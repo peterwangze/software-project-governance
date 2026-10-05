@@ -75,22 +75,30 @@
       "discover": {
         "status": "native",
         "mapping": "web_search",
-        "evidence": "dsh ships a native web_search tool; used by the live sessions that author and maintain this adapter."
+        "evidence": "dsh ships a native web_search tool; used by the live sessions that author and maintain this adapter. Dated anchor 2026-10-04: first-hand tool-surface verification on the dsh host (evidence_ref §3(c) saw web_search present in the verifying session's tool surface) — records existence at that date, not continuous liveness; availability drift degrades per EXP-03.",
+        "verified_on": "2026-10-04",
+        "evidence_ref": "docs/reviews/review-FEAT-086-DESIGN-R0.md"
       },
       "inspect": {
         "status": "native",
         "mapping": "read / grep / glob fs tools",
-        "evidence": "Native fs read/grep/glob tools (runtime_capabilities.tool_calling native)."
+        "evidence": "Native fs read/grep/glob tools (runtime_capabilities.tool_calling native). Dated anchor 2026-10-04: first-hand tool-surface verification on the dsh host (evidence_ref §3(c) saw read/grep/glob present in the verifying session's tool surface) — records existence at that date, not continuous liveness; availability drift degrades per EXP-03.",
+        "verified_on": "2026-10-04",
+        "evidence_ref": "docs/reviews/review-FEAT-086-DESIGN-R0.md"
       },
       "consult": {
         "status": "native",
         "mapping": "web_search; route_agent (arch/vision only — draw excluded: generation is not consultation)",
-        "evidence": "route_agent multi-model router with arch (architecture advisor) and vision (image analysis) targets is native; draw routes image generation and MUST NOT be declared as consultation."
+        "evidence": "route_agent multi-model router with arch (architecture advisor) and vision (image analysis) targets is native; draw routes image generation and MUST NOT be declared as consultation. Dated anchor 2026-10-04: first-hand tool-surface verification on the dsh host (evidence_ref §3(c) saw route_agent with arch/vision/draw targets and confirmed draw is a generation target) — records existence at that date, not continuous liveness; router config drift (OAuth expiry / model decommission) degrades per EXP-03.",
+        "verified_on": "2026-10-04",
+        "evidence_ref": "docs/reviews/review-FEAT-086-DESIGN-R0.md"
       },
       "validate": {
         "status": "native",
         "mapping": "pwsh + verify_workflow.py / unittest execution",
-        "evidence": "Native pwsh tool executes the validation contract commands; validation.command is required for this adapter."
+        "evidence": "Native pwsh tool executes the validation contract commands; validation.command is required for this adapter. Dated anchor 2026-10-04: first-hand tool-surface verification on the dsh host (evidence_ref §3(c) saw pwsh present in the verifying session's tool surface) — records existence at that date, not continuous liveness; availability drift degrades per EXP-03.",
+        "verified_on": "2026-10-04",
+        "evidence_ref": "docs/reviews/review-FEAT-086-DESIGN-R0.md"
       }
     },
     "degraded_mode": "When a channel becomes unavailable, record 判定=受限 in the exploration block (M10.2) per EXP-03; never mark offline knowledge as channel results."

@@ -1188,5 +1188,113 @@ class RecordEvidenceRemediationTests(DoctorCase):
         self.assertNotIn("redirected DSH_HOME", document["notes"])
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# FEAT-088 (F-A3): the exploration-channel evidence-form projection
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class ExplorationChannelProjectionTests(DoctorCase):
+    """The doctor projects the engine's channel guard — never re-derives it.
+
+    Pinned contract: the block is always present in the report; a healthy
+    repository projects PASS without touching the eight stage records; a
+    FAILing guard FAILs the report (a diagnostic entry may not silently
+    pass) *without* manufacturing a K-12 disagreement (the channel face is
+    outside K-12's stage domain); a broken projection degrades to a
+    disclosed ``projected: false`` block instead of killing the doctor
+    (BT-2 discipline applied to a non-stage face).
+    """
+
+    def _stub_engine_guard(self, fake):
+        """Redirect the projection's lazy engine import to ``fake``."""
+        import verify_workflow
+
+        original = verify_workflow.check_exploration_channels
+        verify_workflow.check_exploration_channels = fake
+        self.addCleanup(
+            setattr, verify_workflow, "check_exploration_channels", original)
+
+    def test_the_report_carries_the_channel_projection(self):
+        report = self.run_doctor(offline=True)
+        channels = report["exploration_channels"]
+        self.assertEqual(channels["check"], "check-exploration-channels")
+        self.assertIs(channels["projected"], True)
+        self.assertEqual(channels["verdict"], "PASS")
+        self.assertEqual(channels["issues"], [])
+        # Non-stage face: the eight stage records are exactly the stages.
+        self.assertEqual([record["stage"] for record in report["stages"]],
+                         _STAGE_IDS)
+        # Offline keeps the file-level judgment running (processes are
+        # forbidden, files are not — R1 N-3).
+        layering = channels["probe_layering"]
+        self.assertIn("NOT probed", layering["not_probeable"])
+
+    def test_a_failing_guard_fails_the_report_without_k12_noise(self):
+        def fake(root=None):
+            return {"issues": ["exploration channels: adapters/dsh/adapter-manifest.json"
+                               " channels.discover is declared native without a"
+                               " dated evidence anchor (F-A3)"],
+                    "advisories": [], "probe_layering": {}}
+
+        self._stub_engine_guard(fake)
+        report = self.run_doctor(offline=True)
+        channels = report["exploration_channels"]
+        self.assertEqual(channels["verdict"], "FAIL")
+        self.assertTrue(channels["issues"])
+        self.assertEqual(report["verdict"], "FAIL")
+        self.assertEqual(report["exit_code"], doctor.EXIT_FAIL)
+        # The FAIL is the channel face's own; K-12's stage domain is intact
+        # (no manufactured disagreement record, still exactly eight stages).
+        self.assertNotIn("K-12", [record["stage"] for record in report["stages"]])
+        self.assertEqual(len(report["stages"]), len(_STAGE_IDS))
+
+    def test_a_broken_projection_degrades_to_a_disclosure(self):
+        def boom(root=None):
+            raise RuntimeError("guard exploded")
+
+        self._stub_engine_guard(boom)
+        report = self.run_doctor(offline=True)
+        channels = report["exploration_channels"]
+        self.assertIs(channels["projected"], False)
+        self.assertIsNone(channels["verdict"])
+        self.assertIn("projection unavailable", channels["note"])
+        self.assertIn("RuntimeError: guard exploded", channels["note"])
+        # A degraded projection is a disclosure, not a verdict: with clean
+        # stages the report still exits 0 and never silently passes a FAIL.
+        self.assertNotEqual(report["verdict"], "FAIL")
+        self.assertEqual(report["exit_code"], doctor.EXIT_OK)
+
+    def test_the_projection_cites_the_check_it_projects(self):
+        # BT-R-02 single-verdict seam: the doctor's block names the engine
+        # check that owns the judgment, so the two surfaces stay joinable.
+        report = self.run_doctor(offline=True)
+        self.assertEqual(
+            report["exploration_channels"]["check"],
+            "check-exploration-channels")
+
+    def test_render_report_prints_the_channel_face(self):
+        report = self.run_doctor(offline=True)
+        stream = io.StringIO()
+        doctor.render_report(report, stream=stream)
+        output = stream.getvalue()
+        self.assertIn("exploration-channels:", output)
+        self.assertIn("projected=True", output)
+        self.assertIn("k12_domain", output)
+
+    def test_render_report_prints_channel_issues_when_failing(self):
+        def fake(root=None):
+            return {"issues": ["exploration channels: synthetic anchor issue"],
+                    "advisories": ["exploration channels: synthetic advisory"],
+                    "probe_layering": {}}
+
+        self._stub_engine_guard(fake)
+        report = self.run_doctor(offline=True)
+        stream = io.StringIO()
+        doctor.render_report(report, stream=stream)
+        output = stream.getvalue()
+        self.assertIn("synthetic anchor issue", output)
+        self.assertIn("[advisory] exploration channels: synthetic advisory", output)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

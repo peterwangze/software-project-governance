@@ -1174,6 +1174,53 @@ def stage_s7_hooks(ctx: Context) -> StageOutcome:
     return outcome
 
 
+# ── FEAT-088 (F-A3): exploration-channel evidence-form projection ──────────
+
+
+def _channel_projection(ctx: Context) -> Dict[str, Any]:
+    """Project the engine's exploration-channel guard — never re-derive it.
+
+    The judgment has one owner: ``verify_workflow.check_exploration_channels``
+    (the BT-R-02 single-verdict rule the S2/S3/S7 projections follow). The
+    doctor only surfaces it, so the diagnostic entry and the gate cannot
+    disagree about the same manifest state. Crash-isolated like a stage
+    (BT-2): a projection that cannot run is a disclosed ``projected: false``
+    block, never a dead doctor — and never a silent pass either: when it
+    runs and finds issues, the caller's verdict carries them.
+
+    Deliberately *not* part of the K-12 comparison: K-12's domain is the
+    stage projections of the 28w boundary criteria; this face is another
+    check's verdict on the adapter manifests, and conflating the two would
+    make 28w answer for a judgment it does not own.
+    """
+    try:
+        engine = Path(__file__).resolve().parent
+        if str(engine) not in sys.path:
+            sys.path.insert(0, str(engine))
+        from verify_workflow import check_exploration_channels  # noqa: PLC0415 — lazy
+        result = check_exploration_channels(ctx.root)
+    except Exception as error:  # noqa: BLE001 — projection degradation
+        return {
+            "check": "check-exploration-channels",
+            "verdict": None,
+            "projected": False,
+            "note": ("projection unavailable: "
+                     f"{type(error).__name__}: {error} — the guard itself is "
+                     f"the single owner of this judgment; run `verify_workflow"
+                     f".py check-exploration-channels` directly"),
+            "k12_domain": "excluded — stage projections of 28w criteria only",
+        }
+    return {
+        "check": "check-exploration-channels",
+        "verdict": VERDICT_FAIL if result.get("issues") else VERDICT_PASS,
+        "projected": True,
+        "issues": list(result.get("issues") or []),
+        "advisories": list(result.get("advisories") or []),
+        "probe_layering": result.get("probe_layering"),
+        "k12_domain": "excluded — stage projections of 28w criteria only",
+    }
+
+
 # ── stage dispatch ──────────────────────────────────────────────────────────
 
 StageRunner = Callable[[Context], StageOutcome]
@@ -1321,8 +1368,16 @@ def run_doctor(root: Optional[Path] = None,
                            f"{len(STAGES)} stages; requested "
                            f"{sorted(wanted)}")
         report["boundary"]["note"] = "; ".join(reasons)
-    report["verdict"] = ("FAIL" if any(record["verdict"] == VERDICT_FAIL
-                                       for record in records) else
+    # FEAT-088 (F-A3): the exploration-channel evidence-form projection. A
+    # file-level judgment (manifests + anchor documents), so it runs under
+    # --offline too — offline forbids processes, not files. A FAIL here FAILs
+    # the report (a diagnostic entry may not silently pass) without entering
+    # the K-12 comparison (see _channel_projection for the domain ruling).
+    report["exploration_channels"] = _channel_projection(ctx)
+    channel_failed = report["exploration_channels"].get("verdict") == VERDICT_FAIL
+    report["verdict"] = ("FAIL" if channel_failed
+                         or any(record["verdict"] == VERDICT_FAIL
+                                for record in records) else
                          ("PASS" if any(record["verdict"] == VERDICT_PASS
                                         for record in records) else VERDICT_NOT_RUN))
     report["exit_code"] = exit_code_for(report)
@@ -1838,6 +1893,18 @@ def render_report(report: Dict[str, Any], stream=None) -> None:
               f"agrees={boundary.get('agrees')}", file=stream)
         if boundary.get("note"):
             print(f"      {boundary['note']}", file=stream)
+    channels = report.get("exploration_channels") or {}
+    if channels:
+        print(f"  exploration-channels: verdict={channels.get('verdict')} "
+              f"projected={channels.get('projected')} "
+              f"issues={len(channels.get('issues') or [])} "
+              f"(k12_domain: {channels.get('k12_domain')})", file=stream)
+        for issue in (channels.get("issues") or [])[:4]:
+            print(f"      - {issue}", file=stream)
+        for advisory in (channels.get("advisories") or [])[:2]:
+            print(f"      [advisory] {advisory}", file=stream)
+        if channels.get("note"):
+            print(f"      {channels['note']}", file=stream)
     print(f"  Result: {report.get('verdict')} (exit {report.get('exit_code')})",
           file=stream)
 

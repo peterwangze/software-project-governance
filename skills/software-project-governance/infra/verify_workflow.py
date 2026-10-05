@@ -12075,6 +12075,240 @@ def _check_quote_sync_issues():
     return issues
 
 
+# ── FEAT-088 (F-A3 / REVIEW-FEAT-086-DESIGN-R0 BM-1 residual): exploration-
+#    channel evidence-form guard ──────────────────────────────────────────
+# F-A3: the dsh exploration_channels native declarations were backed by
+# live-session self-attestation ("used by the live sessions that author…")
+# while claude/codex/gemini anchor their channel evidence to DATED E2E
+# records. Host router drift (OAuth expiry / model decommission) never
+# changes a static declaration, so the honest machine-checkable form of
+# "channel liveness" is layered exactly like the ticket's honesty boundary:
+#
+#   layer (a) — evidence-form guard (static, FAIL-able): an adapter enrolled
+#     in CHANNEL_DATE_ANCHOR_ADAPTERS MUST anchor every `native` channel
+#     declaration to a date — a structured `verified_on` (YYYY-MM-DD) and/or
+#     an inline date in the evidence prose (the dated-E2E convention the
+#     sibling adapters already use). A dated claim is falsifiable in-repo;
+#     an undated "live sessions used it" claim is not.
+#   layer (b) — feasibility-limited live probes (read-only, real): when the
+#     anchor carries an `evidence_ref`, the referenced document MUST exist
+#     and MUST contain the anchor date — a dangling or date-less reference
+#     is a broken anchor, not a verified one. Together with layer (a) this
+#     is everything a CLI process can honestly check.
+#   NOT probeable (physical boundary, MUST NOT be claimed): host-session
+#     tool liveness — web_search / route_agent are harness-layer tools a
+#     CLI process cannot invoke. Runtime drift stays governed by the
+#     manifest degraded_mode + EXP-03, and by re-dating the anchor from a
+#     live session. Wall-clock plausibility is likewise NOT judged (a
+#     machine clock behind the repo timeline would manufacture future-date
+#     FAILs): a structured date is only falsified through the evidence_ref
+#     corroboration, never against the clock alone.
+#
+# Advisories (WARN-only, never counted toward the gate): anchor age beyond
+# CHANNEL_EVIDENCE_STALE_DAYS suggests re-verification, with the EXP-03
+# degradation path spelled out so the advice is the honest one. False-alarm
+# protection: FAIL fires only on definite facts (missing / malformed /
+# dangling / self-contradictory anchors), never on heuristics.
+EXPLORATION_CHANNEL_KEYS = ("discover", "inspect", "consult", "validate")
+EXPLORATION_CHANNEL_STATUSES = ("native", "degraded", "unsupported")
+CHANNEL_EVIDENCE_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+CHANNEL_ANCHOR_DATE_STRICT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+#: Adapters whose native channel declarations MUST carry dated anchors.
+#: FEAT-088 remediates the dsh plane (F-A3); the other five enroll by
+#: adopting the same anchor fields and adding their adapter_id here. Any
+#: adapter that voluntarily carries anchor fields is validated meanwhile
+#: (forward-compatible generalization, no retroactive FAIL on the five
+#: not-yet-enrolled manifests — FEAT-088's scope guard).
+CHANNEL_DATE_ANCHOR_ADAPTERS = ("dsh",)
+#: Anchor staleness advisory threshold — aligned with the dsh host
+#: contract's evidence TTL (verified_on_ttl_days = 180) rather than
+#: inventing a second clock. Advisory only: staleness is age, not breakage.
+CHANNEL_EVIDENCE_STALE_DAYS = 180
+
+
+def _anchor_date_or_none(value):
+    """A strict YYYY-MM-DD that is also a real calendar date, else ``None``."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not CHANNEL_ANCHOR_DATE_STRICT_RE.match(text):
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def check_exploration_channels(root=None):
+    """FEAT-088 (F-A3): exploration-channel evidence-form guard, fail-closed.
+
+    Reads the six adapter manifests' ``exploration_channels`` blocks and
+    judges, per the M10.3 four-channel vocabulary: structural conformance
+    (channels present, status vocabulary, non-empty mapping/evidence) for
+    every adapter, plus the dated-evidence-anchor requirement for the
+    native declarations of enrolled adapters. Layer (b) probes are strictly
+    read-only (anchor-document resolution). Returns a dict with ``issues``
+    (gate-counted), ``advisories`` (WARN-only, never counted),
+    ``adapters`` (per-adapter face), ``probe_layering`` (the honesty
+    statement above, machine-restated) and ``pass``.
+    """
+    base = Path(root) if root is not None else ROOT
+    issues = []
+    advisories = []
+    faces = {}
+    for rel in QUOTE_SYNC_ADAPTER_MANIFESTS:
+        adapter_id = Path(rel).parent.name  # adapters/<id>/adapter-manifest.json
+        face = {"manifest": rel, "dated_anchor_required":
+                adapter_id in CHANNEL_DATE_ANCHOR_ADAPTERS}
+        faces[adapter_id] = face
+        path = base / rel
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            issues.append(
+                f"exploration channels: {rel} unreadable or invalid JSON "
+                f"({type(error).__name__}: {error}) (fail-closed)")
+            face["error"] = True
+            continue
+        node = payload.get("exploration_channels")
+        if not isinstance(node, dict):
+            issues.append(
+                f"exploration channels: {rel} has no exploration_channels "
+                f"block (fail-closed)")
+            face["error"] = True
+            continue
+        channels = node.get("channels")
+        if not isinstance(channels, dict):
+            issues.append(
+                f"exploration channels: {rel} exploration_channels.channels "
+                f"is missing or not an object (fail-closed)")
+            face["error"] = True
+            continue
+        missing = [key for key in EXPLORATION_CHANNEL_KEYS if key not in channels]
+        extra = sorted(key for key in channels if key not in EXPLORATION_CHANNEL_KEYS)
+        if missing:
+            issues.append(
+                f"exploration channels: {rel} is missing channel "
+                f"declaration(s) {missing} (M10.3 fixes exactly four)")
+        if extra:
+            issues.append(
+                f"exploration channels: {rel} declares channel(s) unknown to "
+                f"M10.3: {extra}")
+        face["native_anchored"] = {}
+        for key in EXPLORATION_CHANNEL_KEYS:
+            channel = channels.get(key)
+            if not isinstance(channel, dict):
+                if key in channels:
+                    issues.append(
+                        f"exploration channels: {rel} channels.{key} is not "
+                        f"an object")
+                continue
+            status = channel.get("status")
+            if status not in EXPLORATION_CHANNEL_STATUSES:
+                issues.append(
+                    f"exploration channels: {rel} channels.{key}.status="
+                    f"{status!r} is outside the M10.3 vocabulary "
+                    f"{list(EXPLORATION_CHANNEL_STATUSES)}")
+            for field in ("mapping", "evidence"):
+                value = channel.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    issues.append(
+                        f"exploration channels: {rel} channels.{key}.{field} "
+                        f"is missing or empty")
+            if status != "native":
+                continue
+            # ── dated-anchor face: layer (a) form + layer (b) probes ──
+            verified_on = channel.get("verified_on")
+            evidence_text = channel.get("evidence") or ""
+            inline_dates = CHANNEL_EVIDENCE_DATE_RE.findall(evidence_text)
+            anchor_date = _anchor_date_or_none(verified_on)
+            if verified_on is not None and anchor_date is None:
+                issues.append(
+                    f"exploration channels: {rel} channels.{key}.verified_on="
+                    f"{verified_on!r} is not a valid YYYY-MM-DD calendar date")
+            if anchor_date is not None and inline_dates \
+                    and verified_on.strip() not in inline_dates:
+                issues.append(
+                    f"exploration channels: {rel} channels.{key} evidence "
+                    f"prose date(s) {sorted(set(inline_dates))} disagree with "
+                    f"verified_on={verified_on.strip()!r} — two forms of the "
+                    f"same fact must not drift")
+            if face["dated_anchor_required"] and anchor_date is None \
+                    and not inline_dates:
+                issues.append(
+                    f"exploration channels: {rel} channels.{key} is declared "
+                    f"native without a dated evidence anchor (F-A3): add "
+                    f"verified_on (YYYY-MM-DD, optionally evidence_ref) or an "
+                    f"inline date in the evidence text (the dated-E2E "
+                    f"convention); or declare the channel degraded/unsupported "
+                    f"honestly with a degraded_mode per EXP-03 — honest "
+                    f"degradation is legal, capability masquerade is not")
+            ref = channel.get("evidence_ref")
+            if ref is not None and not isinstance(ref, str):
+                issues.append(
+                    f"exploration channels: {rel} channels.{key}.evidence_ref "
+                    f"must be a repository-relative path string")
+            elif isinstance(ref, str) and ref.strip():
+                ref_norm = ref.strip().replace("\\", "/")
+                ref_path = base / ref_norm
+                if not ref_path.is_file():
+                    issues.append(
+                        f"exploration channels: {rel} channels.{key}."
+                        f"evidence_ref '{ref_norm}' does not exist in the "
+                        f"repository (dangling dated anchor)")
+                elif anchor_date is not None:
+                    try:
+                        ref_text = ref_path.read_text(
+                            encoding="utf-8", errors="replace")
+                    except OSError:
+                        ref_text = ""
+                    if verified_on.strip() not in ref_text:
+                        issues.append(
+                            f"exploration channels: {rel} channels.{key} "
+                            f"anchor date {verified_on.strip()!r} is not "
+                            f"present in evidence_ref '{ref_norm}' — the dated "
+                            f"claim is not corroborated by the cited document")
+            face["native_anchored"][key] = {
+                "verified_on": verified_on.strip()
+                if isinstance(verified_on, str) else verified_on,
+                "inline_date_only": anchor_date is None and bool(inline_dates),
+                "age_days": ((date.today() - anchor_date).days
+                             if anchor_date is not None else None),
+            }
+            if anchor_date is not None:
+                age = (date.today() - anchor_date).days
+                if age > CHANNEL_EVIDENCE_STALE_DAYS:
+                    advisories.append(
+                        f"exploration channels: {rel} channels.{key} anchor "
+                        f"is {age} days old (> {CHANNEL_EVIDENCE_STALE_DAYS}): "
+                        f"re-verify from a live session and re-date the anchor; "
+                        f"if the channel is unavailable at runtime, record "
+                        f"判定=受限 per EXP-03 (M10.2) — never mark offline "
+                        f"knowledge as channel results")
+    return {
+        "issues": issues,
+        "advisories": advisories,
+        "adapters": faces,
+        "dated_anchor_adapters": list(CHANNEL_DATE_ANCHOR_ADAPTERS),
+        "probe_layering": {
+            "static_evidence_form": (
+                "native declarations of enrolled adapters must carry dated "
+                "anchors (this check, FAIL-able)"),
+            "feasible_probe": (
+                "evidence_ref existence + anchor-date corroboration in the "
+                "cited document (read-only; the only live checks a CLI "
+                "process can honestly perform here)"),
+            "not_probeable": (
+                "host-session tool liveness (web_search / route_agent) is "
+                "NOT probed and NOT claimed — harness-layer tools are "
+                "outside a CLI process's reach; runtime drift is governed by "
+                "the manifest degraded_mode + EXP-03 and by re-dating the "
+                "anchor from a live session"),
+        },
+        "pass": not issues,
+    }
+
+
 def check_cross_references():
     """Scan .md and .py files for path references, build a reference graph,
     and detect: (1) dangling references (target file does not exist),
@@ -12349,11 +12583,19 @@ def check_cross_references():
     # ── FIX-432 (F-4 / F-A2): citation/note quote-sync guard ──
     quote_sync = _check_quote_sync_issues()
 
+    # ── FEAT-088 (F-A3): exploration-channel evidence-form guard ──
+    # Same carrier discipline as quote_sync: a related-but-distinct manifest
+    # sub-face riding the manifest/cross-reference machine-check surface
+    # instead of a new numbered check section (registry/frozen-snapshot zero
+    # churn; fact source stays plugin-package like its host section).
+    exploration_channels = check_exploration_channels()
+
     return {
         "dangling": dangling,
         "deprecated": deprecated,
         "cycles": unique_cycles,
         "quote_sync": quote_sync,
+        "exploration_channels": exploration_channels,
         "total_files_scanned": len(md_files) + len(py_files),
         "total_refs": sum(len(t) for t in refs.values()),
     }
@@ -16272,6 +16514,29 @@ def _run_full_engine_checks(args):
                 print(f"│    ... and {len(xr_quote) - 10} more")
         else:
             print(f"│  [PASS] Citation/note quote sync clean (FIX-432 F-4/F-A2).")
+        # FEAT-088 (F-A3): exploration-channel evidence-form guard sub-face.
+        # Issues count toward the gate; advisories (staleness WARNs) are
+        # disclosed but deliberately NOT counted — age is not breakage, and
+        # counting heuristics here would be the false-alarm class the ticket
+        # forbids (探活失败→降级建议输出不误报).
+        xr_channels = xr_result.get("exploration_channels", {}) or {}
+        xr_channel_issues = xr_channels.get("issues", [])
+        if xr_channel_issues:
+            xr_issues += len(xr_channel_issues)
+            all_issues += len(xr_channel_issues)
+            print(f"│  [WARN] {len(xr_channel_issues)} exploration-channel "
+                  f"evidence-form issue(s) (FEAT-088 F-A3):")
+            for issue in xr_channel_issues[:10]:
+                print(f"│    - {issue}")
+            if len(xr_channel_issues) > 10:
+                print(f"│    ... and {len(xr_channel_issues) - 10} more")
+        else:
+            print(f"│  [PASS] Exploration-channel evidence forms clean "
+                  f"(FEAT-088 F-A3; native declarations of enrolled adapters "
+                  f"carry dated anchors — host-tool liveness itself is NOT "
+                  f"probed, see check-exploration-channels).")
+        for advisory in (xr_channels.get("advisories") or [])[:5]:
+            print(f"│  [ADVISORY] {advisory}")
         if xr_issues == 0:
             print(f"│  [PASS] Cross-reference graph is clean.")
     else:
@@ -22157,8 +22422,65 @@ def cmd_check_cross_references(args):
     else:
         print(f"\n  [PASS] Citation/note quote sync clean (FIX-432 F-4/F-A2).")
 
+    # FEAT-088 (F-A3): exploration-channel evidence-form guard sub-face.
+    channels_face = result.get("exploration_channels", {}) or {}
+    channel_issues = channels_face.get("issues", [])
+    if channel_issues:
+        fail = True
+        print(f"\n  [FAIL] {len(channel_issues)} exploration-channel "
+              f"evidence-form issue(s) (FEAT-088 F-A3):")
+        for issue in channel_issues:
+            print(f"    - {issue}")
+    else:
+        print(f"\n  [PASS] Exploration-channel evidence forms clean "
+              f"(FEAT-088 F-A3).")
+    for advisory in (channels_face.get("advisories") or [])[:5]:
+        print(f"  [ADVISORY] {advisory}")
+    layering = channels_face.get("probe_layering") or {}
+    if layering:
+        print("\n  Probe layering (honesty statement):")
+        for label, text in layering.items():
+            print(f"    - {label}: {text}")
+
     print()
     if fail:
+        sys.exit(1)
+
+
+def cmd_check_exploration_channels(args):
+    """CLI wrapper for the exploration-channel evidence-form guard (FEAT-088).
+
+    The manifest machine-check face behind F-A3: dated-anchor form rules for
+    native declarations of enrolled adapters, read-only anchor-document
+    probes, WARN-only staleness advisories, and the probe-layering honesty
+    statement (what this check can and cannot verify — it never claims to
+    have probed host-session tool liveness).
+    """
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    result = check_exploration_channels()
+    print()
+    print("=== Exploration-Channel Evidence-Form Check (FEAT-088 F-A3) ===")
+    print(f"  Adapters requiring dated anchors: "
+          f"{result['dated_anchor_adapters']}")
+    if result["issues"]:
+        print(f"  [FAIL] {len(result['issues'])} issue(s):")
+        for issue in result["issues"]:
+            print(f"    - {issue}")
+    else:
+        print("  [PASS] All channel declarations conform (structure for all "
+              "six adapters; dated anchors on enrolled native declarations).")
+    if result["advisories"]:
+        print(f"  [ADVISORY] {len(result['advisories'])} staleness advisory(ies) "
+              f"(WARN-only, not counted):")
+        for advisory in result["advisories"]:
+            print(f"    - {advisory}")
+    print("\n  Probe layering (honesty statement):")
+    for label, text in (result.get("probe_layering") or {}).items():
+        print(f"    - {label}: {text}")
+    if result["issues"] and getattr(args, "fail_on_issues", False):
         sys.exit(1)
 
 
@@ -26302,6 +26624,15 @@ def main(argv=None):
     # check-plugin-freshness
     subparsers.add_parser("check-plugin-freshness", help="Check if installed plugin is up to date with source")
 
+    # check-exploration-channels
+    cec_p = subparsers.add_parser(
+        "check-exploration-channels",
+        help="Check exploration_channels evidence forms (FEAT-088 F-A3): dated "
+             "anchors on native declarations of enrolled adapters + read-only "
+             "anchor-document probes (host-tool liveness is NOT probed)")
+    cec_p.add_argument("--fail-on-issues", action="store_true",
+                       help="Exit with non-zero code if evidence-form issues are found")
+
     # check-agent-adapters
     caa_p = subparsers.add_parser("check-agent-adapters",
                                   help="Check mainstream code agent adapter contracts")
@@ -27343,6 +27674,7 @@ def main(argv=None):
         "check-governance": cmd_check_governance,
         "execution-packet": cmd_execution_packet,
         "check-manifest-consistency": cmd_check_manifest_consistency,
+        "check-exploration-channels": cmd_check_exploration_channels,
         "check-plugin-freshness": cmd_check_plugin_freshness,
         "check-agent-adapters": cmd_check_agent_adapters,
         "check-release": cmd_check_release,

@@ -26,8 +26,11 @@ Modes:
   --install / --sync   (Re)write the preset into ${DSH_HOME}/.agent-presets/governance
                        by rendering ``agent-presets/governance/agent.cordis.yml.template``
                        (staging directory + rename, so a crash mid-render never
-                       leaves a half-written preset). --sync is the post-`git
-                       pull` refresh path.
+                       leaves a half-written preset). Isolated environments
+                       only: the write side refuses the real home (exit 2),
+                       and the post-`git pull` refresh of the real user
+                       preset is a dsh restart, which re-renders it by
+                       package version.
   --uninstall          Remove the governance preset — deletes exactly
                        ${DSH_HOME}/.agent-presets/governance/ and nothing else
                        (sibling presets and every other file under DSH_HOME
@@ -604,7 +607,8 @@ def write_rendered_preset(destination: Path, version: Optional[str] = None) -> b
             (version + "\n").encode("utf-8"))
         # Hook discovery marker: the repo hooks' find_spg_home reads this file
         # to resolve the workflow home under dsh, so installed project hooks
-        # keep self-upgrading after `git pull` + `--sync`.
+        # keep self-upgrading after `git pull` + a dsh restart (or, under an
+        # explicitly redirected isolated DSH_HOME, after `--sync`).
         (destination / _fact("SKILL_ROOT_MARKER")).write_bytes(
             (str(ROOT.resolve()).replace("\\", "/") + "\n").encode("utf-8"))
     except OSError as exc:

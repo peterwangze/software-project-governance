@@ -66,7 +66,7 @@
 - 用户输入 `/governance`（dsh 的 `/name` 手势加载同名 skill）进入统一治理入口
 - `ask_user_question` 是交互边界唯一通道；模式口头切换（"最高权限"等）即时生效
 
-**自升级**：`git -C <仓库> pull && python adapters/dsh/launch.py --sync`；下次会话 bootstrap 自动完成版本检测与结构补全（dsh 无 `/plugin update` 概念）。
+**自升级**：`git -C <仓库> pull` 后重启 dsh——bundle 宿主行 `ensurePreset()` 按包版本幂等重渲染用户根预设；下次会话 bootstrap 自动完成版本检测与结构补全（dsh 无 `/plugin update` 概念；`launch.py --sync` 仅限显式重定向 `DSH_HOME` 的隔离环境，对真实用户根设计性拒绝 `exit 2`）。
 
 **特色能力**：
 - 原生 `subagent`/`subagent_fork`（in-process spawn/fork，子代理继承父预设组合）承载 Agent Team 路由

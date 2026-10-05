@@ -60,7 +60,7 @@
     },
     "git_hooks": {
       "status": "native",
-      "evidence": "Workflow installs and validates pre-commit, commit-msg, and post-commit hooks at the repository level, independent of the agent runtime. The hooks' find_spg_home resolves the workflow home under dsh through the skill-root.txt marker both renderers write into ${DSH_HOME}/.agent-presets/governance/ (it names the package root, i.e. <pkg>/skills/software-project-governance; a legacy copied skills tree at the same location is still accepted), so installed project hooks self-upgrade after `git pull` + `launch.py --sync`."
+      "evidence": "Workflow installs and validates pre-commit, commit-msg, and post-commit hooks at the repository level, independent of the agent runtime. The hooks' find_spg_home resolves the workflow home under dsh through the skill-root.txt marker both renderers write into ${DSH_HOME}/.agent-presets/governance/ (it names the package root, i.e. <pkg>/skills/software-project-governance; a legacy copied skills tree at the same location is still accepted), so installed project hooks self-upgrade after `git pull` + a dsh restart (the bundle host row's ensurePreset() re-renders the preset by package version; `launch.py --sync` serves only an explicitly redirected isolated DSH_HOME — the real user root is refused with exit 2)."
     },
     "workflow_closure": {
       "status": "degraded",

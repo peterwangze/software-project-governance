@@ -26,7 +26,7 @@ python adapters/dsh/launch.py --install       # 手工/离线路径：渲染 ${D
 python adapters/dsh/launch.py --install --dry-run   # 只打印将要写入的路径与 token 渲染映射，不落盘
 python adapters/dsh/launch.py --smoke         # 隔离 DSH_HOME 下的预设加载冒烟闸门（0 PASS / 1 FAIL / 2 REFUSED）
 python adapters/dsh/launch.py --bootstrap-project <项目目录>   # 写入项目级 AGENTS.md
-git -C <仓库> pull; python adapters/dsh/launch.py --sync       # 升级后刷新用户根预设
+git -C <仓库> pull    # 升级后刷新用户根预设：pull 完成后重启 dsh（宿主行 ensurePreset() 按包版本幂等重渲染；--sync 仅限隔离 DSH_HOME）
 ```
 
 常用路径不需要 `--install`：`dsh plugin --profile web add "link:<本仓库绝对路径>"` + 重启后，包内宿主行会按包版本号自动把预设渲染进用户根（幂等；版本未变不写）。
@@ -41,7 +41,7 @@ dsh 升级或 profile 清单重置/重装后，插件的 `dsh.profile.bundles` �
 dsh plugin --profile web add "link:<本仓库绝对路径>"
 ```
 
-然后重启 dsh——bundle 层是 boot-time 应用，非 HMR，不重启不生效。注意 `launch.py --sync` 只刷新用户根预设（`${DSH_HOME}/.agent-presets/governance`），不恢复 bundle 注册。验证：重启后 profile 的 package.json 中 `dsh.profile.bundles` 应含 `@peterwangze/software-project-governance-plugin`；预设选择器应出现「治理协调器」（用户根 ⇒ 自定义预设，可删除、可打开目录）。
+然后重启 dsh——bundle 层是 boot-time 应用，非 HMR，不重启不生效。注意用户根预设（`${DSH_HOME}/.agent-presets/governance`）的刷新正道同样是重启 dsh——bundle 宿主行 `ensurePreset()` 按包版本幂等重渲染（`link:` 安装下 `git pull` 已更新 Junction 目标，重启即生效）；`launch.py --sync` 不适用真实用户根（write_side_refusal 设计性拒绝，exit 2），仅限显式重定向 `DSH_HOME` 的隔离环境（冒烟/测试/离线渲染），且不恢复 bundle 注册。验证：重启后 profile 的 package.json 中 `dsh.profile.bundles` 应含 `@peterwangze/software-project-governance-plugin`；预设选择器应出现「治理协调器」（用户根 ⇒ 自定义预设，可删除、可打开目录）。
 
 ## 验证
 

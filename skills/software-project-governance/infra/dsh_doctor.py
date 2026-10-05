@@ -428,8 +428,9 @@ def stage_s1_delivery(ctx: Context) -> StageOutcome:
         outcome.verdict = VERDICT_NOT_RUN
         outcome.reason = "no resolved DSH_HOME — the delivery plane is unknown"
         outcome.remediation.append(_remediation(
-            "set DSH_HOME, then install the preset",
-            "python adapters/dsh/launch.py --sync",
+            "restart dsh so the bundle host row renders the preset, then "
+            "re-run the doctor with DSH_HOME resolvable",
+            "restart dsh (ensurePreset re-renders by package version)",
             "the preset directory exists and carries the version marker"))
         return outcome
     outcome.evidence.append(_evidence(
@@ -440,8 +441,8 @@ def stage_s1_delivery(ctx: Context) -> StageOutcome:
                           f"the host row has not rendered the preset")
         outcome.findings.append(outcome.reason)
         outcome.remediation.append(_remediation(
-            "render and install the preset",
-            "python adapters/dsh/launch.py --sync",
+            "restart dsh so the bundle host row renders the preset",
+            "restart dsh (ensurePreset re-renders by package version)",
             f"{preset_dir} exists and carries {marker}"))
         return outcome
     marker_path = preset_dir / marker
@@ -455,7 +456,8 @@ def stage_s1_delivery(ctx: Context) -> StageOutcome:
                           f"{preset_dir}")
         outcome.findings.append(outcome.reason)
         outcome.remediation.append(_remediation(
-            "re-install the preset", "python adapters/dsh/launch.py --sync",
+            "re-render the preset by restarting dsh",
+            "restart dsh (ensurePreset rewrites the version marker)",
             f"{marker_path} names version {declared}"))
         return outcome
     if declared and installed != declared:
@@ -464,8 +466,8 @@ def stage_s1_delivery(ctx: Context) -> StageOutcome:
                           f"version {declared!r} — the preset is stale")
         outcome.findings.append(outcome.reason)
         outcome.remediation.append(_remediation(
-            "sync the preset to this package version",
-            "python adapters/dsh/launch.py --sync",
+            "refresh the preset to this package version by restarting dsh",
+            "restart dsh (ensurePreset re-renders when the version differs)",
             f"{marker_path} names version {declared}"))
         return outcome
     skill_root = preset_dir / skill_marker
@@ -477,8 +479,8 @@ def stage_s1_delivery(ctx: Context) -> StageOutcome:
                           f"installed hooks cannot find the workflow home")
         outcome.findings.append(outcome.reason)
         outcome.remediation.append(_remediation(
-            "re-install the preset so the marker is written",
-            "python adapters/dsh/launch.py --sync",
+            "re-render the preset by restarting dsh so the marker is written",
+            "restart dsh (ensurePreset rewrites the skill-root marker)",
             f"{skill_root} exists and names the workflow home"))
         return outcome
     outcome.verdict = VERDICT_PASS
@@ -1118,8 +1120,11 @@ def stage_s6_skills(ctx: Context,
     outcome.reason = result.get("reason") or "isolated smoke did not pass"
     outcome.findings.extend((result.get("details") or [])[:10])
     outcome.remediation.append(_remediation(
-        "sync the preset and restart the harness",
-        "python adapters/dsh/launch.py --sync",
+        "restart dsh to re-render the preset, then re-run the smoke (only "
+        "an isolated env may run --sync: DSH_HOME redirected to a temporary "
+        "directory)",
+        "restart dsh; isolated env only: set DSH_HOME to a temporary "
+        "directory, then python adapters/dsh/launch.py --sync",
         "the isolated smoke resolves the skill catalog and /governance"))
     return outcome
 

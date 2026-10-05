@@ -106,7 +106,7 @@ dsh plugin --profile web remove @peterwangze/software-project-governance-plugin 
 
 # governance preset (launch.py, the user preset root)
 python adapters/dsh/launch.py --install          # install (add --dry-run to preview)
-python adapters/dsh/launch.py --sync             # upgrade after git pull
+# upgrade: git pull, then restart dsh — ensurePreset() re-renders the preset by package version (`--sync` is isolated-env only, DSH_HOME redirected to a temporary directory; the real user root is refused with exit 2)
 python adapters/dsh/launch.py --uninstall        # uninstall — deletes exactly .agent-presets/governance/ (--dry-run to preview)
 # downgrade: git checkout v<old-tag> + --install (overwrites in place)
 ```
@@ -427,7 +427,7 @@ dsh 侧有两个安装面，各自有**官方对称命令**：
 | 动作 | bundle 层（`dsh plugin` 官方命令） | governance 预设（`launch.py`） |
 |------|-----------------------------------|-------------------------------|
 | 安装 | `dsh plugin --profile web add link:<仓库>`（或 `file:<仓库>` / `github:peterwangze/software-project-governance`）+ 重启 | `python adapters/dsh/launch.py --install`（先加 `--dry-run` 预览） |
-| 升级 | `dsh plugin --profile web update @peterwangze/software-project-governance-plugin` + 重启；`link:` 形式直接 `git pull` + 重启；`file:` 形式为 remove + add | `git pull` 后 `python adapters/dsh/launch.py --sync` |
+| 升级 | `dsh plugin --profile web update @peterwangze/software-project-governance-plugin` + 重启；`link:` 形式直接 `git pull` + 重启；`file:` 形式为 remove + add | `git pull` 后重启 dsh——宿主行 `ensurePreset()` 按包版本重渲染（`--sync` 仅限显式重定向 `DSH_HOME` 的隔离环境，对真实用户根必拒 `exit 2`） |
 | 降级 | `dsh plugin remove` 后 `add github:peterwangze/software-project-governance#v<旧tag>`（pnpm git ref 语义）；`link:` 直接 `git checkout v<旧tag>` + 重启 | `git checkout v<旧tag>` 后 `launch.py --install`（覆盖式重装） |
 | 卸载 | `dsh plugin --profile web remove @peterwangze/software-project-governance-plugin` + 重启 | `python adapters/dsh/launch.py --uninstall`（可先 `--dry-run` 预览） |
 

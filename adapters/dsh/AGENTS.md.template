@@ -34,4 +34,4 @@
 
 ## Git hooks / 版本升级（DSH 无 /plugin update 概念）
 
-`.git/hooks/{pre-commit,commit-msg,post-commit}` 缺失 → 提醒一次性安装：`Copy-Item "<plugin_root>/skills/software-project-governance/infra/hooks/*" .git/hooks/`。升级：`git -C "<plugin_root>" pull; python "<plugin_root>/adapters/dsh/launch.py" --sync`，下次会话自动完成其余。
+`.git/hooks/{pre-commit,commit-msg,post-commit}` 缺失 → 提醒一次性安装：`Copy-Item "<plugin_root>/skills/software-project-governance/infra/hooks/*" .git/hooks/`。升级：`git -C "<plugin_root>" pull` 后**重启 dsh**——bundle 宿主行 `ensurePreset()` 按包版本幂等重渲染用户根预设（DSH 无 `/plugin update`；`launch.py --sync` 仅限显式重定向 `DSH_HOME` 的隔离环境，对真实用户根设计性拒绝 exit 2），下次会话自动完成其余。

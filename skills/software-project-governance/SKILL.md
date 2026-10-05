@@ -475,7 +475,7 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 - **plugin_home**：DSH 下 `skill` 工具返回的 resourceBase 即 `skills/software-project-governance/` 目录；`resolve_entry.py` 的 `__file__` 自定位与 HOST_PROJECT_ROOT=cwd 双根模型原样成立，无需平台探测。
 - **Agent Team 映射**：`subagent` 工具 spawn 角色 agent（子代理继承父预设组合）；角色定义 `agents/<role>.md` + 调度模板 `references/agent-dispatch-template.md` 填入 prompt。
 - **用户交互**：`ask_user_question` 工具替代 AskUserQuestion；**命令入口**：`/governance` 等用户手势直接加载 `adapters/dsh/skill-shims/` 下同名投影 skill（其内容为 `commands/*.md` 的薄指针）。
-- **版本升级**：`git -C <plugin_root> pull && python <plugin_root>/adapters/dsh/launch.py --sync`（DSH 无 `/plugin update`）。
+- **版本升级**：`git -C <plugin_root> pull` 后**重启 dsh**——bundle 宿主行 `ensurePreset()` 按包版本幂等重渲染用户根预设（DSH 无 `/plugin update`；`launch.py --sync` 仅限显式重定向 `DSH_HOME` 的隔离环境，对真实用户根设计性拒绝 `exit 2`）。
 - **工具映射**（DSH 会话中把本文件正文的 Claude 平台示例按下表替换）：
 
   | 本文件正文示例 | DSH 等价 |

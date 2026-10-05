@@ -22,7 +22,7 @@ Git hooks 发现：两条交付路径都额外写入预设目录内的 `skill-ro
 
 ```powershell
 python adapters/dsh/launch.py                 # 查看 adapter manifest
-python adapters/dsh/launch.py --install       # 手工/离线路径：渲染 ${DSH_HOME}/.agent-presets/governance/（4 个文件）
+python adapters/dsh/launch.py --install       # 手工/离线路径：渲染 ${DSH_HOME}/.agent-presets/governance/（4 个文件）——写侧守卫：真实用户根必拒 exit 2（write_side_refusal），仅限显式重定向 DSH_HOME 的隔离环境
 python adapters/dsh/launch.py --install --dry-run   # 只打印将要写入的路径与 token 渲染映射，不落盘
 python adapters/dsh/launch.py --smoke         # 隔离 DSH_HOME 下的预设加载冒烟闸门（0 PASS / 1 FAIL / 2 REFUSED）
 python adapters/dsh/launch.py --bootstrap-project <项目目录>   # 写入项目级 AGENTS.md

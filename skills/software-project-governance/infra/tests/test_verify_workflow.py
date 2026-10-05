@@ -23111,10 +23111,15 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # `--scope quick` while the deep-check full face stays explicit; the
     # thin pointer is untouched (pointer semantics, no command line). Same
     # guard discipline: the re-price rides the FEAT-084 ticket.
+    #
+    # FIX-432 (2026-10-04): the 详细规则 M0~M9→M0~M10 sweep line rode the
+    # standard (+1 B) and strict (+1 B) Step 7 templates (lightweight and
+    # the thin pointer carry no 详细规则 section). Same guard discipline:
+    # the re-price rides the FIX-432 ticket.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
         "lightweight": 5221,
-        "standard": 10237,
-        "strict": 11125,
+        "standard": 10238,
+        "strict": 11126,
         "secondary-thin": 2840,
     }
 

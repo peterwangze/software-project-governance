@@ -485,7 +485,7 @@ REQUIRED_FILES = {
     "SKILL PR-FAQ Template": ROOT / "skills/pr-faq/SKILL.md",
     "SKILL OKR Template": ROOT / "skills/okr/SKILL.md",
     "SKILL Six-Pager Template": ROOT / "skills/six-pager/SKILL.md",
-    "Behavior Protocol (M0-M9)": ROOT / "skills/software-project-governance/references/behavior-protocol.md",
+    "Behavior Protocol (M0-M10)": ROOT / "skills/software-project-governance/references/behavior-protocol.md",
     "Five-Layer Architecture Design": ROOT / "project/references/architecture.md",
     "Asset Migration Map": ROOT / "project/references/asset-migration-map.md",
 }
@@ -966,7 +966,7 @@ REQUIRED_SNIPPETS = {
     ],
     ROOT / "skills/software-project-governance/references/behavior-protocol.md": [
         "# 行为协议",
-        "M0-M9 强制性规则",
+        "M0-M10 强制性规则",
         "## M0. 合规语言",
         "## M1. 任务匹配",
         "## M2. 预加载",
@@ -977,6 +977,7 @@ REQUIRED_SNIPPETS = {
         "## M7. 执行连续性",
         "## M8. 自检协议",
         "## M9. 优先级声明",
+        "## M10. 主动生态探索协议",
         "M7.4 任务完成协议",
         "M7.5 任务前协议",
         "证据 → check-governance → 审计 → 交付物审查在 commit 之前 → commit → 继续",
@@ -7501,6 +7502,9 @@ def check_release_readiness(
         [f"dangling reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["dangling"]]
         + [f"deprecated reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["deprecated"]]
         + [f"circular reference: {' -> '.join(cycle)}" for cycle in cross_ref_result["cycles"]]
+        # FIX-432 (F-4/F-A2): quote-sync issues ride the same gate (.get for
+        # backward compatibility with pre-FIX-432 result shapes).
+        + [f"quote sync: {issue}" for issue in cross_ref_result.get("quote_sync", [])]
     )
     details["cross_references"] = {
         "pass": not cross_ref_issues,
@@ -11995,6 +11999,82 @@ def cmd_gates(args):
 
 # ── SYSGAP-008: Cross-Reference Checking ──────────────────────────
 
+# ── FIX-432 (F-4 / F-A2, DEC-315 扩承载): quote-sync guard ──────────
+# F-4: behavior-protocol.md M10.4 的触发入口引文是 SKILL.md 唯一注入面触发行的
+# 规范描述（A9：SKILL 只携带指针）。引文 span MUST 与 SKILL.md 实文逐字一致；
+# 任一侧单独改动即 FAIL——不建平行事实源（引文本身就是 SKILL 行的 spec）。
+# F-A2: 六平台 adapter-manifest exploration_channels.note 是 M10.3 consult-draw
+# 规则的转述拷贝（×6 同步债务）。每个 note MUST 携带规范标记，且规范源文件
+# MUST 仍然携带该标记（双向 fail-closed）——转述/规则漂移均可机检。标记常量
+# 只是 join key，不是平行事实源：规则语义只活在 M10.3（FIX-272 动态锚先例）。
+QUOTE_SYNC_ADAPTER_MANIFESTS = (
+    "adapters/claude/adapter-manifest.json",
+    "adapters/codex/adapter-manifest.json",
+    "adapters/gemini/adapter-manifest.json",
+    "adapters/opencode/adapter-manifest.json",
+    "adapters/chrys/adapter-manifest.json",
+    "adapters/dsh/adapter-manifest.json",
+)
+CONSULT_DRAW_MARKER = "生成≠咨询"
+
+
+def _check_quote_sync_issues():
+    """FIX-432 (F-4 / F-A2): citation/paraphrase sync guard, fail-closed.
+
+    Missing or unparsable canonical surfaces are issues, never silent skips.
+    """
+    issues = []
+    bp_path = ROOT / "skills/software-project-governance/references/behavior-protocol.md"
+    skill_path = ROOT / "skills/software-project-governance/SKILL.md"
+    try:
+        bp_text = bp_path.read_text(encoding="utf-8")
+    except OSError:
+        return [f"quote sync: {bp_path.as_posix()} unreadable (fail-closed)"]
+    try:
+        skill_text = skill_path.read_text(encoding="utf-8")
+    except OSError:
+        return [f"quote sync: {skill_path.as_posix()} unreadable (fail-closed)"]
+
+    # F-4: M10.4 trigger citation must be verbatim-present in SKILL.md.
+    m = re.search(
+        r"任务级触发入口位于 SKILL\.md「Agent 分发路由」表后一行：「(.*?)」",
+        bp_text,
+    )
+    if not m:
+        issues.append(
+            "quote sync: behavior-protocol.md M10.4 trigger-citation anchor line "
+            "missing or reworded (fail-closed; update citation and guard regex together)"
+        )
+    elif m.group(1) not in skill_text:
+        issues.append(
+            "quote sync: M10.4 citation no longer verbatim in SKILL.md injection "
+            "surface — sync the SKILL.md trigger line and the M10.4 citation in one change"
+        )
+
+    # F-A2: canonical consult-draw marker must live in M10.3 AND in all six notes.
+    if CONSULT_DRAW_MARKER not in bp_text:
+        issues.append(
+            f"quote sync: canonical consult-draw marker '{CONSULT_DRAW_MARKER}' no "
+            "longer present in behavior-protocol.md M10.3 (fail-closed; move the rule "
+            "marker, the six adapter notes and this guard together)"
+        )
+    else:
+        for rel in QUOTE_SYNC_ADAPTER_MANIFESTS:
+            path = ROOT / rel
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                note = (payload.get("exploration_channels") or {}).get("note", "")
+            except (OSError, json.JSONDecodeError):
+                issues.append(f"quote sync: {rel} unreadable or invalid JSON (fail-closed)")
+                continue
+            if CONSULT_DRAW_MARKER not in note:
+                issues.append(
+                    f"quote sync: {rel} exploration_channels.note lost canonical marker "
+                    f"'{CONSULT_DRAW_MARKER}' (paraphrase drift, F-A2)"
+                )
+    return issues
+
+
 def check_cross_references():
     """Scan .md and .py files for path references, build a reference graph,
     and detect: (1) dangling references (target file does not exist),
@@ -12266,10 +12346,14 @@ def check_cross_references():
             seen_cycles.add(key)
             unique_cycles.append(cycle)
 
+    # ── FIX-432 (F-4 / F-A2): citation/note quote-sync guard ──
+    quote_sync = _check_quote_sync_issues()
+
     return {
         "dangling": dangling,
         "deprecated": deprecated,
         "cycles": unique_cycles,
+        "quote_sync": quote_sync,
         "total_files_scanned": len(md_files) + len(py_files),
         "total_refs": sum(len(t) for t in refs.values()),
     }
@@ -16175,6 +16259,19 @@ def _run_full_engine_checks(args):
                 print(f"│    - {' -> '.join(cycle)}")
         else:
             print(f"│  [PASS] No circular references found.")
+        # FIX-432 (F-4/F-A2): citation/note quote-sync guard (.get for
+        # backward compatibility with pre-FIX-432 result shapes).
+        xr_quote = xr_result.get("quote_sync", [])
+        if xr_quote:
+            xr_issues += len(xr_quote)
+            all_issues += len(xr_quote)
+            print(f"│  [WARN] {len(xr_quote)} quote-sync issue(s):")
+            for issue in xr_quote[:10]:
+                print(f"│    - {issue}")
+            if len(xr_quote) > 10:
+                print(f"│    ... and {len(xr_quote) - 10} more")
+        else:
+            print(f"│  [PASS] Citation/note quote sync clean (FIX-432 F-4/F-A2).")
         if xr_issues == 0:
             print(f"│  [PASS] Cross-reference graph is clean.")
     else:
@@ -22048,6 +22145,17 @@ def cmd_check_cross_references(args):
             print(f"    - {' -> '.join(cycle)}")
     else:
         print(f"\n  [PASS] No circular references.")
+
+    # FIX-432 (F-4/F-A2): citation/note quote-sync guard (.get for
+    # backward compatibility with pre-FIX-432 result shapes).
+    quote_sync = result.get("quote_sync", [])
+    if quote_sync:
+        fail = True
+        print(f"\n  [FAIL] {len(quote_sync)} quote-sync issue(s) (FIX-432 F-4/F-A2):")
+        for issue in quote_sync:
+            print(f"    - {issue}")
+    else:
+        print(f"\n  [PASS] Citation/note quote sync clean (FIX-432 F-4/F-A2).")
 
     print()
     if fail:

@@ -406,7 +406,7 @@ Agent(
 
 ## 工作流合约
 
-Coordinator 执行行为约束，详见 `references/behavior-protocol.md`（M0-M9 强制性规则）。所有角色 Agent 必须遵守。
+Coordinator 执行行为约束，详见 `references/behavior-protocol.md`（M0-M10 强制性规则）。所有角色 Agent 必须遵守。
 
 ## AI Execution Packet（0.38.0+）
 
@@ -438,7 +438,7 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 
 | 文件 | 用途 |
 |------|------|
-| `references/behavior-protocol.md` | M0-M9 强制性行为协议 |
+| `references/behavior-protocol.md` | M0-M10 强制性行为协议 |
 | `references/methodology-routing.md` | 任务类型→执行方法与证据要求映射 |
 | `references/agent-failure-modes.md` | Agent 异常排查指南 |
 | `references/interaction-boundary.md` | 交互边界规则 |

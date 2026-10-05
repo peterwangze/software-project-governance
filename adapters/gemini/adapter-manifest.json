@@ -70,7 +70,7 @@
   },
   "exploration_channels": {
     "source_of_truth": "skills/software-project-governance/references/behavior-protocol.md M10.3",
-    "note": "M10.3 four behavior-semantic channels materialized for this platform. consult never maps draw: generation is not consultation (review-FEAT-085-DESIGN-R0 F-3). Honest degradation is legal; capability masquerade is an EXP-03 violation.",
+    "note": "M10.3 four behavior-semantic channels materialized for this platform. consult never maps draw: generation is not consultation (生成≠咨询 — canonical rule marker synced from behavior-protocol.md M10.3, drift-guarded by check-cross-references; origin review-FEAT-085-DESIGN-R0 F-3). Honest degradation is legal; capability masquerade is an EXP-03 violation.",
     "channels": {
       "discover": {
         "status": "degraded",

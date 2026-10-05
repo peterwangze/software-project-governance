@@ -54,7 +54,7 @@ passed-with-conditions 遗留项或进行中 P0 → 优先处理；上一 sessio
 
 ## 详细规则
 
-完整行为协议见插件 `software-project-governance` skill（M0~M9 强制性规则、Gate 行为、触发模式等）。以上 bootstrap 规则不依赖 SKILL.md 是否被加载——每次会话必定生效。
+完整行为协议见插件 `software-project-governance` skill（M0~M10 强制性规则、Gate 行为、触发模式等）。以上 bootstrap 规则不依赖 SKILL.md 是否被加载——每次会话必定生效。
 
 ## 故障排除（Agent 行为异常时）
 

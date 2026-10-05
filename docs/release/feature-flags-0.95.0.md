@@ -12,3 +12,7 @@
 ## Kill Switch 验证
 
 N/A——无旗标即无 Kill Switch 面；行为协议的「回退」= 版本回退（rollback-plan-0.95.0.md 承载：git revert 发布 commit 序列 + tag 回退）。
+
+## 边界声明（保守边界——REL-021 token 全量）
+
+本版不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success（RISK-036 已按用户 2026-09-30 裁定关闭〔前提移除式：官方提交暂缓，恢复提交时重开〕；1.0.0 外部验证前置族暂缓——用户声明存在大量未登记需求待登记）。0.95.0 交付面为仓内治理工作流本体（dogfood 实证：1052 unittest、双审 AWN/0×2、13 处版本声明一致）；M10 行为协议的前瞻样本验收为仓内行为面验证（5 样本三类，docs/research/feat-086-prospective-samples-2026-10-04.md），不构成外部运行时支持声明。

@@ -24720,5 +24720,155 @@ class Fix420CommitTaskRevertAwarenessTests(unittest.TestCase):
         self.assertEqual(result["commits"][0]["task_id"], None)
 
 
+# ── FIX-432 (R0 F-1): quote_sync guard committed regression cover ────────────
+
+class QuoteSyncGuardTests(unittest.TestCase):
+    """FIX-432 R0 F-1 — committed regression tests for the quote_sync guard.
+
+    The guard (``_check_quote_sync_issues``, F-4/F-A2) shipped in commit
+    9a28e4d with its negative three-state verification existing only as a
+    throwaway isolated-ROOT probe recorded manually in EVD-1316 — zero
+    committed tests. These tests rebuild that probe durably: the guard's
+    canonical surfaces (behavior-protocol.md, SKILL.md, six adapter
+    manifests) are copied from the real repo into a throwaway temp ROOT,
+    mutated per case, and removed afterwards — the real repo is never
+    touched. Pinned contract:
+
+    - positive: an unmutated surface set yields zero issues (no-false-
+      positive baseline over the current repo shape);
+    - F-4 negative: rewriting OR deleting the SKILL.md trigger line (the
+      M10.4 citation, L364 at fix time) flags exactly one issue pointing
+      at the SKILL.md injection surface;
+    - F-A2 negative (manifest): a single adapter manifest note losing the
+      canonical ``生成≠咨询`` marker flags exactly that one manifest;
+    - F-A2 negative (norm source): behavior-protocol.md M10.3 losing the
+      marker fails closed and skips the manifest sweep (no per-manifest
+      noise for a norm-source break).
+    """
+
+    BP_REL = "skills/software-project-governance/references/behavior-protocol.md"
+    SKILL_REL = "skills/software-project-governance/SKILL.md"
+    _ANCHOR_RE = (
+        r"任务级触发入口位于 SKILL\.md「Agent 分发路由」表后一行：「(.*?)」"
+    )
+
+    def _materialize_surfaces(self, root):
+        """Copy the guard's eight canonical surfaces from the real repo
+        into the isolated ROOT (real files are only ever read)."""
+        rels = (self.BP_REL, self.SKILL_REL) + tuple(vw.QUOTE_SYNC_ADAPTER_MANIFESTS)
+        for rel in rels:
+            dst = root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(vw.ROOT / rel, dst)
+
+    def _run_guard(self, root):
+        with patch.object(vw, "ROOT", Path(root)):
+            return vw._check_quote_sync_issues()
+
+    def _read(self, root, rel):
+        return (Path(root) / rel).read_text(encoding="utf-8")
+
+    def _write(self, root, rel, text):
+        (Path(root) / rel).write_text(text, encoding="utf-8")
+
+    def _real_citation(self):
+        """M10.4-cited trigger text, extracted from the REAL
+        behavior-protocol.md with the guard's own anchor regex, so the
+        mutation stays precise across future coordinated rewordings."""
+        bp_text = (vw.ROOT / self.BP_REL).read_text(encoding="utf-8")
+        m = re.search(self._ANCHOR_RE, bp_text)
+        self.assertIsNotNone(
+            m, "real M10.4 anchor line missing — guard/anchor drift?")
+        return m.group(1)
+
+    def _trigger_line_index(self, root, citation):
+        lines = self._read(root, self.SKILL_REL).split("\n")
+        hit = [i for i, ln in enumerate(lines) if citation in ln]
+        self.assertEqual(
+            len(hit), 1, "SKILL.md trigger line must be uniquely located")
+        return lines, hit[0]
+
+    def test_no_drift_yields_zero_issues(self):
+        # Positive baseline: a faithful copy of the canonical surfaces
+        # must not trip the guard (zero-false-positive calibration).
+        with _governance_temp_dir(prefix="fix432-f1-baseline-") as td:
+            self._materialize_surfaces(Path(td))
+            self.assertEqual(self._run_guard(td), [])
+
+    def test_skill_trigger_line_reworded_is_flagged(self):
+        # F-4 negative (a), reword flavor: the SKILL.md trigger line
+        # drifts from the M10.4 citation → exactly one issue pointing at
+        # the SKILL.md injection surface, nothing else.
+        citation = self._real_citation()
+        with _governance_temp_dir(prefix="fix432-f1-skill-reword-") as td:
+            root = Path(td)
+            self._materialize_surfaces(root)
+            lines, idx = self._trigger_line_index(root, citation)
+            lines[idx] = "> 新任务分解后 → 先做适用性判断（改写后的触发行）"
+            self._write(root, self.SKILL_REL, "\n".join(lines))
+            issues = self._run_guard(td)
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn(
+                "M10.4 citation no longer verbatim in SKILL.md", issues[0])
+            self.assertNotIn("adapter-manifest.json", issues[0])
+
+    def test_skill_trigger_line_deleted_is_flagged(self):
+        # F-4 negative (a), delete flavor: dropping the trigger line
+        # entirely must flag the same single issue (fail-closed, never a
+        # silent pass on a missing injection surface).
+        citation = self._real_citation()
+        with _governance_temp_dir(prefix="fix432-f1-skill-delete-") as td:
+            root = Path(td)
+            self._materialize_surfaces(root)
+            lines, idx = self._trigger_line_index(root, citation)
+            del lines[idx]
+            self._write(root, self.SKILL_REL, "\n".join(lines))
+            issues = self._run_guard(td)
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn(
+                "M10.4 citation no longer verbatim in SKILL.md", issues[0])
+            self.assertNotIn("adapter-manifest.json", issues[0])
+
+    def test_single_manifest_note_marker_loss_is_flagged(self):
+        # F-A2 negative (b): exactly one manifest (dsh) loses the canonical
+        # marker from exploration_channels.note → exactly one issue naming
+        # that manifest; the other five stay silent.
+        rel = "adapters/dsh/adapter-manifest.json"
+        with _governance_temp_dir(prefix="fix432-f1-manifest-") as td:
+            root = Path(td)
+            self._materialize_surfaces(root)
+            payload = json.loads(self._read(root, rel))
+            note = payload["exploration_channels"]["note"]
+            self.assertIn(vw.CONSULT_DRAW_MARKER, note)
+            payload["exploration_channels"]["note"] = note.replace(
+                vw.CONSULT_DRAW_MARKER, "")
+            (root / rel).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+            issues = self._run_guard(td)
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn(rel, issues[0])
+            self.assertIn("lost canonical marker", issues[0])
+            self.assertIn(vw.CONSULT_DRAW_MARKER, issues[0])
+
+    def test_norm_source_marker_loss_fails_closed(self):
+        # F-A2 negative (c): the norm source (behavior-protocol.md M10.3)
+        # loses the canonical marker → one fail-closed issue; the manifest
+        # sweep is skipped (no per-manifest noise for a norm-source break).
+        with _governance_temp_dir(prefix="fix432-f1-normsrc-") as td:
+            root = Path(td)
+            self._materialize_surfaces(root)
+            bp_text = self._read(root, self.BP_REL)
+            self.assertIn(vw.CONSULT_DRAW_MARKER, bp_text)
+            self._write(
+                root, self.BP_REL, bp_text.replace(vw.CONSULT_DRAW_MARKER, ""))
+            issues = self._run_guard(td)
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("canonical consult-draw marker", issues[0])
+            self.assertIn("behavior-protocol.md M10.3", issues[0])
+            self.assertIn("fail-closed", issues[0])
+            self.assertNotIn("adapter-manifest.json", issues[0])
+
+
 if __name__ == "__main__":
     unittest.main()

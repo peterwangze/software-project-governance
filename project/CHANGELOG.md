@@ -2,12 +2,12 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.95.0] - 未发布（准备态）
-<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.95.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
+## [0.95.0] - 2026-10-05
+<!-- 发布日期回填（FIX-349 口径）：M-7 annotated tag `v0.95.0`→1ee500a（transition commit），taggerdate 2026-10-05 20:55:53 +0800 权威。 -->
 
 ### 0.95.0 - **次版本线：「做薄·开放·主动探索」演进第一批（Minor Line: Thin, Open & Proactive Exploration — First Batch）**：载荷五票（AUDIT-157/158 + FEAT-085/086 + FIX-432 / DEC-312 用户裁定预留 0.95.0 / 发布链 REL-099）
 
-0.95.0 为 0.94.0 的次版本线（「做薄·开放·主动探索」五阶段演进的 **Phase 0 基线与止增 + 有界 Phase 1 最小行为修复** 单轮交付）：Phase 0 交付基线四件套（R5 回溯基线 12 样本三判定——应探索 4/可跳过 8/记录未知率 100% 单独披露；checks 146 项四分层分类 L1 36/L2 25/L3 10/L4 2；W1~W7 越界责任清单三要素全覆盖；注入与架构基线快照——止增纪律随基线生效）；Phase 1 交付 M10 主动生态探索协议 + 三类前瞻样本 5 例行为验收 + 全仓 M0-M9→M10 称谓统一与引文同步守卫。版本载荷经 **DEC-312(7) M-0 冻结为五票**（FEAT-087/088 新票与 FEAT-084 Slice-3 缓存子集均走 0.96.0 候选池——DEC-315/DEC-303(4)，M-0 逐项核算见 `docs/release/m-0-assembly-0.95.0.md`）；无破坏性变更（CLI 接口与 JSON schema 零变更、manifest 新键 additive、1047 unittest 零回归实证——FIX-432 R1 后 1052 待发布门复跑确认）、无机制激活翻转、无 `.governance` schema 变更（exploration 区块复用既有 evidence 载体四字段）；版本载荷窗口 `6da8d04（v0.94.0 tag peel）..<M-1 回填位>`（终值随 M-8 批回填——不预编造），发布链 REL-099 组装于 2026-10-05（+0800）。
+0.95.0 为 0.94.0 的次版本线（「做薄·开放·主动探索」五阶段演进的 **Phase 0 基线与止增 + 有界 Phase 1 最小行为修复** 单轮交付）：Phase 0 交付基线四件套（R5 回溯基线 12 样本三判定——应探索 4/可跳过 8/记录未知率 100% 单独披露；checks 146 项四分层分类 L1 36/L2 25/L3 10/L4 2；W1~W7 越界责任清单三要素全覆盖；注入与架构基线快照——止增纪律随基线生效）；Phase 1 交付 M10 主动生态探索协议 + 三类前瞻样本 5 例行为验收 + 全仓 M0-M9→M10 称谓统一与引文同步守卫。版本载荷经 **DEC-312(7) M-0 冻结为五票**（FEAT-087/088 新票与 FEAT-084 Slice-3 缓存子集均走 0.96.0 候选池——DEC-315/DEC-303(4)，M-0 逐项核算见 `docs/release/m-0-assembly-0.95.0.md`）；无破坏性变更（CLI 接口与 JSON schema 零变更、manifest 新键 additive、1047 unittest 零回归实证——FIX-432 R1 后 1052 待发布门复跑确认）、无机制激活翻转、无 `.governance` schema 变更（exploration 区块复用既有 evidence 载体四字段）；版本载荷窗口 `6da8d04（v0.94.0 tag peel）..641e935`（M-4 版本面组装 commit——M-8 批回填终值），发布链 REL-099 组装于 2026-10-05（+0800）。
 
 ### Added
 
@@ -40,7 +40,8 @@
 
 **准备态注记**：本段为 REL-099 组装时点（2026-10-05 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 M-7 annotated tag `v0.95.0` taggerdate 权威落字）；发布终账、Commit 区间终值与发布验证结论随发布链 M-2+ 补记。
 
-## [0.94.0] - 未发布（准备态）
+## [0.94.0] - 2026-10-04
+<!-- 段头回填（REL-099 M-8b，review-REL-099-REL-R0 F-1 残留修正）：tag `v0.94.0`→6da8d04（transition commit），taggerdate 权威——原「未发布（准备态）」为 REL-098 M-8b 未落字残留。 -->
 <!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.94.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
 
 ### 0.94.0 - **次版本线：治理信号可信与元机制闭环批（Minor Line: Signal Trustworthiness & Meta-Mechanism Closure）**：载荷十票（FEAT-081/082/083/084 + FIX-421~426 / 用户 ask 授权 2026-10-03 启动发布链 REL-098）

@@ -499,5 +499,61 @@ class GovernanceDataSizeTest(unittest.TestCase):
         self.assertEqual(live["governance_data_size"]["error_bytes"], 250000)
 
 
+class ArchiveFamilySizeGuardTests(unittest.TestCase):
+    """FIX-435: archive.py C2 split — the module_size debt is REPAID, not
+    excluded. Guards three faces:
+
+    1. the real-repo module_size check reports NO finding for any
+       archive-family module (28n 裸露达标);
+    2. the FIX-430 watchdog-freeze exclusion entry for archive.py is GONE
+       from the live schema (EVD-1309 redemption stays redeemed —
+       re-adding any archive-family exclusion must fail here);
+    3. every family module is under the configured warn threshold by
+       direct physical line count (ratchet 只紧不松).
+    """
+
+    FAMILY = ("archive.py", "archive_verdicts.py",
+              "archive_migration_engine.py", "archive_entity_migration.py",
+              "archive_cli.py", "archive_parsing.py", "archive_indexing.py")
+
+    def test_real_repo_no_module_size_finding_for_archive_family(self):
+        result = vw.check_architecture_health()
+        if result.get("error"):
+            self.skipTest(f"schema unavailable in this env: {result['error']}")
+        finds = [f for f in result["findings"]
+                 if f.get("check") == "module_size"
+                 and "e2e-test-project" not in f.get("path", "")
+                 and any(name in f.get("path", "") for name in self.FAMILY)]
+        self.assertEqual(finds, [],
+                         f"archive family must be clean post-FIX-435: {finds}")
+
+    def test_live_schema_has_no_archive_exclusion(self):
+        live, err = vw._archguard_load_schema(vw.ROOT)
+        self.assertIsNone(err)
+        paths = [e["path"]
+                 for e in live["module_size"].get("exclusions", [])]
+        self.assertNotIn("skills/software-project-governance/infra/archive.py",
+                         paths)
+        self.assertTrue(all("archive" not in p for p in paths),
+                        f"no archive-family exclusions allowed (A5 纪律): "
+                        f"{paths}")
+
+    def test_family_modules_under_warn_threshold(self):
+        live, err = vw._archguard_load_schema(vw.ROOT)
+        self.assertIsNone(err)
+        warn = live["module_size"]["warn_lines"]
+        for name in self.FAMILY:
+            path = (vw.ROOT / "skills/software-project-governance/infra"
+                    / name)
+            text = path.read_text(encoding="utf-8")
+            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+            if normalized.endswith("\n"):
+                normalized = normalized[:-1]
+            count = len(normalized.split("\n")) if normalized else 0
+            self.assertLessEqual(count, warn,
+                                 f"{name} exceeds module_size warn_lines "
+                                 f"{warn} (FIX-435 ratchet: 只紧不松)")
+
+
 if __name__ == "__main__":
     unittest.main()

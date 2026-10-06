@@ -22,10 +22,6 @@
       {
         "path": ".governance/**",
         "reason": "FIX-350: host governance runtime data (incl. backups/) — not product code"
-      },
-      {
-        "path": "skills/software-project-governance/infra/archive.py",
-        "reason": "FIX-430: post-FIX-417 split residue (6016->4241, EVD-1282; ERROR cleared, 4241 still over warn 2000) — 0.95 split carry-over registered in the FIX-430 plan-tracker ticket row + docs/reviews/analysis-FIX-427.md §类 3 C2 recommendation (ticket 4: C2 archive.py split, P2/0.95); docs/reconciliation-0.94.0.md §三 #7 cited only as same-family split-candidate precedent (it covers the OTHER 28n modules — closure_chain/governance_store/dsh_compat/loop_gate_processor — not archive.py, and registers no 0.95 carry-over for archive.py); this exclusion does not delete the debt, it is an explicit watchdog freeze (看护冻结) until the 0.95 split lands"
       }
     ]
   },

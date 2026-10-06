@@ -6085,5 +6085,140 @@ class FIX407DecisionNarrativeMigrationTests(unittest.TestCase):
                          self._reason_of(explain, "DEC-182"))
 
 
+# ── FIX-435: C2 split surface + seam-routing guards ──────────────────
+
+
+class TestFix435SplitSurface(unittest.TestCase):
+    """FIX-435 (archive.py C2 split continuation): the split into
+    archive_verdicts / archive_migration_engine / archive_entity_migration /
+    archive_cli must be invisible to every consumer — ``archive.<name>``
+    keeps resolving for the whole legacy surface, wrapper signatures stay
+    identical, and the tests' function-level patch surface still intercepts
+    the moved implementations through the entry module's live namespace."""
+
+    LEGACY_CALLABLES = (
+        "migrate_by_version", "migrate_auto", "migrate_evidence_resumable",
+        "scan_row_families", "write_family_scan_outputs",
+        "analyze_auto_archive_candidates", "build_index", "rebuild_index",
+        "verify_archive_integrity", "rollback_last_migration", "main",
+        "_migrate_decisions", "_migrate_risks", "_migrate_evidence",
+        "_classify_evidence_rows", "_classify_rows_for_family",
+        "_build_classification_context", "_q6_date_window_fallback",
+        "_window_end_release_date", "_decision_narrative_verdict",
+        "_decision_authority_state", "_migration_state_dir",
+        "_migration_journal_path", "_migration_write_journal",
+        "_migration_write_batch", "_make_incremental_archive_filename",
+        "_next_evidence_archive_filename", "_next_family_archive_filename",
+        "_rollback_task_archive", "_rollback_evidence_archive",
+        "_get_migration_archive_group", "_atomic_write_text",
+        "_big_table_target_lock", "_build_archive_arg_parser",
+        "format_family_scan_tsv", "format_family_scan_summary",
+        "_finalize_explain", "_format_explain_report", "_format_auto_summary",
+        "_evidence_classification_context_digest", "_sha256_text",
+        "_apply_project_root_override", "_validate_project_root",
+        "_extract_project_root_arg", "_ensure_archive_dirs",
+        "_get_existing_archive_files", "_version_still_covered_by_task_archive",
+    )
+    LEGACY_OBJECTS = (
+        "ROOT", "PLUGIN_ROOT", "HOST_PROJECT_ROOT", "_LEGACY_ROOT",
+        "BigTableMigrationError", "DecisionStoreAuthorityConflict",
+        "RowFamilyMigrationRejected", "BIG_TABLE_MIGRATION_BATCH_SIZE",
+        "_WRITE_MIGRATION_ROW_FAMILIES", "_SCAN_ROW_FAMILIES",
+        "_EVIDENCE_REF_ENTITY_TYPES", "_REF_FAILURE_SUBSTATE_ORDER",
+        "_EVIDENCE_KEEP_MARKERS", "_EXPLAIN_UNKNOWN_REASONS", "_ROW_DATE_RE",
+        "_MIGRATION_JOURNAL_SCHEMA", "_DECISION_AUTHORITY_MARKER_NAME",
+    )
+
+    def test_legacy_surface_resolves(self):
+        import archive
+        for name in self.LEGACY_CALLABLES:
+            self.assertTrue(callable(getattr(archive, name, None)),
+                            f"archive.{name} must stay callable after FIX-435")
+        for name in self.LEGACY_OBJECTS:
+            self.assertIsNotNone(getattr(archive, name, None),
+                                 f"archive.{name} must stay resolvable after "
+                                 "FIX-435")
+
+    def test_exception_hierarchy_and_payload_preserved(self):
+        import archive
+        exc = archive.BigTableMigrationError({"code": "x", "detail": "d"})
+        self.assertEqual(exc.payload, {"code": "x", "detail": "d"})
+        self.assertIsInstance(
+            archive.DecisionStoreAuthorityConflict({"detail": "d"}),
+            archive.BigTableMigrationError)
+        self.assertIsInstance(
+            archive.RowFamilyMigrationRejected({"detail": "d"}),
+            archive.BigTableMigrationError)
+
+    def test_wrapper_signatures_unchanged(self):
+        import archive
+        import inspect
+        self.assertEqual(
+            list(inspect.signature(
+                archive.migrate_evidence_resumable).parameters),
+            ["version_start", "version_end", "batch_size", "dry_run",
+             "task_versions", "row_family"])
+        self.assertEqual(
+            inspect.signature(archive.migrate_evidence_resumable)
+            .parameters["batch_size"].default, 200)
+        self.assertEqual(
+            list(inspect.signature(
+                archive._classify_evidence_rows).parameters),
+            ["content", "task_versions", "version_start", "version_end",
+             "context"])
+        self.assertEqual(
+            list(inspect.signature(archive._migrate_decisions).parameters),
+            ["version_start", "version_end", "task_versions", "dry_run",
+             "explain_out"])
+
+    def test_q6_wrapper_honors_window_end_patch(self):
+        """The moved Q6 chain resolves _window_end_release_date through the
+        archive module at call time — patching it intercepts the moved
+        classification exactly as before the split (FIX-435 host seam)."""
+        import archive
+        from datetime import date as _date
+        row = "| DEC-9 | 2026-01-01 | t | c | r |"
+        with patch.object(archive, "_window_end_release_date",
+                          return_value=_date(2026, 6, 1)):
+            self.assertIsNotNone(
+                archive._q6_date_window_fallback(row, "0.90.0"))
+        with patch.object(archive, "_window_end_release_date",
+                          return_value=None):
+            self.assertIsNone(archive._q6_date_window_fallback(row, "0.90.0"))
+
+    def test_isolated_loader_instance_is_seam_consistent(self):
+        """verify_workflow loads archive.py via spec_from_file_location as
+        its own module instance and rebinds ROOT — the split modules must
+        follow THAT instance's live namespace (no rogue second ``import
+        archive``, no module-level seam binding; FIX-435 design invariant).
+        """
+        import importlib.util
+        import archive as direct
+        infra = Path(direct.__file__).parent
+        spec = importlib.util.spec_from_file_location(
+            "fix435_isolated_probe", infra / "archive.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gov = root / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(
+                "# t\n\n### v0.1.0\n"
+                "| 任务ID | 描述 | 优先级 | 依赖 | 目标版本 | 负责人 | "
+                "审查人 | 审查类型 | 闭环路径 | 状态 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| T-1 | d | P1 | — | 0.1.0 | a | — | Code Reviewer | "
+                "TBD | 进行中 |\n",
+                encoding="utf-8")
+            mod.ROOT = root
+            mod.HOST_PROJECT_ROOT = root
+            # dry-run judgment must read the ISOLATED instance's ROOT —
+            # never the direct-import module's cwd-derived default.
+            result = mod.migrate_by_version("0.1.0", "0.2.0", dry_run=True)
+            self.assertTrue(result["success"])
+            self.assertEqual(result["tasks_archived"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

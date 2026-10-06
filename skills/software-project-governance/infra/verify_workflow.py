@@ -7502,8 +7502,10 @@ def check_release_readiness(
         [f"dangling reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["dangling"]]
         + [f"deprecated reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["deprecated"]]
         + [f"circular reference: {' -> '.join(cycle)}" for cycle in cross_ref_result["cycles"]]
-        # FIX-432 (F-4/F-A2): quote-sync issues ride the same gate (.get for
-        # backward compatibility with pre-FIX-432 result shapes).
+        # FIX-432 (F-4/F-A2) / FIX-436 F-8 wording: quote-sync issues ride
+        # the same gate; the current check_cross_references() always emits
+        # the key — .get only tolerates pre-FIX-432/partial dict shapes
+        # (e.g. fixtures or older cached results) that lack it.
         + [f"quote sync: {issue}" for issue in cross_ref_result.get("quote_sync", [])]
     )
     details["cross_references"] = {
@@ -12257,6 +12259,15 @@ def check_exploration_channels(root=None):
                         f"evidence_ref '{ref_norm}' does not exist in the "
                         f"repository (dangling dated anchor)")
                 elif anchor_date is not None:
+                    # FIX-436 (F-C1, option b / DEC-317(2)): the corroboration
+                    # below is a DOCUMENT-WIDE substring match — deliberately
+                    # weaker than the §-level granularity the evidence prose
+                    # may claim ("evidence_ref §3(c) saw …"). A heuristic
+                    # §-neighborhood rule would fire definite FAILs on legal
+                    # shapes (the false-alarm class this guard forbids), so
+                    # the boundary is disclosed here and in
+                    # probe_layering.feasible_probe; §-level positioning stays
+                    # human-review territory.
                     try:
                         ref_text = ref_path.read_text(
                             encoding="utf-8", errors="replace")
@@ -12296,8 +12307,12 @@ def check_exploration_channels(root=None):
                 "anchors (this check, FAIL-able)"),
             "feasible_probe": (
                 "evidence_ref existence + anchor-date corroboration in the "
-                "cited document (read-only; the only live checks a CLI "
-                "process can honestly perform here)"),
+                "cited document (read-only, DOCUMENT-WIDE substring match, "
+                "NOT section-scoped — a date present anywhere in the cited "
+                "document corroborates, so the §-level granularity claimed "
+                "by evidence prose is human-review territory; FIX-436 "
+                "F-C1/DEC-317(2); the only live checks a CLI process can "
+                "honestly perform here)"),
             "not_probeable": (
                 "host-session tool liveness (web_search / route_agent) is "
                 "NOT probed and NOT claimed — harness-layer tools are "
@@ -12307,6 +12322,52 @@ def check_exploration_channels(root=None):
         },
         "pass": not issues,
     }
+
+
+# ── FIX-436 (F-B3 / DEC-317): M10.2 sample-report exploration-block ──
+#    presence advisory — WARN-class, [ADVISORY]-rendered, never counted ──
+# DEC-317 ruled this face OUT of FEAT-088's machine-check scope (four
+# reasons: different judgment face / honest-vs-lazy omission not machine-
+# distinguishable / A10 thinness / better carrier) and mandated the
+# advisory (non-blocking) carrier on the check-governance host health
+# surface. The thin honest form below checks ONE definite fact on
+# committed exemplar docs only — every known sample report still carries
+# at least one `exploration:` block (the M10.2 four-field schema's only
+# committed usage examples). It deliberately does NOT judge omission
+# legality (honest vs lazy stays human-review territory, DEC-317 reason
+# ②) and never counts toward any gate (MUST NOT be made a blocking FAIL).
+EXPLORATION_SAMPLE_REPORTS = (
+    "docs/research/feat-086-prospective-samples-2026-10-04.md",
+    "docs/research/feat-087-channel-loss-samples-2026-10-05.md",
+)
+
+
+def check_exploration_sample_advisories(root=None):
+    """FIX-436 (F-B3 / DEC-317): WARN-class presence advisory, never FAIL.
+
+    Returns advisory strings (empty when every known sample report still
+    carries an ``exploration:`` block). Callers MUST render these as
+    non-counting advisories.
+    """
+    base = Path(root) if root is not None else ROOT
+    advisories = []
+    for rel in EXPLORATION_SAMPLE_REPORTS:
+        try:
+            text = (base / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            advisories.append(
+                f"exploration samples: {rel} unreadable — cannot verify "
+                f"the M10.2 exemplar exploration blocks (advisory, FIX-436 "
+                f"F-B3/DEC-317)")
+            continue
+        if not re.search(r"(?m)^exploration:", text):
+            advisories.append(
+                f"exploration samples: {rel} carries no `exploration:` "
+                f"block — the M10.2 schema's committed usage examples "
+                f"should not lose their trace blocks (advisory, FIX-436 "
+                f"F-B3/DEC-317; honest-vs-lazy omission stays "
+                f"human-judged)")
+    return advisories
 
 
 def check_cross_references():
@@ -16501,8 +16562,9 @@ def _run_full_engine_checks(args):
                 print(f"│    - {' -> '.join(cycle)}")
         else:
             print(f"│  [PASS] No circular references found.")
-        # FIX-432 (F-4/F-A2): citation/note quote-sync guard (.get for
-        # backward compatibility with pre-FIX-432 result shapes).
+        # FIX-432 (F-4/F-A2) / FIX-436 F-8 wording: citation/note quote-sync
+        # guard; the current check_cross_references() always emits the key —
+        # .get only tolerates pre-FIX-432/partial dict shapes that lack it.
         xr_quote = xr_result.get("quote_sync", [])
         if xr_quote:
             xr_issues += len(xr_quote)
@@ -16536,6 +16598,11 @@ def _run_full_engine_checks(args):
                   f"carry dated anchors — host-tool liveness itself is NOT "
                   f"probed, see check-exploration-channels).")
         for advisory in (xr_channels.get("advisories") or [])[:5]:
+            print(f"│  [ADVISORY] {advisory}")
+        # FIX-436 (F-B3 / DEC-317): M10.2 sample-report exploration-block
+        # presence advisory — WARN-class, disclosed but deliberately NOT
+        # counted (same non-blocking discipline as the advisories above).
+        for advisory in check_exploration_sample_advisories():
             print(f"│  [ADVISORY] {advisory}")
         if xr_issues == 0:
             print(f"│  [PASS] Cross-reference graph is clean.")
@@ -22411,8 +22478,9 @@ def cmd_check_cross_references(args):
     else:
         print(f"\n  [PASS] No circular references.")
 
-    # FIX-432 (F-4/F-A2): citation/note quote-sync guard (.get for
-    # backward compatibility with pre-FIX-432 result shapes).
+    # FIX-432 (F-4/F-A2) / FIX-436 F-8 wording: citation/note quote-sync
+    # guard; the current check_cross_references() always emits the key —
+    # .get only tolerates pre-FIX-432/partial dict shapes that lack it.
     quote_sync = result.get("quote_sync", [])
     if quote_sync:
         fail = True
@@ -22441,6 +22509,12 @@ def cmd_check_cross_references(args):
         print("\n  Probe layering (honesty statement):")
         for label, text in layering.items():
             print(f"    - {label}: {text}")
+
+    # FIX-436 (F-B3 / DEC-317): M10.2 sample-report exploration-block
+    # presence advisory — WARN-class, disclosed but never counted toward
+    # the exit code (MUST NOT be a blocking FAIL per DEC-317).
+    for advisory in check_exploration_sample_advisories():
+        print(f"  [ADVISORY] {advisory}")
 
     print()
     if fail:

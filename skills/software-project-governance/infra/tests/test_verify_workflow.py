@@ -24739,6 +24739,12 @@ class QuoteSyncGuardTests(unittest.TestCase):
     - F-4 negative: rewriting OR deleting the SKILL.md trigger line (the
       M10.4 citation, L364 at fix time) flags exactly one issue pointing
       at the SKILL.md injection surface;
+    - F-4 negative, FIX-436 R1-1 (branch ③): rewriting the bp anchor-line
+      PREFIX (guard-regex mismatch) flags exactly one fail-closed anchor
+      issue, manifest sweep stays silent;
+    - FIX-436 R1-1 incidentals (fail-closed I/O branches ①②/⑥b): an
+      unreadable bp or SKILL.md, and one invalid-JSON manifest, each flag
+      exactly that surface — never a silent skip;
     - F-A2 negative (manifest): a single adapter manifest note losing the
       canonical ``生成≠咨询`` marker flags exactly that one manifest;
     - F-A2 negative (norm source): behavior-protocol.md M10.3 losing the
@@ -24748,6 +24754,11 @@ class QuoteSyncGuardTests(unittest.TestCase):
 
     BP_REL = "skills/software-project-governance/references/behavior-protocol.md"
     SKILL_REL = "skills/software-project-governance/SKILL.md"
+    # FIX-436 (R1-2): VERBATIM COPY of the guard's inline regex
+    # (verify_workflow.py ``_check_quote_sync_issues`` — the regex lives
+    # inline in the function body, so it cannot be imported). The two MUST
+    # be updated together in one change; drift fails visibly via
+    # ``_real_citation``'s assertIsNotNone, never silently.
     _ANCHOR_RE = (
         r"任务级触发入口位于 SKILL\.md「Agent 分发路由」表后一行：「(.*?)」"
     )
@@ -24773,8 +24784,10 @@ class QuoteSyncGuardTests(unittest.TestCase):
 
     def _real_citation(self):
         """M10.4-cited trigger text, extracted from the REAL
-        behavior-protocol.md with the guard's own anchor regex, so the
-        mutation stays precise across future coordinated rewordings."""
+        behavior-protocol.md with a verbatim copy of the guard's inline
+        regex (verify_workflow.py ``_check_quote_sync_issues`` — the two
+        MUST be updated together, see _ANCHOR_RE), so the mutation stays
+        precise across future coordinated rewordings."""
         bp_text = (vw.ROOT / self.BP_REL).read_text(encoding="utf-8")
         m = re.search(self._ANCHOR_RE, bp_text)
         self.assertIsNotNone(
@@ -24830,10 +24843,13 @@ class QuoteSyncGuardTests(unittest.TestCase):
             self.assertNotIn("adapter-manifest.json", issues[0])
 
     def test_single_manifest_note_marker_loss_is_flagged(self):
-        # F-A2 negative (b): exactly one manifest (dsh) loses the canonical
+        # F-A2 negative (b): exactly one manifest loses the canonical
         # marker from exploration_channels.note → exactly one issue naming
-        # that manifest; the other five stay silent.
-        rel = "adapters/dsh/adapter-manifest.json"
+        # that manifest; the other five stay silent. FIX-436 (R1-3): the
+        # manifest comes from the guard's own tuple (last element) instead
+        # of a hardcoded platform literal — no dsh-specific fixture to
+        # rot if the platform roster moves.
+        rel = vw.QUOTE_SYNC_ADAPTER_MANIFESTS[-1]
         with _governance_temp_dir(prefix="fix432-f1-manifest-") as td:
             root = Path(td)
             self._materialize_surfaces(root)
@@ -24868,6 +24884,119 @@ class QuoteSyncGuardTests(unittest.TestCase):
             self.assertIn("behavior-protocol.md M10.3", issues[0])
             self.assertIn("fail-closed", issues[0])
             self.assertNotIn("adapter-manifest.json", issues[0])
+
+    def test_bp_anchor_line_prefix_reworded_is_flagged(self):
+        # FIX-436 (R1-1, branch ③): rewriting the bp anchor-line PREFIX
+        # breaks the guard's inline regex match → exactly one fail-closed
+        # issue with the anchor-missing message; the citation-drift branch
+        # (elif) cannot fire, and the manifest sweep stays silent (the
+        # marker face is untouched).
+        with _governance_temp_dir(prefix="fix436-r11-anchor-") as td:
+            root = Path(td)
+            self._materialize_surfaces(root)
+            lines = self._read(root, self.BP_REL).split("\n")
+            hit = [i for i, ln in enumerate(lines)
+                   if "任务级触发入口位于" in ln]
+            self.assertEqual(
+                len(hit), 1, "bp anchor line must be uniquely located")
+            # Prefix-reword flavor: mutate the anchored prefix wording so
+            # the guard's inline regex no longer matches. assertIn keeps
+            # the mutation honest: if the prefix wording ever changes
+            # upstream, this fails visibly here — update this mutation
+            # and the guard regex in one change (same discipline as
+            # _ANCHOR_RE).
+            self.assertIn(
+                "表后一行", lines[hit[0]],
+                "anchor prefix reworded upstream? update this mutation "
+                "and the guard regex together")
+            lines[hit[0]] = lines[hit[0]].replace("表后一行", "表后两行")
+            self._write(root, self.BP_REL, "\n".join(lines))
+            issues = self._run_guard(td)
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn(
+                "anchor line missing or reworded", issues[0])
+            self.assertNotIn("adapter-manifest.json", issues[0])
+
+    def test_unreadable_bp_or_skill_fails_closed(self):
+        # FIX-436 (R1-1 incidentals, branches ①②): bp / SKILL.md
+        # unreadable (here: deleted — FileNotFoundError is an OSError) →
+        # exactly one fail-closed issue naming that surface, returned
+        # before any further judgment; never a silent skip.
+        with _governance_temp_dir(prefix="fix436-r11-unread-") as td:
+            root = Path(td)
+            self._materialize_surfaces(root)
+            (root / self.BP_REL).unlink()
+            issues = self._run_guard(td)
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("behavior-protocol.md", issues[0])
+            self.assertIn("unreadable", issues[0])
+            self.assertIn("fail-closed", issues[0])
+            shutil.copyfile(vw.ROOT / self.BP_REL, root / self.BP_REL)
+            (root / self.SKILL_REL).unlink()
+            issues = self._run_guard(td)
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn("SKILL.md", issues[0])
+            self.assertIn("unreadable", issues[0])
+            self.assertIn("fail-closed", issues[0])
+
+    def test_single_manifest_bad_json_fails_closed(self):
+        # FIX-436 (R1-1 incidental, branch ⑥b): one manifest with invalid
+        # JSON → exactly that manifest flagged unreadable/invalid
+        # (fail-closed, continue past it); the other five stay silent.
+        rel = vw.QUOTE_SYNC_ADAPTER_MANIFESTS[-1]
+        with _governance_temp_dir(prefix="fix436-r11-badjson-") as td:
+            root = Path(td)
+            self._materialize_surfaces(root)
+            (root / rel).write_text("{ not json", encoding="utf-8")
+            issues = self._run_guard(td)
+            self.assertEqual(len(issues), 1, issues)
+            self.assertIn(rel, issues[0])
+            self.assertIn("unreadable or invalid JSON", issues[0])
+
+
+# ── FIX-436 (F-B3 / DEC-317): sample-report exploration-block advisory ─────
+
+class ExplorationSampleAdvisoryTests(unittest.TestCase):
+    """FIX-436 F-B3 — WARN-class presence advisory, never a FAIL.
+
+    DEC-317 ruled the M10.2 SHOULD-trace face out of FEAT-088's machine
+    checks (four reasons: different judgment face / honest-vs-lazy
+    omission not machine-distinguishable / A10 thinness / better carrier)
+    and onto the host-health advisory carrier. The advisory checks ONE
+    definite fact on committed exemplar docs: every known sample report
+    still carries at least one ``exploration:`` block (the M10.2 schema's
+    only committed usage examples). Pinned from both sides: healthy repo
+    → zero advisories; a temp-root copy with the block stripped →
+    exactly one advisory naming that report. The real repo is only ever
+    read.
+    """
+
+    def test_healthy_repo_yields_no_advisories(self):
+        self.assertEqual(vw.check_exploration_sample_advisories(), [])
+
+    def test_stripped_sample_report_yields_one_advisory(self):
+        stripped_rel = vw.EXPLORATION_SAMPLE_REPORTS[0]
+        with _governance_temp_dir(prefix="fix436-fb3-") as td:
+            root = Path(td)
+            for rel in vw.EXPLORATION_SAMPLE_REPORTS:
+                dst = root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(vw.ROOT / rel, dst)
+            text = self._read_stripped(root, stripped_rel)
+            (root / stripped_rel).write_text(text, encoding="utf-8")
+            advisories = vw.check_exploration_sample_advisories(root)
+            self.assertEqual(len(advisories), 1, advisories)
+            self.assertIn(stripped_rel, advisories[0])
+            self.assertIn("no `exploration:` block", advisories[0])
+            self.assertIn("FIX-436", advisories[0])
+
+    @staticmethod
+    def _read_stripped(root, rel):
+        text = (root / rel).read_text(encoding="utf-8")
+        assert "exploration:" in text, "fixture lost its block upstream?"
+        return "\n".join(
+            ln for ln in text.split("\n")
+            if not ln.startswith("exploration:"))
 
 
 if __name__ == "__main__":

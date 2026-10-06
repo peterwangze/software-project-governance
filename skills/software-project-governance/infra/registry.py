@@ -296,6 +296,13 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("check-duplicate-code", "verify_workflow.cmd_check_duplicate_code"),
     ("check-entry-bootstrap-sync",
      "checks.projection.cmd_check_entry_bootstrap_sync"),
+    # FIX-438 (0.95.0 window, DEC-319/320): FEAT-088's exploration-channel
+    # guard subcommand — shipped 2026-10-05 (638509e) with its engine dispatch
+    # but without this _COMMANDS row (the FEAT-064 landing-omission shape,
+    # exposed by the make-up FEAT-020 snapshot regen); declared here in the
+    # same change as that regen.
+    ("check-exploration-channels",
+     "verify_workflow.cmd_check_exploration_channels"),
     ("check-first-session-measurement",
      "verify_workflow.cmd_check_first_session_measurement"),
     ("check-flow-unit-runtime", "verify_workflow.cmd_check_flow_unit_runtime"),
@@ -413,7 +420,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("write-guard-bootstrap", "verify_workflow.cmd_write_guard_bootstrap"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""98 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
+"""99 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
 ``check-dsh-boundary`` and ``dsh-doctor``; FEAT-032 added
 ``governance-cost-report``; FEAT-037 added ``check-entry-bootstrap-sync``;
 FEAT-033 added ``governance-bootstrap``; FEAT-055 added the three governed
@@ -423,13 +430,17 @@ commands, and the two baseline_metadata commands; FIX-370 added
 FIX-383 added ``write-guard-bootstrap`` — declared here by FEAT-064 after
 its landing omission left the R5 registration drift in place; FEAT-080
 added ``demand-source-revise``, the ADR-021 §2.2.1 revision-channel CLI
-regularization), each with the module that
+regularization; FIX-438 declared ``check-exploration-channels`` — FEAT-088
+shipped the guard subcommand without this row, cured by the make-up regen),
+each with the module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
 cross-referenced with the defining module of every handler name — 17 keys are
-already outside the engine, the other 80 ride the monolith).  The docstring
+already outside the engine, the other 82 ride the monolith).  The docstring
 count shipped stale at FEAT-039 time (said 87 with 8 outside when the table
 held 88 with 9 outside); corrected here as part of the deliberate
-re-baseline rather than silently absorbed."""
+re-baseline rather than silently absorbed.  The FEAT-080 window repeated the
+stale-count shape (said 17 outside / 80 monolith at 97 total); both numbers
+re-censused at this FIX-438 re-baseline: 17 outside / 82 monolith at 99."""
 
 # ── check declaration: 71 segments → entry dotted path ──────────────────────
 

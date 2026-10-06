@@ -116,7 +116,14 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # BLOCKING) and Check 42 (Discovery Closure Rate, ADVISORY_SEGMENTS — the
 # ADR-021 §3.2.3 observation-window WARN posture) sections; SegmentSpec +
 # _SEGMENT_LOADERS + snapshot re-baselined in the same change.
-FROZEN_CLI_KEYS = 98
+# FIX-438 (0.95.0 window, DEC-319/320): 98 -> 99 CLI keys — FEAT-088's
+# `check-exploration-channels` (638509e, 2026-10-05) shipped with its engine
+# dispatch but without its registry row and without the snapshot rider; the
+# make-up regen (snapshot + this count + the registry._COMMANDS row + the
+# architecture-baseline re-anchor under DEC-320 path A) re-baselines all
+# four faces in the same change. Segments stay at 73 (the guard rides
+# Check 12 / check-cross-references).
+FROZEN_CLI_KEYS = 99
 FROZEN_SEGMENTS = 73
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):

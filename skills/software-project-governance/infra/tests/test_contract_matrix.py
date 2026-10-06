@@ -92,7 +92,14 @@ from contract_matrix import generator as cmg  # noqa: E402
 # regenerated + registry row + this count re-baselined in the same change,
 # the F-P2-5 regen discipline); segments 71→73 — the Check 41/42 provenance
 # sections (BLOCKING / ADVISORY respectively, ADR-021 §2.2.3+§3.2.3).
-FROZEN_CLI_KEY_COUNT = 98
+# FIX-438 (0.95.0 window, DEC-319): 98→99 keys — FEAT-088 (638509e,
+# 2026-10-05) shipped the `check-exploration-channels` subcommand without
+# its snapshot rider; this make-up regen (`generator.py --regen`) re-
+# baselines the frozen face along the documented contract-change path.
+# Segments unchanged at 73 (the guard rides Check 12 / check-cross-
+# references; no new banner); result_shapes and guard_output_pin faces
+# byte-stable (zero drift in the same regen).
+FROZEN_CLI_KEY_COUNT = 99
 FROZEN_CHECK_SEGMENT_COUNT = 73
 
 

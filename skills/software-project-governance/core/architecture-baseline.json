@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "901800614c9d3edfa7be39a2744f8afd63dc04eb",
+    "git_head": "e1457a8e659090bee02e9bad511ec2cf080b1c10",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 27352,
+    "anchor_loc": 27792,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -264,10 +264,11 @@
         "path": "contract_matrix/generator.py"
       },
       {
-        "count": 1,
+        "count": 2,
         "kind": "import_vw",
         "lines": [
-          1050
+          1052,
+          1205
         ],
         "owner_task": "REFACTOR-remaining",
         "path": "dsh_doctor.py"
@@ -458,7 +459,7 @@
       "_print_check_summary": 9,
       "_print_product_gate_skipped": 3,
       "_print_sequential_id_check": 13,
-      "_run_full_engine_checks": 611,
+      "_run_full_engine_checks": 620,
       "check_agent_adapter_contract": 3,
       "check_architecture_fact_source": 2,
       "check_files": 4,
@@ -475,11 +476,12 @@
       "cmd_check_archive_integrity": 13,
       "cmd_check_commit_scope": 9,
       "cmd_check_complexity": 7,
-      "cmd_check_cross_references": 14,
+      "cmd_check_cross_references": 23,
       "cmd_check_deterministic_scaffolds": 8,
       "cmd_check_dsh_boundary": 1,
       "cmd_check_dsh_preset_smoke": 7,
       "cmd_check_duplicate_code": 7,
+      "cmd_check_exploration_channels": 10,
       "cmd_check_first_session_measurement": 6,
       "cmd_check_flow_unit_runtime": 14,
       "cmd_check_goal_alignment": 15,
@@ -540,7 +542,7 @@
       "cmd_write_guard_bootstrap": 2,
       "main": 1
     },
-    "total": 1341
+    "total": 1369
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",

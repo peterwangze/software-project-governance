@@ -107,7 +107,18 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      1338; synced here by FIX-423 with the bisect evidence
 #      (344ec8c..2aa2377 census: _run_full_engine_checks 608 -> 611, all
 #      other functions unchanged).)
-FACTS_PRINT_TOTAL = 1341
+#   -> 1369 (0.95.0 window, FIX-438 / DEC-320 path A, 2026-10-06: +28 over
+#      the FEAT-083-regen census — FEAT-088 (638509e) +21: the Check 12
+#      exploration-channels face (+5 in _run_full_engine_checks, 615 -> 620;
+#      +6 in cmd_check_cross_references, 17 -> 23) and the standalone
+#      cmd_check_exploration_channels panel +10 (0 -> 10); FIX-432 (9a28e4d,
+#      the F-4 citation/note quote-sync guard) +7: 611 -> 615 in
+#      _run_full_engine_checks and 14 -> 17 in cmd_check_cross_references.
+#      Both tickets landed without their archguard rider; this make-up regen
+#      re-anchored the baseline in the same change. Per-commit split
+#      machine-censused via count_print_calls over git show c00d70c /
+#      9a28e4d / e1457a8.)
+FACTS_PRINT_TOTAL = 1369
 
 
 def _committed_baseline():
@@ -577,7 +588,20 @@ class BaselineArtifactTests(unittest.TestCase):
         # face is untouched, R6 stays 205/Δ0). Engine print census stays
         # 1341 (zero drift — the delegation prints nothing); r2 face
         # byte-stable in the same regen (47 sites across 37 files).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27352)
+        # FIX-438 make-up re-anchor (2026-10-06, DEC-319/320 path A):
+        # 27352 -> 27792, +440 net over the FEAT-083 anchor — measured
+        # split: FEAT-088 (638509e) +332 (the inline exploration-channel
+        # guard body +234 at L12142, Check 12 wiring +8, engine-check
+        # integration +23, CLI renderers +57, dispatch +10), FIX-432
+        # (9a28e4d) +108 net (M0-M9→M10 sweep: cmd_gates +76 among others),
+        # REL-098 M-4 / REL-099 version bumps ±0 (wash). Both tickets
+        # landed reviewed (REVIEW-FEAT-088-CODE-R0 / FIX-432 R0, both
+        # AWN/0) but without their archguard rider — the make-up regen
+        # re-anchored in the same change. R2 face 47 -> 48 sites (the
+        # dsh_doctor.py _channel_projection lazy import_vw, L1205, BT-R-02
+        # single-verdict projection); R4 census 1341 -> 1369 (per-commit
+        # split in the FACTS_PRINT_TOTAL lineage above).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27792)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

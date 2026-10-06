@@ -2043,5 +2043,142 @@ class DshAdapterTests(unittest.TestCase):
         self.assertIn("delegation", ids)
 
 
+# ── FIX-439: DSH bootstrap splice defect family (incident-20261006) ─────────
+
+
+class BootstrapSpliceFIX439Tests(unittest.TestCase):
+    """FIX-439 — guards for the second-recurrence host corruption family.
+
+    External-host incident 2026-10-06 (``.governance/incidents/
+    incident-20261006-dsh-bootstrap-splice-repeat.md``): a Scenario C version
+    upgrade corrupted a host AGENTS.md because (1) ``write_bootstrap`` spliced
+    without the template's H2 full set, leaving the previous bootstrap section
+    behind as a stale duplicate (two behavior-constraint versions injected
+    into every session); (2) even WITH the full set the span ran past the
+    ``---`` separator into the host's own trailing H1 section; (3) the same
+    family inverted evidence-append's refusal semantics (guarded separately
+    in test_verify_workflow.py). These tests pin the host's three post-upgrade
+    validation faces (incident §7) plus splice idempotence and the fail-closed
+    duplicate guard. Every fixture is a temp-dir project — a real host project
+    root is never written.
+    """
+
+    @staticmethod
+    def _rendered_template(launch):
+        source = launch._read_text(launch.BOOTSTRAP_TEMPLATE)
+        rendered, escaped = launch._substitute_repo_root(source)
+        assert not escaped, escaped
+        return rendered
+
+    @classmethod
+    def setUpClass(cls):
+        cls.launch = _load_launch_module()
+        cls.rendered = cls._rendered_template(cls.launch)
+
+    def _host_project(self, td, tail_extra=""):
+        """Prior-version host layout (incident §1 shape): an older DSH
+        bootstrap section, a ``---`` separator, then the host's own H1
+        section with a quote block and H2 subsections. The prior version is
+        DERIVED from the template header (FIX-352/353 discipline — the
+        static-version-pin guard flags a literal active-version pin),
+        never hardcoded alongside it."""
+        project = Path(td) / "tv"
+        project.mkdir()
+        match = re.search(r"@bootstrap-version:\s*([0-9]+\.[0-9]+\.[0-9]+)",
+                          self.rendered)
+        assert match is not None, "bootstrap template carries no version"
+        old_section = self.rendered.replace(match.group(1), "0.88.0")
+        (project / "AGENTS.md").write_text(
+            old_section + "\n---\n\n# 项目工程原则与编程要求（用户固化）\n\n"
+            "> 宿主引用块\n\n## 基本原则\n\n1. 原则一\n" + tail_extra,
+            encoding="utf-8", newline="",
+        )
+        return project
+
+    def _shared(self):
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        import sync_entry_projection
+        return sync_entry_projection
+
+    def test_span_converges_before_separator_and_host_h1(self):
+        # incident §4 face: with the template H2 full set the span must NOT
+        # cross the `---` separator nor swallow the host's trailing H1 —
+        # while still covering the OLD section whole (all its H2s inside).
+        sep = self._shared()
+        with _sandbox_td() as td:
+            project = self._host_project(td)
+            text = (project / "AGENTS.md").read_text(encoding="utf-8")
+            boundary = sep.bootstrap_boundary_titles(self.rendered)
+            span = sep.bootstrap_section_span(text, boundary)
+            self.assertIsNotNone(span)
+            section = text[span[0]:span[1]]
+            self.assertTrue(section.startswith("# Governance Bootstrap"))
+            self.assertNotIn("---", section)          # converges before `---`
+            self.assertNotIn("# 项目工程原则", section)  # host H1 untouched
+            self.assertNotIn("## 基本原则", section)    # host H2 untouched
+            # the whole OLD section is inside the span (its six H2s)…
+            self.assertIn("## 第一动作（每会话）", section)
+            self.assertIn("## Git hooks / 版本升级", section)
+            # …and only once each — no stale duplicate may survive a splice.
+            self.assertEqual(
+                sep.bootstrap_h2_singleton_violations(
+                    sep.replace_bootstrap_section(text, self.rendered, boundary),
+                    self.rendered),
+                [],
+            )
+
+    def test_bootstrap_replaces_old_section_and_preserves_host_tail(self):
+        # Host validation face ①②③ (incident §7) after a real splice write.
+        sep = self._shared()
+        with _sandbox_td() as td:
+            project = self._host_project(td)
+            self.assertEqual(self.launch.write_bootstrap(project, force=False), 0)
+            updated = (project / "AGENTS.md").read_text(encoding="utf-8")
+            # ① the rendered template is the file prefix
+            self.assertTrue(updated.startswith(self.rendered))
+            # ② every template H2 appears exactly once (no stale duplicate,
+            #    asserted both via the shared guard and an independent count)
+            self.assertEqual(
+                sep.bootstrap_h2_singleton_violations(updated, self.rendered), [])
+            self.assertEqual(updated.count("## 第一动作（每会话）"), 1)
+            # the old version's marker is gone, the host tail is intact
+            self.assertNotIn("0.88.0", updated)
+            for anchor in ("---", "# 项目工程原则与编程要求", "> 宿主引用块",
+                           "## 基本原则", "1. 原则一"):
+                self.assertIn(anchor, updated)
+            # ③ the spliced section validates as the DSH thin-pointer dialect
+            boundary = sep.bootstrap_boundary_titles(self.rendered)
+            span = sep.bootstrap_section_span(updated, boundary)
+            section = updated[span[0]:span[1]]
+            self.assertEqual(sep.validate_dsh_thin_pointer(section), [])
+
+    def test_bootstrap_second_write_is_byte_identical(self):
+        # incident §8 idempotence guard: re-running the bootstrap on a file
+        # the current template already wrote must change zero bytes.
+        with _sandbox_td() as td:
+            project = self._host_project(td)
+            self.assertEqual(self.launch.write_bootstrap(project, force=False), 0)
+            first = (project / "AGENTS.md").read_bytes()
+            self.assertEqual(self.launch.write_bootstrap(project, force=False), 0)
+            self.assertEqual((project / "AGENTS.md").read_bytes(), first)
+
+    def test_bootstrap_refuses_duplicate_template_h2_fail_closed(self):
+        # incident §8 post-splice guard: a host tail that repeats a template
+        # H2 title would leave two copies after the splice — the write must
+        # be refused with the original file preserved byte-for-byte.
+        with _sandbox_td() as td:
+            project = self._host_project(
+                td, tail_extra="\n## 第一动作（每会话）\n\n宿主自建同名小节\n")
+            before = (project / "AGENTS.md").read_bytes()
+            err = io.StringIO()
+            with redirect_stderr(err):
+                rc = self.launch.write_bootstrap(project, force=False)
+            self.assertEqual(rc, 1)
+            self.assertEqual((project / "AGENTS.md").read_bytes(), before)
+            self.assertIn("fail-closed", err.getvalue())
+            self.assertIn("第一动作", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

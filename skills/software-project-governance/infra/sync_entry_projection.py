@@ -105,6 +105,14 @@ class CanonicalSourceError(ValueError):
     """Raised when the canonical template source cannot be parsed (fail-closed)."""
 
 
+class BootstrapSpliceError(CanonicalSourceError):
+    """FIX-439: raised when a splice would break the section-singleton
+    invariant (duplicate/missing template H2) — the write is refused and the
+    original entry file kept. Subclasses :class:`CanonicalSourceError` so the
+    existing fail-closed CLI/report catch sites answer it with the same
+    structured ERROR instead of a traceback."""
+
+
 @dataclass(frozen=True)
 class EntryWrite:
     relative_path: str
@@ -202,8 +210,38 @@ def _closing_fence_stop(text: str, open_end: int, region_end: int, key: str) -> 
 
 # ── section span + splice ─────────────────────────────────────────────────
 
+#: FIX-439 explicit span terminators. A bootstrap section NEVER crosses the
+#: first thematic break (``---``) or the first H1 line after its own start,
+#: even when every H2 in between is whitelisted: without them, a boundary
+#: set covering the section's own H2 subsections (the DSH agent-instructions
+#: dialect carries six) lets the span run past the ``---`` separator and the
+#: host's trailing H1 section up to the next non-whitelisted H2, so a splice
+#: would DELETE host content (incident-20261006 §4). The canonical templates
+#: contain neither a thematic break nor an H1 after their header, so for the
+#: in-repo guarded surfaces these terminators are a no-op.
+_H1_LINE_RE = re.compile(r"(?m)^# [^\n]*\n")
+_HR_LINE_RE = re.compile(r"(?m)^-{3,}[ \t]*\r?$")
+
+
 def _h2_titles(text: str) -> frozenset[str]:
     return frozenset(line.rstrip("\n").strip() for line in _H2_LINE_RE.findall(text))
+
+
+def bootstrap_boundary_titles(*section_texts: str) -> frozenset[str]:
+    """Union of every H2 title carried by the given (canonical) section texts.
+
+    FIX-439: the ONE boundary caliber both entry writers splice under —
+    ``apply_entry_projection`` passes the union over every canonical
+    template (a drifted full bootstrap from ANY profile is replaced as one
+    section), and the DSH ``write_bootstrap`` passes the rendered
+    template's own H2 full set (its six in-section H2 subsections are part
+    of the section being replaced, not section boundaries — the no-set call
+    left them behind as a stale duplicate, incident-20261006 §3).
+    """
+    titles: set[str] = set()
+    for text in section_texts:
+        titles.update(_h2_titles(text))
+    return frozenset(titles)
 
 
 def _match_newlines(section: str, target_text: str) -> str:
@@ -218,21 +256,25 @@ def bootstrap_section_span(text: str, boundary_titles: frozenset[str] | None = N
     The section starts at the first ``#``/``##`` Governance Bootstrap header
     and ends before the next H2 header whose full title is NOT part of
     ``boundary_titles`` (``None`` → any H2 ends the section; the thin
-    pointer uses H3 subsections only, so ``None`` is its natural boundary).
+    pointer uses H3 subsections only, so ``None`` is its natural boundary),
+    OR before the first thematic break / H1 line after the section start —
+    whichever boundary comes first (see ``_H1_LINE_RE`` / ``_HR_LINE_RE``).
     """
     start_match = _SECTION_START_RE.search(text)
     if start_match is None:
         return None
     cursor = start_match.end()
-    while cursor < len(text):
-        line_match = _H2_LINE_RE.search(text, cursor)
-        if line_match is None:
-            break
+    hard_end = len(text)
+    for terminator in (_HR_LINE_RE, _H1_LINE_RE):
+        match = terminator.search(text, cursor)
+        if match is not None and match.start() < hard_end:
+            hard_end = match.start()
+    region = text[cursor:hard_end]
+    for line_match in _H2_LINE_RE.finditer(region):
         title = line_match.group(0).strip()
         if boundary_titles is None or title not in boundary_titles:
-            return (start_match.start(), line_match.start())
-        cursor = line_match.end()
-    return (start_match.start(), len(text))
+            return (start_match.start(), cursor + line_match.start())
+    return (start_match.start(), hard_end)
 
 
 def _slice_span(text: str, span) -> str:
@@ -267,6 +309,28 @@ def replace_bootstrap_section(
     after_body = after.lstrip("\r\n")
     after = nl + after_body if after_body else ""
     return before + new_section + after
+
+
+def bootstrap_h2_singleton_violations(new_text: str, section_text: str) -> list[str]:
+    """FIX-439 fail-closed post-splice guard: H2 singletons or refusal.
+
+    After a splice, every H2 title carried by the section being written
+    (``section_text``) must appear in the resulting text EXACTLY once,
+    line-anchored. A count above 1 means a stale earlier section would
+    survive the splice (the duplication defect — two bootstrap sections
+    injected into every session, incident-20261006 §2); a count of 0 means
+    the splice dropped part of the section it was supposed to write. Either
+    way the caller MUST refuse the write and keep the original file.
+    """
+    violations: list[str] = []
+    for title in sorted(_h2_titles(section_text)):
+        pattern = re.compile(r"(?m)^" + re.escape(title) + r"[ \t]*\r?$")
+        count = len(pattern.findall(new_text))
+        if count != 1:
+            violations.append(
+                f"H2 heading appears {count}x, expected exactly 1: "
+                f"{title!r}")
+    return violations
 
 
 def has_full_bootstrap(section_text: str) -> bool:
@@ -446,9 +510,11 @@ def apply_entry_projection(
     # Splice boundary = union of every canonical template's H2 titles: a
     # drifted full bootstrap (whatever profile it came from) is replaced as
     # ONE section, and foreign trailing H2 sections (e.g. 项目质量原则)
-    # survive outside the span.
-    boundary = _h2_titles(
-        "\n".join(templates[key] for key in (*FULL_PROFILE_KEYS, "secondary-thin"))
+    # survive outside the span. FIX-439: the same boundary caliber the DSH
+    # write_bootstrap uses (bootstrap_boundary_titles), plus the explicit
+    # `---`/H1 span terminators — one shared splice implementation.
+    boundary = bootstrap_boundary_titles(
+        *(templates[key] for key in (*FULL_PROFILE_KEYS, "secondary-thin"))
     )
     plan = plan_entry_writes(
         root, profile=profile, primary=primary, source_root=src
@@ -458,6 +524,17 @@ def apply_entry_projection(
         path = root / write.relative_path
         old_text = _read_text(path) if path.exists() else ""
         new_text = replace_bootstrap_section(old_text, write.section_text, boundary)
+        # FIX-439 fail-closed splice guard: every H2 of the section being
+        # written must land in the file exactly once — a duplicate means a
+        # stale section would survive the splice; refuse and keep the file.
+        violations = bootstrap_h2_singleton_violations(
+            new_text, write.section_text)
+        if violations:
+            raise BootstrapSpliceError(
+                f"bootstrap splice guard refused to write "
+                f"{write.relative_path} (original kept): "
+                + "; ".join(violations)
+            )
         if new_text == old_text:
             unchanged.append(write.relative_path)
             continue

@@ -1272,6 +1272,16 @@ def evidence_append(*, task_id, evd_type, description, basis, artifacts="",
             description=description, basis=basis, artifacts=artifacts,
             actor=actor, date_str=date_str, gate=gate, conclusion=conclusion,
             refs=checked_refs, op_id=op_id)
+        # FIX-439: the FULL row validator runs BEFORE any byte is written
+        # (DoD 1 as written: fully validated before the target is opened for
+        # writing). Until this fix the content checks (目标对齐 skeleton,
+        # 事实依据 payload, 用户影响 subfields) lived ONLY on the post-write
+        # reread leg, so a schema_violation was returned with the row ALREADY
+        # persisted — the external-host incident measured a refused EVD row
+        # surviving in the evidence log (incident-20261006 §5). The post-write
+        # reread below still re-runs the same validator, but only for
+        # structural parity (DoD 4), never as the first line of defense.
+        _evidence_row_validator(row_text, op_id)
         new_bytes = _append_row_bytes(original, row_text)
         _atomic_write_bytes(target, new_bytes)
         _post_write_append_check(
@@ -1486,6 +1496,10 @@ def decision_append(*, decider, content, basis="", date=None,
         row_text = _build_decision_row(
             dec_id=dec_id, date_str=date_str, decider=decider,
             content=content, basis=basis, op_id=op_id)
+        # FIX-439: same pre-write validation order the JSON leg already has
+        # (it validates at build time) — a refusal must leave zero bytes
+        # persisted on the md leg too, never a written row plus an error.
+        _decision_row_validator(row_text, op_id)
         new_bytes = _append_row_bytes(original, row_text)
         _atomic_write_bytes(target, new_bytes)
         _post_write_append_check(

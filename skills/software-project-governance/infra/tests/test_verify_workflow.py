@@ -24999,5 +24999,100 @@ class ExplorationSampleAdvisoryTests(unittest.TestCase):
             if not ln.startswith("exploration:"))
 
 
+# ── FIX-439: intake refusal must imply zero persistence (incident §5) ───────
+
+class GovernanceStoreZeroPersistenceFIX439Tests(unittest.TestCase):
+    """FIX-439 — evidence/decision append refusals leave ZERO bytes written.
+
+    External-host incident 2026-10-06 §5 (``.governance/incidents/
+    incident-20261006-dsh-bootstrap-splice-repeat.md``): ``evidence-append``
+    returned a ``schema_violation`` refusal while the row was ALREADY
+    persisted to the host evidence log — the full row validator ran only on
+    the post-write reread leg, so the host kept a refused row plus a retried
+    duplicate. The full validator now runs BEFORE the atomic write on both
+    md legs of the append pipeline (the JSON leg already validated at build
+    time). These guards construct schema-violating inputs and assert the
+    target file is byte-for-byte unchanged after the refusal, with no
+    operation-ledger side effect either.
+    """
+
+    _EVD_HEADER = (
+        "# 证据\n\n"
+        "| ID | 任务 | 类型 | 描述 | 依据 | 产物 | 行为者 | 日期 | Gate | 结论 |\n"
+        "|---|---|---|---|---|---|---|---|---|---|\n"
+    )
+    _EVD_SEED = (
+        "| EVD-1 | FEAT-001 | 产品代码 | seed row | 事实依据：seed | a | "
+        "actor | 2026-10-01 | G11 | ✅ 完成 |\n"
+    )
+
+    def _evidence_target(self, td):
+        gov = Path(td) / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        target = gov / "evidence-log.md"
+        target.write_text(self._EVD_HEADER + self._EVD_SEED,
+                          encoding="utf-8", newline="\n")
+        return gov, target
+
+    def test_evidence_append_skeleton_refusal_writes_zero_bytes(self):
+        # The class that was inverted pre-fix: the Check 16 skeleton checks
+        # (目标对齐 passage) lived only on the post-write leg, so this exact
+        # refusal used to return schema_violation WITH the row persisted.
+        import governance_store as gs
+        with _governance_temp_dir(prefix="fix439-evd-skel-") as td:
+            gov, target = self._evidence_target(td)
+            before = target.read_bytes()
+            result = gs.evidence_append(
+                governance_dir=gov, task_id="FEAT-046", evd_type="产品代码",
+                description="description missing the goal-alignment skeleton",
+                basis="事实依据内容", artifacts="产物单元格")
+            self.assertTrue(result.get("error"), result)
+            self.assertEqual(result.get("code"), "schema_violation", result)
+            self.assertEqual(target.read_bytes(), before)
+            self.assertFalse((gov / "governance-store-ops.json").exists())
+
+    def test_evidence_append_obtain_enum_refusal_writes_zero_bytes(self):
+        # The incident's exact refusal class: 获得= outside the closed enum
+        # (host log row EVD-202 was persisted despite this refusal).
+        import governance_store as gs
+        with _governance_temp_dir(prefix="fix439-evd-enum-") as td:
+            gov, target = self._evidence_target(td)
+            before = target.read_bytes()
+            result = gs.evidence_append(
+                governance_dir=gov, task_id="FEAT-046", evd_type="产品代码",
+                description=(
+                    "目标对齐：这一段目标对齐描述超过三十个字符以通过骨架下限检查"
+                    "（FIX-439 测试夹具）。用户影响：获得=会话续接面（快照）与健康面"
+                    "同时可用，感知=无，体验变化=否，迁移指南=不需要。"),
+                basis="事实依据内容", artifacts="产物单元格")
+            self.assertTrue(result.get("error"), result)
+            self.assertEqual(result.get("code"), "schema_violation", result)
+            self.assertEqual(target.read_bytes(), before)
+            self.assertFalse((gov / "governance-store-ops.json").exists())
+
+    def test_decision_append_refusal_writes_zero_bytes(self):
+        # Same-family guard on the decision md leg: a raw '|' outside an
+        # inline-code span breaks the 5-column row shape — refused with the
+        # target byte-identical (the full validator also runs pre-write now,
+        # matching the JSON leg's order).
+        import governance_store as gs
+        with _governance_temp_dir(prefix="fix439-dec-") as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir(parents=True)
+            target = gov / "decision-log.md"
+            target.write_text(
+                "# 决策\n\n| 编号 | 日期 | 决策人 | 决策内容 | 依据 |\n"
+                "|---|---|---|---|---|\n",
+                encoding="utf-8", newline="\n")
+            before = target.read_bytes()
+            result = gs.decision_append(
+                governance_dir=gov, decider="Coordinator",
+                content="raw pipe | outside a code span", basis="b")
+            self.assertTrue(result.get("error"), result)
+            self.assertEqual(result.get("code"), "schema_violation", result)
+            self.assertEqual(target.read_bytes(), before)
+            self.assertFalse((gov / "governance-store-ops.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

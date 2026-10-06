@@ -1707,7 +1707,16 @@ def write_bootstrap(project: Path, force: bool, dry_run: bool = False) -> int:
     existing = None
     if target.exists():
         existing = target.read_text(encoding="utf-8", errors="replace")
-    span = (shared.bootstrap_section_span(existing)
+    # FIX-439: splice under the template's OWN H2 full set — the same
+    # canonical-boundary caliber + explicit `---`/H1 span terminators that
+    # apply_entry_projection uses (one shared splice implementation in
+    # sync_entry_projection). The DSH template carries six H2 subsections of
+    # its own, so the previous no-boundary span cut at the FIRST of them and
+    # left the old section behind as a stale duplicate — two bootstrap
+    # sections injected into every host session on every version upgrade
+    # (incident-20261006 §3, second recurrence).
+    boundary = shared.bootstrap_boundary_titles(rendered)
+    span = (shared.bootstrap_section_span(existing, boundary)
             if existing is not None else None)
     if existing is not None and span is None and not force:
         print(
@@ -1742,8 +1751,21 @@ def write_bootstrap(project: Path, force: bool, dry_run: bool = False) -> int:
         # translates every "\n" to os.linesep on Windows, so one bootstrap
         # write silently re-EOLs the WHOLE target file (LF -> CRLF) — a side
         # effect well outside the section this path claims to splice.
-        target.write_text(shared.replace_bootstrap_section(existing, rendered),
-                          encoding="utf-8", newline="")
+        new_text = shared.replace_bootstrap_section(existing, rendered, boundary)
+        # FIX-439 fail-closed post-splice guard: every template H2 must sit
+        # in the file exactly once. A duplicate means a stale earlier section
+        # would survive the splice (the incident's defect class) — refuse the
+        # write and leave the original file untouched.
+        violations = shared.bootstrap_h2_singleton_violations(new_text, rendered)
+        if violations:
+            print(
+                "ERROR: bootstrap splice guard failed — refusing to write; "
+                f"the original {target} is left unchanged (FIX-439 "
+                f"fail-closed): " + "; ".join(violations),
+                file=sys.stderr,
+            )
+            return 1
+        target.write_text(new_text, encoding="utf-8", newline="")
     else:
         target.write_text(rendered, encoding="utf-8", newline="")
     print(f"bootstrap written: {target}")

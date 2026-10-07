@@ -118,7 +118,17 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      re-anchored the baseline in the same change. Per-commit split
 #      machine-censused via count_print_calls over git show c00d70c /
 #      9a28e4d / e1457a8.)
-FACTS_PRINT_TOTAL = 1369
+#   -> 1371 (0.96.0 M-0 pre-window, FIX-441 / DEC-324 path A, 2026-10-06:
+#      +2 — the FIX-436 (c442e07) F-B3 advisory non-blocking rendering
+#      face (DEC-322(1)): +1 in _run_full_engine_checks (620 -> 621, the
+#      Check 12 advisory line) and +1 in cmd_check_cross_references
+#      (23 -> 24, the CLI-side advisory render). c442e07 landed reviewed
+#      (REVIEW-FIX-436-R0 AWN/0) without its archguard rider; this
+#      sanctioned make-up regen re-anchored the baseline in the same
+#      change. Axis-by-axis reconciliation vs the DEC-324 attribution:
+#      R1 +74, R4 +2 (exactly these two functions), R2/R3/R5/R6 zero
+#      drift.
+FACTS_PRINT_TOTAL = 1371
 
 
 def _committed_baseline():
@@ -601,7 +611,18 @@ class BaselineArtifactTests(unittest.TestCase):
         # dsh_doctor.py _channel_projection lazy import_vw, L1205, BT-R-02
         # single-verdict projection); R4 census 1341 -> 1369 (per-commit
         # split in the FACTS_PRINT_TOTAL lineage above).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27792)
+        # FIX-441 make-up re-anchor (2026-10-06, DEC-324 path A — DEC-320
+        # precedent isomorphic): 27792 -> 27866, +74/-0 net, all attributed
+        # to the single reviewed commit c442e07 (FIX-436, REVIEW-FIX-436-R0
+        # AWN/0) — the F-B3 advisory carrier function (~26 lines,
+        # DEC-322(1) WARN-level non-blocking ride), its two consumer
+        # renderings (Check 12 wiring + CLI face), probe comments (+9) and
+        # the F-8 triple .get comment precision pass. Engine print census
+        # 1369 -> 1371 (per-fn split in the FACTS_PRINT_TOTAL lineage
+        # above). R2 48/37, R3 matrix, R5 faces and R6 205/Δ0 all
+        # byte-stable in the same regen (zero drift outside the c442e07
+        # attribution).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27866)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

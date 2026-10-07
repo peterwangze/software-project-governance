@@ -2179,6 +2179,179 @@ class BootstrapSpliceFIX439Tests(unittest.TestCase):
             self.assertIn("fail-closed", err.getvalue())
             self.assertIn("第一动作", err.getvalue())
 
+    def test_dry_run_plans_splice_without_writing(self):
+        # FIX-440 F-3 (companion pin): --dry-run stays the read-only preview
+        # on the clean path — target byte-identical, plan says "planned
+        # write", exit 0.
+        with _sandbox_td() as td:
+            project = self._host_project(td)
+            before = (project / "AGENTS.md").read_bytes()
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = self.launch.write_bootstrap(
+                    project, force=False, dry_run=True)
+            self.assertEqual(rc, 0)
+            self.assertEqual((project / "AGENTS.md").read_bytes(), before)
+            self.assertIn("planned write", out.getvalue())
+            self.assertIn("nothing written", out.getvalue())
+
+    def test_dry_run_previews_guard_refusal_fail_closed(self):
+        # FIX-440 F-3: the singleton guard used to run only AFTER the
+        # dry-run early-return, so --dry-run promised "planned write" for a
+        # host the real run then refuses with exit 1 — the Scenario C step-A
+        # preview / real-run perception fork review-FIX-439-CODE-R0 F-3
+        # measured. The guard now previews in dry-run too (the same
+        # guard-before-dry_run caliber apply_entry_projection follows):
+        # expected refusal, exit 1, zero writes.
+        with _sandbox_td() as td:
+            project = self._host_project(
+                td, tail_extra="\n## 第一动作（每会话）\n\n宿主自建同名小节\n")
+            before = (project / "AGENTS.md").read_bytes()
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = self.launch.write_bootstrap(
+                    project, force=False, dry_run=True)
+            self.assertEqual(rc, 1)
+            self.assertEqual((project / "AGENTS.md").read_bytes(), before)
+            self.assertNotIn("planned write", out.getvalue())
+            self.assertIn("fail-closed", err.getvalue())
+            self.assertIn("第一动作", err.getvalue())
+
+
+# ── FIX-440: CRLF host EOL preservation through the bootstrap splice ────────
+
+
+class BootstrapCrlfEolFIX440Tests(unittest.TestCase):
+    """FIX-440 (review-FIX-439-CODE-R0 F-1) — a CRLF host keeps its bytes.
+
+    The bootstrap read side used universal-newline mode (every ``\\r\\n``
+    normalized to ``\\n`` on read) while the write side kept ``newline=""``
+    byte discipline, so the first bootstrap write into a CRLF host AGENTS.md
+    re-encoded the WHOLE file as LF — every non-bootstrap byte rewritten,
+    the splice's "non-bootstrap content preserved" promise broken at byte
+    level, and ``_match_newlines`` could never fire on the file path chain
+    (dead branch). FIX-440 reads with translation disabled on BOTH read
+    sites (launch ``write_bootstrap`` and ``sync_entry_projection._read_text``)
+    and revives ``_match_newlines``: the spliced section takes the host's
+    own EOL form under the same whole-text CRLF heuristic the splice
+    separator already uses. Pinned here: out-of-section bytes preserved
+    verbatim (``\\r\\n`` included), single-EOL stability, mixed-EOL hosts
+    legal and idempotent, and the sync-side apply path equally guarded.
+    Every fixture is a temp-dir project — a real host project root is never
+    written.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.launch = _load_launch_module()
+        cls.rendered = BootstrapSpliceFIX439Tests._rendered_template(cls.launch)
+
+    def _shared(self):
+        if str(_INFRA_DIR) not in sys.path:
+            sys.path.insert(0, str(_INFRA_DIR))
+        import sync_entry_projection
+        return sync_entry_projection
+
+    def _prior_host_text(self):
+        """The FIX-439 prior-version host layout in LF form (section version
+        DERIVED from the template header — FIX-352/353 discipline)."""
+        match = re.search(r"@bootstrap-version:\s*([0-9]+\.[0-9]+\.[0-9]+)",
+                          self.rendered)
+        assert match is not None, "bootstrap template carries no version"
+        old_section = self.rendered.replace(match.group(1), "0.88.0")
+        return (old_section + "\n---\n\n# 项目工程原则与编程要求（用户固化）\n\n"
+                "> 宿主引用块\n\n## 基本原则\n\n1. 原则一\n")
+
+    def _host_project(self, td, section_crlf, tail_crlf):
+        """Host project whose bootstrap section and trailing host section
+        carry independently chosen EOL forms (Windows checkout = both True;
+        the mixed world = section LF + tail CRLF)."""
+        project = Path(td) / "tv"
+        project.mkdir()
+        section, tail = self._prior_host_text().split("\n---\n", 1)
+        tail = "---\n" + tail
+        if section_crlf:
+            section = section.replace("\n", "\r\n")
+        if tail_crlf:
+            tail = tail.replace("\n", "\r\n")
+        (project / "AGENTS.md").write_text(section + tail,
+                                           encoding="utf-8", newline="")
+        return project
+
+    def test_crlf_host_tail_bytes_preserved_through_splice(self):
+        # F-1 core acceptance: after the bootstrap write every byte OUTSIDE
+        # the spliced section is identical to the original CRLF host file —
+        # pre-fix the universal-newline read + LF write flipped the WHOLE
+        # file, host tail included.
+        with _sandbox_td() as td:
+            project = self._host_project(td, section_crlf=True, tail_crlf=True)
+            target = project / "AGENTS.md"
+            before = target.read_bytes()
+            self.assertEqual(self.launch.write_bootstrap(project, force=False), 0)
+            after = target.read_bytes()
+            # ① the host tail (separator onward) is byte-identical — \r\n kept
+            self.assertEqual(after[after.index(b"---"):],
+                             before[before.index(b"---"):])
+            # ② the spliced section took the host's own EOL form (revived
+            #    _match_newlines) — no bare LF anywhere in the file
+            self.assertNotIn(b"\n", after.replace(b"\r\n", b""))
+            # ③ splice semantics unchanged: current template written whole
+            #    as the file prefix, prior version gone
+            self.assertTrue(after.startswith(
+                self.rendered.replace("\n", "\r\n").encode("utf-8")))
+            self.assertNotIn(b"0.88.0", after)
+
+    def test_crlf_host_second_write_is_byte_identical(self):
+        # DEC-323 idempotence in the CRLF world: re-running the bootstrap on
+        # a file the current template already wrote must change zero bytes.
+        with _sandbox_td() as td:
+            project = self._host_project(td, section_crlf=True, tail_crlf=True)
+            self.assertEqual(self.launch.write_bootstrap(project, force=False), 0)
+            first = (project / "AGENTS.md").read_bytes()
+            self.assertEqual(self.launch.write_bootstrap(project, force=False), 0)
+            self.assertEqual((project / "AGENTS.md").read_bytes(), first)
+
+    def test_mixed_eol_host_is_legal_and_splice_idempotent(self):
+        # FIX-440 constraint c: a mixed file (LF bootstrap section + CRLF
+        # host tail) is a legal world — the splice preserves the CRLF tail
+        # verbatim, converges the section to the tail's EOL form (the
+        # whole-text heuristic the splice separator already uses), and the
+        # SECOND splice is byte-identical.
+        with _sandbox_td() as td:
+            project = self._host_project(td, section_crlf=False, tail_crlf=True)
+            target = project / "AGENTS.md"
+            before = target.read_bytes()
+            self.assertEqual(self.launch.write_bootstrap(project, force=False), 0)
+            after = target.read_bytes()
+            self.assertEqual(after[after.index(b"---"):],
+                             before[before.index(b"---"):])
+            self.assertEqual(self.launch.write_bootstrap(project, force=False), 0)
+            self.assertEqual((project / "AGENTS.md").read_bytes(), after)
+
+    def test_sync_projection_preserves_crlf_host_bytes(self):
+        # F-1's second read site: sync_entry_projection._read_text feeds
+        # apply_entry_projection's write — the same normalization flip on a
+        # CRLF single-entry workspace. FIX-440 reads raw there too: host
+        # prefix bytes preserved, the appended section in the host's CRLF,
+        # and the second apply reports a zero-diff "unchanged".
+        sep = self._shared()
+        with _sandbox_td() as td:
+            workspace = Path(td) / "ws"
+            workspace.mkdir()
+            host = "# 项目说明\r\n\r\n宿主自有内容\r\n"
+            (workspace / "AGENTS.md").write_text(host, encoding="utf-8",
+                                                 newline="")
+            result = sep.apply_entry_projection(workspace,
+                                                source_root=_REPO_ROOT)
+            self.assertEqual(result["applied"], ["AGENTS.md"])
+            data = (workspace / "AGENTS.md").read_bytes()
+            self.assertTrue(data.startswith(host.encode("utf-8")))
+            self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
+            second = sep.apply_entry_projection(workspace,
+                                                source_root=_REPO_ROOT)
+            self.assertEqual(second["unchanged"], ["AGENTS.md"])
+            self.assertEqual((workspace / "AGENTS.md").read_bytes(), data)
+
 
 if __name__ == "__main__":
     unittest.main()

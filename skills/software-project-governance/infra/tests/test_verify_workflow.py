@@ -25049,7 +25049,29 @@ class GovernanceStoreZeroPersistenceFIX439Tests(unittest.TestCase):
             self.assertTrue(result.get("error"), result)
             self.assertEqual(result.get("code"), "schema_violation", result)
             self.assertEqual(target.read_bytes(), before)
-            self.assertFalse((gov / "governance-store-ops.json").exists())
+            self.assertFalse(gs._ledger_path(gov).exists())
+
+    def test_evidence_append_pure_row_level_refusal_writes_zero_bytes(self):
+        # FIX-440 F-2: the input class ONLY the FIX-439 pre-write row
+        # validator can catch — the goal-alignment skeleton EXISTS but its
+        # payload is < 30 chars. The Check 17 intake mirror is a no-op (no
+        # 用户影响 passage), _build_evidence_row's checks are shape-only, so
+        # with the pre-write validator call (governance_store L1284)
+        # reverted this exact input is persisted by the post-write reread
+        # refusal — the incident §5 defect class. Red/green verified by
+        # temporarily disabling that one call (red), then restoring (green).
+        import governance_store as gs
+        with _governance_temp_dir(prefix="fix440-evd-row-") as td:
+            gov, target = self._evidence_target(td)
+            before = target.read_bytes()
+            result = gs.evidence_append(
+                governance_dir=gov, task_id="FEAT-046", evd_type="产品代码",
+                description="目标对齐：太短",  # skeleton present, < 30 chars
+                basis="事实依据内容", artifacts="产物单元格")
+            self.assertTrue(result.get("error"), result)
+            self.assertEqual(result.get("code"), "schema_violation", result)
+            self.assertEqual(target.read_bytes(), before)
+            self.assertFalse(gs._ledger_path(gov).exists())
 
     def test_evidence_append_obtain_enum_refusal_writes_zero_bytes(self):
         # The incident's exact refusal class: 获得= outside the closed enum
@@ -25068,7 +25090,7 @@ class GovernanceStoreZeroPersistenceFIX439Tests(unittest.TestCase):
             self.assertTrue(result.get("error"), result)
             self.assertEqual(result.get("code"), "schema_violation", result)
             self.assertEqual(target.read_bytes(), before)
-            self.assertFalse((gov / "governance-store-ops.json").exists())
+            self.assertFalse(gs._ledger_path(gov).exists())
 
     def test_decision_append_refusal_writes_zero_bytes(self):
         # Same-family guard on the decision md leg: a raw '|' outside an
@@ -25091,7 +25113,7 @@ class GovernanceStoreZeroPersistenceFIX439Tests(unittest.TestCase):
             self.assertTrue(result.get("error"), result)
             self.assertEqual(result.get("code"), "schema_violation", result)
             self.assertEqual(target.read_bytes(), before)
-            self.assertFalse((gov / "governance-store-ops.json").exists())
+            self.assertFalse(gs._ledger_path(gov).exists())
 
 
 if __name__ == "__main__":

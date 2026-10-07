@@ -245,6 +245,20 @@ def bootstrap_boundary_titles(*section_texts: str) -> frozenset[str]:
 
 
 def _match_newlines(section: str, target_text: str) -> str:
+    """FIX-440: live again. Pre-FIX-440 this branch could never fire on the
+    file path chain — the universal-newline read normalized every \\r\\n
+    away before the comparison, so a CRLF host file got its WHOLE content
+    re-encoded as LF by the newline="" write. With raw-EOL reads (see
+    ``_read_text``) the target's true EOL form reaches the splice: the
+    section being written takes the host's own newline form under the same
+    whole-text CRLF heuristic ``replace_bootstrap_section`` uses for its
+    separator (``nl``) — a single-EOL host stays single-EOL, a mixed file
+    converges to the tail's form. Revived rather than removed because the
+    separator already commits to that heuristic: removing only this half
+    would mint mixed-EOL seams (LF section body + CRLF separators) and
+    destabilize the append-path blank-line detection. Downstream faces are
+    EOL-insensitive by design (``_norm`` content comparisons; the singleton
+    guard's ``\\r?`` line anchor; span regexes tolerate a trailing \\r)."""
     if "\r\n" in target_text and "\r\n" not in section:
         return section.replace("\n", "\r\n")
     return section
@@ -410,7 +424,15 @@ def validate_thin_pointer(section_text: str, primary_entry: str) -> list[str]:
 # ── plan / apply / report ─────────────────────────────────────────────────
 
 def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    # FIX-440 (review-FIX-439-CODE-R0 F-1): read with newline translation
+    # DISABLED so a CRLF entry file keeps its \r\n through the splice. The
+    # default universal-newline read collapses every \r\n to \n, and the
+    # newline="" write then re-encodes the WHOLE file as LF — flipping the
+    # EOL of every non-bootstrap byte (the byte-preservation promise
+    # broken). Path.read_text has no newline parameter before Python 3.13,
+    # hence the explicit open().
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        return handle.read()
 
 
 def _entry_sections(templates: dict[str, str], profile: str, primary: str) -> dict[str, str]:

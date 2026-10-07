@@ -1706,7 +1706,15 @@ def write_bootstrap(project: Path, force: bool, dry_run: bool = False) -> int:
         return 1
     existing = None
     if target.exists():
-        existing = target.read_text(encoding="utf-8", errors="replace")
+        # FIX-440 (review-FIX-439-CODE-R0 F-1): read with newline
+        # translation disabled so a CRLF host AGENTS.md keeps its \r\n
+        # through the splice — with the default universal-newline read the
+        # newline="" write below re-encodes the WHOLE file as LF, rewriting
+        # every non-bootstrap byte (errors="replace" is unchanged: only the
+        # newline dimension moves in this fix).
+        with target.open("r", encoding="utf-8", errors="replace",
+                         newline="") as handle:
+            existing = handle.read()
     # FIX-439: splice under the template's OWN H2 full set — the same
     # canonical-boundary caliber + explicit `---`/H1 span terminators that
     # apply_entry_projection uses (one shared splice implementation in
@@ -1725,15 +1733,6 @@ def write_bootstrap(project: Path, force: bool, dry_run: bool = False) -> int:
             file=sys.stderr,
         )
         return 1
-    if dry_run:
-        print(f"[DRY-RUN] bootstrap target: {target}")
-        if span is not None:
-            print("[DRY-RUN] planned write  : AGENTS.md bootstrap section splice "
-                  "(non-bootstrap content preserved; FEAT-037)")
-        else:
-            print("[DRY-RUN] planned write  : AGENTS.md (thin governance pointer)")
-        print("[DRY-RUN] nothing written — re-run without --dry-run to write")
-        return 0
     if existing is not None and span is not None:
         # FEAT-037: splice the bootstrap section in place, preserving any
         # non-bootstrap content around it, instead of clobbering the file.
@@ -1755,18 +1754,43 @@ def write_bootstrap(project: Path, force: bool, dry_run: bool = False) -> int:
         # FIX-439 fail-closed post-splice guard: every template H2 must sit
         # in the file exactly once. A duplicate means a stale earlier section
         # would survive the splice (the incident's defect class) — refuse the
-        # write and leave the original file untouched.
+        # write and leave the original file untouched. FIX-440 F-3: the guard
+        # runs BEFORE the dry-run early-return (the same
+        # guard-before-dry_run caliber apply_entry_projection follows), so a
+        # dry-run previews the refusal instead of promising a "planned
+        # write" the real run would refuse with exit 1.
         violations = shared.bootstrap_h2_singleton_violations(new_text, rendered)
         if violations:
-            print(
-                "ERROR: bootstrap splice guard failed — refusing to write; "
-                f"the original {target} is left unchanged (FIX-439 "
-                f"fail-closed): " + "; ".join(violations),
-                file=sys.stderr,
-            )
+            detail = "; ".join(violations)
+            if dry_run:
+                print(
+                    "ERROR: bootstrap splice guard failed — dry-run preview: "
+                    "the real run would be REFUSED (exit 1) with the original "
+                    f"{target} left unchanged (FIX-439 fail-closed, FIX-440 "
+                    f"dry-run parity): {detail}",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    "ERROR: bootstrap splice guard failed — refusing to write; "
+                    f"the original {target} is left unchanged (FIX-439 "
+                    f"fail-closed): {detail}",
+                    file=sys.stderr,
+                )
             return 1
+        if dry_run:
+            print(f"[DRY-RUN] bootstrap target: {target}")
+            print("[DRY-RUN] planned write  : AGENTS.md bootstrap section splice "
+                  "(non-bootstrap content preserved; FEAT-037)")
+            print("[DRY-RUN] nothing written — re-run without --dry-run to write")
+            return 0
         target.write_text(new_text, encoding="utf-8", newline="")
     else:
+        if dry_run:
+            print(f"[DRY-RUN] bootstrap target: {target}")
+            print("[DRY-RUN] planned write  : AGENTS.md (thin governance pointer)")
+            print("[DRY-RUN] nothing written — re-run without --dry-run to write")
+            return 0
         target.write_text(rendered, encoding="utf-8", newline="")
     print(f"bootstrap written: {target}")
     return 0

@@ -128,7 +128,16 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      change. Axis-by-axis reconciliation vs the DEC-324 attribution:
 #      R1 +74, R4 +2 (exactly these two functions), R2/R3/R5/R6 zero
 #      drift.
-FACTS_PRINT_TOTAL = 1371
+#   -> 1375 (0.97.0 window, FEAT-089 rider / DEC-326 path A, 2026-10-07:
+#      +4 — the Check 30c WARN→FAIL escalation consumer block in
+#      _run_full_engine_checks (621 -> 625): the escalation decision-face
+#      line (coverage × releases → condition_met + side-record state),
+#      the [FAIL] violations header, the [WARN] undated header and the
+#      DEC-146 ③ baseline footnote line. FEAT-089 landed reviewed
+#      (REVIEW-FEAT-089-R0 AWN/0, F-1 closed by this very rider);
+#      sanctioned regen re-anchored R1 27866 -> 27895 (+29, the same
+#      consumer block) in the same change; R2/R3/R5/R6 zero drift.
+FACTS_PRINT_TOTAL = 1375
 
 
 def _committed_baseline():
@@ -622,7 +631,17 @@ class BaselineArtifactTests(unittest.TestCase):
         # above). R2 48/37, R3 matrix, R5 faces and R6 205/Δ0 all
         # byte-stable in the same regen (zero drift outside the c442e07
         # attribution).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27866)
+        # FEAT-089 rider re-anchor (2026-10-07, DEC-326 path A — DEC-320/
+        # 324 precedent isomorphic): 27866 -> 27895, +29/-0 net, all
+        # attributed to the Check 30c WARN→FAIL escalation consumer block
+        # in _run_full_engine_checks (REVIEW-FEAT-089-R0 AWN/0 —
+        # violations tier + escalation decision-face render + V6d WARN
+        # tier + DEC-146 ③ baseline footnote). Engine print census
+        # 1371 -> 1375 (per-fn split in the FACTS_PRINT_TOTAL lineage
+        # above). R2 48/37, R3 matrix, R5 faces and R6 205/Δ0 all
+        # byte-stable in the same regen (zero drift outside the FEAT-089
+        # attribution).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27895)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

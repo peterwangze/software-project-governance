@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "record_type": "check30c-fail-escalation",
+  "task_id": "FEAT-089",
+  "title": "Check 30c WARN-to-FAIL escalation batch — DEC-146(2) unforgeable side record (DEC-146(4))",
+  "decision_refs": [
+    "DEC-146(2)",
+    "DEC-146(4)",
+    "DEC-321"
+  ],
+  "escalation_version": "0.97.0",
+  "effective_date": "2026-08-22",
+  "generated_by": "exception_registry.review_provenance_exemptions_sha256 + checks.review_domain live scan (machine path)",
+  "generated_at": "2026-10-07",
+  "exemptions_sha256": "53615bc68488cf2d9d754592998dd85b41da5937dd56410407186fea19f287ce",
+  "exemptions": [
+    {
+      "id": "EXEMPT-30C-001",
+      "record_id": "REVIEW-FIX-256-CODE-R0",
+      "task_id": "FIX-256",
+      "record_date": "2026-08-22",
+      "rule": "V7",
+      "face": "row",
+      "approved_by": "DEC-146(2) + DEC-321",
+      "registered_in": "FEAT-089 (0.97.0)"
+    },
+    {
+      "id": "EXEMPT-30C-002",
+      "record_id": "REVIEW-FIX-258-CODE-R0",
+      "task_id": "FIX-258",
+      "record_date": "2026-08-22",
+      "rule": "V7",
+      "face": "row",
+      "approved_by": "DEC-146(2) + DEC-321",
+      "registered_in": "FEAT-089 (0.97.0)"
+    }
+  ],
+  "escalation_basis": {
+    "condition": "exemption-honored coverage == 100% AND releases since 2026-08-22 >= 2 (DEC-146 ②)",
+    "coverage_raw": {
+      "numerator": 477,
+      "denominator": 479,
+      "pct": 99.6
+    },
+    "coverage_exemption_honored": {
+      "numerator": 479,
+      "denominator": 479,
+      "pct": 100.0
+    },
+    "releases_since_effective_date": 23,
+    "releases_source": "plugin release ledger core/releases/*.json (lifecycle released, not withdrawn, recorded_at >= effective date; lower bound — ledger starts at 0.62.0)",
+    "condition_met_at_escalation": true,
+    "live_measurement": {
+      "measured_at": "2026-10-07",
+      "rows_judged": 69,
+      "rows_machine": 67,
+      "rows_exempted": 2,
+      "rows_undated_v6d_warn": 2,
+      "files_judged": 410,
+      "files_machine": 410,
+      "files_exempted": 0,
+      "files_undated_v6d_warn": 40
+    },
+    "notes": [
+      "v6d tightening: undated records (rows 2 / files 40 at escalation) WARN from this batch on - never all_issues (DEC-146(3) accepted baseline)",
+      "exemption = list registration only; historical rows never rewritten or backfilled (DEC-321 method correction)",
+      "side-record scope: pins the exemption list + escalation basis; per-row marker forgery detection (write-time receipts) is a separate unshipped mechanism - registered, not claimed"
+    ]
+  }
+}

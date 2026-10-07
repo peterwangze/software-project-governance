@@ -153,19 +153,24 @@ CONTRACT_MODE_VOCABULARY: Tuple[str, ...] = ("full", "quick")
 """Mirror of §3.6's literal mode tokens (``domain:<name>`` is a selector)."""
 
 ADVISORY_SEGMENTS: Tuple[str, ...] = (
-    "28p", "28q", "28r", "28s", "28t", "30c", "39", "42",
+    "28p", "28q", "28r", "28s", "28t", "39", "42",
 )
 """Segments whose engine section never increments ``all_issues``.
 
 Measured, not assumed: an AST pass over ``_run_full_engine_checks`` finds the
-``all_issues`` AugAssign nodes inside each ``# ── <id>. `` section; these 8
+``all_issues`` AugAssign nodes inside each ``# ── <id>. `` section; these 7
 sections have none (comments mentioning the counter do not count), so their
 findings are advisory disclosures — ``28p`` prints ``(advisory)``, ``28s`` /
-``28t`` cite ``gate_integration.fatal_on_error=false``, ``30c`` / ``39``
-declare the FIX-260 / DEC-159 gradual-WARN convention, and ``28q`` / ``28r``
-print findings without touching the counter; ``42`` carries the ADR-021
-§3.2.3 observation-window WARN posture (渐进 FAIL 翻转经 decision-log 入账,
+``28t`` cite ``gate_integration.fatal_on_error=false``, ``39`` declares the
+DEC-159 gradual-WARN convention, and ``28q`` / ``28r`` print findings
+without touching the counter; ``42`` carries the ADR-021 §3.2.3
+observation-window WARN posture (渐进 FAIL 翻转经 decision-log 入账,
 never silently). Re-judged by ``tests/test_registry.py::CheckRegistryTests``.
+
+FEAT-089 / DEC-146 ②: ``30c`` left this set — its escalation batch
+delivered the WARN→FAIL flip (violations increment ``all_issues`` since
+0.97.0; the remaining V6d undated tier stays WARN-only by design, DEC-146 ③
+accepted baseline).
 """
 
 DELEGATED_LOADERS: Dict[str, str] = {

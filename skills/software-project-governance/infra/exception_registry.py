@@ -26,9 +26,38 @@ become a silent exemption channel):
   * PURE annotation: every function here is read-only and returns NEW
     structures; callers' findings/summaries/exit codes are never mutated.
 
+── Check 30c provenance exemption list (FEAT-089 / DEC-146 ② / DEC-321) ──
+
+A SECOND, structurally different registry lives here: the DEC-registered
+exemption list Check 30c consumes for its WARN→FAIL escalation batch.
+
+  * Why in this module: both registries are governance-exception carriers
+    (module responsibility: 治理例外登记载体). The FEAT-075 file registry
+    stays annotation-only over artifact files; the 30c list is a CODE
+    constant — the plugin (not the host project) owns it, because the
+    exempted rows are plugin-history facts (evidence rows written before
+    the machine-path contract existed) and the list ships with the
+    escalation that consumes it (0.97.0). A host-side file would put the
+    escalation's own exemption baseline under host write access — the
+    thing DEC-146 ④'s unforgeable side record exists to prevent.
+  * Matching is (rule, task_id, record_date, face)-exact. ``record_id``
+    keeps the human-readable evidence ID cell verbatim (REVIEW-FIX-256-
+    CODE-R0); it is an anchor for humans, NOT a match key — the V7 row
+    scanner normalizes ID cells to ``task_id`` (ROLE segments never enter
+    the key), so the key must be the normalized pair.
+  * Unforgeability boundary (DEC-146 ④, honest scope): the side record
+    (``infra/checks/review_exemptions_30c.json``) pins this list's
+    canonical sha256 and the escalation-basis snapshot. Check 30c asserts
+    side-record hash == live-registry hash on every run (a drifted or
+    hand-edited list → EXEMPTION-SIDE-RECORD FAIL, fail-closed). This
+    makes SILENT list drift impossible; it does not make the marker text
+    itself unforgeable per row (write-time receipts are a separate,
+    unshipped mechanism — registered, not claimed).
+
 Stdlib-only; no verify_workflow import (R2 reverse-dependency discipline).
 """
 
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -359,3 +388,141 @@ def release_disclosure_block(root=None, today=None):
             "(DEC-278(5): 原始 FAIL 与真实字节数保留)"
         ),
     }
+
+
+# ── Check 30c provenance exemption list (FEAT-089 / DEC-146 ② / DEC-321) ──
+# The DEC-registered exemptions Check 30c consumes in its WARN→FAIL
+# escalation batch (0.97.0). Two rows, both written ON the effective date
+# (2026-08-22) itself — the day the rule went live — and both preemptively
+# registered by DEC-321 (first cohort). Registration = list entry ONLY:
+# the historical rows are never rewritten, backfilled, or "re-persisted"
+# through review-record (DEC-321 方法勘正: a backfill would counterfeit the
+# persistence timepoint and push coverage to 100% ahead of the gradual
+# design — forbidden).
+REVIEW_PROVENANCE_EXEMPTIONS = (
+    {
+        "id": "EXEMPT-30C-001",
+        "check": "30c",
+        "record_id": "REVIEW-FIX-256-CODE-R0",
+        "task_id": "FIX-256",
+        "record_date": "2026-08-22",
+        "rule": "V7",
+        "face": "row",
+        "approved_by": "DEC-146(2) + DEC-321",
+        "registered_in": "FEAT-089 (0.97.0)",
+        "note": (
+            "生效日当日残留手写行（规则上线首日的真实缺口证据，DEC-146 ③ "
+            "诚实代价）；不回写不改写历史行、不走 review-record 补录"
+            "（DEC-321 禁补录）"
+        ),
+    },
+    {
+        "id": "EXEMPT-30C-002",
+        "check": "30c",
+        "record_id": "REVIEW-FIX-258-CODE-R0",
+        "task_id": "FIX-258",
+        "record_date": "2026-08-22",
+        "rule": "V7",
+        "face": "row",
+        "approved_by": "DEC-146(2) + DEC-321",
+        "registered_in": "FEAT-089 (0.97.0)",
+        "note": (
+            "同上——2026-08-22 生效日当日第二行；首批入册（DEC-321 预登记）"
+        ),
+    },
+)
+
+#: Structural contract of one exemption entry (validated by
+#: ``load_review_provenance_exemptions``; a malformed entry is INERT —
+#: fail-closed, disclosed by Check 30c's side-record assertion).
+_REVIEW_PROVENANCE_EXEMPTION_FIELDS = (
+    "id", "check", "record_id", "task_id", "record_date", "rule", "face",
+    "approved_by", "registered_in",
+)
+
+
+def load_review_provenance_exemptions(exemptions=None):
+    """Validate the 30c exemption list (read-only, fail-closed per entry).
+
+    Returns ``(entries, errors)``: malformed entries are dropped (an entry
+    missing required fields or carrying an unparsable record_date can never
+    match — it must not silently absorb a violation) and reported in
+    ``errors``. ``exemptions`` overrides the module constant (tests, and
+    Check 30c's tamper-probe path).
+    """
+    raw = exemptions if exemptions is not None else REVIEW_PROVENANCE_EXEMPTIONS
+    entries, errors = [], []
+    for idx, entry in enumerate(raw or ()):
+        if not isinstance(entry, dict):
+            errors.append(f"exemptions[{idx}]: not an object")
+            continue
+        missing = [f for f in _REVIEW_PROVENANCE_EXEMPTION_FIELDS
+                   if not str(entry.get(f, "")).strip()]
+        if missing:
+            errors.append(
+                f"exemptions[{idx}] ({entry.get('id', '?')}): "
+                f"missing/empty field(s) {', '.join(missing)}")
+            continue
+        if entry.get("rule") not in ("V7", "V8"):
+            errors.append(
+                f"exemptions[{idx}] ({entry['id']}): rule must be V7/V8")
+            continue
+        if entry.get("face") not in ("row", "file", "any"):
+            errors.append(
+                f"exemptions[{idx}] ({entry['id']}): face must be "
+                f"row/file/any")
+            continue
+        try:
+            date.fromisoformat(str(entry["record_date"]).strip())
+        except ValueError:
+            errors.append(
+                f"exemptions[{idx}] ({entry['id']}): record_date must be "
+                f"ISO YYYY-MM-DD")
+            continue
+        entries.append(entry)
+    return entries, errors
+
+
+def review_provenance_exemptions_sha256(exemptions=None):
+    """Canonical sha256 of the exemption list (the side record pins THIS).
+
+    Canonical serialization: JSON, sort_keys, ensure_ascii=False, compact
+    separators — byte-stable across runs/platforms for the same list.
+    """
+    raw = exemptions if exemptions is not None else REVIEW_PROVENANCE_EXEMPTIONS
+    canonical = json.dumps(
+        list(raw or ()), ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def match_review_provenance_exemption(rule, task_id, record_date,
+                                      face="row", exemptions=None):
+    """Match ONE exemption entry for a Check 30c finding (exact keys).
+
+    Args:
+      rule: "V7" or "V8" (the finding's rule).
+      task_id: the V7/V8 scanner's normalized task id (e.g. "FIX-256" —
+        ROLE segments like the "-CODE-R0" tail never enter the key).
+      record_date: ``datetime.date`` of the row/file (exact equality —
+        an exemption registered for 2026-08-22 never absorbs 2026-08-23).
+      face: "row" | "file" (the finding's channel).
+
+    Returns the matching entry dict, or None. Malformed entries were
+    already dropped by ``load_review_provenance_exemptions`` — an entry
+    that cannot prove its scope never matches (fail-closed).
+    """
+    if record_date is None or not task_id:
+        return None
+    entries, _errors = load_review_provenance_exemptions(exemptions)
+    for entry in entries:
+        if entry["rule"] != rule:
+            continue
+        if entry["task_id"] != task_id:
+            continue
+        if str(entry["record_date"]).strip() != record_date.isoformat():
+            continue
+        if entry["face"] not in (face, "any"):
+            continue
+        return entry
+    return None

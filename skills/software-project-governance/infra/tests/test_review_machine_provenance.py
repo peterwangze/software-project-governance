@@ -66,13 +66,14 @@ class Check30cFixtureTests(unittest.TestCase):
         text.append("")
         return "\n".join(text)
 
-    def test_a_handwritten_row_warns_v7(self):
-        """Fixture (a): handwritten REVIEW row (dated, no CLI marker) → WARN/V7."""
+    def test_a_handwritten_row_fails_v7(self):
+        """Fixture (a): handwritten REVIEW row (dated, no CLI marker) →
+        FAIL/V7 (FEAT-089 / DEC-146 ② escalation: WARN → FAIL since 0.97.0)."""
         r = vw.check_review_machine_provenance(review_rows=[HANDWRITTEN_ROW])
-        self.assertEqual(r["verdict"], "WARN")
-        rules = {w["rule"] for w in r["warnings"]}
+        self.assertEqual(r["verdict"], "FAIL")
+        rules = {v["rule"] for v in r["violations"]}
         self.assertIn("V7", rules)
-        v7 = [w for w in r["warnings"] if w["rule"] == "V7"]
+        v7 = [v for v in r["violations"] if v["rule"] == "V7"]
         self.assertEqual(v7[0]["task_id"], "FIX-300")
 
     def test_b_machine_records_pass(self):
@@ -84,26 +85,28 @@ class Check30cFixtureTests(unittest.TestCase):
         self.assertEqual(r["warnings"], [])
         self.assertEqual(r["verdict"], "PASS")
 
-    def test_c1_needs_change_row_without_file_warns_v8(self):
-        """Fixture (c) form 1: NEEDS_CHANGE row, no machine file → WARN/V8."""
+    def test_c1_needs_change_row_without_file_fails_v8(self):
+        """Fixture (c) form 1: NEEDS_CHANGE row, no machine file → FAIL/V8
+        (FEAT-089 escalation — V8 findings moved to violations)."""
         r = vw.check_review_machine_provenance(
             review_rows=[self._machine_row(result="NEEDS_CHANGE")],
             review_files={},
         )
-        rules = {w["rule"] for w in r["warnings"]}
+        rules = {v["rule"] for v in r["violations"]}
         self.assertIn("V8", rules)
 
-    def test_c2_needs_change_file_without_next_round_warns_v8(self):
-        """Fixture (c) form 2: NEEDS_CHANGE file lacking next_round → WARN/V8."""
+    def test_c2_needs_change_file_without_next_round_fails_v8(self):
+        """Fixture (c) form 2: NEEDS_CHANGE file lacking next_round → FAIL/V8
+        (FEAT-089 escalation)."""
         body = self._machine_file(result="NEEDS_CHANGE").replace(
             "- next_round: REVIEW-FIX-301-R1\n", "")
         r = vw.check_review_machine_provenance(
             review_rows=[],
             review_files={"review-FIX-301-R0.md": body},
         )
-        rules = {w["rule"] for w in r["warnings"]}
+        rules = {v["rule"] for v in r["violations"]}
         self.assertIn("V8", rules)
-        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
+        v8 = [v for v in r["violations"] if v["rule"] == "V8"]
         self.assertEqual(v8[0]["task_id"], "FIX-301")
 
     def test_pre_effective_date_rows_are_legacy_not_judged(self):
@@ -120,17 +123,22 @@ class Check30cFixtureTests(unittest.TestCase):
         # Nothing dated on/after the effective date → nothing judged.
         self.assertEqual(r["verdict"], "no-verdict")
 
-    def test_undated_records_are_not_judged(self):
-        """V6d-style: records without a parseable date are not judged."""
+    def test_undated_records_now_warn_v6d(self):
+        """FEAT-089 / DEC-146 ② (V6d tightening): records without a parseable
+        date are no longer silently un-judged — each undated REVIEW record is
+        a V6d WARN (never counted in all_issues; the escalation's WARN tier)."""
         undated_row = HANDWRITTEN_ROW.replace("2026-09-01", "")
         undated_file = self._machine_file().replace("- date: 2026-09-01", "- date: ?")
         r = vw.check_review_machine_provenance(
             review_rows=[undated_row],
             review_files={"review-FIX-301-R0.md": undated_file},
         )
-        self.assertEqual(r["warnings"], [])
+        self.assertEqual(r["verdict"], "WARN")
+        rules = {w["rule"] for w in r["warnings"]}
+        self.assertEqual(rules, {"V6d"}, r["warnings"])
         self.assertEqual(r["stats"]["rows_undated"], 1)
         self.assertEqual(r["stats"]["files_undated"], 1)
+        self.assertEqual(r["violations"], [])
 
     def test_empty_corpus_is_no_verdict(self):
         r = vw.check_review_machine_provenance(review_rows=[], review_files={})
@@ -317,14 +325,17 @@ class MachineRowClassificationTests(unittest.TestCase):
 
     def test_evd_row_mentioning_review_id_is_not_judged(self):
         """EVD- 行（ID 列非 REVIEW-）description 提及 REVIEW id → 不入
-        WARN，显式分类计数（红→绿：现行全行 finditer 判 V7）。"""
+        WARN，显式分类计数（红→绿：现行全行 finditer 判 V7）。
+        FEAT-089: review_files={} 隔离 live 文件面（V6d 收紧后 undated
+        live 文件会漏入 fixture 面）。"""
         row = (
             "| EVD-FIX-310 | FIX-310 | 产品代码 | 交付完成"
             "（REVIEW-FIX-310-R0 APPROVED_WITH_NOTES/0；审查链闭环） | "
             "事实依据：diff 逐行 | patch | Coordinator | 2026-09-01 | "
             "G11 | 完成 |"
         )
-        r = vw.check_review_machine_provenance(review_rows=[row])
+        r = vw.check_review_machine_provenance(review_rows=[row],
+                                               review_files={})
         self.assertEqual(r["warnings"], [], r["warnings"])
         self.assertEqual(r["stats"].get("rows_non_review"), 1)
 
@@ -337,7 +348,8 @@ class MachineRowClassificationTests(unittest.TestCase):
             "REVIEW-FIX-311-R0 已机录） | 事实依据：机器写入 | snapshot | "
             "Coordinator | 2026-09-01 | G11 | DONE |"
         )
-        r = vw.check_review_machine_provenance(review_rows=[row])
+        r = vw.check_review_machine_provenance(review_rows=[row],
+                                               review_files={})
         self.assertEqual(r["warnings"], [], r["warnings"])
         self.assertEqual(r["stats"].get("rows_non_review"), 1)
 
@@ -350,7 +362,7 @@ class MachineRowClassificationTests(unittest.TestCase):
         )
         r = vw.check_review_machine_provenance(review_rows=[row])
         self.assertTrue(
-            [w for w in r["warnings"] if w["rule"] == "V7"], r["warnings"])
+            [v for v in r["violations"] if v["rule"] == "V7"], r["violations"])
 
     def test_needs_change_row_with_next_round_record_no_v8(self):
         """V8 溯源豁免：R0=NEEDS_CHANGE 机录行 + 同号文件被后续 R0 终写
@@ -370,9 +382,10 @@ class MachineRowClassificationTests(unittest.TestCase):
                                                review_files=files)
         self.assertEqual(r["warnings"], [], r["warnings"])
 
-    def test_needs_change_row_without_next_round_record_still_warns_v8(self):
+    def test_needs_change_row_without_next_round_record_still_fails_v8(self):
         """边界：R0=NEEDS_CHANGE 机录行 + 无 next_round 字段 + R1 记录
-        不存在 → V8 WARN 保持（复审义务未溯源——不得放宽）。"""
+        不存在 → V8 FAIL 保持（复审义务未溯源——不得放宽；FEAT-089
+        升级为 FAIL tier）。"""
         rows = [self._machine_row("FIX-314", 0, "NEEDS_CHANGE")]
         files = {
             "review-FIX-314-R0.md": self._machine_file_text(
@@ -380,8 +393,8 @@ class MachineRowClassificationTests(unittest.TestCase):
         }
         r = vw.check_review_machine_provenance(review_rows=rows,
                                                review_files=files)
-        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
-        self.assertTrue(v8, r["warnings"])
+        v8 = [v for v in r["violations"] if v["rule"] == "V8"]
+        self.assertTrue(v8, r["violations"])
 
     def test_needs_change_file_with_next_round_record_no_v8(self):
         """V8 溯源豁免（文件级）：NEEDS_CHANGE 机录文件缺 next_round 字段
@@ -395,14 +408,14 @@ class MachineRowClassificationTests(unittest.TestCase):
                                                review_files=files)
         self.assertEqual(r["warnings"], [], r["warnings"])
 
-    def test_handwritten_review_row_still_warns_v7(self):
+    def test_handwritten_review_row_still_fails_v7(self):
         """边界：现行手写 REVIEW- 行（ID 列 REVIEW-、dated ≥ 生效日、无
-        marker）→ V7 WARN 保持（现行格式违规不得放宽）。"""
+        marker、无豁免命中）→ V7 FAIL 保持（现行格式违规不得放宽）。"""
         r = vw.check_review_machine_provenance(review_rows=[HANDWRITTEN_ROW])
-        self.assertEqual(r["verdict"], "WARN")
+        self.assertEqual(r["verdict"], "FAIL")
         self.assertTrue(
-            [w for w in r["warnings"] if w["rule"] == "V7"
-             and w["task_id"] == "FIX-300"], r["warnings"])
+            [v for v in r["violations"] if v["rule"] == "V7"
+             and v["task_id"] == "FIX-300"], r["violations"])
 
 
 class ReworkR1DischargeScopeTests(unittest.TestCase):
@@ -445,7 +458,7 @@ class ReworkR1DischargeScopeTests(unittest.TestCase):
 
     def test_older_next_round_record_does_not_discharge_v8(self):
         """红→绿：R+1 记录 dated 2026-08-01 早于 R0 NEEDS_CHANGE
-        （2026-09-05）——同号历史轮命名冲突形态 → 不豁免，V8 WARN。"""
+        （2026-09-05）——同号历史轮命名冲突形态 → 不豁免，V8 FAIL。"""
         rows = [
             self._machine_row("FIX-320", 0, "NEEDS_CHANGE",
                               date="2026-09-05"),
@@ -460,12 +473,12 @@ class ReworkR1DischargeScopeTests(unittest.TestCase):
         }
         r = vw.check_review_machine_provenance(review_rows=rows,
                                                review_files=files)
-        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
-        self.assertTrue(v8, r["warnings"])
+        v8 = [v for v in r["violations"] if v["rule"] == "V8"]
+        self.assertTrue(v8, r["violations"])
 
     def test_unknown_conclusion_next_round_does_not_discharge_v8(self):
         """红→绿：R+1 记录 conclusion 不可解析（空结论列 → UNKNOWN）→
-        非有效复审记录 → 不豁免，V8 WARN。"""
+        非有效复审记录 → 不豁免，V8 FAIL。"""
         rows = [
             self._machine_row("FIX-321", 0, "NEEDS_CHANGE",
                               date="2026-09-01"),
@@ -478,8 +491,8 @@ class ReworkR1DischargeScopeTests(unittest.TestCase):
         }
         r = vw.check_review_machine_provenance(review_rows=rows,
                                                review_files=files)
-        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
-        self.assertTrue(v8, r["warnings"])
+        v8 = [v for v in r["violations"] if v["rule"] == "V8"]
+        self.assertTrue(v8, r["violations"])
 
     def test_dated_valid_next_round_still_discharges_v8(self):
         """绿保持（回归锚定）：R+1 记录 dated ≥ R0 且结论有效 → 豁免
@@ -502,7 +515,7 @@ class ReworkR1DischargeScopeTests(unittest.TestCase):
 
     def test_file_level_discharge_also_checks_date_order(self):
         """文件级豁免同步收紧：R0=NEEDS_CHANGE 文件缺 next_round + 更早
-        的 R1 文件（2026-08-01 < R0 2026-09-05）→ V8 WARN。"""
+        的 R1 文件（2026-08-01 < R0 2026-09-05）→ V8 FAIL。"""
         rows = []
         files = {
             "review-FIX-323-R0.md": self._machine_file_text(
@@ -512,8 +525,8 @@ class ReworkR1DischargeScopeTests(unittest.TestCase):
         }
         r = vw.check_review_machine_provenance(review_rows=rows,
                                                review_files=files)
-        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
-        self.assertTrue(v8, r["warnings"])
+        v8 = [v for v in r["violations"] if v["rule"] == "V8"]
+        self.assertTrue(v8, r["violations"])
 
 
 class ReworkR2IndexSemanticsTests(unittest.TestCase):
@@ -558,7 +571,7 @@ class ReworkR2IndexSemanticsTests(unittest.TestCase):
     def test_composite_valid_old_plus_unknown_new_not_discharged(self):
         """红→绿：R+1 有效记录 dated 2026-08-01（< base 2026-09-05）+
         同轮较新 UNKNOWN 记录（2026-09-10）——归并式误放行，逐记录式
-        拒绝 → V8 WARN。"""
+        拒绝 → V8 FAIL。"""
         rows = [
             self._machine_row("FIX-330", 0, "NEEDS_CHANGE",
                               date="2026-09-05"),
@@ -575,8 +588,8 @@ class ReworkR2IndexSemanticsTests(unittest.TestCase):
         }
         r = vw.check_review_machine_provenance(review_rows=rows,
                                                review_files=files)
-        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
-        self.assertTrue(v8, r["warnings"])
+        v8 = [v for v in r["violations"] if v["rule"] == "V8"]
+        self.assertTrue(v8, r["violations"])
 
     def test_single_valid_dated_record_still_discharges(self):
         """绿保持：单条有效且 dated ≥ base 的 R+1 记录 → 豁免（逐记录式
@@ -594,6 +607,269 @@ class ReworkR2IndexSemanticsTests(unittest.TestCase):
         r = vw.check_review_machine_provenance(review_rows=rows,
                                                review_files=files)
         self.assertEqual(r["warnings"], [], r["warnings"])
+
+
+class Check30cFailEscalationTests(unittest.TestCase):
+    """FEAT-089 / DEC-146 ② —— Check 30c WARN→FAIL 升级批语义锁定。
+
+    DEC-146 ②（archive/decisions L73）三动作的本票兑现：
+
+      1. FAIL 升级——dated-on/after-生效日 无机器标记的 REVIEW 记录
+         （V7）与缺 next_round 的 NEEDS_CHANGE 记录（V8）从 WARN 升级
+         为 FAIL（violations，计入 all_issues）；单向棘轮不回退。
+      2. V6d 收紧——「无日期记录不判」口径收紧为「无日期即 WARN」
+         （V6d finding：无法证明是生效日前的记录一律 WARN，不判 FAIL
+         ——日期未知不构成机器来源违规的确定性事实）。
+      3. DEC 豁免清单——REVIEW-FIX-256/258-CODE-R0（2026-08-22 生效日
+         当日残留手写行，DEC-321 预登记首批入册）经清单登记豁免：
+         不回写不改写历史行、不走 review-record 补录（DEC-321 禁补录
+         ——补录将伪化持久化时点并使覆盖率提前达 100%）。
+
+    升级条件判定面（DEC-146 ②：覆盖率 100% × ≥2 发布版本）在
+    stats["escalation"] 显式可复算（coverage_raw / coverage_exemption_
+    honored / releases_since_effective_date / condition_met）。
+    """
+
+    # 形态镜像 live 手写行（evidence-log ID cell 原文，2026-08-22）：
+    # V7 判定从 ID cell 提取的规范化 task id = "FIX-256"（ROLE 段不进
+    # 匹配键——record_id 仅作人读锚）。结论列镜像 live 原文
+    # （unresolved_blockers=0 —— APPROVED_WITH_NOTES 族，无 V8 面）。
+    EXEMPT_ROW_FX256 = (
+        "| REVIEW-FIX-256-CODE-R0 | FIX-256 | 产品代码 | Code Review R0"
+        "（独立 Reviewer，2026-08-22）：APPROVED_WITH_NOTES | 事实依据："
+        "diff 逐行 | r0.md | Code Reviewer | 2026-08-22 | G11 | "
+        "APPROVED_WITH_NOTES | unresolved_blockers=0 |"
+    )
+    EXEMPT_ROW_FX258 = (
+        "| REVIEW-FIX-258-CODE-R0 | FIX-258 | 产品代码 | Code Review R0"
+        "（独立 Reviewer，2026-08-22）：APPROVED_WITH_NOTES | 事实依据："
+        "diff 逐行 | r0.md | Code Reviewer | 2026-08-22 | G11 | "
+        "APPROVED_WITH_NOTES | unresolved_blockers=0 |"
+    )
+
+    # ── 1. 豁免命中：清单登记行被吸收，不产生 finding ──────────────────
+
+    def test_exempted_row_absorbed_no_violation(self):
+        """豁免命中：FIX-256 手写行（2026-08-22，无 marker）→ 无 V7
+        finding，计入 stats.rows_exempted（exemption-honored 覆盖率）。"""
+        r = vw.check_review_machine_provenance(
+            review_rows=[self.EXEMPT_ROW_FX256], review_files={})
+        self.assertEqual(r["violations"], [], r["violations"])
+        self.assertEqual(r["warnings"], [], r["warnings"])
+        self.assertEqual(r["stats"]["rows_exempted"], 1)
+        self.assertEqual(r["verdict"], "PASS")
+
+    def test_both_exempted_rows_absorbed(self):
+        """DEC-321 首批入册两行（FIX-256/258-CODE-R0）全部命中。"""
+        r = vw.check_review_machine_provenance(
+            review_rows=[self.EXEMPT_ROW_FX256, self.EXEMPT_ROW_FX258],
+            review_files={})
+        self.assertEqual(r["violations"], [], r["violations"])
+        self.assertEqual(r["stats"]["rows_exempted"], 2)
+
+    # ── 2. 豁免未命中：键不匹配即 FAIL（豁免不是模糊赦免） ─────────────
+
+    def test_exemption_miss_wrong_date_fails(self):
+        """日期不匹配（2026-08-23 ≠ 登记日 2026-08-22）→ V7 FAIL——
+        豁免按 (task, date) 精确匹配，不得吸收其他日期的同任务行。"""
+        row = self.EXEMPT_ROW_FX256.replace("2026-08-22", "2026-08-23")
+        r = vw.check_review_machine_provenance(review_rows=[row],
+                                               review_files={})
+        v7 = [v for v in r["violations"] if v["rule"] == "V7"]
+        self.assertTrue(v7, r["violations"])
+        self.assertEqual(r["stats"]["rows_exempted"], 0)
+        self.assertEqual(r["verdict"], "FAIL")
+
+    def test_exemption_miss_wrong_task_fails(self):
+        """任务不匹配（FIX-999 ≠ FIX-256/258）→ V7 FAIL。"""
+        row = self.EXEMPT_ROW_FX256.replace("FIX-256", "FIX-999")
+        r = vw.check_review_machine_provenance(review_rows=[row],
+                                               review_files={})
+        v7 = [v for v in r["violations"] if v["rule"] == "V7"]
+        self.assertTrue(v7, r["violations"])
+
+    def test_exemption_miss_machine_row_not_consumed(self):
+        """机器行不消耗豁免额度（豁免只吸收 non-machine 判定）。"""
+        machine_fx256 = self.EXEMPT_ROW_FX256.replace(
+            "Code Review R0（独立 Reviewer，2026-08-22）：APPROVED_WITH_NOTES",
+            "review-record CLI 机器写入 review 结论记录（round 0）")
+        r = vw.check_review_machine_provenance(
+            review_rows=[machine_fx256, self.EXEMPT_ROW_FX256],
+            review_files={})
+        self.assertEqual(r["violations"], [], r["violations"])
+        self.assertEqual(r["stats"]["rows_machine"], 1)
+        self.assertEqual(r["stats"]["rows_exempted"], 1)
+
+    # ── 3. V6d 收紧：无日期即 WARN（不判 FAIL） ─────────────────────────
+
+    def test_undated_row_warns_not_fails(self):
+        """无日期 REVIEW 行 → V6d WARN（非 FAIL——日期未知不是机器来源
+        违规的确定性事实；WARN 不计入 all_issues）。"""
+        undated = HANDWRITTEN_ROW.replace("2026-09-01", "")
+        r = vw.check_review_machine_provenance(review_rows=[undated])
+        self.assertEqual(r["verdict"], "WARN")
+        rules = {w["rule"] for w in r["warnings"]}
+        self.assertEqual(rules, {"V6d"})
+        self.assertEqual(r["violations"], [])
+
+    def test_undated_file_warns_v6d(self):
+        """无日期 CLI 命名 review 文件 → V6d WARN（同一收紧口径）。"""
+        body = self._undated_file_body()
+        r = vw.check_review_machine_provenance(
+            review_rows=[],
+            review_files={"review-FIX-500-R0.md": body})
+        self.assertEqual(r["verdict"], "WARN")
+        rules = {w["rule"] for w in r["warnings"]}
+        self.assertEqual(rules, {"V6d"})
+        self.assertEqual(r["stats"]["files_undated"], 1)
+        self.assertEqual(r["violations"], [])
+
+    @staticmethod
+    def _undated_file_body():
+        return (
+            "# Review Record (machine-written by review-record)\n"
+            "\n"
+            "- task: FIX-500\n"
+            "- round: R0\n"
+            "- date: ?\n"
+            "- reviewer: rv\n"
+            "- report: r.md\n"
+            "- wiring: pending\n"
+            "\n"
+            "**审查结论**: **APPROVED**\n"
+        )
+
+    # ── 4. 升级判定面：100% × ≥2 发布版本显式可复算 ────────────────────
+
+    def test_escalation_stats_recomputable(self):
+        """stats["escalation"] 携带可复算判定面：coverage_raw /
+        coverage_exemption_honored（分子分母显式）/ releases_since_
+        effective_date / condition_met（100% ∧ ≥2）。"""
+        r = vw.check_review_machine_provenance(
+            review_rows=[self.EXEMPT_ROW_FX256], review_files={})
+        esc = r["stats"]["escalation"]
+        self.assertTrue(esc["active"])
+        self.assertEqual(esc["effective_date"], "2026-08-22")
+        # exemption-honored 覆盖率 = (machine + exempted) / judged = 1/1。
+        honored = esc["coverage_exemption_honored"]
+        self.assertEqual(honored["numerator"], 1)
+        self.assertEqual(honored["denominator"], 1)
+        self.assertEqual(honored["pct"], 100.0)
+        # raw 覆盖率不含豁免（0/1）。
+        self.assertEqual(esc["coverage_raw"]["numerator"], 0)
+        self.assertEqual(esc["coverage_raw"]["denominator"], 1)
+        self.assertGreaterEqual(esc["releases_since_effective_date"], 2)
+        self.assertTrue(esc["condition_met"])
+
+    def test_released_versions_since_injectable(self):
+        """release-ledger 计数可注入复算（临时 ledger fixture：生效日
+        后 2 个 released 版本 → 2；生效日前的 released 不计；非 released
+        不计；withdrawn 不计）。"""
+        import json as _json
+        with tempfile.TemporaryDirectory(prefix="r089_") as td:
+            ledger = Path(td)
+            (ledger / "0.10.0.json").write_text(_json.dumps({
+                "version": "0.10.0", "lifecycle_state": "released",
+                "effective_state": {"lifecycle_state": "released",
+                                    "withdrawn": False},
+                "events": [{"type": "candidate_to_released",
+                            "recorded_at": "2026-09-01T00:00:00Z"}],
+            }), encoding="utf-8")
+            (ledger / "0.11.0.json").write_text(_json.dumps({
+                "version": "0.11.0", "lifecycle_state": "released",
+                "effective_state": {"lifecycle_state": "released",
+                                    "withdrawn": False},
+                "events": [{"type": "candidate_to_released",
+                            "recorded_at": "2026-09-15T00:00:00Z"}],
+            }), encoding="utf-8")
+            # 生效日前 released → 不计。
+            (ledger / "0.09.0.json").write_text(_json.dumps({
+                "version": "0.09.0", "lifecycle_state": "released",
+                "effective_state": {"lifecycle_state": "released",
+                                    "withdrawn": False},
+                "events": [{"type": "candidate_to_released",
+                            "recorded_at": "2026-08-01T00:00:00Z"}],
+            }), encoding="utf-8")
+            # candidate（未 released）→ 不计。
+            (ledger / "0.12.0.json").write_text(_json.dumps({
+                "version": "0.12.0", "lifecycle_state": "candidate",
+                "effective_state": {"lifecycle_state": "candidate",
+                                    "withdrawn": False},
+                "events": [{"type": "declared_candidate",
+                            "recorded_at": "2026-09-20T00:00:00Z"}],
+            }), encoding="utf-8")
+            # withdrawn → 不计。
+            (ledger / "0.13.0.json").write_text(_json.dumps({
+                "version": "0.13.0", "lifecycle_state": "released",
+                "effective_state": {"lifecycle_state": "released",
+                                    "withdrawn": True},
+                "events": [{"type": "candidate_to_released",
+                            "recorded_at": "2026-09-25T00:00:00Z"}],
+            }), encoding="utf-8")
+            from checks.review_domain import _released_versions_since
+            n = _released_versions_since(
+                __import__("checks.review_domain", fromlist=["x"])
+                .REQ107_MACHINE_PROVENANCE_DATE,
+                releases_dir=ledger)
+            self.assertEqual(n, 2)
+
+    def test_condition_unmet_when_coverage_below_100(self):
+        """覆盖率 <100%（未豁免手写行在库）→ condition_met=False（判定
+        面如实反映，FAIL 由该行自身的 V7 violation 承载）。"""
+        r = vw.check_review_machine_provenance(review_rows=[HANDWRITTEN_ROW],
+                                               review_files={})
+        esc = r["stats"]["escalation"]
+        self.assertEqual(esc["coverage_exemption_honored"]["pct"], 0.0)
+        self.assertFalse(esc["condition_met"])
+        self.assertEqual(r["verdict"], "FAIL")
+
+    # ── 5. DEC-146 ④：不可伪造 JSON 侧记录（change-triage 式） ─────────
+
+    def test_side_record_verifies_live_registry(self):
+        """侧记录（infra/checks/review_exemptions_30c.json）的
+        exemptions_sha256 与 exception_registry 清单 canonical hash 一致
+        → stats.escalation.side_record.verified=True，无 finding。"""
+        r = vw.check_review_machine_provenance(
+            review_rows=[self.EXEMPT_ROW_FX256], review_files={})
+        self.assertTrue(r["stats"]["escalation"]["side_record"]["verified"])
+        self.assertEqual(r["violations"], [])
+
+    def test_side_record_hash_mismatch_fails_closed(self):
+        """fail-closed：豁免清单被篡改（mock 追加条目）→ 清单 hash 与
+        侧记录不一致 → EXEMPTION-SIDE-RECORD violation（FAIL）——清单
+        漂移不可静默生效（DEC-146 ④ 侧记录的执法点）。"""
+        import exception_registry
+        tampered = list(exception_registry.REVIEW_PROVENANCE_EXEMPTIONS) + [{
+            "id": "EXEMPT-30C-FAKE", "check": "30c",
+            "record_id": "REVIEW-FIX-666-CODE-R0", "task_id": "FIX-666",
+            "record_date": "2026-09-30", "rule": "V7", "face": "row",
+            "approved_by": "forged", "registered_in": "forged",
+            "note": "tamper probe",
+        }]
+        with mock.patch.object(exception_registry,
+                               "REVIEW_PROVENANCE_EXEMPTIONS", tampered):
+            r = vw.check_review_machine_provenance(review_rows=[])
+        sr = [v for v in r["violations"]
+              if v["rule"] == "EXEMPTION-SIDE-RECORD"]
+        self.assertTrue(sr, r["violations"])
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertFalse(r["stats"]["escalation"]["side_record"]["verified"])
+
+    def test_exempted_rows_require_registry_marker_shape(self):
+        """豁免条目结构契约：每条必含 id/task_id/record_date/rule/face/
+        approved_by/registered_in（结构漂移在 exception_registry 侧
+        fail-closed——清单加载即校验）。"""
+        import exception_registry
+        for entry in exception_registry.REVIEW_PROVENANCE_EXEMPTIONS:
+            for field in ("id", "record_id", "task_id", "record_date",
+                          "rule", "face", "approved_by", "registered_in"):
+                self.assertIn(field, entry, entry)
+            self.assertEqual(entry["task_id"], "FIX-256"
+                             if "FIX-256" in entry["record_id"]
+                             else "FIX-258")
+            self.assertEqual(entry["record_date"], "2026-08-22")
+        self.assertEqual(
+            len(exception_registry.REVIEW_PROVENANCE_EXEMPTIONS), 2)
 
 
 if __name__ == "__main__":

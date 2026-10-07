@@ -555,7 +555,7 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
      (C7) round 完全由 evidence-log 中已存在 R{n} 的最大值派生，无内存状态，并行安全。
      (C8) 审查结论机器持久化（FIX-260/REQ-107，ADR-017 R1 N1 兑现）：Reviewer 返回审查结论后，Coordinator MUST 在写入任何审查证据前通过机器路径持久化：
           `python skills/software-project-governance/infra/verify_workflow.py review-record --task {task_id} --round {n} --result {结论} --report {reviewer报告路径} [--reviewer {名称}]`
-          review-{task}-R{n}.md 文件与 evidence 行由 CLI 机器写入（唯一路径）；NEEDS_CHANGE 时 CLI 自动产出 `next_round`/`prev_report` 复审义务字段——跨会话可从证据直接推导待复审项，复审触发不依赖 Coordinator 记忆。手写 REVIEW-{id} 证据行 = 流程违规（M1.2 快速通道豁免已收窄）；CLI 不可用（工具缺失/执行失败）时 fail-closed：修复环境后重试，不得降级为手写。Check 30c 对无机器来源标记的 REVIEW 记录与缺 `next_round` 的 NEEDS_CHANGE 记录 WARN（渐进 FAIL——升级路径登记于 FIX-260 decision-log）。
+          review-{task}-R{n}.md 文件与 evidence 行由 CLI 机器写入（唯一路径）；NEEDS_CHANGE 时 CLI 自动产出 `next_round`/`prev_report` 复审义务字段——跨会话可从证据直接推导待复审项，复审触发不依赖 Coordinator 记忆。手写 REVIEW-{id} 证据行 = 流程违规（M1.2 快速通道豁免已收窄）；CLI 不可用（工具缺失/执行失败）时 fail-closed：修复环境后重试，不得降级为手写。Check 30c 对无机器来源标记的 REVIEW 记录与缺 `next_round` 的 NEEDS_CHANGE 记录 FAIL（FEAT-089 / DEC-146 ② 升级批兑现：豁免后机器标记覆盖率达 100% 且生效日后 ≥2 个发布版本，0.97.0 起单向升级，棘轮不回退）；无日期记录 WARN（V6d 收紧——无法证明生效日前的记录不再静默逃逸，WARN 不计入 all_issues）；2026-08-22 生效日当日两条残留手写行（REVIEW-FIX-256/FIX-258-CODE-R0）经 DEC 豁免清单登记吸收（DEC-146 ②/DEC-321——不回写不改写历史行、禁补录）；豁免清单由不可伪造 JSON 侧记录钉住 hash（DEC-146 ④——清单漂移即 FAIL）。
 
    > **最小契约投影（FIX-253/REQ-112；FIX-260 扩展）**：本节 T1-T4、step 4.6 (C8)（审查结论必机录——FIX-260/REQ-107，压缩形式由 DSH persona 契约块第 4 行携带，`check-injection-contract` 锚含 `review-record`）、step 6 与 interaction-boundary.md 任务排序规则的压缩形式由 SKILL.md「关键行为契约」段与 DSH persona（agent-presets/governance/agent.cordis.yml.template）携带；`check-injection-contract` 锚点守护同步。修改本节关键词（复审/NEEDS_CHANGE/review-record/task-priority-analysis/依赖理由/三要素/推荐卡）时 MUST 同步注入面，否则 check FAIL。关键行为契约第 5/6 条（推荐必标需求源/发现即闭环——FEAT-078/ADR-021，canonical 全文见本节末尾）的压缩形式同样由 SKILL.md「关键行为契约」段、DSH persona 契约块与 governance-init.md Step 7 入口模板携带（secondary-thin 薄指针与 AGENTS.md.template 携带指针），修改该两条文本时 MUST 同步全部注入面并 re-run check-injection-budget。**step 6c 交互基线（DEC-143，R0-W1b 修订）**：step 6c 原「否则可自主执行推荐项并在完成后再次推荐」分支按 DEC-143 废止——任务完成后的推荐统一按「自动推荐 + 用户确认」呈现（选项含推荐候选与「自主执行推荐项」，由用户确认或改选，而非 agent 默认自主执行）；「当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion」的既有规则不变。step 6c 经 FEAT-072/DEC-266 升级为三要素推荐卡呈现（AskUserQuestion 前正文卡 + 短选项与卡片一一对应），上述 DEC-143「自动推荐 + 用户确认」基线不变。step 6 另补一句「推荐为空 → 呈现结构化空原因（禁止机械枚举）」（注入面已先行，出处状态见 §6.2 注）。
 
@@ -565,7 +565,7 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
      - **T2（NEEDS_CHANGE 触发熔断）**：审查结论含 `NEEDS_CHANGE` 且 round ≥ 3 → **MUST** 转 BLOCKED + escalation AskUserQuestion。
      - **T3（APPROVED 终态）**：审查结论含 `APPROVED` 或 `APPROVED_WITH_NOTES`（含 `unresolved_blockers=0`） → 审查通过终态，可继续 step 5 commit。
      - **T4（BLOCKED 终态）**：审查结论含 `BLOCKED` → escalation AskUserQuestion。
-     - **违反检测**：Check 21（review_spawn_gap）和 Check 30（review_closure）会检测 evidence-log 中 `NEEDS_CHANGE` 后无对应 R{n+1} 的记录——如果 Coordinator 跳过了 T1 复审，Check 会 FAIL。Check 30c（machine provenance，FIX-260/REQ-107）检测 REVIEW 记录未经 review-record CLI 机器写入（无机器来源标记 → WARN，渐进 FAIL）以及 NEEDS_CHANGE 记录缺 `next_round` 复审义务字段（→ WARN）。
+     - **违反检测**：Check 21（review_spawn_gap）和 Check 30（review_closure）会检测 evidence-log 中 `NEEDS_CHANGE` 后无对应 R{n+1} 的记录——如果 Coordinator 跳过了 T1 复审，Check 会 FAIL。Check 30c（machine provenance，FIX-260/REQ-107；FEAT-089 / DEC-146 ② 升级批后 FAIL 语义）检测 REVIEW 记录未经 review-record CLI 机器写入（无机器来源标记 → FAIL，0.97.0 起升级）以及 NEEDS_CHANGE 记录缺 `next_round` 复审义务字段（→ FAIL）；无日期记录 → WARN（V6d 收紧，不计入 all_issues）。
 
    degraded mode 限额（DEC-090 降级 SoD + AUDIT-128 用户决策）：
      - 同一 task_id 累计 degraded 审查 ≤ 2 次

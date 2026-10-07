@@ -17575,33 +17575,62 @@ def _run_full_engine_checks(args):
         print(f"│  [{rc30['verdict']}] {rc30['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 30c. Review Machine Provenance (FIX-260 / REQ-107, ADR-017 R1 N1) ──
+    # ── 30c. Review Machine Provenance (FIX-260 / REQ-107 + FEAT-089) ──
     # V7: REVIEW rows / review files without the review-record CLI machine
-    # marker → WARN (gradual: escalation to FAIL registered in the FIX-260
-    # decision-log entry). V8: NEEDS_CHANGE records without the machine
-    # next_round revisit field → WARN. Legacy (pre-effective-date) and
-    # undated records are exempt. WARN does not increment all_issues.
+    # marker → FAIL since 0.97.0 (DEC-146 ② escalation delivered by
+    # FEAT-089; DEC exemption list absorbs the 2026-08-22 residual rows —
+    # DEC-146 ②/DEC-321). V8: NEEDS_CHANGE records without the machine
+    # next_round revisit field → FAIL (escalated with V7). V6d tightening:
+    # undated records → WARN (never all_issues — DEC-146 ③ baseline).
+    # EXEMPTION-SIDE-RECORD: the DEC-146 ④ side record must pin the live
+    # exemption list (hash mismatch → FAIL, fail-closed). The escalation
+    # decision face (coverage × releases) is recomputable from the stats.
     print("\n┌─ Check 30c: Review Machine Provenance (FIX-260) ────┐")
     mp30c = check_review_machine_provenance()
+    _esc30c = mp30c["stats"].get("escalation", {})
     print(f"│  Rows judged: {mp30c['stats']['rows_judged']} "
           f"(machine {mp30c['stats']['rows_machine']}, "
+          f"exempted {mp30c['stats'].get('rows_exempted', 0)}, "
           f"undated {mp30c['stats']['rows_undated']}, "
           f"non-review {mp30c['stats'].get('rows_non_review', 0)}); "
           f"files judged: {mp30c['stats']['files_judged']} "
-          f"(legacy {mp30c['stats']['files_legacy_skipped']}, "
+          f"(machine {mp30c['stats'].get('files_machine', 0)}, "
+          f"legacy {mp30c['stats']['files_legacy_skipped']}, "
           f"undated {mp30c['stats']['files_undated']}, "
           f"unmatched {mp30c['stats']['files_unmatched']})")
+    if _esc30c:
+        print(f"│  Escalation (DEC-146 ②, since {_esc30c.get('since_version')}): "
+              f"coverage raw {_esc30c['coverage_raw']['numerator']}/"
+              f"{_esc30c['coverage_raw']['denominator']} "
+              f"({_esc30c['coverage_raw']['pct']}%), exemption-honored "
+              f"{_esc30c['coverage_exemption_honored']['numerator']}/"
+              f"{_esc30c['coverage_exemption_honored']['denominator']} "
+              f"({_esc30c['coverage_exemption_honored']['pct']}%) × "
+              f"{_esc30c['releases_since_effective_date']} release(s) since "
+              f"{_esc30c.get('effective_date')} → condition_met="
+              f"{_esc30c.get('condition_met')}; side record "
+              f"{'verified' if _esc30c.get('side_record', {}).get('verified') else 'NOT verified'}")
     print(f"│  Verdict: {mp30c['verdict']}")
+    if mp30c.get("violations"):
+        all_issues += len(mp30c["violations"])
+        shown = mp30c["violations"][:8]
+        print(f"│  [FAIL] {len(mp30c['violations'])} machine-provenance "
+              f"violation(s) (showing first {len(shown)}):")
+        for v in shown:
+            print(f"│    - [{v['rule']}] {v.get('task_id','')}: {v['reason']}")
+        if len(mp30c["violations"]) > 8:
+            print(f"│    ... and {len(mp30c['violations']) - 8} more")
     if mp30c["warnings"]:
         shown = mp30c["warnings"][:8]
-        print(f"│  [WARN] {len(mp30c['warnings'])} machine-provenance/revisit-field WARN(s)"
-              f" (showing first {len(shown)}):")
+        print(f"│  [WARN] {len(mp30c['warnings'])} undated-record WARN(s)"
+              f" (V6d tightening, showing first {len(shown)}):")
         for w in shown:
             print(f"│    - [{w['rule']}] {w.get('task_id','')}: {w['reason']}")
         if len(mp30c["warnings"]) > 8:
             print(f"│    ... and {len(mp30c['warnings']) - 8} more")
-        print("│  (gradual severity — WARN in 0.75.x; escalation path registered)")
-    else:
+        print("│  (undated → WARN never increments all_issues — DEC-146 ③ "
+              "accepted baseline)")
+    if not mp30c.get("violations") and not mp30c["warnings"]:
         print(f"│  [{mp30c['verdict']}] {mp30c['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 

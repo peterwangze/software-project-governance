@@ -3172,9 +3172,28 @@ def _collect_live_review_sequences():
 # Effective date: records dated BEFORE this are legacy (all 0.74.x-and-earlier
 # handwritten REVIEW rows/files are pre-rule residue, same judgment pattern as
 # FIX173_NAMING_NORMALIZATION_DATE / FIX174_NORMALIZATION_DATE) and are never
-# judged. Records without a parseable date are not judged (V6d pattern: no
-# false positive on an unknown date).
+# judged. Records without a parseable date: FEAT-089 / DEC-146 ② tightened
+# the inherited "undated → not judged" (V6d pattern) stance to "undated →
+# WARN" — an unprovable-pre-effective-date record can no longer silently
+# escape the judgment face (WARN never enters all_issues).
 REQ107_MACHINE_PROVENANCE_DATE = date(2026, 8, 22)
+
+# FEAT-089 / DEC-146 ② — the registered escalation batch is DELIVERED: V7
+# (missing machine-source marker) and V8 (missing machine next_round revisit
+# field) findings are FAIL from 0.97.0 onward. Single-direction ratchet
+# (WARN→FAIL), never back. The escalation CONDITIONS (exemption-honored
+# coverage 100% sustained over ≥2 released versions) are recomputable from
+# stats["escalation"] on every run — the decision face stays transparent
+# after the flip.
+PROVENANCE_FAIL_ESCALATION_VERSION = "0.97.0"
+
+# DEC-146 ④ — the unforgeable side record (change-triage style JSON): pins
+# the exemption list's canonical sha256 + the escalation-basis snapshot.
+# Check 30c asserts side-record hash == live-registry hash every run; a
+# drifted/hand-edited list (or a missing/malformed side record) is an
+# EXEMPTION-SIDE-RECORD FAIL — silent exemption-list drift is impossible.
+REVIEW_EXEMPTIONS_SIDE_RECORD = (
+    Path(__file__).resolve().parent / "review_exemptions_30c.json")
 
 # Machine-source markers — the exact fixed strings review_record.py emits
 # (_evidence_row description, L241) and the review-file first line (L204).
@@ -3224,69 +3243,212 @@ def _match_review_file_name(name):
     return None
 
 
-def check_review_machine_provenance(review_rows=None, review_files=None):
-    """FIX-260 / REQ-107: Check 30c — review-record machine-path assertions.
+def _released_versions_since(day, releases_dir=None):
+    """FEAT-089 / DEC-146 ②: released versions on/after ``day`` — the
+    machine-readable half of the escalation condition (exemption-honored
+    coverage 100% × ≥2 released versions).
+
+    Source: the plugin's declarative release ledger
+    (``core/releases/*.json`` — same authority ``archive.py`` reads, never
+    the host root). A manifest counts when its (effective) lifecycle_state
+    is ``released``, it is not withdrawn, and its first parsable
+    ``events[].recorded_at`` date is on/after ``day``. Single-file parse
+    failures are skipped fail-open (a corrupt manifest must never fake the
+    count upward). Coverage boundary, disclosed: the ledger physically
+    starts at 0.62.0 — pre-0.62 releases are not machine-countable here,
+    so the count is a LOWER BOUND (the fail-closed direction for a "≥2"
+    threshold).
+
+    ``releases_dir`` overrides the default location (tests inject fixture
+    ledgers here).
+    """
+    if releases_dir is None:
+        releases_dir = (
+            Path(__file__).resolve().parents[2] / "core" / "releases")
+    try:
+        paths = sorted(Path(releases_dir).glob("*.json"))
+    except OSError:
+        return 0
+    count = 0
+    for path in paths:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue  # fail-open: never blocks, never inflates
+        if not isinstance(manifest, dict):
+            continue
+        effective = manifest.get("effective_state")
+        state = None
+        if isinstance(effective, dict):
+            state = effective.get("lifecycle_state") or None
+        if not state:
+            state = manifest.get("lifecycle_state")
+        withdrawn = bool(manifest.get("withdrawn")) or (
+            isinstance(effective, dict)
+            and bool(effective.get("withdrawn")))
+        if state != "released" or withdrawn:
+            continue
+        recorded = None
+        for event in manifest.get("events") or ():
+            if not isinstance(event, dict):
+                continue
+            ts = event.get("recorded_at")
+            if not isinstance(ts, str):
+                continue
+            try:
+                recorded = date.fromisoformat(ts[:10])
+                break
+            except ValueError:
+                continue
+        if recorded is None or recorded < day:
+            continue
+        count += 1
+    return count
+
+
+def _verify_exemptions_side_record():
+    """DEC-146 ④: assert the side record still pins the live exemption list.
+
+    Returns ``(verified: bool, detail: dict)``. Verified ⇔ the side-record
+    JSON exists, parses, and its ``exemptions_sha256`` equals the canonical
+    sha256 of ``exception_registry.REVIEW_PROVENANCE_EXEMPTIONS``. Any miss
+    (missing file / bad JSON / hash mismatch / malformed registry entries)
+    → verified=False with a human-readable ``reason`` — the caller turns
+    that into an EXEMPTION-SIDE-RECORD FAIL (fail-closed: a drifted list
+    must never silently absorb violations).
+    """
+    detail = {"path": str(REVIEW_EXEMPTIONS_SIDE_RECORD),
+              "exemptions_sha256": None, "verified": False, "reason": ""}
+    try:
+        import exception_registry
+    except ImportError:
+        detail["reason"] = (
+            "exception_registry unavailable — cannot verify the exemption "
+            "side record")
+        return False, detail
+    live_sha = exception_registry.review_provenance_exemptions_sha256()
+    _entries, reg_errors = \
+        exception_registry.load_review_provenance_exemptions()
+    detail["exemptions_sha256"] = live_sha
+    if reg_errors:
+        detail["reason"] = (
+            "exemption registry malformed (fail-closed): "
+            + "; ".join(reg_errors))
+        return False, detail
+    try:
+        doc = json.loads(
+            REVIEW_EXEMPTIONS_SIDE_RECORD.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        detail["reason"] = (
+            "side record unreadable/missing ({0}) — the DEC-146 ④ "
+            "unforgeable side record must ship beside the escalation".format(
+                exc))
+        return False, detail
+    pinned = doc.get("exemptions_sha256") if isinstance(doc, dict) else None
+    if pinned != live_sha:
+        detail["reason"] = (
+            "side-record exemptions_sha256 {0!r} != live registry hash "
+            "{1!r} — the exemption list drifted from the DEC-registered "
+            "side record (re-register via a DEC + side-record regen; "
+            "hand-editing the list is not a sanctioned path)".format(
+                pinned, live_sha))
+        return False, detail
+    detail["verified"] = True
+    return True, detail
+
+
+def check_review_machine_provenance(review_rows=None, review_files=None,
+                                    releases_dir=None):
+    """FIX-260 / REQ-107 + FEAT-089 (DEC-146 ② escalation batch): Check 30c.
 
     V7 (machine provenance): a REVIEW evidence row dated on/after
     ``REQ107_MACHINE_PROVENANCE_DATE`` that lacks the review-record CLI row
     marker, or a CLI-format ``review-{task}-R{n}.md`` file dated on/after the
-    effective date without the machine-written first line → WARN. Gradual
-    severity: WARN-only as of 0.75.x (ADR-017 R1 N1); escalation to FAIL is
-    registered in the FIX-260 decision-log entry.
+    effective date without the machine-written first line → FAIL
+    (escalated from WARN by FEAT-089 / DEC-146 ②: the registered condition
+    — exemption-honored coverage 100% sustained over ≥2 released versions —
+    was met; single-direction ratchet). Rows registered in the DEC
+    exemption list (DEC-146 ② / DEC-321 first cohort: REVIEW-FIX-256/
+    258-CODE-R0, both written ON the effective date) are absorbed — no
+    finding, counted in ``stats["rows_exempted"]``; the historical rows
+    themselves are never rewritten or backfilled (DEC-321 禁补录).
 
     V8 (revisit-field contract): a NEEDS_CHANGE record dated on/after the
     effective date whose corresponding review file lacks the machine
-    ``next_round: REVIEW-...`` field — or has no file at all → WARN. This
-    makes the 复审必达 obligation derivable from evidence across sessions
-    (REQ-107 acceptance signal 2). FIX-344: a slug-suffixed record id
+    ``next_round: REVIEW-...`` field — or has no file at all → FAIL
+    (escalated with V7). FIX-344: a slug-suffixed record id
     (``REVIEW-{task}-R{n}-{SLUG}``, the FIX-314 second-reviewer shape) is
     judged against its OWN namespaced file ``review-{task}-R{n}-{slug}.md`` —
     the canonical sibling of the round's FIRST reviewer is never borrowed
-    (that borrow manufactured a false "lacks the field" WARN for every
+    (that borrow manufactured a false "lacks the field" finding for every
     compliant second-half NEEDS_CHANGE).
 
-    FIX-291 / FIX-281⑧ (router WARN 10→13 growth) — row classification:
-      * V7/V8 row judgments anchor on the ID COLUMN: only a row whose first
-        cell IS a ``REVIEW-`` record is a review-conclusion row. An EVD-/
-        RECO-/TRIAGE- row that MENTIONS a REVIEW id in its description is a
-        cross-reference, never a review record — it is classified
-        (``stats["rows_non_review"]``) and not judged. This is the
-        whitelist/provenance classification for machine rows of other CLIs
-        (RECO- = task-priority-analysis) and kills the "every new delivery
-        row mentions its review record → +1 WARN" false-positive growth.
-      * V8 provenance discharge: a NEEDS_CHANGE record whose R+1 round record
-        already exists (row or file) has its 复审必达 obligation provably
-        discharged — no WARN (live REL-070: release R0 NEEDS_CHANGE + design
-        R0 APPROVED_WITH_NOTES overwrote the same-numbered machine file, so
-        the file's next_round field is gone while R1/R2 records exist).
-        Boundary: a genuine handwritten REVIEW- row (ID column REVIEW-, no
-        CLI marker, dated ≥ effective date) still WARNs — current-format
-        violations are not relaxed.
+    V6d (FEAT-089 / DEC-146 ② tightening): an undated REVIEW row / CLI-named
+    review file → WARN (was: silently not judged). An unknown date is not a
+    provable machine-source violation (hence WARN, never FAIL), but it can
+    no longer silently escape the judgment face. WARN never enters
+    all_issues / exit codes (DEC-146 ③ accepted baseline preserved).
+
+    EXEMPTION-SIDE-RECORD (DEC-146 ④): the side record's pinned sha256
+    must equal the live exemption registry's canonical hash on every run —
+    a drifted, hand-edited, malformed, or missing side record → FAIL
+    (fail-closed).
+
+    FIX-291 / FIX-281⑧ row classification (unchanged): V7/V8 row judgments
+    anchor on the ID COLUMN — an EVD-/RECO-/TRIAGE- row that MENTIONS a
+    REVIEW id is a cross-reference (``stats["rows_non_review"]``), never
+    judged. V8 provenance discharge: a valid R+1 record dated on/after the
+    NEEDS_CHANGE record discharges the 复审必达 obligation (REL-070).
+
+    The escalation decision face is recomputable from
+    ``stats["escalation"]``: coverage_raw / coverage_exemption_honored
+    (numerator + denominator + pct), releases_since_effective_date
+    (release ledger), condition_met — DEC-146 ②'s "100% × ≥2 releases"
+    is explicitly re-derivable from the output.
 
     Args:
       review_rows: list of raw evidence-log row strings (fixture path). When
         None, the live evidence-log is scanned.
       review_files: dict {filename: content} (fixture path). When None, the
         live ``.governance/review-*.md`` files are scanned.
+      releases_dir: override for the release-ledger directory (tests inject
+        fixture ledgers; default = the plugin's core/releases).
 
-    Returns dict: {verdict ∈ {"PASS", "WARN", "no-verdict"}, reason, warnings,
-    stats}. Never raises. WARN never escalates to a Check-level FAIL here —
-    that is the registered gradual path, not this release.
+    Returns dict: {verdict ∈ {"PASS", "WARN", "FAIL", "no-verdict"},
+    reason, violations (FAIL tier: V7/V8/EXEMPTION-SIDE-RECORD),
+    warnings (WARN tier: V6d undated), stats}. Never raises.
     """
     _resolve_shared()
     result = {
         "verdict": "no-verdict",
         "reason": "",
+        "violations": [],
         "warnings": [],
         "stats": {
             "rows_scanned": 0, "rows_judged": 0, "rows_undated": 0,
-            "rows_machine": 0, "rows_non_review": 0,
+            "rows_machine": 0, "rows_non_review": 0, "rows_exempted": 0,
             "files_scanned": 0, "files_judged": 0, "files_undated": 0,
+            "files_machine": 0, "files_exempted": 0,
             "files_legacy_skipped": 0, "files_unmatched": 0,
         },
     }
+    violations = result["violations"]
     warnings = result["warnings"]
     stats = result["stats"]
+
+    def _exemption_matches(rule, task_id, record_date, face):
+        """DEC-146 ② exemption lookup (exact keys). Never raises — a
+        registry that cannot be consulted matches nothing (fail-closed:
+        the side-record assertion carries the failure)."""
+        try:
+            import exception_registry
+        except ImportError:
+            return None
+        try:
+            return exception_registry.match_review_provenance_exemption(
+                rule, task_id, record_date, face=face)
+        except Exception:
+            return None
 
     # ── Collect rows (fixture or live) ──────────────────────────────────
     rows = review_rows
@@ -3433,33 +3595,57 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
         task_id, round_n, _slug = m
         fdate = _file_date(text)
         if fdate is None:
+            # FEAT-089 / DEC-146 ② (V6d tightening): an undated CLI-named
+            # record no longer silently escapes — WARN (not FAIL: an
+            # unknown date is not a provable machine-source violation).
             stats["files_undated"] += 1
+            warnings.append({
+                "rule": "V6d",
+                "task_id": task_id,
+                "reason": "review file {0} has no parseable date — an "
+                          "undated record cannot prove it predates the "
+                          "effective date {1} (DEC-146 ② tightening: "
+                          "undated → WARN)".format(
+                              name, REQ107_MACHINE_PROVENANCE_DATE.isoformat()),
+            })
             continue
         if fdate < REQ107_MACHINE_PROVENANCE_DATE:
             continue
         stats["files_judged"] += 1
-        if REVIEW_MACHINE_FILE_MARKER not in text:
-            warnings.append({
-                "rule": "V7",
-                "task_id": task_id,
-                "reason": "review file {0} lacks the machine-source marker "
-                          "'{1}' (handwritten; MUST persist via "
-                          "`verify_workflow.py review-record`, M7.4 step 4.6 "
-                          "C8)".format(name, REVIEW_MACHINE_FILE_MARKER),
-            })
+        if REVIEW_MACHINE_FILE_MARKER in text:
+            stats["files_machine"] += 1
+        else:
+            # FEAT-089: DEC exemption list (exact keys) absorbs registered
+            # historical rows; everything else FAILs (DEC-146 ② escalation).
+            if _exemption_matches("V7", task_id, fdate, "file"):
+                stats["files_exempted"] += 1
+            else:
+                violations.append({
+                    "rule": "V7",
+                    "task_id": task_id,
+                    "reason": "review file {0} lacks the machine-source marker "
+                              "'{1}' (handwritten; MUST persist via "
+                              "`verify_workflow.py review-record`, M7.4 step 4.6 "
+                              "C8) — FAIL since {2} (DEC-146 ② "
+                              "escalation)".format(
+                                  name, REVIEW_MACHINE_FILE_MARKER,
+                                  PROVENANCE_FAIL_ESCALATION_VERSION),
+                })
         conclusion = _extract_review_conclusion_from_text(text)
         if conclusion == "NEEDS_CHANGE" and not REVIEW_NEXT_ROUND_FIELD_RE.search(text):
             # FIX-291 provenance discharge (R1 tightened): a VALID R+1
             # record dated on/after this record proves the revisit happened.
             if not _next_round_discharged(task_id, round_n, fdate):
-                warnings.append({
+                violations.append({
                     "rule": "V8",
                     "task_id": task_id,
                     "reason": "R{0}=NEEDS_CHANGE without the machine next_round "
                               "revisit field — the 复审必达 obligation is not "
                               "machine-derivable (expected "
-                              "next_round: REVIEW-{1}-R{2})".format(
-                                  round_n, task_id, round_n + 1),
+                              "next_round: REVIEW-{1}-R{2}) — FAIL since {3} "
+                              "(DEC-146 ② escalation)".format(
+                                  round_n, task_id, round_n + 1,
+                                  PROVENANCE_FAIL_ESCALATION_VERSION),
                 })
 
     # ── V7/V8 over evidence rows ────────────────────────────────────────
@@ -3496,7 +3682,22 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
                     row_date = None
                 break
         if row_date is None:
+            # FEAT-089 / DEC-146 ② (V6d tightening): an undated REVIEW row
+            # no longer silently escapes — WARN per undated record (not
+            # FAIL: an unknown date is not a provable machine-source
+            # violation). The finding anchors on the first parsed cid.
             stats["rows_undated"] += 1
+            _first = re.match(r"^REVIEW-([A-Z]+-\d+)(?:-R(\d+))?$", ids[0])
+            warnings.append({
+                "rule": "V6d",
+                "task_id": _first.group(1) if _first else ids[0],
+                "reason": "REVIEW evidence row {0} has no parseable date — "
+                          "an undated record cannot prove it predates the "
+                          "effective date {1} (DEC-146 ② tightening: "
+                          "undated → WARN)".format(
+                              ids[0],
+                              REQ107_MACHINE_PROVENANCE_DATE.isoformat()),
+            })
             continue
         if row_date < REQ107_MACHINE_PROVENANCE_DATE:
             continue
@@ -3515,14 +3716,24 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
                 continue
             task_id, round_n = m_id.group(1), int(m_id.group(2) or 0)
             if not is_machine:
-                warnings.append({
-                    "rule": "V7",
-                    "task_id": task_id,
-                    "reason": "REVIEW evidence row {0} lacks the machine-source "
-                              "marker '{1}' (handwritten; MUST persist via "
-                              "`verify_workflow.py review-record`, M7.4 step "
-                              "4.6 C8)".format(cid, REVIEW_MACHINE_ROW_MARKER),
-                })
+                # FEAT-089: DEC exemption list (exact keys: rule/task/date/
+                # face) absorbs the DEC-321 first cohort (REVIEW-FIX-256/
+                # 258-CODE-R0, written ON the effective date); any other
+                # handwritten row FAILs (DEC-146 ② escalation — ratchet).
+                if _exemption_matches("V7", task_id, row_date, "row"):
+                    stats["rows_exempted"] += 1
+                else:
+                    violations.append({
+                        "rule": "V7",
+                        "task_id": task_id,
+                        "reason": "REVIEW evidence row {0} lacks the machine-source "
+                                  "marker '{1}' (handwritten; MUST persist via "
+                                  "`verify_workflow.py review-record`, M7.4 step "
+                                  "4.6 C8) — FAIL since {2} (DEC-146 ② "
+                                  "escalation)".format(
+                                      cid, REVIEW_MACHINE_ROW_MARKER,
+                                      PROVENANCE_FAIL_ESCALATION_VERSION),
+                    })
             if conclusion == "NEEDS_CHANGE":
                 # FIX-291 provenance discharge (R1 tightened): a VALID R+1
                 # record dated on/after this row proves the revisit happened
@@ -3536,38 +3747,95 @@ def check_review_machine_provenance(review_rows=None, review_files=None):
                 fname, ftext = _lookup_review_file(
                     task_id, round_n, slug=slug_by_cid.get(cid))
                 if ftext is None or not REVIEW_NEXT_ROUND_FIELD_RE.search(ftext):
-                    warnings.append({
+                    violations.append({
                         "rule": "V8",
                         "task_id": task_id,
                         "reason": "R{0}=NEEDS_CHANGE row without a machine "
                                   "next_round revisit field ({1}) — the 复审必达 "
-                                  "obligation is not machine-derivable".format(
+                                  "obligation is not machine-derivable — FAIL "
+                                  "since {2} (DEC-146 ② escalation)".format(
                                       round_n,
                                       "no machine review file"
                                       if ftext is None
-                                      else "file {0} lacks the field".format(fname)),
+                                      else "file {0} lacks the field".format(fname),
+                                      PROVENANCE_FAIL_ESCALATION_VERSION),
                     })
 
+    # ── DEC-146 ④: unforgeable side record (fail-closed) ───────────────
+    side_verified, side_detail = _verify_exemptions_side_record()
+    if not side_verified:
+        violations.append({
+            "rule": "EXEMPTION-SIDE-RECORD",
+            "task_id": "30c",
+            "reason": side_detail["reason"],
+        })
+
+    # ── Escalation decision face (DEC-146 ②: 100% × ≥2 releases) ───────
     judged = stats["rows_judged"] + stats["files_judged"]
-    if warnings:
+    machine_total = stats["rows_machine"] + stats["files_machine"]
+    honored_total = machine_total + stats["rows_exempted"] \
+        + stats["files_exempted"]
+    releases_since = _released_versions_since(
+        REQ107_MACHINE_PROVENANCE_DATE, releases_dir=releases_dir)
+
+    def _pct(num, den):
+        return round(num * 100.0 / den, 1) if den else 0.0
+
+    stats["escalation"] = {
+        "active": True,
+        "since_version": PROVENANCE_FAIL_ESCALATION_VERSION,
+        "effective_date": REQ107_MACHINE_PROVENANCE_DATE.isoformat(),
+        "coverage_raw": {
+            "numerator": machine_total, "denominator": judged,
+            "pct": _pct(machine_total, judged),
+        },
+        "coverage_exemption_honored": {
+            "numerator": honored_total, "denominator": judged,
+            "pct": _pct(honored_total, judged),
+        },
+        "releases_since_effective_date": releases_since,
+        "condition_met": bool(
+            judged > 0 and honored_total == judged and releases_since >= 2),
+        "condition": (
+            "exemption-honored coverage == 100% AND releases since "
+            "{0} >= 2 (DEC-146 ②)".format(
+                REQ107_MACHINE_PROVENANCE_DATE.isoformat())),
+        "side_record": side_detail,
+    }
+
+    if violations:
+        result["verdict"] = "FAIL"
+        result["reason"] = (
+            "{0} machine-provenance/revisit-field/side-record violation(s) "
+            "— FAIL since {1} (DEC-146 ② escalation delivered by FEAT-089; "
+            "exemption-honored coverage {2}% × {3} release(s) since "
+            "{4})".format(
+                len(violations), PROVENANCE_FAIL_ESCALATION_VERSION,
+                stats["escalation"]["coverage_exemption_honored"]["pct"],
+                releases_since,
+                REQ107_MACHINE_PROVENANCE_DATE.isoformat())
+        )
+    elif warnings:
         result["verdict"] = "WARN"
         result["reason"] = (
-            "{0} machine-provenance/revisit-field WARN(s) — gradual severity "
-            "(WARN in 0.75.x, escalation to FAIL registered in the FIX-260 "
-            "decision-log entry; ADR-017 R1 N1)".format(len(warnings))
+            "{0} undated REVIEW record(s) — V6d tightening (DEC-146 ②: "
+            "undated → WARN, never all_issues); all dated records carry "
+            "machine provenance or a DEC exemption".format(len(warnings))
         )
     elif judged == 0:
         result["verdict"] = "no-verdict"
         result["reason"] = (
             "no REVIEW record dated on/after {0} — Check 30c has nothing to "
-            "judge (legacy/undated records are exempt)".format(
+            "judge (legacy records are exempt; undated records WARN "
+            "separately)".format(
                 REQ107_MACHINE_PROVENANCE_DATE.isoformat())
         )
     else:
         result["verdict"] = "PASS"
         result["reason"] = (
             "{0} row(s)/{1} file(s) dated on/after {2} all carry the "
-            "review-record machine provenance".format(
+            "review-record machine provenance or a DEC exemption "
+            "(exemption-honored coverage 100%)".format(
                 stats["rows_judged"], stats["files_judged"],
                 REQ107_MACHINE_PROVENANCE_DATE.isoformat())
         )

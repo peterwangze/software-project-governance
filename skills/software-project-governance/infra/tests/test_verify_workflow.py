@@ -22653,8 +22653,9 @@ class ReviewFileSuffixAwarenessTests(unittest.TestCase):
         self.assertEqual(r["stats"]["files_unmatched"], 0)
         self.assertEqual(r["verdict"], "PASS")
 
-    def test_namespaced_handwritten_file_warns_v7(self):
-        """文件级 V7 对 namespaced 同样生效（matched 桶不是豁免）。"""
+    def test_namespaced_handwritten_file_fails_v7(self):
+        """文件级 V7 对 namespaced 同样生效（matched 桶不是豁免）——
+        FEAT-089 / DEC-146 ② 升级后 V7 findings 移 violations（FAIL）。"""
         body = self._machine_file_text(
             "FIX-401", 0, "APPROVED").replace(
             "# Review Record (machine-written by review-record)", "# Review")
@@ -22662,7 +22663,7 @@ class ReviewFileSuffixAwarenessTests(unittest.TestCase):
             review_rows=[],
             review_files={"review-FIX-401-R0-design.md": body})
         self.assertTrue(
-            [w for w in r["warnings"] if w["rule"] == "V7"], r["warnings"])
+            [v for v in r["violations"] if v["rule"] == "V7"], r["violations"])
         self.assertEqual(r["stats"]["files_unmatched"], 0)
 
     def test_role_token_files_stay_unmatched(self):
@@ -22698,9 +22699,10 @@ class ReviewFileSuffixAwarenessTests(unittest.TestCase):
                                                review_files=files)
         self.assertEqual(r["warnings"], [], r["warnings"])
 
-    def test_namespaced_row_without_own_file_still_warns_v8(self):
+    def test_namespaced_row_without_own_file_still_fails_v8(self):
         """边界（不放宽）：slug 行的自身文件缺失时——即使 canonical 兄弟
-        存在——复审义务不可机读，V8 WARN 保持（不借查他方记录）。"""
+        存在——复审义务不可机读，V8 FAIL 保持（不借查他方记录；
+        FEAT-089 升级为 FAIL tier）。"""
         rows = [self._machine_row("FIX-411", 0, "NEEDS_CHANGE",
                                   slug="DESIGN-REVIEWER")]
         files = {
@@ -22709,12 +22711,13 @@ class ReviewFileSuffixAwarenessTests(unittest.TestCase):
         }
         r = vw.check_review_machine_provenance(review_rows=rows,
                                                review_files=files)
-        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
-        self.assertTrue(v8, r["warnings"])
+        v8 = [v for v in r["violations"] if v["rule"] == "V8"]
+        self.assertTrue(v8, r["violations"])
 
-    def test_namespaced_file_without_next_round_still_warns_v8(self):
+    def test_namespaced_file_without_next_round_still_fails_v8(self):
         """边界（不放宽）：namespaced 文件 NEEDS_CHANGE 但缺 next_round →
-        V8 WARN 保持，且归属自身文件（不再指向 canonical 兄弟）。"""
+        V8 FAIL 保持，且归属自身文件（不再指向 canonical 兄弟）；
+        FEAT-089 / DEC-146 ② 升级为 FAIL tier（violations）。"""
         rows = [self._machine_row("FIX-412", 0, "NEEDS_CHANGE",
                                   slug="DESIGN-REVIEWER")]
         files = {
@@ -22727,17 +22730,17 @@ class ReviewFileSuffixAwarenessTests(unittest.TestCase):
         }
         r = vw.check_review_machine_provenance(review_rows=rows,
                                                review_files=files)
-        v8 = [w for w in r["warnings"] if w["rule"] == "V8"]
-        self.assertTrue(v8, r["warnings"])
+        v8 = [v for v in r["violations"] if v["rule"] == "V8"]
+        self.assertTrue(v8, r["violations"])
         # The row-channel V8 names the record's OWN file; the file-channel
         # V8 (new matched bucket) carries no filename. Neither may point at
         # the canonical sibling.
         self.assertTrue(
-            any("review-FIX-412-R0-design-reviewer.md" in w["reason"]
-                for w in v8), v8)
+            any("review-FIX-412-R0-design-reviewer.md" in v["reason"]
+                for v in v8), v8)
         self.assertTrue(
-            all("review-FIX-412-R0.md " not in w["reason"] + " "
-                for w in v8), v8)
+            all("review-FIX-412-R0.md " not in v["reason"] + " "
+                for v in v8), v8)
 
     def test_namespaced_r1_discharges_r0_needs_change_row(self):
         """V8 溯源豁免聚合：R0 NEEDS_CHANGE 行 + canonical R0 被终写覆盖

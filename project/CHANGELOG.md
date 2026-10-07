@@ -2,7 +2,8 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.96.0] - 未发布（准备态——tag 未打；发布日期随 M-7 taggerdate 回填——FIX-349 口径）
+## [0.96.0] - 2026-10-07
+<!-- 发布日期回填（FIX-349 口径）：M-7 annotated tag `v0.96.0`→325289f（transition commit），taggerdate 2026-10-07 16:29:10 +0800 权威。 -->
 
 ### 0.96.0 - **次版本线：「做薄」债务本金偿还与看护基线治理批（Minor Line: B16 Principal Repayment & Guardrail Baseline Governance）**：载荷七票（FIX-435~441 / DEC-318 候选批组建 + FIX-439 用户紧急插入〔DEC-323〕+ FIX-441 M-0 前置 rider〔DEC-324〕/ 发布链 REL-100）
 

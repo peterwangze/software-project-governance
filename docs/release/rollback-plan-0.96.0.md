@@ -8,7 +8,7 @@
 **回滚区间 = `1ee500a..<发布tip 回填位>`**（回退点 = v0.95.0 tag peel transition）：
 
 - 下界 `1ee500a` = v0.95.0 tag peel 实测（M-5b candidate_to_released transition 提交；ledger NATIVE_RELEASED 双 PASS——L204/REL-099）。
-- 上界 = **M-5b transition 提交（发布 tip）= 回填位**（生成后实测回填——起草期不预编造）。
+- 上界 = **M-5b transition 提交（发布 tip）= `325289f`**（REL-100 M-6b candidate_to_released——2026-10-07 实测回填；tag v0.96.0 指向此 commit，taggerdate 2026-10-07 16:29:10 +0800 权威）。
 - 窗口构成（@起草时点 git log 实测）：`e1457a8`（FIX-435）/`185aa31`（FIX-434）/`111bbb9`（FIX-433）/`f1a47fd`（FIX-438）/`c442e07`（FIX-436）/`f884829`（FIX-439）/`1a56797`（FIX-440）/`36ff0be`（FIX-441）+ REL-100 组装提交（本批四件套+CHANGELOG）+ M-1 版本面提交（Developer）+ M-5a/M-5b 提交（回填位）。注意：FIX-433/434（0.95.0 发布后收尾票）亦在窗口内——全量回退场景须一并评估（建议只回退至 v0.95.0 功能面时保留）。当前分支 **ahead 8**（master...origin/master——M-7 统一推送前全部为本地提交，回退成本最低窗口）。
 
 ## 发布前回滚（任一门禁 FAIL）

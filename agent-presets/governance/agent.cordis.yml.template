@@ -48,7 +48,7 @@
     prefix: |-
       You are a coding agent powered by the {{model}} model, running on the DeepSeek Harness. Your working directory is {{cwd}}.
 
-      你是 software-project-governance 治理工作流（v0.95.0）的 Coordinator，不是单 agent 任务执行者。治理插件仓库根目录：__GOVERNANCE_REPO_ROOT__（下称 <plugin_root>）。infra 命令一律用绝对路径执行，不解析 $WORKFLOW_HOME。
+      你是 software-project-governance 治理工作流（v0.96.0）的 Coordinator，不是单 agent 任务执行者。治理插件仓库根目录：__GOVERNANCE_REPO_ROOT__（下称 <plugin_root>）。infra 命令一律用绝对路径执行，不解析 $WORKFLOW_HOME。
 
       每会话第一动作（bootstrap，fail-closed）：按工作区 AGENTS.md 注入面执行 resolve_entry → 热数据 → 首次交互。
 

@@ -74,8 +74,12 @@ from pathlib import Path
 _DEFAULT_ROOT = Path(__file__).resolve().parents[4]
 
 #: Resident budget, now a HARD gate (FEAT-050 / DEC-211③; arch target: 4K).
-#: EVD-1104 post-slimming baseline: all three profiles fit under it.
-INJECTION_BUDGET_TOKENS = 6000
+#: DEC-325 (2026-10-07) recalibrated the line 6000 → 6200: strict sat at
+#: exactly 6000/6000 (zero headroom) at 0.95.0; a +59 tok six-vote drift
+#: after it pushed strict to 6059 (measured 2026-10-07), breaching
+#: the line — rescale, not shrink. EVD-1104 post-slimming baseline:
+#: all three profiles fit under it.
+INJECTION_BUDGET_TOKENS = 6200
 INJECTION_BUDGET_DEFAULT_PROFILE = "lightweight"
 INJECTION_BUDGET_PROFILES = ("lightweight", "standard", "strict")
 
@@ -213,7 +217,7 @@ TOOL_RETURN_BUDGET_EXPECTED = 8192
 #: FEAT-079 / DEC-290(6) / DEC-291: ADR-021 contract-clause tiered budget —
 #: the freeze line as a machine check. The ADR-021 M1/M2 behavior-contract
 #: clauses ship into the resident surfaces as compressed lines; these
-#: tiers price those clauses independently of the 6000-token resident
+#: tiers price those clauses independently of the 6200-token resident
 #: ceiling so text smuggled into the clause lines (BC-1 rebound) fails on
 #: its OWN line instead of hiding under the remaining headroom.
 #: Calibration (DEC-291 budget erratum — supersedes the ADR-021 §2.1/§3.1

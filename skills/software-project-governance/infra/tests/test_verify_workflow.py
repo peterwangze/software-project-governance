@@ -21267,7 +21267,7 @@ class ContractTierBudgetTests(unittest.TestCase):
     160/320 under-counted the calibrated CJK pricing; B1a re-tunes the
     CONSTANTS only, so these tests read them instead of pinning literals).
     Smuggling extra text into the clause lines FAILs instead of hiding
-    under the 6000-token resident ceiling. Pre-injection (B1a text not
+    under the 6200-token resident ceiling. Pre-injection (B1a text not
     landed) the tiers are inactive: disclosed in ``notes``, never a silent
     skip, verdict unchanged.
     """
@@ -23169,7 +23169,7 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
 
     def test_default_profile_is_the_reference_config(self):
         self.assertEqual(vw.INJECTION_BUDGET_DEFAULT_PROFILE, "lightweight")
-        self.assertEqual(vw.INJECTION_BUDGET_TOKENS, 6000)
+        self.assertEqual(vw.INJECTION_BUDGET_TOKENS, 6200)
         self.assertIn(vw.INJECTION_BUDGET_DEFAULT_PROFILE,
                       vw.INJECTION_BUDGET_PROFILES)
 

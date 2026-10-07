@@ -66,7 +66,7 @@ def _valid_kwargs(**overrides):
                "canonical 模板口径）"),
         numerator=("resident 注入 token 实测：lightweight 4,216 / "
                    "standard 5,694 / strict 5,966（EVD-1104 canonical 重测）"),
-        denominator="INJECTION_BUDGET_TOKENS=6000 tokens（resident 硬门上限）",
+        denominator="INJECTION_BUDGET_TOKENS=6200 tokens（resident 硬门上限）",
         exclusions=("tool-return 预算面（bootstrap_aggregate."
                     "MAX_JSON_BYTES=8192B）单列；报告输出等非注入文本不计"),
         threshold_basis="DEC-210/211（≤6,000 出货姿态 + 批 2.3 翻 hard）",
@@ -567,7 +567,7 @@ class CommandLineTests(unittest.TestCase):
             "--target-commit-digest", "b717835",
             "--scope", "resident injection template set",
             "--numerator", "resident tokens measured",
-            "--denominator", "INJECTION_BUDGET_TOKENS=6000",
+            "--denominator", "INJECTION_BUDGET_TOKENS=6200",
             "--exclusions", "tool-return budget face",
             "--threshold-basis", "DEC-210/211",
             "--expiry-condition", "SKILL version bump or surface SHA change",
@@ -610,7 +610,7 @@ class CommandLineTests(unittest.TestCase):
         self._run(self.base_args)
         scope_digest = bm.caliber_digest(
             "tokens", "resident tokens measured",
-            "INJECTION_BUDGET_TOKENS=6000", "tool-return budget face")
+            "INJECTION_BUDGET_TOKENS=6200", "tool-return budget face")
         evaluate_args = [
             "baseline-evaluate",
             "--gate", "injection-budget",
@@ -682,7 +682,7 @@ class CommandLineTests(unittest.TestCase):
              "--observed-unit", "tokens",
              "--observed-scope-digest",
              bm.caliber_digest("tokens", "resident tokens measured",
-                               "INJECTION_BUDGET_TOKENS=6000",
+                               "INJECTION_BUDGET_TOKENS=6200",
                                "tool-return budget face"),
              "--registry", str(self.registry)])
         self.assertEqual(code, 2)
@@ -768,7 +768,7 @@ class DispatchFaceTests(unittest.TestCase):
         "--target-commit-digest", "b717835",
         "--scope", "resident injection template set",
         "--numerator", "resident tokens measured",
-        "--denominator", "INJECTION_BUDGET_TOKENS=6000",
+        "--denominator", "INJECTION_BUDGET_TOKENS=6200",
         "--exclusions", "tool-return budget face",
         "--threshold-basis", "DEC-210/211",
         "--expiry-condition", "SKILL version bump or surface SHA change",

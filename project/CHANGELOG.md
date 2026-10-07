@@ -2,6 +2,41 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.96.0] - 未发布（准备态——tag 未打；发布日期随 M-7 taggerdate 回填——FIX-349 口径）
+
+### 0.96.0 - **次版本线：「做薄」债务本金偿还与看护基线治理批（Minor Line: B16 Principal Repayment & Guardrail Baseline Governance）**：载荷七票（FIX-435~441 / DEC-318 候选批组建 + FIX-439 用户紧急插入〔DEC-323〕+ FIX-441 M-0 前置 rider〔DEC-324〕/ 发布链 REL-100）
+
+0.96.0 为 0.95.0 的次版本线（REQ-147「治理做薄」**Phase 2 首笔债务本金偿还**单轮交付）：B16 债务从「止增」转「真实清偿」（archive.py 4241→1697 行四域拆分 + module_size exclusions 4 行回收——EVD-1309 止增语义兑现，28n 裸露达标）；archguard 基线两跳 sanctioned regen（27352→27792→27866，DEC-320/DEC-324 路径 A）恢复 fatal gate green；外部宿主「云视TV」bootstrap splice 缺陷族第 2 次复发根治（三缺陷族 + CRLF EOL 承诺兑现）。版本载荷经 DEC-318 组建 + TRIAGE-REL-100 用户立项（M-0 核算见 `docs/release/m-0-assembly-0.96.0.md`）；无破坏性变更（行为收紧面均为既有 fail-closed 承诺的缺陷修复兑现——CLI 接口与 JSON schema 零变更、test_verify_workflow 全量 **Ran 1061 OK**〔M-2 终态：DEC-325 预算重定标后 f=2→f=0，EVD-1344〕）；无机制激活翻转、无 `.governance` schema 变更；版本载荷窗口 `1ee500a（v0.95.0 tag peel）..回填位`（M-8 批回填终值），发布链 REL-100 组装于 2026-10-07（+0800）。B16 本金偿还以 archive 家族为界（closure_chain/dsh_compat/governance_store/loop_migration 等 28n 预存组如实披露未偿——0.97+ 候选池）。
+
+### Added
+
+- **bootstrap 段边界统一守护（FIX-439——宿主 incident 根治①）**：`adapters/dsh/launch.py` write_bootstrap 与 apply_entry_projection 统一段边界（canonical H2 全集 + `---`/H1 显式终止符——span 收敛不吞宿主尾段）+ **H2-singleton 写前守护**（违规 ⇒ exit 1 原文件字节不变）——DSH 宿主 AGENTS.md bootstrap 注入从「假设驱动」转「契约守护」。
+- **evidence/decision-append 校验前置（FIX-439③）**：md 腿 intake 校验-写入顺序倒置修复——拒绝 ⇒ **零持久化零台账**（fail-closed 承诺成立；宿主重复证据行 EVD-202/203 根因闭合）。
+- **dry-run 预演 guard（FIX-440 F-3）**：launch dry-run 补 replace+guard 预演（与 apply_entry_projection 口径一致——违规 exit 1 零写入）。
+
+### Changed
+
+- **archive.py 四域拆分（FIX-435——B16 本金偿还）**：4241→1697 行（入口壳+host seam 同签名包装器），拆出 archive_verdicts/archive_migration_engine/archive_entity_migration/archive_cli（家族全 ≤2000 阈值）；`core/architecture-health.json` exclusions 中 archive.py 4 行**回收**（止增面净空——28n 裸露达标）；行为等价三层闭环（dry-run 零翻转/CLI 逐字节/AST 78 对比）。
+- **契约快照与 archguard 基线 sanctioned regen（FIX-438 + FIX-441）**：两跳裁定路径 A（DEC-320/DEC-324）——anchor 27352→27792（+440 逐 commit 机证）→27866（+74=c442e07 已审增量）；R2/R4/R5/R7 全轴对账；registry.py dispatch 行补登（FEAT-064 同型）+ 三镜像字面量同步；**ratchet 全轴 PASS 0 violations（fatal gate green）**、契约族 12 测试归位（全量 19F→4F）。
+- **DEC-316/317 sweep 收尾（FIX-436）**：M10.2 F-A5 措辞收紧与 S2 边界自洽；quote_sync 锚失配/unreadable/坏JSON 3 case（守卫 6 分支 committed 覆盖）；F-B3 SHOULD 痕迹注记 advisory 载体（WARN 级骑 Check 12/CLI 双面——DEC-322(1)，registry 零 churn）。
+- **治理卫生登记（FIX-437——快速通道）**：Check 30c 两行处置（豁免清单预登记路径——DEC-321 绑定 DEC-146 升级批义务，WARN 维持既定披露基线）；RISK-066 缓解引用改形（跨实体裁定引用→任务实体锚——Check 36 R3 消解）。
+
+### Fixed
+
+- **bootstrap splice 段定位缺陷族（FIX-439——外部宿主 incident 第 2 次复发根治）**：①`write_bootstrap` 未传 `boundary_titles` 致新旧段并存（62→93 行双版本注入）→ 统一段边界修复；②`bootstrap_section_span` 越过 `---` 吞噬宿主尾段（span (0,2560) 实测越界）→ 收敛于首个 `---` 前；③evidence-append schema_violation 拒绝后仍持久化 → 校验前置零写入。幂等守护/宿主三项校验面/拒绝零写入 7 用例（dsh 族 59+3 全绿）。
+- **bootstrap 读侧 CRLF EOL 翻转（FIX-440 F-1——FIX-439 R0 承接）**：双读点显式 `newline=空串`（仅 newline 维度移动）——CRLF 宿主首写段外逐字节保留 + 二写幂等 + LF 世界不变；`_match_newlines` 死分支复活（四支柱论证）。
+- **纯 row-level 拒绝用例（FIX-440 F-2）+ 零台账断言取径（F-6）**：三层穿透仅前置校验可拦的独立红绿用例；断言改从 `_ledger_path` 取路径。
+
+### Breaking changes
+
+**无**——依据：①CLI 接口与 JSON schema 零变更（拆分经 verify_workflow.py 入口 re-export 保持调用面透明——FIX-435 CLI 8 子命令逐字节对照实证）；②行为收紧面（bootstrap H2-singleton 守护 exit 1 / evidence-append 拒绝零写入 / span 收敛）均为**既有承诺的缺陷修复兑现**（fail-closed 承诺原未成立——incident-20261006 实测），合法调用方零破坏；③无 MUST 规则删除/重命名；④无 Gate 行为语义改变、无 `.governance` schema 变更（FIX-437 为治理登记面改形）；⑤回归基线 test_verify_workflow **Ran 1061 OK**（M-2 终态——DEC-325 预算重定标后 f=2→f=0：strict profile 6059 曾超 6000 硬门 59 tok，重定标 6200 后全量全绿，EVD-1344）+ dsh 族 65 OK。
+
+**行为变更（用户可感知，非旗标面——本版无 feature flag 债务）**：DSH 宿主 bootstrap 写入新增 H2-singleton 守护（段结构违规时拒绝写入并保留原文件——此前会产出双段/越界损坏形态）；evidence-append 违规行不再落盘——回退 = git revert 发布 commit 序列（见 `docs/release/rollback-plan-0.96.0.md`）。**resident 注入硬门经 DEC-325 重定标 6000→6200 tok**（M-2 GO 终审裁定：0.95.0 时 strict 已零余量压线 6000/6000 + 0.95.0 后六票文本 +59 tok 击穿——治理让步如实披露，后续版本注入增量须在 6200 基线内消化，再触线优先收缩而非再抬门）。
+
+**版本面再生纪律**：本版版本面经权威源 bump → `release-projection --write` 确定性再生（written=17，sd_integrity 28 scanned/0 unreadable，幂等复跑 PASS@0.96.0）+ 双根 entry sync（repo root + e2e fixture ×4 面）+ 引擎锚（REQUIRED_SNIPPETS 六面版本针脚 0.96.0——手钉先例）+ STATIC_PIN_EXEMPTIONS bump-time **核查**（零新浮现 pin——无需登记：实树 0.96.0 零未豁免、test_static_version_pins 25 passed；EVD-1343⑤）。
+
+**决策链**：DEC-318（候选批组建）/ DEC-319/320（FIX-438 立票与路径 A）/ DEC-321（Check 30c 豁免清单预登记）/ DEC-322（FIX-436 F-B3/F-C1 归属）/ DEC-323（FIX-439 紧急插入拆票）/ DEC-324（FIX-441 rider 裁定路径 A）/ **DEC-325（REL-100 M-2 预算重定标 6000→6200——用户 GO 终审）**；**证据**：EVD-1342~1344（REL-100 M-0/M-1/M-2 链）+ 七票载荷证据 EVD-1328/1331~1341 + REVIEW-FIX-435-R0·R1 / REVIEW-FIX-436-R0 / REVIEW-FIX-438-R0 / REVIEW-FIX-439-R0 / REVIEW-FIX-440-R0 / REVIEW-FIX-441-R0（全 APPROVED_WITH_NOTES/unresolved_blockers=0）+ **REVIEW-REL-100-R0 双审 AWN/0×2**（Code Reviewer M-3a + Release Reviewer M-3b——发布链终审）。
+
 ## [0.95.0] - 2026-10-05
 <!-- 发布日期回填（FIX-349 口径）：M-7 annotated tag `v0.95.0`→1ee500a（transition commit），taggerdate 2026-10-05 20:55:53 +0800 权威。 -->
 

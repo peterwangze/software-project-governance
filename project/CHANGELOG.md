@@ -2,8 +2,8 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.97.0] - 未发布（准备态——tag 未打；发布日期随 M-7 taggerdate 回填——FIX-349 口径）
-<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.97.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
+## [0.97.0] - 2026-10-09（taggerdate 18:14:55 +0800 权威〔FIX-349〕——tag v0.97.0→dd5c2a2〔transition：M-5a candidate b54c754→M-6b manifest-only〕；ledger NATIVE_RELEASED 本地+remote 双 PASS）
+<!-- 发布日期占位（FIX-349 口径）：已按 M-7 taggerdate 权威回填。 -->
 
 ### 0.97.0 - **次版本线：治理开销优化承载版（Minor Line: Governance Overhead Optimization）**：载荷四票（FEAT-089 DEC-146 升级批 + FEAT-090/091/092 治理开销优化批 / 发布链 REL-101）
 

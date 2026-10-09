@@ -14115,6 +14115,18 @@ def _execution_packet_field_issues(packet):
             not value or not all(isinstance(item, str) and item.strip() for item in value)
         ):
             issues.append(f"{field} must be non-empty string array")
+    # FEAT-092: optional advisory budget field — absent is legal (缺省不写),
+    # present must be exactly {max_steps: positive int} (fail-closed on
+    # illegal shapes so Check 18c / write-guard surface them).
+    budget = packet.get("budget")
+    if budget is not None:
+        if (not isinstance(budget, dict)
+                or set(budget) != {"max_steps"}
+                or isinstance(budget.get("max_steps"), bool)
+                or not isinstance(budget.get("max_steps"), int)
+                or budget["max_steps"] <= 0):
+            issues.append(
+                "budget must be {max_steps: positive integer} (FEAT-092)")
     return issues
 
 
@@ -15331,6 +15343,18 @@ def cmd_execution_packet(args):
             tid: packet for tid, packet in payload["packets"].items()
             if tid in wanted
         }
+    # FEAT-092: advisory step-budget guard — the packet constrained scope
+    # but never budget (session-f3f46901: AUD-001 409 steps/90.1M). Illegal
+    # values fail closed BEFORE anything is written (argparse type=int
+    # already refuses non-ints with exit 2).
+    budget = getattr(args, "budget", None)
+    if budget is not None:
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+            print("[ERROR] --budget must be a positive integer (got {0!r})".format(budget))
+            sys.exit(2)
+        stamped = selected if selected is not None else payload["packets"]
+        for packet in stamped.values():
+            packet["budget"] = {"max_steps": budget}
     if args.write:
         # FIX-296 (EVD-959): the write face never DROPS packets. FEAT-080
         # (g) refines the --task --write combination into an INCREMENTAL
@@ -24063,6 +24087,8 @@ def cmd_review_record(args):
         reviewer=args.reviewer,
         unit_id=args.unit,
         gate_id=args.gate,
+        scope=getattr(args, "scope", "full"),
+        delta_base=getattr(args, "delta_base", None),
         root=HOST_PROJECT_ROOT,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -26717,6 +26743,10 @@ def main(argv=None):
                       help="Write .governance/execution-packets.json")
     xp_p.add_argument("--task", action="append",
                       help="Limit packet generation to a task id; may be repeated")
+    xp_p.add_argument("--budget", type=int, default=None,
+                      help="Advisory step budget (FEAT-092): stamp "
+                           "budget.max_steps (positive integer) on the "
+                           "generated packets; omitted by default")
 
     # check-manifest-consistency
     cmc_p = subparsers.add_parser("check-manifest-consistency",
@@ -27444,6 +27474,15 @@ def main(argv=None):
                       help="Flow-unit id (wiring; optional — else registry mapping)")
     rr_p.add_argument("--gate", default=None,
                       help="Gate id G1..G11 (wiring; optional — else registry mapping)")
+    rr_p.add_argument("--scope", default="full", choices=["full", "delta"],
+                      help="Review injection scope (FEAT-091): 'delta' = "
+                           "R2+ revisit reviews the fix diff + prev-round "
+                           "report + acceptance criteria (M7.4 T1 R2 "
+                           "injection face); default 'full' is backward "
+                           "compatible")
+    rr_p.add_argument("--delta-base", default=None,
+                      help="Delta anchor for --scope delta (FEAT-091): "
+                           "prev-round review report path or diff anchor")
 
     # next-candidates (FIX-236.3 / ADR-017 §3.4, P3-5 — read end of the
     # loop_exit → next-unit recommendation bridge)

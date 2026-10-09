@@ -236,6 +236,7 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 - 交叉验证时: 归档文件中的证据 = 有效证据——不可误判为缺失
 
 关键行为契约第 5/6 条（完整规则 SKILL.md「关键行为契约」段）：5. **推荐必标需求源**：推荐与排序呈现逐项标注需求源（用户点名、活性缺陷、机器信号三选一标注），不标即违规；同优先级内 user-named 未闭合时 machine-signal 不得排前（DEC-286(7)）。6. **发现即闭环**：问题在触发点当场闭环（FAIL 即修/发现即改/风险即决/发布即结账）；「登记待以后」=违规；付不起闭环成本的动作不开始（DEC-286）。
+关键行为契约第 7~9 条（FEAT-090，完整规则 M7.8）：7. 并行优先派发——独立任务单步批量 spawn，等待期间禁 Start-Sleep/轮询。8. 健康检查事件化——全量深检仅会话首检/推进类动作前/异常三类触发。9. 热路径单源——热数据唯一读取路径 governance-bootstrap，直读热面文件=违规。
 
 ### 干活前检查
 - 这个任务在计划跟踪表里吗？不在就先入账
@@ -277,6 +278,7 @@ AskUserQuestion 是唯一合法的用户提问方式。禁止内联文字提问�
 6. **即将写入的内容是否有事实依据？**无文件/命令/测试/日志/用户输入支撑 → 标 `BLOCKED`/`待验证`，禁止编造。
 
 关键行为契约第 5/6 条（完整规则 SKILL.md「关键行为契约」段）：5. **推荐必标需求源**：推荐与排序呈现逐项标注需求源（用户点名、活性缺陷、机器信号三选一标注），不标即违规；同优先级内 user-named 未闭合时 machine-signal 不得排前（DEC-286(7)）。6. **发现即闭环**：问题在触发点当场闭环（FAIL 即修/发现即改/风险即决/发布即结账）；「登记待以后」=违规；付不起闭环成本的动作不开始（DEC-286）。
+关键行为契约第 7~9 条（FEAT-090，完整规则 M7.8）：7. 并行优先派发——独立任务单步批量 spawn，等待期间禁 Start-Sleep/轮询。8. 健康检查事件化——全量深检仅会话首检/推进类动作前/异常三类触发。9. 热路径单源——热数据唯一读取路径 governance-bootstrap，直读热面文件=违规。
 
 ### Step 0: 确定双维度模式（明细 §B0）
 读 plan-tracker `## 项目配置` 确定两正交维度。**触发模式**：always-on = 完整 Step 1~4+治理面板；on-demand = 仅 Step 1（Step 2~4 显式调用时；MUST NOT 主动输出面板）；silent-track = Step 1~2（MUST NOT 输出面板，仅 Gate 失败或风险 escalation 到期打断）。**权限模式**：maximum-autonomy = 除关键决策（范围/架构/发布/风险/依赖/模式变更）、P0/治理关键文件交付物审查、全部任务完成外一切自动（含 git commit+push）；default-confirm = 破坏性 git/文件系统破坏/外部副作用/不可逆操作四类须确认。**治理开关**：用户说"最高权限/确认模式/始终在线/按需/静默跟踪/当前模式" → 立即切换并更新 plan-tracker。**行为灰度开关（FEAT-040）**：`GOVERNANCE_LEGACY_BEHAVIOR=1` 或 plan-tracker `behavior_profile: legacy`（env 优先；默认 modern；非法值报 `behavior.invalid`）→ 只回退性能行为；**安全语义不回退**：升级确认门/异常不隐藏/fail-closed（`resolved_root_ok == false` 即停）/真实环境防护/复审必达。边界表：SKILL.md「行为灰度开关」。**每次会话输出一句确认**：always-on → `Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`（on-demand/silent-track 变体 §B0）。

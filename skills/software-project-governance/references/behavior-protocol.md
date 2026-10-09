@@ -554,14 +554,15 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
      (C6) 每轮复审的证据编号：REVIEW-{task_id}-R1 / -R2 / -R3（向后兼容：无后缀 = R0/首轮）。
      (C7) round 完全由 evidence-log 中已存在 R{n} 的最大值派生，无内存状态，并行安全。
      (C8) 审查结论机器持久化（FIX-260/REQ-107，ADR-017 R1 N1 兑现）：Reviewer 返回审查结论后，Coordinator MUST 在写入任何审查证据前通过机器路径持久化：
-          `python skills/software-project-governance/infra/verify_workflow.py review-record --task {task_id} --round {n} --result {结论} --report {reviewer报告路径} [--reviewer {名称}]`
-          review-{task}-R{n}.md 文件与 evidence 行由 CLI 机器写入（唯一路径）；NEEDS_CHANGE 时 CLI 自动产出 `next_round`/`prev_report` 复审义务字段——跨会话可从证据直接推导待复审项，复审触发不依赖 Coordinator 记忆。手写 REVIEW-{id} 证据行 = 流程违规（M1.2 快速通道豁免已收窄）；CLI 不可用（工具缺失/执行失败）时 fail-closed：修复环境后重试，不得降级为手写。Check 30c 对无机器来源标记的 REVIEW 记录与缺 `next_round` 的 NEEDS_CHANGE 记录 FAIL（FEAT-089 / DEC-146 ② 升级批兑现：豁免后机器标记覆盖率达 100% 且生效日后 ≥2 个发布版本，0.97.0 起单向升级，棘轮不回退）；无日期记录 WARN（V6d 收紧——无法证明生效日前的记录不再静默逃逸，WARN 不计入 all_issues）；2026-08-22 生效日当日两条残留手写行（REVIEW-FIX-256/FIX-258-CODE-R0）经 DEC 豁免清单登记吸收（DEC-146 ②/DEC-321——不回写不改写历史行、禁补录）；豁免清单由不可伪造 JSON 侧记录钉住 hash（DEC-146 ④——清单漂移即 FAIL）。
+          `python skills/software-project-governance/infra/verify_workflow.py review-record --task {task_id} --round {n} --result {结论} --report {reviewer报告路径} [--reviewer {名称}] [--scope full|delta] [--delta-base {前轮报告路径或diff锚}]`
+          review-{task}-R{n}.md 文件与 evidence 行由 CLI 机器写入（唯一路径）；NEEDS_CHANGE 时 CLI 自动产出 `next_round`/`prev_report` 复审义务字段——跨会话可从证据直接推导待复审项，复审触发不依赖 Coordinator 记忆。`--scope` 记录本轮审查注入面（FEAT-091：R2+ 复审默认 `delta`，注入面=修复 diff+前轮报告+验收标准，见 T1「R2 复审注入面」；缺省 `full` 向后兼容；`--delta-base` 记录 delta 锚点，仅 `--scope delta` 时有意义）。手写 REVIEW-{id} 证据行 = 流程违规（M1.2 快速通道豁免已收窄）；CLI 不可用（工具缺失/执行失败）时 fail-closed：修复环境后重试，不得降级为手写。Check 30c 对无机器来源标记的 REVIEW 记录与缺 `next_round` 的 NEEDS_CHANGE 记录 FAIL（FEAT-089 / DEC-146 ② 升级批兑现：豁免后机器标记覆盖率达 100% 且生效日后 ≥2 个发布版本，0.97.0 起单向升级，棘轮不回退）；无日期记录 WARN（V6d 收紧——无法证明生效日前的记录不再静默逃逸，WARN 不计入 all_issues）；2026-08-22 生效日当日两条残留手写行（REVIEW-FIX-256/FIX-258-CODE-R0）经 DEC 豁免清单登记吸收（DEC-146 ②/DEC-321——不回写不改写历史行、禁补录）；豁免清单由不可伪造 JSON 侧记录钉住 hash（DEC-146 ④——清单漂移即 FAIL）。
 
    > **最小契约投影（FIX-253/REQ-112；FIX-260 扩展）**：本节 T1-T4、step 4.6 (C8)（审查结论必机录——FIX-260/REQ-107，压缩形式由 DSH persona 契约块第 4 行携带，`check-injection-contract` 锚含 `review-record`）、step 6 与 interaction-boundary.md 任务排序规则的压缩形式由 SKILL.md「关键行为契约」段与 DSH persona（agent-presets/governance/agent.cordis.yml.template）携带；`check-injection-contract` 锚点守护同步。修改本节关键词（复审/NEEDS_CHANGE/review-record/task-priority-analysis/依赖理由/三要素/推荐卡）时 MUST 同步注入面，否则 check FAIL。关键行为契约第 5/6 条（推荐必标需求源/发现即闭环——FEAT-078/ADR-021，canonical 全文见本节末尾）的压缩形式同样由 SKILL.md「关键行为契约」段、DSH persona 契约块与 governance-init.md Step 7 入口模板携带（secondary-thin 薄指针与 AGENTS.md.template 携带指针），修改该两条文本时 MUST 同步全部注入面并 re-run check-injection-budget。**step 6c 交互基线（DEC-143，R0-W1b 修订）**：step 6c 原「否则可自主执行推荐项并在完成后再次推荐」分支按 DEC-143 废止——任务完成后的推荐统一按「自动推荐 + 用户确认」呈现（选项含推荐候选与「自主执行推荐项」，由用户确认或改选，而非 agent 默认自主执行）；「当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion」的既有规则不变。step 6c 经 FEAT-072/DEC-266 升级为三要素推荐卡呈现（AskUserQuestion 前正文卡 + 短选项与卡片一一对应），上述 DEC-143「自动推荐 + 用户确认」基线不变。step 6 另补一句「推荐为空 → 呈现结构化空原因（禁止机械枚举）」（注入面已先行，出处状态见 §6.2 注）。
 
    **FIX-224 确定性触发器（M5.1b 风格——不依赖 Coordinator 自觉）**：
      当 Coordinator 收到 Reviewer 的审查结论时，MUST 先按 (C8) 通过 `review-record` CLI 机器持久化结论，再检测以下触发条件并执行对应动作，不得跳过：
      - **T1（NEEDS_CHANGE 触发复审）**：审查结论含 `NEEDS_CHANGE`（含变体 `NEEDS_CHANGES`）且 round < 3 → **MUST** 立即 spawn 同一 Reviewer 复审（round+1），注入前轮 review 报告路径。不得在此处输出任何”是否需要复审”的问句——复审是强制的，不是可选的。
+        **R2 复审注入面（FEAT-091 delta 复审）**：复审必达、round+1、Reviewer 同人不变——变的是注入范围。R{n+1} 复审 prompt 注入面 = 修复 diff + 前轮 review 报告路径（review-{id}-R{n}.md）+ 验收标准，三者足矣；MUST NOT 默认全量重建上下文式重审（实测 REV×11=99.4M ≈ 全系统 31%、单 REV 平均 9M，R2 全量重审为成本大头，而契约原文只要求注入前轮报告路径——delta 复审不是降低标准，是消除上下文重建浪费）。边界：产物发生整体结构性变更（文件重组/大面积重写）时，Reviewer 仍可要求全量注入后再出结论（Reviewer 裁定权保留，复审结论注明「要求全量」即视为行使）。
      - **T2（NEEDS_CHANGE 触发熔断）**：审查结论含 `NEEDS_CHANGE` 且 round ≥ 3 → **MUST** 转 BLOCKED + escalation AskUserQuestion。
      - **T3（APPROVED 终态）**：审查结论含 `APPROVED` 或 `APPROVED_WITH_NOTES`（含 `unresolved_blockers=0`） → 审查通过终态，可继续 step 5 commit。
      - **T4（BLOCKED 终态）**：审查结论含 `BLOCKED` → escalation AskUserQuestion。
@@ -762,6 +763,16 @@ Coordinator 在每次读取 `agent-locks.json` 时 **MUST** 检查 `file_locks` 
 **R4 例外条款（incidents 实时留痕通道）**：长时真实环境操作（执行窗口长、事故可能在返回前发生，逐条上报不足以覆盖执行中归因）需要实时留痕时，Coordinator **可在派发 prompt 中预授权**任务级 incidents 留痕文件（`.governance/incidents/{task_id}-*.log`）；获预授权的角色 agent 向该文件**追加**实时命令日志（每条含命令/时间/退出码/影响路径；仅限该路径、仅限追加，禁止改写既有内容）——这是调度模板「不修改 .governance/ 治理记录」禁令的**唯二例外之一**（另一例外=Coordinator 自身的治理写回职责），调度模板禁止事项处已同步加注。未获预授权的角色 agent 对 `.governance/` 零写入，R4 仅走结构化返回上报通道。
 
 **R5（验收措辞禁令）**：验收标准中**禁止出现无限定语的「真实安装/真实环境」措辞**；标准措辞 =「隔离环境安装冒烟（环境变量重定向至临时目录）通过」+（可选）「用户逐项确认后的真机验证」。存量含此类措辞的任务行在下次 triage 复核时改写。change-triage 第五步对验收文本中的 R5 禁令词（真实安装/真实环境/真机）自动检出并按真实环境触及处理（触发 R1 条件）。
+
+### M7.8 协调开销纪律（FEAT-090 — Coordinator 开销削减）
+
+现场实测依据（出处：像素风RPG 会话 session-f3f46901 治理开销分析，2026-10-09）：35 次 Start-Sleep ≈ 2.9h（活跃时间 50% 在等待）；Coordinator 405 步中 ~220 步（54%）为治理/协调；verify_workflow 58 次（check-governance 21 + 裸全量 21）；governance-bootstrap 快路径仅 1 次 vs plan-tracker 直读 20 次。以下三条为 MUST 级行为契约（违反任一 = 流程违规），与 M7.4/M7.7 契约同列 SKILL.md「关键行为契约」投影；性能行为可按「行为灰度开关」legacy 回退，但派发/验证/读取语义的安全面（M7.6 冲突预检、M7.4 验证义务本身）不回退。
+
+**M7.8.1 并行优先派发**：独立、无依赖、无文件锁冲突（M7.6 预检口径 + `.governance/agent-locks.json` 无冲突）的待办任务，Coordinator **MUST** 单步批量 spawn——同一条消息内发出多个 subagent 调用，不得「派发一个→等返回→再派下一个」串行化。等待子代理返回期间使用 Start-Sleep / polling / busy-wait = **行为违规**——运行时在子代理完成时会主动通知 Coordinator，轮询等待纯属浪费（实测 35 次 Start-Sleep ≈ 2.9h）；等待期间存在就绪任务时 **MUST** 继续派发，不得空转。
+
+**M7.8.2 健康检查事件化**：`check-governance` / verify 全量深检仅三类触发——① 会话首次深检（M4.1 step 5 / M5.5 后置深检）；② 推进类动作（发布、版本 bump、治理写回、恢复遗留任务）前（M5.5 条 3）；③ 异常信号（FAIL / 异常输出 / 回归失败等需要深检定位）。**逐轮例行全量检查 = 违规**（每轮复审后、每个子任务返回后例行跑全量 check-governance 不在三触发器内）。本条只约束三触发器之外的例行深检，不取消 M7.4 step 2（任务完成外部验证）与 M8 自检的既有强制点——后者按各自原文口径执行（会话级摘要面默认 quick，FEAT-084）。
+
+**M7.8.3 热路径单源（write-guard 同级表述）**：`governance-bootstrap --format json` 是 plan-tracker 热数据的**唯一合法读取路径**（FEAT-034 快路径）；Coordinator 在会话热路径上直读 `.governance` 热面文件（plan-tracker / execution-packets / evidence-log）= **违规**（与 M1.2 write-guard 同级表述）。冷面/归档查询（archive/index.md 检索、decision-log 历史回溯等按需展开面）不在此列；`governance-bootstrap` 聚合命令不可用时按 FEAT-034 fallback 六段读取降级（legacy 行为灰度同此，见 SKILL.md「行为灰度开关」）。
 
 ## M8. 自检协议（MANDATORY）
 

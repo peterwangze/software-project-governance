@@ -10,12 +10,15 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/test_review_record.py -v
 """
 
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
@@ -123,6 +126,88 @@ class ReviewRecordPersistenceTests(unittest.TestCase):
              mock.patch.object(vw, "GOVERNANCE_DIR", gov):
             result = vw.check_review_closure()
         self.assertEqual(result["verdict"], "PASS", result["reason"])
+
+
+class ReviewRecordScopeTests(unittest.TestCase):
+    """FEAT-091: delta-revisit injection-scope recording.
+
+    ``--scope full|delta`` (+ ``--delta-base`` anchor) records WHICH
+    injection face the review ran against — the delta revisit contract
+    (M7.4 T1 R2 注入面) made machine-persistable. Default ``full`` keeps
+    every pre-FEAT-091 caller byte-compatible; illegal combos fail closed
+    before anything is written.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="rrs_")
+        self.root = Path(self.tmpdir)
+        (self.root / ".governance").mkdir()
+
+    def _write(self, **overrides):
+        kwargs = {
+            "task_id": "FIX-236",
+            "round_n": 1,
+            "result": "NEEDS_CHANGE",
+            "report_path": str(self.root / "report-r1.md"),
+            "reviewer": "Code Reviewer Noether",
+            "root": self.root,
+        }
+        kwargs.update(overrides)
+        return review_record.write_review_record(**kwargs)
+
+    def test_default_scope_is_full_and_carries_field_line(self):
+        summary = self._write()
+        self.assertFalse(summary.get("error"))
+        self.assertEqual(summary["scope"], "full")
+        content = (self.root / ".governance" / "review-FIX-236-R1.md"
+                   ).read_text(encoding="utf-8")
+        self.assertIn("- scope: full", content)
+        self.assertNotIn("delta_base", content)
+
+    def test_delta_scope_records_delta_base_field(self):
+        prev = str(self.root / "review-FIX-236-R0.md")
+        summary = self._write(scope="delta", delta_base=prev)
+        self.assertFalse(summary.get("error"))
+        self.assertEqual(summary["scope"], "delta")
+        self.assertEqual(summary["delta_base"], prev)
+        content = (self.root / ".governance" / "review-FIX-236-R1.md"
+                   ).read_text(encoding="utf-8")
+        self.assertIn("- scope: delta", content)
+        self.assertIn("- delta_base: {0}".format(prev), content)
+        # the revisit fields coexist with the scope face
+        self.assertIn("next_round", content)
+
+    def test_illegal_scope_fails_closed_without_write(self):
+        summary = self._write(scope="partial")
+        self.assertIn("error", summary)
+        self.assertIn("scope", summary["error"])
+        self.assertFalse(
+            (self.root / ".governance" / "review-FIX-236-R1.md").exists())
+
+    def test_delta_base_with_full_scope_fails_closed(self):
+        summary = self._write(scope="full", delta_base="some-anchor")
+        self.assertIn("error", summary)
+        self.assertIn("delta", summary["error"])
+        self.assertFalse(
+            (self.root / ".governance" / "review-FIX-236-R1.md").exists())
+
+    def test_cli_wires_scope_and_delta_base_into_writer(self):
+        """The verify_workflow thin entry forwards the new flags (FEAT-091);
+        --scope choices are argparse-enforced (exit 2 on illegal value)."""
+        buf = io.StringIO()
+        args = SimpleNamespace(
+            task="FIX-236", round=1, result="APPROVED",
+            report=str(self.root / "report.md"), reviewer="CLI Reviewer",
+            unit=None, gate=None, scope="delta",
+            delta_base=str(self.root / "prev.md"))
+        with mock.patch("review_record.write_review_record",
+                        return_value={"ok": True}) as writer, \
+             redirect_stdout(buf):
+            vw.cmd_review_record(args)
+        writer.assert_called_once()
+        _, call_kwargs = writer.call_args
+        self.assertEqual(call_kwargs["scope"], "delta")
+        self.assertEqual(call_kwargs["delta_base"], str(self.root / "prev.md"))
 
 
 class ReviewRecordWiringTests(unittest.TestCase):

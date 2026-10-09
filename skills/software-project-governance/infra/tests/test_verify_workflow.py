@@ -23119,10 +23119,18 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # standard (+1 B) and strict (+1 B) Step 7 templates (lightweight and
     # the thin pointer carry no 详细规则 section). Same guard discipline:
     # the re-price rides the FIX-432 ticket.
+    #
+    # FEAT-090 (2026-10-09): the 关键行为契约第 7~9 条 compressed line
+    # (parallel-first dispatch / health-check eventization / hot-path
+    # single-source) entered the lightweight (+365 B) and standard/strict
+    # (+365 B each) Step 7 templates — trigger-line form (契约 v2: 明细
+    # 按需, full text lives in behavior-protocol.md M7.8); the thin pointer
+    # is untouched (pointer semantics). Same guard discipline: the
+    # deliberate re-price rides the FEAT-090 ticket.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
-        "lightweight": 5221,
-        "standard": 10238,
-        "strict": 11126,
+        "lightweight": 5586,
+        "standard": 10603,
+        "strict": 11491,
         "secondary-thin": 2840,
     }
 

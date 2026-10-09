@@ -44,6 +44,11 @@
    - 输出 `BLOCKED`，说明 Reviewer runtime 不可用，审查未完成；
    - 生成 degraded evidence，明确写入：`不构成独立审查`、`不得计入审查通过`、`不得解锁产品代码交付`。
 
+**派发协议（FEAT-091 审查链成本收敛——REV×11=99.4M ≈ 全系统 31%，单 REV 平均 9M 全量重建上下文）**：
+- **批量审查**：2~4 个相关产物（同主题/同任务的相邻切片）MUST 合并派发给一个 Reviewer——单次 spawn 覆盖产物集，消除逐产物全量上下文重建；**Developer≠Reviewer 独立性不变**（批量的是审查载荷，不是审查独立性；每份产物仍须逐份给出结论）。
+- **审查报告摘要化回注**：Reviewer 报告回注 Coordinator 上下文时 MUST 摘要化——仅注入 verdict + blockers 列表 + 全文路径（报告全文落盘 `docs/reviews/`，需要细节时按路径 Read）；禁止将报告全文注入回注。
+- **delta 复审**：R2+ 复审按 `references/behavior-protocol.md` M7.4 T1「R2 复审注入面」执行——注入面 = 修复 diff + 前轮 review 报告路径 + 验收标准（三者足矣，不默认全量重审；产物整体结构性变更时 Reviewer 保留要求全量的裁定权）；复审结论落 record 时用 `review-record --scope delta --delta-base {前轮报告路径或diff锚}` 记录注入面。
+
 ### Step 3: Reviewer 输出审查结论
 
 - **APPROVED**：零 BLOCKING 问题

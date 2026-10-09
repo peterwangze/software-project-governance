@@ -222,16 +222,19 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 **一键验证**：`governance-bootstrap --format json | --format text`（`behavior` 面 + 文本行）；守护测试 `infra/tests/test_behavior_profile.py`；协议面守护（六个注入面必须携带 `行为灰度开关` 标记）同文件。
 
-### 关键行为契约（MUST；完整规则：references/behavior-protocol.md M7.4/M7.7）
+### 关键行为契约（MUST；完整规则：references/behavior-protocol.md M7.4/M7.7/M7.8）
 
-六条与铁律同级，违反任一 = 流程违规（本段为 canonical 投影；persona 携带压缩形式，`check-injection-contract` 锚点守护）：
+九条与铁律同级，违反任一 = 流程违规（本段为 canonical 投影；persona 携带压缩形式，`check-injection-contract` 锚点守护；第 7~9 条为 FEAT-090 协调开销纪律，完整规则 M7.8）：
 
-1. **复审必达（M7.4 step 4.6，T1-T4）**：收到 Reviewer 审查结论后 MUST 立即判定并执行——结论含 NEEDS_CHANGE 且 round<3（触发器 T1）→ spawn 同一 Reviewer 复审（round+1，prompt 注入前轮 review 报告路径为强制读取项），不得跳过、不得询问；round≥3 仍 NEEDS_CHANGE（触发器 T2）→ BLOCKED + escalation AskUserQuestion；APPROVED 或带 `unresolved_blockers=0` 的 APPROVED_WITH_NOTES 为唯一通过终态；BLOCKED → escalation。
+1. **复审必达（M7.4 step 4.6，T1-T4）**：收到 Reviewer 审查结论后 MUST 立即判定并执行——结论含 NEEDS_CHANGE 且 round<3（触发器 T1）→ spawn 同一 Reviewer 复审（round+1，prompt 注入前轮 review 报告路径为强制读取项），不得跳过、不得询问；round≥3 仍 NEEDS_CHANGE（触发器 T2）→ BLOCKED + escalation AskUserQuestion；APPROVED 或带 `unresolved_blockers=0` 的 APPROVED_WITH_NOTES 为唯一通过终态；BLOCKED → escalation。**delta 注入面（FEAT-091）**：R2+ 复审注入面 = 修复 diff + 前轮报告路径 + 验收标准，不默认全量重审；结构性变更时 Reviewer 可要求全量（M7.4 T1）。
 2. **完成必推荐（M7.4 step 6，FIX-223/237.5 增强；FEAT-072/DEC-266 三要素推荐卡）**：任务标记已完成→MUST 运行 `task-priority-analysis`（fail-closed 不跳过），快照记入 evidence-log→按依赖推荐 1~3 项；AskUserQuestion 前 MUST 给正文三要素推荐卡（服务目标/解决问题/方案要点，附可追溯依赖理由）；依据缺失 MUST 明示、不得编造，影响执行则先澄清；按 DEC-143 用对应短选项确认，MUST NOT 默认自主执行；空推荐→结构化空原因；MUST NOT 直接结束会话。
 3. **选项必带依据（interaction-boundary.md 任务排序行 + 反打断违规表）**：凡向用户呈现"接下来做什么"类选项，选项 MUST 可追溯到依赖分析输出（排序候选 + 每项依赖状态理由），禁止机械枚举未完成事项。
 4. **真实环境必防护（M7.7 R1/R4/R5，FIX-271/274）**：任何涉及用户真实环境（`$HOME` 下配置目录、`$DSH_HOME`、仓库外任意路径）的测试/验收/安装操作，执行前 MUST 满足三选一并留痕——(a) 隔离环境（环境变量重定向至临时目录）/(b) 完整备份 + 操作后一致性校验/(c) 用户逐项授权（ask_user_question）；三者皆缺 = 禁止执行，无豁免。真实环境每条命令 MUST 逐条上报（角色 agent 结构化返回，Coordinator 于收到当下机写 evidence 行；无上报或收到未机写均按违规处理；预授权 incidents log 追加例外）。验收措辞 MUST 用「隔离环境安装冒烟（环境变量重定向至临时目录）通过」——无限定语的「真实安装/真实环境」= 违规措辞。
 5. **推荐必标需求源**：推荐与排序呈现逐项标注需求源（用户点名、活性缺陷、机器信号三选一标注），不标即违规；同优先级内 user-named 未闭合时 machine-signal 不得排前（DEC-286(7)）。
 6. **发现即闭环**：问题在触发点当场闭环（FAIL 即修/发现即改/风险即决/发布即结账）；「登记待以后」=违规；付不起闭环成本的动作不开始（DEC-286）。
+7. **并行优先派发（M7.8.1，FEAT-090）**：独立无依赖任务 MUST 单步批量 spawn；等待子代理期间 Start-Sleep/轮询 = 违规；等待期有就绪任务 MUST 继续派发。
+8. **健康检查事件化（M7.8.2，FEAT-090）**：全量深检仅三类触发——会话首检/推进类动作前/异常信号；逐轮例行全量 = 违规。
+9. **热路径单源（M7.8.3，FEAT-090，write-guard 同级）**：热数据唯一读取路径 governance-bootstrap --format json；直读 plan-tracker/execution-packets/evidence-log = 违规。
 
 ### 产品代码 vs 治理记录边界
 
@@ -362,6 +365,8 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 | 任务模糊 | Coordinator 自行处理 | — | 用户触发 | 先记录已知事实、缺失信息、默认假设和下一步验证动作 |
 
 > 新任务/事务分解后 → 探索适用性判断（EXP-01，详见 `references/behavior-protocol.md` M10）。
+
+**子代理预算传递（FEAT-092，advisory 语义起步——不是硬门禁）**：execution-packet 带 `budget.max_steps`（`execution-packet --task {id} --budget {N}` 生成）时，Coordinator 派发 MUST 把预算传入 sub-agent prompt（如「步数预算：N 步，建议值」）；agent 接近/超限时应做**检查点拆分**——产出中间报告落盘 + 新派发续作（注入中间报告路径），而非单次无上限长跑（实测单任务 409 步/90.1M 的开销面即为此设）。
 
 ## Sub-agent 调度
 

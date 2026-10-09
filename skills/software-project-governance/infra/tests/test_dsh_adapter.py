@@ -1110,14 +1110,17 @@ class DshAdapterTests(unittest.TestCase):
         self.assertIn(m2_canonical, protocol_text, "canonical M2 clause (M7.4 end)")
 
         # ② SKILL.md 关键行为契约 — compressed items 5/6, verbatim; the
-        # section intro must count six items once the clauses land.
+        # section intro must count the live item total. FEAT-078 landed
+        # six items (FIX-411 kept the count when the 「以下」 prefix went);
+        # FEAT-090/091 raise it to nine (items 7/8/9 = M7.8 coordination
+        # cost discipline — the count follows the live contract list).
         skill_text = (_REPO_ROOT / skill_rel).read_text(encoding="utf-8")
         self.assertIn(m1_compressed, skill_text, "SKILL.md clause 5 (compressed)")
         self.assertIn(m2_compressed, skill_text, "SKILL.md clause 6 (compressed)")
-        self.assertIn("六条与铁律同级", skill_text,
-                      "关键行为契约 intro must count six items post-FEAT-078 "
-                      "(FIX-411: FIX-405/406's freeze-line compression "
-                      "dropped the 「以下」 prefix — the six-item count stands)")
+        self.assertIn("九条与铁律同级", skill_text,
+                      "关键行为契约 intro must count nine items post-FEAT-090 "
+                      "(six-item era ended with FEAT-078/B1a; 7/8/9 = M7.8 "
+                      "coordination cost discipline)")
 
         # ③ DSH persona contract block — compressed bodies + the B1b-planned
         # extra anchor 「用户点名」 (ADR §2.1 registry row: persona 面另加).

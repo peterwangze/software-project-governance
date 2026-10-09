@@ -137,7 +137,15 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      (REVIEW-FEAT-089-R0 AWN/0, F-1 closed by this very rider);
 #      sanctioned regen re-anchored R1 27866 -> 27895 (+29, the same
 #      consumer block) in the same change; R2/R3/R5/R6 zero drift.
-FACTS_PRINT_TOTAL = 1375
+#   -> 1376 (0.97.0 window, FEAT-090/091/092 治理开销优化批 rider,
+#      2026-10-09: +1 — the FEAT-092 execution-packet --budget fail-closed
+#      [ERROR] line in cmd_execution_packet (2 -> 3). Sanctioned regen
+#      re-anchored R1 27895 -> 27934 (+39: FEAT-091 review-record
+#      --scope/--delta-base parser flags + cmd pass-through; FEAT-092
+#      --budget flag + budget stamping block; _execution_packet_field_issues
+#      budget shape validation) in the same change; R2/R3/R5/R6 zero
+#      drift.)
+FACTS_PRINT_TOTAL = 1376
 
 
 def _committed_baseline():
@@ -641,7 +649,19 @@ class BaselineArtifactTests(unittest.TestCase):
         # above). R2 48/37, R3 matrix, R5 faces and R6 205/Δ0 all
         # byte-stable in the same regen (zero drift outside the FEAT-089
         # attribution).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27895)
+        # FEAT-090/091/092 治理开销优化批 rider re-anchor (2026-10-09,
+        # DEC-320/324/326 precedent isomorphic): 27895 -> 27934, +39/-0
+        # net, all attributed to the three-ticket batch — FEAT-091
+        # (+~19: review-record --scope/--delta-base parser flags +
+        # cmd_review_record pass-through), FEAT-092 (+~20:
+        # execution-packet --budget flag + budget stamping block in
+        # cmd_execution_packet + budget shape validation in
+        # _execution_packet_field_issues). Engine print census
+        # 1375 -> 1376 (+1 — the FEAT-092 --budget fail-closed [ERROR]
+        # line; per-fn split in the FACTS_PRINT_TOTAL lineage above).
+        # R2 48/37, R3 matrix, R5 faces and R6 205/Δ0 all byte-stable in
+        # the same regen (zero drift outside the batch attribution).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27934)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

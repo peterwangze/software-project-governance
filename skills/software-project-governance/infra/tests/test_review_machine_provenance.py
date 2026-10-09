@@ -252,15 +252,24 @@ class InjectionAnchorExtensionTests(unittest.TestCase):
                              "(DEC-161 raise)")
 
     def test_skill_contract_section_stays_within_budget(self):
-        """FIX-253/FIX-274 budget: entry SKILL 关键行为契约 section ≤ 3KB.
+        """FIX-253/FIX-274 budget: entry SKILL 关键行为契约 section ≤ 4KB.
 
         DEC-144 set a 2KB hard cap for this section; raised to 2.5KB by
         FIX-274 / DEC-162 (2026-08-23, four-clause era); raised to 3.0KB
         by DEC-295(2) (2026-09-29, six-clause era — the B1a injection of
         clauses 5/6 (DEC-286(7)/DEC-291) added 448B of PERMANENT contract
         text; measured 2866 after the DEC-295-mandated intro slimming,
-        +206B headroom). Guard mirrors the persona-block test above
-        (the persona budget stays at 2.5KB — different surface).
+        +206B headroom); raised to 4.0KB by FEAT-090/FEAT-091
+        (2026-10-09, nine-clause era — contract items 7/8/9 (M7.8:
+        parallel-first dispatch / health-check eventization / hot-path
+        single-source) + the FEAT-091 delta-revisit injection-face note
+        on item 1; items landed in one-line trigger form (契约 v2:
+        明细按需 — full text in behavior-protocol.md M7.8); measured 3686,
+        +410B headroom — review-FEAT-090/091/092-R0 correction: the original
+        3621/+475 reading predated the intro-line 九条 rewording (+65B)).
+        Guard mirrors the persona-block test above (the
+        persona budget stays at 2.5KB — different surface). DEC 回执由
+        Coordinator 收口入 decision-log（本票 Developer 不写 .governance/）。
         """
         text = (
             vw.ROOT / "skills/software-project-governance/SKILL.md"
@@ -268,9 +277,9 @@ class InjectionAnchorExtensionTests(unittest.TestCase):
         start = text.index("关键行为契约")
         end = text.index("产品代码 vs 治理记录边界", start)
         block = text[start:end]
-        self.assertLessEqual(len(block.encode("utf-8")), 3072,
-                             "SKILL 关键行为契约 section exceeds the 3.0KB "
-                             "budget (DEC-295(2) raise)")
+        self.assertLessEqual(len(block.encode("utf-8")), 4096,
+                             "SKILL 关键行为契约 section exceeds the 4.0KB "
+                             "budget (FEAT-090/091 nine-clause era raise)")
 
 
 class MachineRowClassificationTests(unittest.TestCase):

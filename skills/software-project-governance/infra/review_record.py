@@ -258,14 +258,17 @@ def _wire_to_loop(task_id, round_n, result, review_file, reviewer, report_path,
 
 
 def _review_file_text(task_id, round_n, result, reviewer, report_path,
-                      date_str, wiring_note, force_note=None):
+                      date_str, wiring_note, force_note=None,
+                      scope="full", delta_base=None):
     """Machine-written review record markdown (Check 30 file-scan parseable).
 
     ``force_note`` (FIX-289⑤) is the backup filename when this write is a
     deliberate force overwrite; it emits the ``- force_overwrite:`` marker
     line so the overwrite is traceable from the record itself. The marker is
     inert to the Check 30/30c file parsers (date/conclusion/next_round
-    extraction are anchored to their own field lines).
+    extraction are anchored to their own field lines). ``scope`` /
+    ``delta_base`` (FEAT-091) record the review injection face the same
+    way — additive field lines, inert to the anchored parsers.
     """
     lines = [
         "# Review Record (machine-written by review-record)",
@@ -276,7 +279,10 @@ def _review_file_text(task_id, round_n, result, reviewer, report_path,
         "- reviewer: {0}".format(reviewer or "unknown"),
         "- report: {0}".format(report_path),
         "- wiring: {0}".format(wiring_note),
+        "- scope: {0}".format(scope),
     ]
+    if delta_base:
+        lines.append("- delta_base: {0}".format(delta_base))
     if force_note:
         lines.append(
             "- force_overwrite: previous record preserved at {0}".format(
@@ -343,6 +349,8 @@ def write_review_record(
     plugin_home=None,
     actor=None,
     force=False,
+    scope="full",
+    delta_base=None,
 ):
     """Persist one review conclusion + Wire A (FIX-236.1).
 
@@ -402,6 +410,19 @@ def write_review_record(
             "BLOCKED (got {0!r})".format(result))}
     if not report_path:
         return {"error": "report_path is required"}
+    # FEAT-091: review injection-scope record (delta revisit). Default
+    # "full" keeps every pre-FEAT-091 caller byte-compatible; "delta"
+    # requires an anchor (prev-round report path or diff anchor).
+    scope_norm = str(scope or "full").strip().lower()
+    if scope_norm not in ("full", "delta"):
+        return {"error": (
+            "scope must be full | delta (FEAT-091; got {0!r})".format(scope))}
+    if delta_base is not None and not str(delta_base).strip():
+        return {"error": "delta_base must be a non-empty path/anchor"}
+    if delta_base is not None and scope_norm != "delta":
+        return {"error": (
+            "delta_base requires scope=delta (FEAT-091; scope={0})".format(
+                scope_norm))}
 
     # Resolve destinations.
     if evidence_dir is None:
@@ -488,7 +509,7 @@ def write_review_record(
     # 1. Machine-write the review record (independent of the loop wiring).
     review_text = _review_file_text(
         task_id, round_n, result_norm, reviewer, report_path, today, "pending",
-        force_note=force_note)
+        force_note=force_note, scope=scope_norm, delta_base=delta_base)
     try:
         review_file.write_text(review_text, encoding="utf-8")
     except OSError as exc:
@@ -527,7 +548,10 @@ def write_review_record(
         "evidence_row_written": True,
         "wiring": wiring,
         "revisit_required": result_norm == "NEEDS_CHANGE",
+        "scope": scope_norm,
     }
+    if delta_base is not None:
+        summary["delta_base"] = str(delta_base)
     if result_norm == "NEEDS_CHANGE":
         summary["next_round"] = "REVIEW-{0}-R{1}".format(task_id, round_n + 1)
         summary["prev_report"] = str(report_path)

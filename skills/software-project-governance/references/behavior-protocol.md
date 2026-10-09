@@ -772,7 +772,7 @@ Coordinator 在每次读取 `agent-locks.json` 时 **MUST** 检查 `file_locks` 
 
 **M7.8.2 健康检查事件化**：`check-governance` / verify 全量深检仅三类触发——① 会话首次深检（M4.1 step 5 / M5.5 后置深检）；② 推进类动作（发布、版本 bump、治理写回、恢复遗留任务）前（M5.5 条 3）；③ 异常信号（FAIL / 异常输出 / 回归失败等需要深检定位）。**逐轮例行全量检查 = 违规**（每轮复审后、每个子任务返回后例行跑全量 check-governance 不在三触发器内）。本条只约束三触发器之外的例行深检，不取消 M7.4 step 2（任务完成外部验证）与 M8 自检的既有强制点——后者按各自原文口径执行（会话级摘要面默认 quick，FEAT-084）。
 
-**M7.8.3 热路径单源（write-guard 同级表述）**：`governance-bootstrap --format json` 是 plan-tracker 热数据的**唯一合法读取路径**（FEAT-034 快路径）；Coordinator 在会话热路径上直读 `.governance` 热面文件（plan-tracker / execution-packets / evidence-log）= **违规**（与 M1.2 write-guard 同级表述）。冷面/归档查询（archive/index.md 检索、decision-log 历史回溯等按需展开面）不在此列；`governance-bootstrap` 聚合命令不可用时按 FEAT-034 fallback 六段读取降级（legacy 行为灰度同此，见 SKILL.md「行为灰度开关」）。
+**M7.8.3 热路径单源（write-guard 同级表述）**：`governance-bootstrap --format json` 是 plan-tracker 热数据的**唯一合法读取路径**（FEAT-034 快路径）；Coordinator 在会话热路径上直读 `.governance` 热面文件（plan-tracker / execution-packets / evidence-log）= **违规**（与 M1.2 write-guard 同级表述）。冷面/归档查询（.governance/archive/index.md 检索、decision-log 历史回溯等按需展开面）不在此列；`governance-bootstrap` 聚合命令不可用时按 FEAT-034 fallback 六段读取降级（legacy 行为灰度同此，见 SKILL.md「行为灰度开关」）。
 
 ## M8. 自检协议（MANDATORY）
 

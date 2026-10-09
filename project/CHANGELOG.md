@@ -2,6 +2,40 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.97.0] - 未发布（准备态——tag 未打；发布日期随 M-7 taggerdate 回填——FIX-349 口径）
+<!-- 发布日期占位（FIX-349 口径）：发布日期零预填；M-7 annotated tag `v0.97.0` 落地后以 taggerdate 权威回填本行日期单元格。 -->
+
+### 0.97.0 - **次版本线：治理开销优化承载版（Minor Line: Governance Overhead Optimization）**：载荷四票（FEAT-089 DEC-146 升级批 + FEAT-090/091/092 治理开销优化批 / 发布链 REL-101）
+
+0.97.0 为 0.96.0 的次版本线（**治理开销优化承载版**——session-f3f46901 实测基线驱动：主会话 103.65M + 子代理 552.3M token、35 次 Start-Sleep 等待≈2.9h、审查链占 31%、热数据快路径仅 1 次 vs 慢路径 42 次〔EVD-1350〕）：DEC-146 升级批兑现 **Check 30c WARN→FAIL 执法激活** + M7.8 协调开销纪律三契约 + 审查链成本收敛（delta 复审/批量审查）+ 子代理预算护栏单轮交付。版本载荷经 TRIAGE-REL-101 用户立项（M-0 核算见 `docs/release/m-0-assembly-0.97.0.md`——GO 有条件无硬阻断，C1 执行包已落）；无破坏性变更（依据见 Breaking changes）；无 `.governance` schema 变更（CLI/schema 变更均为可选字段追加：--budget/--scope/--delta-base）；版本载荷窗口 `325289f（v0.96.0 tag peel）..回填位`（M-8 批回填终值——窗口内已知 6 commits：1b3636f〔REL-100 M-8〕+ c9dc84f/a4c73b8/af8fba0〔FEAT-089 链〕+ aca1fe4/602dc79〔治理开销批〕），发布链 REL-101 组装于 2026-10-09（+0800）。
+
+### Added
+
+- **M7.8 协调开销纪律三契约（FEAT-090——Coordinator 行为面，commit aca1fe4+602dc79 收口）**：`references/behavior-protocol.md` M7.8 + SKILL.md 关键行为契约第 7~9 条——**7 并行优先派发**（独立任务单步批量 spawn，等待期间禁 Start-Sleep/轮询）/**8 健康检查事件化**（全量深检仅会话首检/推进类动作前/异常三类触发）/**9 热路径单源**（热数据唯一读取路径 governance-bootstrap，直读热面文件=违规）。实测依据 EVD-1350（session-f3f46901 全事件流归因）；预期收益台账 EVD-1352：**省 ~2.9h/会话**（35 次睡眠等待→0）、检查 42→约 6 次、重复读 20→0。
+- **delta 复审注入面与批量审查派发（FEAT-091——审查链成本面，commit aca1fe4 同批归并）**：M7.4 T1 delta 复审注入面（复审注入前轮 review 报告路径增量而非全量）+ 批量审查派发协议（2~4 产物单 Reviewer 批审）+ 审查报告摘要化回注 + review-record --scope/--delta-base 机录字段。首用即本批自身：REVIEW-FEAT-090-092-CODE-R0 一轮批量审查三票全 AWN/0。
+- **execution-packet 预算护栏（FEAT-092——子代理面，commit aca1fe4 同批归并）**：--budget max_steps 预算字段 + 检查点拆分语义（advisory 字段，不执法翻转）。
+- **Check 30c 豁免清单载体（FEAT-089——DEC-146④ 兑现，commit c9dc84f）**：exception_registry REVIEW_PROVENANCE_EXEMPTIONS（EXEMPT-30C-001/002 = REVIEW-FIX-256/258-CODE-R0 2026-08-22，DEC-146②+DEC-321 预登记；四键精确匹配 rule/task_id/record_date/face + malformed 即 inert + canonical sha256）+ `review_exemptions_30c.json` 侧记录（不可伪造——钉清单 sha256=53615bc6… + 升级依据快照，漂移即 FAIL）。
+
+### Changed
+
+- **Check 30c WARN→FAIL 执法激活（FEAT-089——本版最重要行为变更）**：`PROVENANCE_FAIL_ESCALATION_VERSION=0.97.0` **单向棘轮**（review_domain.py 硬编码，不可改号）——**bump 至 0.97.0 后，手写/无 receipt 审查结论行（V7/V8）从 WARN 升级为 FAIL 计入 all_issues，发布即执法（版本承诺兑现）**。判定面数字：escalation coverage_raw 477/479=99.6% vs honored 479/479=100.0%（×23 releases 机读复算）；V6d 收紧：无日期记录即 WARN 不计入（rows 2+files 40 生效日前手写报告为 DEC-146③ 接受基线，实测 42 与台账精确一致）；专项测试 28→41（13 新用例：豁免命中/未命中/V6d/判定面/侧记录/结构契约）。
+- **archguard 基线 sanctioned regen 链（DEC-326 rider + 治理开销批）**：FEAT-089 rider（commit a4c73b8）R1 27866→27895（+29=30c 消费块）+ R4 print total 1371→1375 + R7 committed==fresh 恢复；治理开销批再承 27895→27934（EVD-1351 sanctioned regen）——七轴 PASS 0 violations。
+- **DEC-327 契约段预算升档**：SKILL.md「关键行为契约」段字节预算 3072→4096B（六条→九条时代——第 7~9 条随 FEAT-090 进入；先例链 DEC-144→162→295(2)）；**DEC-328 勘误：复测段 3686B，余量 410B**（≤4096 断言不受影响，test_review_machine_provenance 41 passed 活体成立）；回退语义：若 R0 回退第 7~9 条则预算随票回落 3072；伴随事实：M0 fixture pin 重定基 + FACTS_PRINT_TOTAL/anchor 冻结字面量随票更新。
+
+### Breaking changes
+
+**无**——依据：①行为增强均为 MUST 语义强化（并行派发/禁睡眠/事件化/单源/delta 复审/budget advisory 字段），合法调用方零破坏；②Check 30c FAIL 执法为 DEC-146 既定升级路径兑现（预告在案；豁免清单消费后 honored 479/479=100.0%，V6d 无日期 WARN 不计入，预期不产生新 FAIL）；③`GOVERNANCE_LEGACY_BEHAVIOR=1` 行为灰度开关可回退 M7.8.3 的 FEAT-034 fallback 性能面（M7.8.1/.2 为新增契约无旧态可回退；**安全语义不回退**）；④CLI/schema 变更均为可选字段追加（--budget/--scope/--delta-base）；⑤`.governance` schema 无变更；⑥回归基线：全套件 4757P/1S（EVD-1351）+ 契约族 184P/0F + provenance 族 41P/0F + archguard 七轴 0 violations + 三 profile 注入预算 PASS（4416/5899/6172 ≤ 6200，strict headroom 28tok 冻结线 ACTIVE）。
+
+**行为变更（用户可感知，非旗标面——本版无 feature flag 债务）**：**Check 30c 执法激活**——升级 0.97.0 后手写/无 receipt 审查结论行从 WARN 升为 FAIL（禁手写 REVIEW 行的执法落地）；Coordinator 会话行为按 M7.8 三契约收紧（并行派发/禁睡眠等待/健康检查事件化/热路径单源）——回退 = git revert 发布 commit 序列（见 `docs/release/rollback-plan-0.97.0.md`，M-4 落盘后生效）；性能回退面可经 `GOVERNANCE_LEGACY_BEHAVIOR=1`（仅 M7.8.3 FEAT-034 fallback 面）。
+
+**升级路径**：/plugin update → 下次会话 bootstrap 自升级（FEAT-035 升级确认门：升级摘要含版本跨度 + CHANGELOG 要点 + 写操作清单 + 回滚方式，用户未响应前零写操作）——契约第 7~9 条注入随 canonical 模板自动携带（commands/governance-init.md Step 7 已含），无需手动迁移（EVD-1352：迁移指南=不需要）。
+
+**版本面再生纪律**：本版版本面经权威源 bump → `release-projection --write` 确定性再生（written=17，write_then_probe PASS，sd_integrity 28 scanned/0 unreadable）+ 双根 entry sync（repo root + e2e fixture 的 AGENTS.md/CLAUDE.md bootstrap 段 ×4 面经 sync_entry_projection.py --write 再生）+ 引擎锚（REQUIRED_SNIPPETS 六面版本针脚 0.97.0——手钉先例）+ `.git/hooks` 安装面四针脚同步（prepare-commit-msg 漂移 0.95.0 一并归零——28q hooks_drift 基线消解）+ STATIC_PIN_EXEMPTIONS bump-time 核查（**零新浮现 pin**——0.97.0 实树扫描 0 未豁免项，无需登记；test_static_version_pins 复跑全绿）。
+
+**决策链**：DEC-326（FEAT-089 rider sanctioned regen 承接）/ DEC-327（契约段预算升档 3072→4096B）/ DEC-328（勘误 3686B/余量 410B）；**证据**：EVD-1348~1352（0.96.0 released 门禁终局 + FEAT-089 交付 + 治理开销实测分析 + 三票交付 + 用户影响分析）+ REVIEW-FEAT-089-CODE-R0（AWN/0，单轮深审）+ REVIEW-FEAT-090-092-CODE-R0（批量审查 AWN/0×3——FEAT-091 派发协议首用）+ M-0 GO 报告 `docs/release/m-0-assembly-0.97.0.md`。
+
+**准备态注记**：本段为 REL-101 组装时点（2026-10-09 +0800）的**准备态**——发布日期不预填（发布收口按 FIX-349 口径以 M-7 annotated tag `v0.97.0` taggerdate 权威回填本行日期单元格）；发布终账、Commit 区间终值与发布验证结论随发布链 M-2+ 补记。
+
 ## [0.96.0] - 2026-10-07
 <!-- 发布日期回填（FIX-349 口径）：M-7 annotated tag `v0.96.0`→325289f（transition commit），taggerdate 2026-10-07 16:29:10 +0800 权威。 -->
 

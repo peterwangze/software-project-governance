@@ -129,7 +129,16 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # authority_ledger.py, engine wires dispatch only — governance_cost
 # pattern). Snapshot + architecture-baseline re-anchored in the same
 # change (the documented contract-change path). Segments stay at 73.
-FROZEN_CLI_KEYS = 100
+# FEAT-096 (0.98.0 window, DEC-330 batch): 100 -> 105 CLI keys — the five
+# `isolation-*` execution-isolation conservative-surface commands (write
+# concurrency limit + under-review/being-written mutex + read-only review
+# snapshots + lease reclaim with loss-of-authority verification; handlers
+# = engine thin entries defined in verify_workflow.py, module logic in
+# execution_isolation.py — the agent-locks-acquire pattern). Snapshot +
+# frozen counts re-baselined in the same change (the documented
+# contract-change path). Segments stay at 73 (no check-governance segment
+# rides the isolation surface).
+FROZEN_CLI_KEYS = 105
 FROZEN_SEGMENTS = 73
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
@@ -161,7 +170,13 @@ FROZEN_SEGMENTS = 73
 # calibers bootstrap_aggregate reaches are function-local imports, so the
 # cold face grows by exactly this one module). Baseline regenerated in
 # the same change.
-FROZEN_ENGINE_IMPORT_COUNT = 206
+# FEAT-096: 206 -> 207 — the engine imports the self-contained
+# ``execution_isolation`` module (stdlib-only at import time: argparse /
+# hashlib / json / os / re / stat / sys / tempfile / threading / time /
+# datetime / pathlib — all already in the cold face, so the face grows by
+# exactly this one module; measured 207 live). Baseline regenerated in
+# the same change.
+FROZEN_ENGINE_IMPORT_COUNT = 207
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {

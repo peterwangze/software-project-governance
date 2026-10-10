@@ -109,7 +109,16 @@ from contract_matrix import generator as cmg  # noqa: E402
 # governance rows (EVD-1359/1360), which flipped the deferred detector's
 # fired-hit state — disclosed as a make-up rider (the FIX-438 precedent),
 # not a FEAT-093 contract change. Segments unchanged at 73.
-FROZEN_CLI_KEY_COUNT = 100
+# FEAT-096 (0.98.0 window, DEC-330 batch): 100→105 keys — the five
+# `isolation-*` execution-isolation conservative-surface commands (write
+# concurrency limit + under-review/being-written mutex + read-only review
+# snapshots + lease reclaim with loss-of-authority verification; engine
+# thin entries in verify_workflow.py, module logic in
+# execution_isolation.py). Snapshot regenerated + registry rows + this
+# count re-baselined in the same change (the documented contract-change
+# path). Segments unchanged at 73 (no check-governance segment rides the
+# isolation surface).
+FROZEN_CLI_KEY_COUNT = 105
 FROZEN_CHECK_SEGMENT_COUNT = 73
 
 

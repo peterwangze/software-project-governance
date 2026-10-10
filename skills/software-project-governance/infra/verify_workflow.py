@@ -103,6 +103,19 @@ from baseline_metadata import cmd_baseline_evaluate, cmd_baseline_register
 # function-locally — the governance_cost pattern).
 import authority_ledger
 from authority_ledger import cmd_authority_ledger
+# FEAT-096 (0.98.0): execution isolation conservative surface — the
+# four-piece set (write concurrency limit + under-review/being-written
+# mutex + read-only review snapshots + lease reclaim with
+# loss-of-authority verification). Self-contained stdlib-only module;
+# the engine wires dispatch only (governance_cost pattern). Capability
+# honesty: host worktree/sandbox isolation is UNVERIFIED (FEAT-095
+# report §7 U1) — the delivered surface is CLI-level, disclosed.
+import execution_isolation
+from execution_isolation import (cmd_isolation_capability,
+                                 cmd_isolation_lease_reclaim,
+                                 cmd_isolation_snapshot,
+                                 cmd_isolation_status,
+                                 cmd_isolation_write)
 
 ROOT = Path(__file__).resolve().parents[3]
 INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
@@ -25597,6 +25610,45 @@ def cmd_agent_locks_acquire(args):
         post_write_check=check_agent_locks_format)
 
 
+# ── FEAT-096 (0.98.0): execution-isolation engine thin entries ─────────
+#
+# All validation and writing live in execution_isolation.py (RISK-039
+# thin-entry discipline).  These glue entries inject the ENGINE-resolved
+# host paths (read at call time so an explicit --project-root override
+# applies — the cmd_agent_locks_acquire pattern) and return the module's
+# exit code (0 ok / 2 refusal; judge's allowed=false also exits 2).
+
+
+def cmd_isolation_write_engine(args):
+    """Thin entry — isolation-write CLI (FEAT-096 ① write slot)."""
+    return cmd_isolation_write(
+        args, governance_dir=GOVERNANCE_DIR, repo_root=HOST_PROJECT_ROOT)
+
+
+def cmd_isolation_snapshot_engine(args):
+    """Thin entry — isolation-snapshot CLI (FEAT-096 ②③ review snapshot)."""
+    return cmd_isolation_snapshot(
+        args, governance_dir=GOVERNANCE_DIR, repo_root=HOST_PROJECT_ROOT)
+
+
+def cmd_isolation_lease_reclaim_engine(args):
+    """Thin entry — isolation-lease-reclaim CLI (FEAT-096 ④ 失权回收)."""
+    return cmd_isolation_lease_reclaim(
+        args, governance_dir=GOVERNANCE_DIR, repo_root=HOST_PROJECT_ROOT)
+
+
+def cmd_isolation_status_engine(args):
+    """Thin entry — isolation-status CLI (machine-readable world)."""
+    return cmd_isolation_status(
+        args, governance_dir=GOVERNANCE_DIR, repo_root=HOST_PROJECT_ROOT)
+
+
+def cmd_isolation_capability_engine(args):
+    """Thin entry — isolation-capability CLI (honesty disclosure)."""
+    return cmd_isolation_capability(
+        args, governance_dir=GOVERNANCE_DIR, repo_root=HOST_PROJECT_ROOT)
+
+
 def cmd_governance_write_guard(args):
     """Thin entry — governance-write-guard CLI (FEAT-011 / G3 extension).
 
@@ -27876,6 +27928,48 @@ def main(argv=None):
     )
     authority_ledger.add_arguments(al_p)
 
+    # FEAT-096 (0.98.0 — execution isolation conservative surface): args
+    # and handlers live in execution_isolation.py — the engine only wires
+    # dispatch (the governance_cost pattern; ArchGuard R4 print budget
+    # untouched). Exit 0 ok / 2 refusal (fail-closed; judge's
+    # allowed=false also exits 2).
+    isw_p = subparsers.add_parser(
+        "isolation-write",
+        help="FEAT-096 exclusive write slot per file domain (--action "
+             "begin/end/judge): shared-file write concurrency limit — a "
+             "second writer on the same domain is refused with holder + "
+             "expected release",
+    )
+    execution_isolation.add_write_arguments(isw_p)
+    iss_p = subparsers.add_parser(
+        "isolation-snapshot",
+        help="FEAT-096 read-only review snapshot (--action create/release): "
+             "domains under review refuse writes (被审/在写互斥); snapshot "
+             "files + sha256 manifest are chmod read-only",
+    )
+    execution_isolation.add_snapshot_arguments(iss_p)
+    isl_p = subparsers.add_parser(
+        "isolation-lease-reclaim",
+        help="FEAT-096 reclaim expired agent-locks leases with "
+             "loss-of-authority verification (expired writer's residual "
+             "write slot revoked; old-format lock files stay readable)",
+    )
+    execution_isolation.add_lease_reclaim_arguments(isl_p)
+    ist_p = subparsers.add_parser(
+        "isolation-status",
+        help="FEAT-096 machine-readable isolation world: writers / lease "
+             "expiries / reviews / waiters / reclaim log (--text for "
+             "grep anchors)",
+    )
+    execution_isolation.add_status_arguments(ist_p)
+    isc_p = subparsers.add_parser(
+        "isolation-capability",
+        help="FEAT-096 capability disclosure — references the FEAT-095 "
+             "harness-enforcement research report; NO host-level "
+             "isolation claim (U1 unverified)",
+    )
+    execution_isolation.add_capability_arguments(isc_p)
+
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -27988,6 +28082,15 @@ def main(argv=None):
         # FEAT-093 (0.98.0): authority-ledger dispatch (identity contract +
         # event log + projection rebuild; exit 0 ok / 1 FAIL verdict).
         "authority-ledger": cmd_authority_ledger,
+        # FEAT-096 (0.98.0): execution-isolation dispatch (conservative
+        # surface four-piece set; exit 0 ok / 2 refusal — the module
+        # handlers resolve governance_dir from the ENGINE's resolved
+        # paths, the agent-locks-acquire thin-entry pattern).
+        "isolation-write": cmd_isolation_write_engine,
+        "isolation-snapshot": cmd_isolation_snapshot_engine,
+        "isolation-lease-reclaim": cmd_isolation_lease_reclaim_engine,
+        "isolation-status": cmd_isolation_status_engine,
+        "isolation-capability": cmd_isolation_capability_engine,
     }
 
     cmd = args.command or "verify"

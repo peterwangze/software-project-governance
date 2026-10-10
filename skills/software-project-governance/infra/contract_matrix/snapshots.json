@@ -168,8 +168,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 97,
-      "key_count": 100,
+      "handler_count": 102,
+      "key_count": 105,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -250,6 +250,11 @@
         "governance-context",
         "governance-cost-report",
         "governance-write-guard",
+        "isolation-capability",
+        "isolation-lease-reclaim",
+        "isolation-snapshot",
+        "isolation-status",
+        "isolation-write",
         "locks-amend",
         "locks-extend",
         "locks-release",
@@ -379,7 +384,7 @@
                   "hits": "int",
                   "reason": "str",
                   "rows_judged": "int",
-                  "skip_kind": "NoneType"
+                  "skip_kind": "str"
                 }
               },
               "issues": {
@@ -434,14 +439,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "c783cff3651b49343aa976dc44e04e70282b3c62",
+    "git_head": "099acbf0efa1ad1b309593960cc526ed1d68a90d",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-10-10T03:17:11+00:00"
+    "timestamp_utc": "2026-10-10T12:52:47+00:00"
   },
   "python_family_pins": [
     {

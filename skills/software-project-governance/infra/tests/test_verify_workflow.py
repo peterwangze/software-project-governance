@@ -26480,5 +26480,234 @@ class FEAT094ReviewTrustChainTests(unittest.TestCase):
                         "{0:.2f}s".format(elapsed))
 
 
+class Feat096ExecutionIsolationWiringTests(unittest.TestCase):
+    """FEAT-096 engine-dispatch regression — the conservative-surface
+    four-piece set wired as verify_workflow subcommands.
+
+    arch 盲区裁定 (DEC-330 批): 锁可绕过 = 锁未控制实际写入能力 — the
+    conservative answer limits WRITE CONCURRENCY on shared files instead
+    of pretending a bypassable soft lock is safety.  These tests pin the
+    ENGINE wiring (thin entries inject the engine-resolved
+    GOVERNANCE_DIR / HOST_PROJECT_ROOT; exit 0 ok / 2 refusal) for:
+
+      ① isolation-write  — write-slot mutex (second writer exit 2 with
+                           holder + expected release);
+      ② isolation-snapshot — under-review/being-written mutex;
+      ③ (same command)   — read-only snapshot (write gate refuses the
+                           snapshot root);
+      ④ isolation-lease-reclaim — expired writer refused + reclaimed.
+
+    Deep unit coverage lives in test_execution_isolation.py; this class
+    guards the dispatch face only (all fixtures in temp dirs — the real
+    .governance is never touched)."""
+
+    def _make_world(self, td):
+        root = Path(td)
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        docs = root / "docs"
+        docs.mkdir(exist_ok=True)
+        (docs / "a.md").write_bytes(b"alpha\n")
+        return root, gov
+
+    def _seed_active_lease(self, gov, domain, task_id="FIX-100"):
+        locked_at = "2026-10-10T11:00:00"
+        (gov / "agent-locks.json").write_bytes((
+            json.dumps({
+                "active_tasks": {
+                    task_id: {
+                        "agent_role": "Developer",
+                        "spawned_at": locked_at,
+                        "coordinator_session": "s-x",
+                        "target_files": [domain],
+                    },
+                },
+                "file_locks": {
+                    domain: {
+                        "locked_by": task_id,
+                        "locked_at": locked_at,
+                        "ttl_seconds": 14400,
+                        "ttl_reason": "seed",
+                    },
+                },
+            }, indent=4) + "\n").encode("utf-8"))
+
+    def _run_engine(self, handler, **fields):
+        args = SimpleNamespace(command="isolation", **fields)
+        buffer = io.StringIO()
+        import execution_isolation as ei
+        with redirect_stdout(buffer):
+            code = handler(args)
+        try:
+            payload = json.loads(buffer.getvalue())
+        except ValueError:
+            payload = {"raw": buffer.getvalue()}
+        return code, payload
+
+    # ── ① write-slot mutex through the engine dispatch face ──────────
+
+    def test_isolation_write_engine_mutex_refusal_exit_code(self):
+        with _governance_temp_dir(prefix="feat096-mx-") as td:
+            root, gov = self._make_world(td)
+            domain = "docs/a.md"
+            with patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", root):
+                code1, first = self._run_engine(
+                    vw.cmd_isolation_write_engine, action="begin",
+                    task="FIX-100", files=domain, writer="", purpose="",
+                    ttl=600, timeout=10.0)
+                self.assertEqual(code1, 0, first)
+                code2, second = self._run_engine(
+                    vw.cmd_isolation_write_engine, action="begin",
+                    task="FIX-200", files=domain, writer="", purpose="",
+                    ttl=600, timeout=10.0)
+            self.assertEqual(code2, 2, second)
+            self.assertEqual(second["refusals"][0]["holder"], "FIX-100")
+            self.assertIn("expires_at", second["refusals"][0])
+
+    def test_isolation_write_engine_judge_refused_exits_2(self):
+        # judge is a pure gate query: allowed=false is NOT an "error"
+        # payload but still exits 2 — callers branch on the code.
+        with _governance_temp_dir(prefix="feat096-jd-") as td:
+            root, gov = self._make_world(td)
+            domain = "docs/a.md"
+            with patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", root):
+                self._run_engine(
+                    vw.cmd_isolation_write_engine, action="begin",
+                    task="FIX-100", files=domain, writer="", purpose="",
+                    ttl=600, timeout=10.0)
+                code, judged = self._run_engine(
+                    vw.cmd_isolation_write_engine, action="judge",
+                    task="FIX-200", files=domain, writer="", purpose="",
+                    ttl=600, timeout=10.0)
+            self.assertEqual(code, 2)
+            self.assertFalse(judged.get("error"))
+            self.assertFalse(judged["allowed"])
+
+    # ── ②③ snapshot mutex + read-only through the engine face ───────
+
+    def test_isolation_snapshot_engine_review_mutex_and_readonly_gate(self):
+        with _governance_temp_dir(prefix="feat096-sn-") as td:
+            root, gov = self._make_world(td)
+            domain = "docs/a.md"
+            with patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", root):
+                code_snap, snap = self._run_engine(
+                    vw.cmd_isolation_snapshot_engine, action="create",
+                    task="FIX-100", files=domain, round=0, timeout=10.0)
+                self.assertEqual(code_snap, 0, snap)
+                code_blocked, blocked = self._run_engine(
+                    vw.cmd_isolation_write_engine, action="begin",
+                    task="FIX-300", files=domain, writer="", purpose="",
+                    ttl=600, timeout=10.0)
+                self.assertEqual(code_blocked, 2)
+                self.assertEqual(blocked["refusals"][0]["reason"],
+                                 "under_review")
+                snap_rel = str((Path(snap["snapshot_root"]) / domain)
+                               .relative_to(root)).replace("\\", "/")
+                code_ro, ro = self._run_engine(
+                    vw.cmd_isolation_write_engine, action="begin",
+                    task="FIX-300", files=snap_rel, writer="", purpose="",
+                    ttl=600, timeout=10.0)
+            self.assertEqual(code_ro, 2)
+            self.assertEqual(ro["refusals"][0]["reason"],
+                             "snapshot_immutable")
+            # restore writability for the temp cleanup (Windows rmtree
+            # refuses read-only files)
+            snap_root = Path(snap["snapshot_root"])
+            for path in snap_root.rglob("*"):
+                os.chmod(path, os.stat(path).st_mode | 0o200)
+
+    # ── ④ lease reclaim through the engine face ─────────────────────
+
+    def test_isolation_lease_reclaim_engine_expired_lease_cleaned(self):
+        with _governance_temp_dir(prefix="feat096-lr-") as td:
+            root, gov = self._make_world(td)
+            domain = "docs/a.md"
+            stale = "2026-10-10T06:00:00"  # + 3600s ttl << now
+            (gov / "agent-locks.json").write_bytes((
+                json.dumps({
+                    "active_tasks": {
+                        "FIX-100": {
+                            "agent_role": "Developer",
+                            "spawned_at": stale,
+                            "coordinator_session": "s-x",
+                            "target_files": [domain],
+                        },
+                    },
+                    "file_locks": {
+                        domain: {
+                            "locked_by": "FIX-100",
+                            "locked_at": stale,
+                            "ttl_seconds": 3600,
+                            "ttl_reason": "seed",
+                        },
+                    },
+                }, indent=4) + "\n").encode("utf-8"))
+            with patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", root):
+                code, report = self._run_engine(
+                    vw.cmd_isolation_lease_reclaim_engine, timeout=10.0)
+            self.assertEqual(code, 0, report)
+            self.assertEqual([r["domain"] for r in report["reclaimed"]],
+                             [domain])
+            locks_now = json.loads(
+                (gov / "agent-locks.json").read_text(encoding="utf-8"))
+            self.assertNotIn(domain, locks_now["file_locks"])
+            self.assertNotIn("FIX-100", locks_now["active_tasks"])
+
+    # ── status / capability / registration faces ─────────────────────
+
+    def test_isolation_status_engine_text_has_grep_anchors(self):
+        with _governance_temp_dir(prefix="feat096-st-") as td:
+            root, gov = self._make_world(td)
+            self._seed_active_lease(gov, "docs/a.md")
+            with patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", root):
+                code, payload = self._run_engine(
+                    vw.cmd_isolation_status_engine, text=True)
+            self.assertEqual(code, 0, payload)
+            self.assertIn("lease domain=docs/a.md task=FIX-100",
+                          payload["raw"])
+            self.assertIn("lease_expiry=", payload["raw"])
+
+    def test_isolation_capability_cli_registered_end_to_end(self):
+        # argv-level proof: the engine parser accepts the subcommand and
+        # the dispatch table routes it (exit 0; reads/writes nothing).
+        with redirect_stdout(io.StringIO()):
+            rc = vw.main(["isolation-capability"])
+        self.assertEqual(rc, 0)
+
+    def test_isolation_module_shares_one_option_fact_source(self):
+        # FEAT-047 P2-1 caliber (module side): every add_*_arguments face
+        # defines EXACTLY the option set of build_parser's own
+        # subparsers — the engine subparser and the module CLI cannot
+        # drift.
+        import execution_isolation as ei
+        parser = ei.build_parser()
+        group = next(a for a in parser._subparsers._group_actions
+                     if a.dest == "command")
+        for command, add_face in (
+                ("isolation-write", ei.add_write_arguments),
+                ("isolation-snapshot", ei.add_snapshot_arguments),
+                ("isolation-lease-reclaim", ei.add_lease_reclaim_arguments),
+                ("isolation-status", ei.add_status_arguments),
+                ("isolation-capability", ei.add_capability_arguments)):
+            face_parser = argparse.ArgumentParser()
+            sub = face_parser.add_subparsers(dest="command")
+            face_sub = sub.add_parser(command)
+            add_face(face_sub)
+            canonical_opts = {
+                a.dest: (a.required, getattr(a, "option_strings", []))
+                for a in group.choices[command]._actions
+                if a.dest not in ("help", "command")}
+            face_opts = {
+                a.dest: (a.required, getattr(a, "option_strings", []))
+                for a in face_sub._actions
+                if a.dest not in ("help", "command")}
+            self.assertEqual(canonical_opts, face_opts, command)
+
+
 if __name__ == "__main__":
     unittest.main()

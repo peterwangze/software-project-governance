@@ -123,7 +123,13 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # architecture-baseline re-anchor under DEC-320 path A) re-baselines all
 # four faces in the same change. Segments stay at 73 (the guard rides
 # Check 12 / check-cross-references).
-FROZEN_CLI_KEYS = 99
+# FEAT-093 (0.98.0 window, DEC-330): 99 -> 100 CLI keys — the
+# `authority-ledger` dispatch (task identity contract + append-only event
+# log + rebuildable plan-tracker projection; handler in
+# authority_ledger.py, engine wires dispatch only — governance_cost
+# pattern). Snapshot + architecture-baseline re-anchored in the same
+# change (the documented contract-change path). Segments stay at 73.
+FROZEN_CLI_KEYS = 100
 FROZEN_SEGMENTS = 73
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
@@ -150,7 +156,12 @@ FROZEN_SEGMENTS = 73
 # review-FEAT-055 F-1; ``threading`` was already in the HEAD face).
 # Baseline regenerated in the same change, see
 # ``core/architecture-baseline.json``.
-FROZEN_ENGINE_IMPORT_COUNT = 205
+# FEAT-093: 205 -> 206 — the engine imports the self-contained
+# ``authority_ledger`` module (stdlib-only at import time; the peer-leaf
+# calibers bootstrap_aggregate reaches are function-local imports, so the
+# cold face grows by exactly this one module). Baseline regenerated in
+# the same change.
+FROZEN_ENGINE_IMPORT_COUNT = 206
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {
@@ -387,7 +398,11 @@ class CommandRegistryTests(unittest.TestCase):
                           if reg.loader_module(spec.handler)
                           != reg.ENGINE_MODULE)
         self.assertEqual(migrated, [
+            # FEAT-093 (0.98.0): the authority-ledger handler lives in
+            # authority_ledger.py; the engine wires dispatch only
+            # (governance_cost pattern). Sorted position follows the key.
             "archguard-ratchet",
+            "authority-ledger",
             # FEAT-055 (0.86.0 batch 2.0): the BaselineMetadata provenance
             # writer's two dispatch keys; handlers live in
             # baseline_metadata.py, the engine wires dispatch only

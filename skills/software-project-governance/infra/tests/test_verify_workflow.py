@@ -25127,5 +25127,715 @@ class GovernanceStoreZeroPersistenceFIX439Tests(unittest.TestCase):
             self.assertFalse(gs._ledger_path(gov).exists())
 
 
+# ── FEAT-093: authority ledger — identity contract + projection ─────────────
+
+class FEAT093AuthorityLedgerIdentityTests(unittest.TestCase):
+    """FEAT-093 acceptance ③ — same-id different-semantics writes REFUSED.
+
+    The RPG-session defect this closes (report §3.2): 5 groups of FEAT ids
+    silently re-meaning across sessions.  Under the ledger writer that
+    write class is structurally impossible: the id's semantic anchor is
+    registered at first write; a same-id/different-anchor registration is
+    refused AND the attempt is appended as an ``identity_conflict_rejected``
+    audit event.  Semantic change requires a ``task_superseded`` event (new
+    id / versioned id + replacement relationship) — 原 ID 静默换义禁.
+    """
+
+    SUBJECT_A = "**权威账本与身份契约——稳定 task/attempt/review 身份**——0.98 首票细节叙述"
+    SUBJECT_B = "**完全不同的语义——同一 ID 换义尝试**——另一回事"
+
+    def _writer(self, td):
+        import authority_ledger as al
+        gov = Path(td) / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        return al, gov, al.LedgerWriter(gov)
+
+    def test_same_id_different_semantics_refused_and_audited(self):
+        # RED phase evidence: without the identity gate in record_task the
+        # second registration would land as a second task_registered (the
+        # RPG dual-semantics shape); the gate refuses it and keeps the
+        # attempt as an audit event.
+        with _governance_temp_dir(prefix="feat093-identity-") as td:
+            al, gov, w = self._writer(td)
+            first = w.record_task("FEAT-093", subject=self.SUBJECT_A,
+                                  status="⏳ 待执行")
+            self.assertEqual(first["status"], "registered", first)
+            events_before = len(w.events)
+            refused = w.record_task("FEAT-093", subject=self.SUBJECT_B,
+                                    status="✅ 完成")
+            self.assertEqual(refused["status"], "refused", refused)
+            self.assertEqual(refused["code"], "identity_conflict", refused)
+            # exactly ONE new event landed: the audit of the attempt
+            self.assertEqual(len(w.events), events_before + 1)
+            audit = w.events[-1]
+            self.assertEqual(audit["kind"], "identity_conflict_rejected")
+            self.assertEqual(audit["payload"]["task_id"], "FEAT-093")
+            # the registered identity is UNCHANGED (no silent re-meaning)
+            self.assertEqual(
+                w.state["tasks"]["FEAT-093"]["semantic_anchor"],
+                al.semantic_anchor(self.SUBJECT_A))
+            # and the refusal survives a reload (durable audit trail)
+            w2 = al.LedgerWriter(gov)
+            self.assertEqual(w2.integrity["ok"], True)
+            self.assertEqual(
+                w2.state["counts"]["tasks"]["identity_conflict_rows"], 1)
+
+    def test_same_id_same_anchor_registration_is_idempotent(self):
+        with _governance_temp_dir(prefix="feat093-idem-") as td:
+            al, gov, w = self._writer(td)
+            w.record_task("FEAT-093", subject=self.SUBJECT_A)
+            events_before = len(w.events)
+            again = w.record_task(
+                "FEAT-093",
+                subject=self.SUBJECT_A + "——追加叙述不改锚")
+            self.assertEqual(again["status"], "already_registered", again)
+            self.assertEqual(len(w.events), events_before)  # no new event
+
+    def test_semantic_change_requires_supersession(self):
+        with _governance_temp_dir(prefix="feat093-supersede-") as td:
+            al, gov, w = self._writer(td)
+            w.record_task("FEAT-093", subject=self.SUBJECT_A)
+            # the legal semantic-change path: new id + recorded replacement
+            sup = w.supersede_task(
+                "FEAT-093", "FEAT-110", new_subject="**替代语义——新任务**",
+                reason="语义变更裁定", status="⏳ 待执行")
+            self.assertEqual(sup["status"], "superseded", sup)
+            self.assertEqual(
+                w.state["tasks"]["FEAT-093"]["superseded_by"], "FEAT-110")
+            self.assertIn("FEAT-110", w.state["tasks"])
+            # the OLD id's identity stays frozen even after supersession
+            refused = w.record_task("FEAT-093", subject=self.SUBJECT_B)
+            self.assertEqual(refused["code"], "identity_conflict", refused)
+            # superseding without a reason is a schema refusal
+            bad = w.supersede_task("FEAT-110", "FEAT-111",
+                                   new_subject="**x**", reason="  ")
+            self.assertEqual(bad["status"], "refused", bad)
+
+    def test_transaction_refuses_whole_batch_on_schema_violation(self):
+        # validation atomicity: one invalid event refuses the entire batch,
+        # nothing is appended (no partial transaction).
+        with _governance_temp_dir(prefix="feat093-txn-") as td:
+            al, gov, w = self._writer(td)
+            events_before = len(w.events)
+            with self.assertRaises(al.LedgerError):
+                w.transact([
+                    ("task_registered", {
+                        "task_id": "FEAT-093",
+                        "semantic_anchor": "锚",
+                        "anchor_fingerprint": "f" * 64}),
+                    ("not_a_kind", {"anything": True}),
+                ])
+            self.assertEqual(len(w.events), events_before)
+            self.assertFalse((gov / "authority-ledger" /
+                              "events.jsonl").exists())
+
+    def test_generic_core_state_event_families_and_schema_refusals(self):
+        # acceptance ① schema coverage: review / recheck obligation / goal
+        # budget ride the same transactional writer (closed vocabularies).
+        with _governance_temp_dir(prefix="feat093-kinds-") as td:
+            al, gov, w = self._writer(td)
+            ok = w.record_event("review_recorded", {
+                "review_id": "REVIEW-FEAT-093-R0", "task_id": "FEAT-093",
+                "verdict": "NEEDS_CHANGE"})
+            self.assertEqual(ok["status"], "recorded", ok)
+            w.record_event("recheck_obligation_registered",
+                           {"task_id": "FEAT-093", "round": 1})
+            self.assertEqual(
+                len(w.state["open_recheck_obligations"]), 1)
+            w.record_event("recheck_obligation_cleared",
+                           {"task_id": "FEAT-093"})
+            self.assertEqual(
+                len(w.state["open_recheck_obligations"]), 0)
+            w.record_event("goal_budget_recorded",
+                           {"goal_id": "session-x", "max_rounds": 10})
+            with self.assertRaises(al.LedgerError):
+                w.transact([("review_recorded", {"task_id": "FEAT-093"})])
+            with self.assertRaises(al.LedgerError):
+                w.transact([("made_up_kind", {"x": 1})])
+
+    def test_torn_tail_is_detected_and_appends_refused(self):
+        # fail-closed recovery: a crash mid-append leaves a torn line; the
+        # loader reports it and the writer refuses further appends (never
+        # silently folds a partial transaction).
+        with _governance_temp_dir(prefix="feat093-torn-") as td:
+            al, gov, w = self._writer(td)
+            w.record_task("FEAT-093", subject=self.SUBJECT_A)
+            events_file = gov / "authority-ledger" / "events.jsonl"
+            with open(events_file, "a", encoding="utf-8") as fh:
+                fh.write('{"seq": 2, "kind": "task_regis')
+            w2 = al.LedgerWriter(gov)
+            self.assertFalse(w2.integrity["ok"])
+            self.assertTrue(w2.integrity["problems"])
+            with self.assertRaises(al.LedgerIntegrityError):
+                w2.record_task("FEAT-094", subject="**x**")
+
+
+class FEAT093AuthorityLedgerProjectionTests(unittest.TestCase):
+    """FEAT-093 acceptance ② + ④ — migration zero loss + rebuildable
+    projection (counts identical item by item, dry-run first)."""
+
+    PLAN = (
+        "# 样例\n\n"
+        "## 项目配置\n\n"
+        "- **项目目标**: 测试目标\n"
+        "- **authority_ledger**: off\n\n"
+        "## Gate 状态跟踪\n\n"
+        "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| G1 | → 调研 | passed-on-entry | 2026-04-20 | DEC-001 |\n"
+        "| G5 | → 开发实现 | passed | 2026-04-20 | DEC-023 |\n"
+        "| G11 | → 下一轮 | pending |  |  |\n\n"
+        "### 优先级一览\n\n"
+        "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+        "|--------|----|------|------|---------|---------|------|\n"
+        "| **P1** | FEAT-093 | **权威账本与身份契约——稳定身份**——细节 | — | 0.98.0 |"
+        " 产品代码 | 🆕 triaged |\n"
+        "| **P1** | FEAT-094 | **审查可信链**——绑定 | FEAT-093 | 0.98.0 |"
+        " 产品代码 | 🆕 triaged |\n"
+        "| **P2** | FIX-442 | **冒烟检查并发容忍**——修复 | — | 0.98.0 |"
+        " 产品代码 | ✅ 完成 (2026-10-10) |\n"
+        "| **P1** | FEAT-093 | **同 ID 换义行——历史双语义** | — | 0.99.0 |"
+        " 产品代码 | ⏳ 待执行 |\n"
+    )
+    RISKS = (
+        "# 风险\n\n"
+        "| 编号 | 风险描述 | 影响 | 可能性 | 当前状态 | 缓解措施 | 负责人 |"
+        " 截止日期 | 关联任务 | 复盘记录 |\n"
+        "|---|---|---|---|---|---|---|---|---|---|\n"
+        "| RISK-001 | 描述一 | 高 | 中 | 打开 | 缓解 | Owner |"
+        " 2026-11-01 | FEAT-093 | — |\n"
+        "| RISK-002 | 描述二 | 低 | 低 | **已关闭** (2026-05-05) | — |"
+        " Owner | — | — | — |\n"
+        "| RISK-003 | 描述三 | 中 | 中 | 缓解中（观察） | 缓解 | Owner |"
+        " — | — | — |\n"
+    )
+
+    def _gov(self, td, *, plan_extra_rows=""):
+        import authority_ledger as al
+        gov = Path(td) / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text(
+            self.PLAN + plan_extra_rows, encoding="utf-8", newline="\n")
+        (gov / "risk-log.md").write_text(
+            self.RISKS, encoding="utf-8", newline="\n")
+        return al, gov
+
+    def test_migration_dry_run_writes_zero_bytes(self):
+        with _governance_temp_dir(prefix="feat093-mig-dry-") as td:
+            al, gov = self._gov(td)
+            report = al.migrate(gov, dry_run=True)
+            self.assertEqual(report["status"], "PASS", report)
+            self.assertEqual(report["wrote"]["events"], 0)
+            self.assertFalse((gov / "authority-ledger").exists())
+
+    def test_migration_write_zero_loss_counts(self):
+        # acceptance ④: every task/Gate/risk count facet identical before
+        # and after migration, item by item — including the historical
+        # dual-semantics row (flagged, never silently blessed).
+        with _governance_temp_dir(prefix="feat093-mig-write-") as td:
+            al, gov = self._gov(td)
+            report = al.migrate(gov, dry_run=False)
+            self.assertEqual(report["status"], "PASS", report)
+            for item in report["comparison"]:
+                self.assertTrue(item["equal"], item)
+            self.assertEqual(report["counts_before"]["tasks"]["rows"], 4)
+            self.assertEqual(report["counts_before"]["tasks"]["distinct_ids"], 3)
+            self.assertEqual(report["counts_before"]["gates"]["passed"], 2)
+            self.assertEqual(report["counts_before"]["gates"]["pending"], 1)
+            self.assertEqual(report["counts_before"]["risks"]["open"], 2)
+            self.assertEqual(report["counts_before"]["risks"]["closed"], 1)
+            self.assertEqual(report["plan"]["flagged_conflicts"], 1)
+            self.assertEqual(report["plan"]["task_registered"], 3)
+            # the flagged conflict is disclosed as a historical audit event
+            w = al.LedgerWriter(gov)
+            flagged = [e for e in w.events
+                       if e["kind"] == "historical_identity_conflict"]
+            self.assertEqual(len(flagged), 1)
+            self.assertEqual(
+                flagged[0]["payload"]["task_id"], "FEAT-093")
+            # and the LIVE identity of FEAT-093 stays the first anchor
+            self.assertEqual(
+                w.state["tasks"]["FEAT-093"]["semantic_anchor"],
+                "权威账本与身份契约——稳定身份")
+
+    def test_migration_rerun_is_idempotent(self):
+        with _governance_temp_dir(prefix="feat093-mig-rerun-") as td:
+            al, gov = self._gov(td)
+            al.migrate(gov, dry_run=False)
+            w1 = al.LedgerWriter(gov)
+            first_count = len(w1.events)
+            report = al.migrate(gov, dry_run=False)
+            self.assertEqual(report["status"], "PASS", report)
+            w2 = al.LedgerWriter(gov)
+            # only the per-run summary event is added; registrations are
+            # idempotent (no duplicate rows, no re-flagged conflicts)
+            self.assertEqual(w2.state["counts"]["tasks"]["registered"], 3)
+            self.assertEqual(
+                w2.state["counts"]["tasks"]["identity_conflict_rows"], 1)
+            self.assertLessEqual(len(w2.events), first_count + 1)
+
+    def test_rebuild_projection_counts_identical_after_migrate(self):
+        # acceptance ②: one command rebuilds the hot-zone projection from
+        # the ledger; every count facet identical (零丢失).
+        with _governance_temp_dir(prefix="feat093-rebuild-") as td:
+            al, gov = self._gov(td)
+            al.migrate(gov, dry_run=False)
+            report = al.rebuild_projection(gov, write=True)
+            self.assertEqual(report["status"], "PASS", report)
+            for item in report["comparison"]:
+                self.assertTrue(item["equal"], item)
+            self.assertEqual(report["drift_count"], 0, report["drift"])
+            self.assertTrue(report["snapshot"]["written"])
+            # snapshot is the materialized projection and is fresh
+            st = al.status(gov)
+            self.assertFalse(st["snapshot"]["stale"])
+            self.assertEqual(st["integrity"]["ok"], True)
+            # the rebuild appended its audit event and the log re-verified
+            w = al.LedgerWriter(gov)
+            self.assertTrue(any(e["kind"] == "projection_rebuilt"
+                                for e in w.events))
+
+    def test_rebuild_discloses_drift_after_ledger_divergence(self):
+        # honest FAIL: after a ledger-side supersession the table genuinely
+        # lacks the new id — rebuild reports the drift, never fakes PASS.
+        with _governance_temp_dir(prefix="feat093-drift-") as td:
+            al, gov = self._gov(td)
+            al.migrate(gov, dry_run=False)
+            w = al.LedgerWriter(gov)
+            w.supersede_task("FEAT-094", "FEAT-120",
+                             new_subject="**替代任务**", reason="裁定",
+                             status="⏳ 待执行")
+            report = al.rebuild_projection(gov, write=False)
+            self.assertEqual(report["status"], "FAIL", report)
+            kinds = {d["kind"] for d in report["drift"]}
+            self.assertIn("ledger_only", kinds)
+
+    def test_switch_progressive_adoption_arms(self):
+        # default OFF (legacy byte-identical); env > plan-tracker > default;
+        # invalid tokens are REPORTED by the arm that saw them (state=invalid,
+        # no further arm consulted) and switch_enabled projects invalid to
+        # OFF (fail-closed, never guessed).
+        with _governance_temp_dir(prefix="feat093-switch-") as td:
+            al, gov = self._gov(td)
+            self.assertEqual(al.switch_state(self.PLAN)["state"], "off")
+            self.assertEqual(
+                al.switch_state(self.PLAN)["source"], "plan-tracker")
+            on_text = self.PLAN.replace(
+                "- **authority_ledger**: off", "- **authority_ledger**: on")
+            self.assertEqual(
+                al.switch_state(on_text)["state"], "on")
+            self.assertEqual(
+                al.switch_state(on_text)["source"], "plan-tracker")
+            env = {"GOVERNANCE_AUTHORITY_LEDGER": "1"}
+            self.assertEqual(
+                al.switch_state(on_text, environ=env)["state"], "on")
+            self.assertEqual(
+                al.switch_state(on_text, environ=env)["source"], "env")
+            # env off beats plan-tracker on
+            env_off = {"GOVERNANCE_AUTHORITY_LEDGER": "off"}
+            self.assertEqual(
+                al.switch_state(on_text, environ=env_off)["state"], "off")
+            # invalid token: reported, never guessed
+            env_bad = {"GOVERNANCE_AUTHORITY_LEDGER": "legacyy"}
+            bad = al.switch_state(self.PLAN, environ=env_bad)
+            self.assertEqual(bad["state"], "invalid")
+            self.assertEqual(bad["invalid"], "legacyy")
+            self.assertFalse(al.switch_enabled(self.PLAN, environ=env_bad))
+            # no key at all: default arm
+            self.assertEqual(
+                al.switch_state("# 无配置\n")["source"], "default")
+
+    def test_dual_write_mirror_off_by_default_and_on_when_switched(self):
+        # the task_row_update CLI path mirrors committed flips ONLY when
+        # the switch is on (default off = no ledger files at all).  The
+        # flip anchors FEAT-094 (FEAT-093 appears twice in this fixture —
+        # the dual-semantics row — so its anchor is deliberately ambiguous
+        # to the row writer, exactly the B-1 refusal shape).
+        import task_row_update as tru
+        with _governance_temp_dir(prefix="feat093-dualwrite-off-") as td:
+            al, gov = self._gov(td)
+            args = tru._build_parser().parse_args([
+                "--task", "FEAT-094", "--from", "triaged", "--to", "dev",
+                "--reason", "switch off probe"])
+            args.file = str(gov / "plan-tracker.md")
+            rc = tru.cmd_task_row_update(args)
+            self.assertEqual(rc, 0)
+            self.assertFalse((gov / "authority-ledger").exists())
+        with _governance_temp_dir(prefix="feat093-dualwrite-on-") as td:
+            al, gov = self._gov(td)
+            al.migrate(gov, dry_run=False)
+            env = {"GOVERNANCE_AUTHORITY_LEDGER": "1"}
+            with mock.patch.dict(os.environ, env, clear=False):
+                args = tru._build_parser().parse_args([
+                    "--task", "FEAT-094", "--from", "triaged", "--to",
+                    "dev", "--reason", "switch on probe", "--json"])
+                args.file = str(gov / "plan-tracker.md")
+                captured = {}
+                original_emit = tru._emit
+
+                def spy(payload, as_json):
+                    captured.update(payload)
+                    return original_emit(payload, as_json)
+
+                with mock.patch.object(tru, "_emit", spy):
+                    rc = tru.cmd_task_row_update(args)
+                self.assertEqual(rc, 0)
+            face = captured["result"]["authority_ledger"]
+            self.assertEqual(face["status"], "recorded", face)
+            w = al.LedgerWriter(gov)
+            changes = [e for e in w.events
+                       if e["kind"] == "task_state_changed"]
+            self.assertEqual(len(changes), 1)
+            self.assertEqual(changes[0]["payload"]["task_id"], "FEAT-094")
+            self.assertEqual(
+                w.state["tasks"]["FEAT-094"]["status"], "dev")
+
+    def test_rebuild_wall_budget_on_31_task_scale(self):
+        # quality-budget performance guard: full projection rebuild on a
+        # 31-task dataset stays far inside the 2s budget; a single
+        # transaction stays inside 50ms (measured, generous margins).
+        import time as _time
+        rows = "\n".join(
+            "| **P2** | TASK-{0:03d} | **任务 {0} 标题——语义锚**——细节 | — |"
+            " 0.98.0 | 产品代码 | 🆕 ⏳ 待实施 |".format(i)
+            for i in range(1, 32))
+        with _governance_temp_dir(prefix="feat093-perf-") as td:
+            al, gov = self._gov(td, plan_extra_rows=rows + "\n")
+            t0 = _time.perf_counter()
+            report = al.migrate(gov, dry_run=False)
+            t1 = _time.perf_counter()
+            rebuilt = al.rebuild_projection(gov, write=True)
+            t2 = _time.perf_counter()
+            self.assertEqual(report["status"], "PASS", report)
+            self.assertEqual(rebuilt["status"], "PASS", rebuilt)
+            self.assertLess(rebuilt["wall_ms"], 2000.0)
+            w = al.LedgerWriter(gov)
+            t3 = _time.perf_counter()
+            w.record_task_state_change(
+                "TASK-001", from_state="triaged", to_state="dev",
+                reason="perf probe")
+            t4 = _time.perf_counter()
+            self.assertLess((t4 - t3) * 1000, 50.0)
+            # honest disclosure: the wall clocks are part of the report
+            self.assertIn("wall_ms", report)
+
+
+class FEAT093AuthorityLedgerReworkR0Tests(unittest.TestCase):
+    """FEAT-093 R0 rework round (docs/reviews/review-FEAT-093-CODE-R0.md
+    §8) — the P1-1 intra-batch identity gap (red tests reproducing the
+    review's probes), the P2-1/P2-2 unknown-identity laxity, and the P3
+    fixes that shipped with them."""
+
+    SUBJECT_A = "**权威账本与身份契约——稳定 task/attempt/review 身份**——0.98 首票细节叙述"
+
+    def _writer(self, td):
+        import authority_ledger as al
+        gov = Path(td) / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        return al, gov, al.LedgerWriter(gov)
+
+    def _migrated_gov(self, td):
+        # the projection fixture (task table with one historical
+        # dual-semantics row + gates + risks), already migrated once.
+        import authority_ledger as al
+        fixture = FEAT093AuthorityLedgerProjectionTests
+        gov = Path(td) / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        (gov / "plan-tracker.md").write_text(
+            fixture.PLAN, encoding="utf-8", newline="\n")
+        (gov / "risk-log.md").write_text(
+            fixture.RISKS, encoding="utf-8", newline="\n")
+        al.migrate(gov, dry_run=False)
+        return al, gov
+
+    # ── P1-1: intra-batch identity contract ─────────────────────────────
+
+    def test_p1_1_intra_batch_dual_anchor_registration_refused_and_audited(self):
+        # The R0 probe scenario: ONE batch, TWO task_registered events,
+        # same id, DIFFERENT anchors.  Before the fix the whole batch was
+        # accepted with ZERO audit events and the fold silently kept the
+        # last anchor.  Now: the whole batch is refused, exactly ONE
+        # identity_conflict_rejected audit event lands, the id is never
+        # registered (no silent last-write-wins).
+        with _governance_temp_dir(prefix="feat093-r0-p11-") as td:
+            al, gov, w = self._writer(td)
+            with self.assertRaises(al.LedgerError):
+                w.transact([
+                    ("task_registered", {
+                        "task_id": "FEAT-900",
+                        "semantic_anchor": "锚A",
+                        "anchor_fingerprint": al.anchor_fingerprint("锚A")}),
+                    ("task_registered", {
+                        "task_id": "FEAT-900",
+                        "semantic_anchor": "锚B",
+                        "anchor_fingerprint": al.anchor_fingerprint("锚B")}),
+                ])
+            # the ONLY landed event is the audit of the refused attempt
+            self.assertEqual(len(w.events), 1)
+            audit = w.events[-1]
+            self.assertEqual(audit["kind"], "identity_conflict_rejected")
+            self.assertEqual(audit["payload"]["task_id"], "FEAT-900")
+            self.assertEqual(audit["payload"]["existing_anchor"], "锚A")
+            self.assertEqual(audit["payload"]["attempted_anchor"], "锚B")
+            # no business event landed; the anchor never flipped
+            self.assertNotIn("FEAT-900", w.state["tasks"])
+            # durable + integrity intact after reload
+            w2 = al.LedgerWriter(gov)
+            self.assertTrue(w2.integrity["ok"])
+            self.assertNotIn("FEAT-900", w2.state["tasks"])
+            self.assertEqual(
+                w2.state["counts"]["tasks"]["identity_conflict_rows"], 1)
+
+    def test_p1_1_raw_batch_cannot_re_register_existing_identity(self):
+        # the raw-transact bypass of the record_task face: re-registering
+        # a REGISTERED id with a different anchor through transact is
+        # refused AND audited (the same refusal semantics, one code path).
+        with _governance_temp_dir(prefix="feat093-r0-rawreg-") as td:
+            al, gov, w = self._writer(td)
+            w.record_task("FEAT-901", subject="**锚X——原语义**")
+            with self.assertRaises(al.LedgerError):
+                w.transact([("task_registered", {
+                    "task_id": "FEAT-901",
+                    "semantic_anchor": "锚Y",
+                    "anchor_fingerprint": al.anchor_fingerprint("锚Y")})])
+            self.assertEqual(len(w.events), 2)  # registration + audit
+            self.assertEqual(w.events[-1]["kind"],
+                             "identity_conflict_rejected")
+            self.assertEqual(
+                w.state["tasks"]["FEAT-901"]["semantic_anchor"],
+                "锚X——原语义")
+
+    def test_p1_1_same_anchor_batch_and_sequenced_events_accepted(self):
+        # the fix must not over-refuse: same id + SAME anchor inside one
+        # batch is the idempotent shape; register-then-supersede and
+        # register-then-state-change sequences inside ONE batch are legal
+        # (the simulated fold sees the batch's own earlier events).
+        with _governance_temp_dir(prefix="feat093-r0-batchok-") as td:
+            al, gov, w = self._writer(td)
+            fp = al.anchor_fingerprint("同锚")
+            ok = w.transact([
+                ("task_registered", {
+                    "task_id": "FEAT-902", "semantic_anchor": "同锚",
+                    "anchor_fingerprint": fp}),
+                ("task_registered", {
+                    "task_id": "FEAT-902", "semantic_anchor": "同锚",
+                    "anchor_fingerprint": fp}),
+                ("task_state_changed", {
+                    "task_id": "FEAT-902", "from_state": "a",
+                    "to_state": "b"}),
+            ])
+            self.assertEqual(ok["status"], "recorded", ok)
+            self.assertEqual(ok["event_count"], 3)
+            self.assertEqual(w.state["tasks"]["FEAT-902"]["status"], "b")
+            self.assertEqual(w.state["counts"]["tasks"]["registered"], 1)
+            # intra-batch supersede: old registered in the SAME batch
+            sup = w.transact([
+                ("task_registered", {
+                    "task_id": "FEAT-903", "semantic_anchor": "旧锚",
+                    "anchor_fingerprint": al.anchor_fingerprint("旧锚")}),
+                ("task_superseded", {
+                    "old_task_id": "FEAT-903", "new_task_id": "FEAT-904",
+                    "new_anchor": "新锚", "reason": "批内替代"}),
+            ])
+            self.assertEqual(sup["status"], "recorded", sup)
+            self.assertEqual(
+                w.state["tasks"]["FEAT-903"]["superseded_by"], "FEAT-904")
+            events_before = len(w.events)
+            # a supersede whose NEW id collides with an earlier
+            # batch-internal registration is refused (new-id uniqueness
+            # covers the intra-batch view too)
+            with self.assertRaises(al.LedgerError):
+                w.transact([
+                    ("task_registered", {
+                        "task_id": "FEAT-905", "semantic_anchor": "锚5",
+                        "anchor_fingerprint": al.anchor_fingerprint("锚5")}),
+                    ("task_superseded", {
+                        "old_task_id": "FEAT-903",
+                        "new_task_id": "FEAT-905",
+                        "new_anchor": "撞锚", "reason": "批内撞 id"}),
+                ])
+            self.assertEqual(len(w.events), events_before)
+
+    # ── P2-1: orphan state events refused at the writer face ────────────
+
+    def test_p2_1_state_change_for_unregistered_task_refused(self):
+        # before the fix the event was ACCEPTED (write disclosed
+        # "recorded") and then silently dropped by the fold — the
+        # orphan-event class behind the "switch on without migrate"
+        # misorder.  Now the writer face refuses it structurally.
+        with _governance_temp_dir(prefix="feat093-r0-p21-") as td:
+            al, gov, w = self._writer(td)
+            refused = w.record_task_state_change(
+                "FEAT-999", from_state="triaged", to_state="dev",
+                reason="probe")
+            self.assertEqual(refused["status"], "refused", refused)
+            self.assertEqual(refused["code"], "unknown_task_id", refused)
+            # nothing landed at all (no orphan event accepted-then-dropped)
+            self.assertEqual(len(w.events), 0)
+            self.assertFalse((gov / "authority-ledger").exists())
+            # the raw transact face is equally sealed (no bypass)
+            with self.assertRaises(al.LedgerError):
+                w.transact([("task_state_changed", {
+                    "task_id": "FEAT-999", "from_state": "a",
+                    "to_state": "b"})])
+            # a REGISTERED id still records fine
+            w.record_task("FEAT-999", subject="**后注册的正身**")
+            ok = w.record_task_state_change(
+                "FEAT-999", from_state="triaged", to_state="dev")
+            self.assertEqual(ok["status"], "recorded", ok)
+
+    # ── P2-2: phantom supersede refused ──────────────────────────────────
+
+    def test_p2_2_supersede_with_unregistered_old_id_refused(self):
+        # a supersede referencing an unregistered old id is a phantom
+        # replacement (broken lineage) — refused, nothing lands.
+        with _governance_temp_dir(prefix="feat093-r0-p22-") as td:
+            al, gov, w = self._writer(td)
+            bad = w.supersede_task(
+                "FEAT-777", "FEAT-888", new_subject="**幻影替代**",
+                reason="无正身替代")
+            self.assertEqual(bad["status"], "refused", bad)
+            self.assertEqual(bad["code"], "unknown_task_id", bad)
+            self.assertEqual(len(w.events), 0)
+            self.assertNotIn("FEAT-777", w.state["tasks"])
+            self.assertNotIn("FEAT-888", w.state["tasks"])
+            # raw transact face equally sealed
+            with self.assertRaises(al.LedgerError):
+                w.transact([("task_superseded", {
+                    "old_task_id": "FEAT-777", "new_task_id": "FEAT-888",
+                    "new_anchor": "幻影", "reason": "raw"})])
+            # register the old identity → the same supersede succeeds
+            w.record_task("FEAT-777", subject="**正身**")
+            ok = w.supersede_task(
+                "FEAT-777", "FEAT-888", new_subject="**替代语义**",
+                reason="有正身替代")
+            self.assertEqual(ok["status"], "superseded", ok)
+            self.assertEqual(
+                w.state["tasks"]["FEAT-777"]["superseded_by"], "FEAT-888")
+
+    # ── P3-3: dry-run re-migration fidelity ──────────────────────────────
+
+    def test_p3_3_dry_run_remigration_predicts_live_counts(self):
+        # the dry-run rehearsal is seeded with the live event log: a
+        # RE-migration dry-run classes already-registered rows as
+        # same-anchor duplicates exactly as the live write would (before
+        # the fix the rehearsal ran on an empty ledger and over-reported
+        # registrations — the report no longer predicted live behavior).
+        with _governance_temp_dir(prefix="feat093-r0-p33-") as td:
+            al, gov = self._migrated_gov(td)
+            before = len(al.LedgerWriter(gov).events)
+            dry = al.migrate(gov, dry_run=True)
+            self.assertEqual(dry["status"], "PASS", dry)
+            self.assertEqual(dry["plan"]["task_registered"], 0, dry["plan"])
+            self.assertEqual(dry["plan"]["same_anchor_duplicates"], 3,
+                             dry["plan"])
+            self.assertEqual(dry["plan"]["flagged_conflicts"], 1,
+                             dry["plan"])
+            self.assertEqual(dry["wrote"]["events"], 0)
+            # the live ledger stays untouched by the rehearsal
+            self.assertEqual(len(al.LedgerWriter(gov).events), before)
+
+    # ── P3-4: content-tamper branch (hash mismatch) ──────────────────────
+
+    def test_p3_4_content_tamper_breaks_integrity_and_refuses_appends(self):
+        # the hash-mismatch branch (a landed event's content rewritten
+        # without rebuilding the chain — distinct from the torn-tail
+        # branch): load reports it and the writer refuses further
+        # appends (fail-closed).
+        with _governance_temp_dir(prefix="feat093-r0-p34-") as td:
+            al, gov, w = self._writer(td)
+            w.record_task("FEAT-093", subject=self.SUBJECT_A)
+            w.record_task("FEAT-094", subject="**另一个任务**")
+            events_file = gov / "authority-ledger" / "events.jsonl"
+            lines = events_file.read_text(encoding="utf-8").splitlines()
+            tampered = json.loads(lines[0])
+            tampered["payload"]["semantic_anchor"] = "篡改后的锚"
+            lines[0] = json.dumps(
+                tampered, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"))
+            events_file.write_text("\n".join(lines) + "\n",
+                                   encoding="utf-8", newline="\n")
+            w2 = al.LedgerWriter(gov)
+            self.assertFalse(w2.integrity["ok"])
+            self.assertTrue(any("hash mismatch" in problem
+                                for problem in w2.integrity["problems"]))
+            with self.assertRaises(al.LedgerIntegrityError):
+                w2.record_task("FEAT-095", subject="**x**")
+
+    # ── P3-5: unregistrable source row → structured FAIL ─────────────────
+
+    def test_p3_5_migrate_unregistrable_row_is_structured_fail(self):
+        # a source row with no extractable anchor (empty 事项 cell) used
+        # to abort migrate with an uncaught-traceback LedgerError; now it
+        # is a structured FAIL (schema_violation_row) with the already-
+        # appended events left valid for the idempotent re-run.
+        with _governance_temp_dir(prefix="feat093-r0-p35-") as td:
+            import authority_ledger as al
+            gov = Path(td) / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            (gov / "plan-tracker.md").write_text(
+                "## 项目配置\n\n"
+                "- **authority_ledger**: off\n\n"
+                "### 优先级一览\n\n"
+                "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
+                "|--------|----|------|------|---------|---------|------|\n"
+                "| **P1** | FEAT-093 | **有锚任务** | — | 0.98.0 |"
+                " 产品代码 | ⏳ 待执行 |\n"
+                "| **P2** | FIX-500 |  | — | 0.98.0 | 产品代码 |"
+                " ⏳ 待执行 |\n",
+                encoding="utf-8", newline="\n")
+            dry = al.migrate(gov, dry_run=True)
+            self.assertEqual(dry["status"], "FAIL", dry)
+            self.assertEqual(dry["code"], "schema_violation_row", dry)
+            self.assertIn("FIX-500", dry["detail"])
+            self.assertFalse((gov / "authority-ledger").exists())
+            live = al.migrate(gov, dry_run=False)
+            self.assertEqual(live["status"], "FAIL", live)
+            self.assertEqual(live["code"], "schema_violation_row", live)
+            # partial migration stays valid + idempotent: the good row
+            # registered, the log integrity intact, a re-run reaches the
+            # same refusal without duplicating anything
+            w = al.LedgerWriter(gov)
+            self.assertTrue(w.integrity["ok"])
+            self.assertIn("FEAT-093", w.state["tasks"])
+            again = al.migrate(gov, dry_run=False)
+            self.assertEqual(again["code"], "schema_violation_row", again)
+            w2 = al.LedgerWriter(gov)
+            self.assertEqual(
+                len([e for e in w2.events
+                     if e["kind"] == "task_registered"]), 1)
+
+    # ── P3-6: switch key section scope ───────────────────────────────────
+
+    def test_p3_6_switch_key_honored_only_in_config_section(self):
+        # section scope (the Gate parser's caliber): a
+        # `- **authority_ledger`: …` shaped line OUTSIDE ## 项目配置
+        # (another section, a quote, a code block) never flips the
+        # switch.
+        import authority_ledger as al
+        stray = (
+            "## 其他节\n\n"
+            "- **authority_ledger**: on\n\n"
+            "## 项目配置\n\n"
+            "- **项目目标**: x\n"
+        )
+        resolved = al.switch_state(stray)
+        self.assertEqual(resolved["source"], "default")  # stray ignored
+        self.assertEqual(resolved["state"], "off")
+        proper = "## 项目配置\n\n- **authority_ledger**: on\n"
+        self.assertEqual(al.switch_state(proper)["state"], "on")
+        self.assertEqual(al.switch_state(proper)["source"], "plan-tracker")
+        # an invalid token OUTSIDE the section is equally ignored…
+        stray_invalid = "## 别处\n\n- **authority_ledger**: wat\n"
+        self.assertEqual(
+            al.switch_state(stray_invalid)["source"], "default")
+        # …while an invalid token INSIDE the section is reported by the
+        # plan-tracker arm (state=invalid, never guessed)
+        in_section_invalid = "## 项目配置\n\n- **authority_ledger**: wat\n"
+        bad = al.switch_state(in_section_invalid)
+        self.assertEqual(bad["state"], "invalid")
+        self.assertEqual(bad["source"], "plan-tracker")
+
+
 if __name__ == "__main__":
     unittest.main()

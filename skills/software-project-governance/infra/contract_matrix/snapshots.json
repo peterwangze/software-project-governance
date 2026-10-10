@@ -168,12 +168,13 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 96,
-      "key_count": 99,
+      "handler_count": 97,
+      "key_count": 100,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
         "archguard-ratchet",
+        "authority-ledger",
         "baseline-evaluate",
         "baseline-register",
         "capability-context",
@@ -378,7 +379,7 @@
                   "hits": "int",
                   "reason": "str",
                   "rows_judged": "int",
-                  "skip_kind": "str"
+                  "skip_kind": "NoneType"
                 }
               },
               "issues": {
@@ -433,14 +434,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "e1457a8e659090bee02e9bad511ec2cf080b1c10",
+    "git_head": "c783cff3651b49343aa976dc44e04e70282b3c62",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-10-06T05:04:16+00:00"
+    "timestamp_utc": "2026-10-10T03:17:11+00:00"
   },
   "python_family_pins": [
     {

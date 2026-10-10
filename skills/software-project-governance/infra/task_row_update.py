@@ -2328,6 +2328,15 @@ def _execute(args: argparse.Namespace,
         if result.code == RESULT_OK and not replayed \
                 and "already aligned" in (result.detail or ""):
             result_face["changed"] = False
+        # FEAT-093 dual-write mirror (progressive, OFF by default): mirror
+        # the committed effect into the authority ledger when the switch is
+        # on; the outcome is disclosed on the payload, never on the frozen
+        # WriterResult, and a mirror failure never rolls the row back.
+        if result.code == RESULT_OK and not replayed:
+            result_face["authority_ledger"] = mirror_authority_ledger(
+                target, task_id=args.task, action=REFRESH_ACTION,
+                from_state="", to_state="committed",
+                reason=args.reason, operation_id=result.operation_id)
         _emit({"mode": "result", "result": result_face}, args.json)
         if result.code == RESULT_OK:
             return ExitCode.REPLAY if replayed else ExitCode.OK
@@ -2373,14 +2382,22 @@ def _execute(args: argparse.Namespace,
         expected_revision=args.expected_revision,
         schema_version=args.schema_version, ledger=ledger)
     replayed = (result.detail or "").startswith("replay of operation")
-    _emit({"mode": "result", "result": {
+    result_face = {
         "operation_id": result.operation_id,
         "code": result.code,
         "new_revision": result.new_revision,
         "observed_revision": result.observed_revision,
         "execution": result.execution,
         "detail": result.detail,
-    }}, args.json)
+    }
+    # FEAT-093 dual-write mirror (progressive, OFF by default; see
+    # mirror_authority_ledger for the honesty contract).
+    if result.code == RESULT_OK and not replayed:
+        result_face["authority_ledger"] = mirror_authority_ledger(
+            target, task_id=args.task, action="state_flip",
+            from_state=args.from_state, to_state=args.to_state,
+            reason=args.reason, operation_id=result.operation_id)
+    _emit({"mode": "result", "result": result_face}, args.json)
     if result.code == RESULT_OK:
         return ExitCode.REPLAY if replayed else ExitCode.OK
     return _disposition_exit_code(result.code)
@@ -2404,6 +2421,61 @@ def cmd_task_row_update(args) -> int:
     caliber).
     """
     return _execute(args, _build_parser())
+
+
+# ── FEAT-093 authority-ledger dual-write mirror (progressive, OFF by default)
+
+def mirror_authority_ledger(target: Path, *, task_id: str, action: str,
+                            from_state: str, to_state: str,
+                            reason: str = "",
+                            operation_id: Optional[str] = None) -> Dict[
+                                str, Any]:
+    """Mirror one COMMITTED row write into the authority ledger (FEAT-093).
+
+    Progressive adoption (execution-packet assumption_record: 写路径先双写
+    后读切换): when the ``GOVERNANCE_AUTHORITY_LEDGER`` switch is OFF — the
+    shipped default — this is a no-op returning ``{"status": "off"}`` and
+    the legacy path stays byte-identical.  When ON, the state change is
+    appended as a ``task_state_changed`` event into the ledger bound to the
+    target's governance dir (``<target>.parent``).
+
+    Honesty contract: this is a POST-COMMIT mirror, not a distributed
+    transaction.  The row write already happened (its own receipt is on the
+    ops sidecar); a mirror failure is DISCLOSED in the returned face and
+    reconciled later by ``authority-ledger migrate`` / ``rebuild`` — it
+    never silently disappears, and it never rolls the committed row back.
+    The mirror outcome rides the CLI payload (``authority_ledger`` key),
+    NOT the frozen WriterResult (consumed read-only).
+    """
+    try:
+        import authority_ledger  # noqa: PLC0415 (deliberate: peer leaf,
+        # function-local so the cold-load import face of this module stays
+        # stdlib + contracts — the same trade bootstrap_aggregate._behavior
+        # makes)
+    except ImportError as exc:  # pragma: no cover - packaging damage
+        return {"status": "unavailable", "detail": str(exc)}
+    try:
+        plan_path = target.parent / "plan-tracker.md"
+        plan_text = plan_path.read_text(encoding="utf-8") \
+            if plan_path.is_file() else ""
+        if not authority_ledger.switch_enabled(
+                plan_text, environ=os.environ):
+            return {"status": "off"}
+        writer = authority_ledger.LedgerWriter(target.parent)
+        if action == REFRESH_ACTION:
+            outcome = writer.record_task_state_change(
+                task_id, from_state="〔suffix refresh〕",
+                to_state="committed",
+                reason=reason or "FIX-394 suffix refresh mirror",
+                operation_id=operation_id)
+        else:
+            outcome = writer.record_task_state_change(
+                task_id, from_state=from_state, to_state=to_state,
+                reason=reason, operation_id=operation_id)
+        return outcome
+    except Exception as exc:  # noqa: BLE001 - disclosed, never fatal here
+        return {"status": "failed", "detail": "{0}: {1}".format(
+            type(exc).__name__, exc)}
 
 
 # ``ExitCode.REPLAY`` is declared with the structured-code table above.

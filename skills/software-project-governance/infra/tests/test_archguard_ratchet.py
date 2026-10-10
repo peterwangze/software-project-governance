@@ -661,7 +661,16 @@ class BaselineArtifactTests(unittest.TestCase):
         # line; per-fn split in the FACTS_PRINT_TOTAL lineage above).
         # R2 48/37, R3 matrix, R5 faces and R6 205/Δ0 all byte-stable in
         # the same regen (zero drift outside the batch attribution).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27934)
+        # FEAT-093 rider re-anchor (0.98.0 window, DEC-330 — DEC-320/324/
+        # 326/327 precedent isomorphic): 27934 -> 27957, +23/-0 net, all
+        # attributed to the authority-ledger dispatch wiring (module import
+        # block +6, subparser block +12, commands-dict row +3, comment
+        # lines; handler + printing live in authority_ledger.py — R4 print
+        # census byte-stable at 1376). R5 cli keys 99 -> 100 in the same
+        # regen (contract-matrix rider in the same change); R2 48/37, R3
+        # matrix and R6 206/Δ0 (cold-import face +1 module:
+        # authority_ledger) byte-stable outside the FEAT-093 attribution.
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27957)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

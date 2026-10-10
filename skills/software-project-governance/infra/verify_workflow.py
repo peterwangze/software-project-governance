@@ -97,6 +97,12 @@ from governance_store import (cmd_decision_append, cmd_evidence_append,
                               cmd_locks_release)
 import baseline_metadata
 from baseline_metadata import cmd_baseline_evaluate, cmd_baseline_register
+# FEAT-093 (0.98.0): the authority ledger — task identity contract +
+# append-only event log + rebuildable plan-tracker projection (engine wires
+# dispatch only; stdlib-only at import time, peer-leaf calibers imported
+# function-locally — the governance_cost pattern).
+import authority_ledger
+from authority_ledger import cmd_authority_ledger
 
 ROOT = Path(__file__).resolve().parents[3]
 INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
@@ -27796,6 +27802,20 @@ def main(argv=None):
     )
     baseline_metadata.add_evaluate_arguments(ble_p)
 
+    # authority-ledger (FEAT-093 / 0.98.0 — the authority ledger for
+    # governance core state): args and handler live in
+    # authority_ledger.py — the engine only wires dispatch (the
+    # governance_cost pattern); the migrate/rebuild faces carry the
+    # identity contract + zero-loss counts proof.
+    al_p = subparsers.add_parser(
+        "authority-ledger",
+        help="FEAT-093 authority ledger: task identity contract (same-id "
+             "different-semantics writes REFUSED + audited) + append-only "
+             "event log + rebuildable plan-tracker projection (dry-run "
+             "first)",
+    )
+    authority_ledger.add_arguments(al_p)
+
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -27905,6 +27925,9 @@ def main(argv=None):
         "decision-append": cmd_decision_append,
         "baseline-register": cmd_baseline_register,
         "baseline-evaluate": cmd_baseline_evaluate,
+        # FEAT-093 (0.98.0): authority-ledger dispatch (identity contract +
+        # event log + projection rebuild; exit 0 ok / 1 FAIL verdict).
+        "authority-ledger": cmd_authority_ledger,
     }
 
     cmd = args.command or "verify"

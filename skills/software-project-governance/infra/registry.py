@@ -229,6 +229,11 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     "task_row_update",
     "governance_store",
     "baseline_metadata",
+    # FEAT-093 (0.98.0): the authority ledger handler — task identity
+    # contract + append-only event log + rebuildable plan-tracker
+    # projection; engine wires dispatch only (governance_cost pattern),
+    # stdlib-only at import time.
+    "authority_ledger",
 )
 """Closed declaration of loadable modules (§9.1 controlled loader whitelist).
 
@@ -265,6 +270,10 @@ class LoaderResolutionError(RegistryError):
 _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("agent-locks-acquire", "verify_workflow.cmd_agent_locks_acquire"),
     ("agent-runtime-e2e", "verify_workflow.cmd_agent_runtime_e2e"),
+    # FEAT-093 (0.98.0): the authority-ledger dispatch — task identity
+    # contract + append-only event log + rebuildable plan-tracker
+    # projection (engine wires dispatch only — governance_cost pattern).
+    ("authority-ledger", "authority_ledger.cmd_authority_ledger"),
     ("archguard-ratchet", "archguard_ratchet.cmd_archguard_ratchet"),
     # FEAT-055 (0.86.0 batch 2.0): the BaselineMetadata provenance writer
     # joins the dispatch face (batch-1 module, engine wires dispatch only —

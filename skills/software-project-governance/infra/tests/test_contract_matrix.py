@@ -99,7 +99,17 @@ from contract_matrix import generator as cmg  # noqa: E402
 # Segments unchanged at 73 (the guard rides Check 12 / check-cross-
 # references; no new banner); result_shapes and guard_output_pin faces
 # byte-stable (zero drift in the same regen).
-FROZEN_CLI_KEY_COUNT = 99
+# FEAT-093 (0.98.0 window, DEC-330): 99→100 keys — the authority-ledger
+# dispatch (task identity contract + append-only event log + rebuildable
+# plan-tracker projection; handler in authority_ledger.py, engine wires
+# dispatch only — governance_cost pattern). The same regen also absorbed
+# one PRE-EXISTING live-data drift in result_shapes
+# (check_governance_write_shapes deferred_observation.skip_kind NoneType
+# vs str): the committed snapshot predated the AUDIT-159 session's
+# governance rows (EVD-1359/1360), which flipped the deferred detector's
+# fired-hit state — disclosed as a make-up rider (the FIX-438 precedent),
+# not a FEAT-093 contract change. Segments unchanged at 73.
+FROZEN_CLI_KEY_COUNT = 100
 FROZEN_CHECK_SEGMENT_COUNT = 73
 
 

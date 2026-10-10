@@ -252,19 +252,22 @@ class ScanLimits:
     # FIX369SemanticBudgetRecalibrationTests in
     # infra/tests/test_loop_runtime_claims.py).  Recomputable formula:
     #   max_semantic_units = ceil(measured_peak x 1.2)
-    # measured_peak = 301602 semantic_units = the highest same-day
-    # check-loop-runtime-claims measurement on record (2026-09-20 +08:00:
-    # 300701 morning / 300913 ~17:4x / 301602 ~18:0x; working tree at commit
-    # 6e25753; payload 15,385,341B < the 32MiB payload budget), and 1.2 is
-    # the growth-margin factor from docs/planning/version-plan-0.87.0.md
-    # §3.1 (candidate A).  ceil(301602 x 1.2) = ceil(361922.4) = 361923.
-    # Derived pre-archive, so the M-8 evidence-log hot-face migration
-    # (~8920 units) only widens the headroom.  M-2 duty: re-measure at each
-    # release gate; before moving this constant again, re-derive it via the
-    # same formula and register the measurement provenance with
-    # verify_workflow.py baseline-register (gate check-31-semantic-units) —
-    # silent raises are forbidden.
-    max_semantic_units: int = 361923
+    # FIX-369 derivation: measured_peak = 301602 (2026-09-20 +08:00, commit
+    # 6e25753; payload 15,385,341B), ceil(301602 x 1.2) = 361923.
+    # FEAT-094 (v0.98.0) re-derivation — same formula, same discipline (the
+    # DEC-261 precedent for max_candidate_bytes: organic plugin growth
+    # FEAT-072..093 consumed the headroom to 361,217/361,923 = 99.8%, so any
+    # normal-sized batch tripped the cap; structurally exhausted, not a
+    # waiver): measured_peak = 361,949 semantic_units = the FEAT-094 final
+    # working tree INCLUDING this provenance rider (2026-10-10 +08:00;
+    # review trust chain +~728 net units after in-ticket dedup, payload
+    # 19,185,832B < the 32MiB payload budget); ceil(361949 x 1.2) =
+    # ceil(434338.8) = 434339.  M-2 duty:
+    # re-measure at each release gate; before moving this constant again,
+    # re-derive it via the same formula and register the measurement
+    # provenance with verify_workflow.py baseline-register (gate
+    # check-31-semantic-units) — silent raises are forbidden.
+    max_semantic_units: int = 434339
     max_semantic_payload_bytes: int = 32 * 1024 * 1024
 
 

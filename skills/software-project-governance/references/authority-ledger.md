@@ -2,6 +2,7 @@
 
 > schema 锚：`authority-ledger/1`（`infra/authority_ledger.py` 常量 `LEDGER_SCHEMA`）
 > 需求源：RPG 长程 session 实测同 ID 双语义 ×5 组 / 22 行僵尸「未开始」/ 计划执行双轨零对账（分析报告 §3.2；DEC-330 拆票，本票为 0.98「可信有界执行内核」首票）。
+> FEAT-094 审查可信链扩展见文末「审查可信链（FEAT-094）」节。
 
 ## 定位
 
@@ -61,3 +62,36 @@ python <plugin_home>/infra/verify_workflow.py authority-ledger rebuild  [--write
 ## 回滚
 
 `git revert` 单票 commit；开关关闭即回直写路径；账本事件日志为新增产物，随回滚移除或按 EVD 行说明保留。
+
+## 审查可信链（FEAT-094）
+
+> 需求源：RPG session 三实证（REV-009 审查锚定幻影修订〔untracked+并发重写〕/ REV-001+002 两条 R2 义务机录声明后蒸发 / REV-009-R2 机录 APPROVED vs 报告原文 NEEDS_CHANGE，分析报告 §3.5）。写入器：`infra/review_record.py`（`write_review_record` 五步事务）。
+
+**五步不可分割**（提交报告→验证结构与修订→登记发现→自动生成后续义务→更新状态）：`review_recorded` 事件与复审义务事件在**同一 `transact` 批**落账（validation atomicity + 单次顺序追加）；账本先提交、文件面（`review-{task}-R{n}.md` + evidence 行）后落，文件面中途失败对本事务新建的文件做补偿删除并披露已落账事务 id——不留半提交窗口。账本拒绝（撕裂尾/义务契约违反）→ 整笔事务拒绝，零写入（异常不隐藏）。
+
+**① 不可变快照绑定 + 报告哈希**（record 内 grep 锚字段，additive、对 Check 30/30c 锚定解析器惰性）：
+
+| 字段 | 语义 |
+|------|------|
+| `- report_sha256: <64hex>` | 被审报告**字节**哈希（重算可验证；报告在机录后被改写 ⇒ `verify_review_trust` 判 CONFLICT） |
+| `- snapshot_commit: <40hex \| git:unavailable>` | 记录时被审仓库 HEAD（诚实披露，git 不可用不伪造） |
+| `- snapshot_worktree: clean \| dirty(N) \| unavailable` | 记录时工作区洁净度披露（WIP 审查合法，仅披露绑定弱化） |
+| `- snapshot_bind: <path>=<40hex>` | `git hash-object` blob 钉扎（CLI `--bind-file` 可重复；**untracked 安全**——REV-009 幻影修订类的机器检测面） |
+
+evidence 行 artifacts 单元格携带短钉扎 `report_sha256=<12hex>; commit=<12hex|none>[; obligation=<id>]`（全哈希在 record）。复核 API：`review_record.verify_review_trust(review_file, repo_root)` → `CLEAN / CONFLICT / UNKNOWN / UNPINNED`（legacy 无钉记录=UNPINNED，**不**判 CONFLICT——兼容性设计；CONFLICT 处置=人工消解，禁乐观者胜出，禁改写 record 本身）。
+
+**② R2 义务自动生成且唯一可消解**：NEEDS_CHANGE 机录 ⇒ 同批自动登记 `recheck_obligation_registered`（`obligation_id=RECHECK-{task}-R{n+1}`，携带 `prev_report`/`created_by`/报告哈希/commit）。义务键单源：`authority_ledger.obligation_key`（fold 与写入器共用）。写入器义务契约（`_check_batch_obligations`，整批模拟折叠口径，与身份契约同款姿势）：已 OPEN 键的重复登记 ⇒ 整批拒绝（唯一）；无 OPEN 键的清除 ⇒ 整批拒绝（幻影清除）。**唯一消解路径**=该轮自身的审查事务（APPROVED/APPROVED_WITH_NOTES/NEEDS_CHANGE/BLOCKED 落地即同批清除本轮义务；NEEDS_CHANGE 同时滚动登记下一轮）或 Coordinator 显式 `recheck_obligation_cleared` 事件（人工逃生口，留痕）。追加式事件日志=义务**结构性不可蒸发**；`authority-ledger status` 的 `open_recheck_obligation_keys` 可 grep 未决义务清单。
+
+**③ CONFLICT 判定**：报告清晰携带裁决 token（`**APPROVED|APPROVED_WITH_NOTES|NEEDS_CHANGE|BLOCKED**` 粗体段或「审查结论：」行）而机录 claim 不在其中 ⇒ 拒绝（`code=conflict_report_vs_record`，零写入），处置路径=人工对齐两侧后重跑（禁自动取优）。豁免集 `{BLOCKED, ABORTED, UNKNOWN}`：BLOCKED 是 T2 round≥3 升级裁决（复审必达触发器语义不变——升级记录比报告更严是设计语义而非不一致）；ABORTED/UNKNOWN 是关于代理存活状态的 supervisor 事实，非对被审对象的裁决。无 token 的自由格式报告不参与判定（字节哈希钉扎仍生效）。
+
+**④/⑤ 死亡代理终态**：supervisor 以 `--result ABORTED|UNKNOWN [--abort-reason <文本>]` 记录代理死亡终态（record 内 `- abort_reason:` additive 字段）；终态不触发复审（非 NEEDS_CHANGE）且**不解除未决复审义务**——死亡不豁免该轮仍欠一个真实裁决；补审轮（通常另一位 reviewer，FIX-314 命名空间文件）落真实裁决时同批解除。Check 30 词表已含死亡终态（`_REVIEW_DEATH_TERMINALS`——可解析识别但非合法闭环态：未完成任务 → WARN re-spawn expected；标完成任务 → FAIL fail-closed；死亡终态 R+1 不解除复审必达期望，与账本义务语义一致）。
+
+**触发器语义零变化**（non_goal 硬约束）：T1/T2、round+1、`prev_report` 注入、`next_round` 字段与 summary 键逐字节兼容前置行为（`test_revisit_trigger_fields_byte_compatible` 看护）；本节只加可信绑定。历史 review-record 不回填（provenance 诚实，仅新记录生效）。
+
+**CLI**（全部新参数可选，向后兼容）：
+
+```
+python <plugin_home>/infra/verify_workflow.py review-record --task {id} --round {n} \
+  --result {APPROVED|APPROVED_WITH_NOTES|NEEDS_CHANGE|BLOCKED|ABORTED|UNKNOWN} \
+  --report {报告路径} [--reviewer {名称}] [--bind-file {被审文件}]... [--abort-reason {文本}]
+```

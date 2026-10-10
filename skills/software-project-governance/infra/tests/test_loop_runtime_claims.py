@@ -2025,13 +2025,18 @@ class FIX369SemanticBudgetRecalibrationTests(unittest.TestCase):
         # Recomputable derivation (provenance block in
         # checks/loop_runtime_claims.py): ceil(301602 measured peak x 1.2
         # margin) = 361923, recorded 2026-09-20 (+08:00) at commit 6e25753.
+        # FEAT-094 (v0.98.0) re-derivation, same formula/discipline (the
+        # DEC-261 precedent: organic growth FEAT-072..093 consumed the
+        # FIX-369 headroom to 361,217/361,923 = 99.8% pre-FEAT-094 —
+        # structurally exhausted): measured 361,949 (FEAT-094 final tree
+        # incl. this rider, 2026-10-10 +08:00), ceil(361949 x 1.2) = 434339.
         # A budget edit that skips this derivation fails here — silent
         # raises are the drift failure mode review-REL-084-DESIGN BA-1
         # names.
         import math
 
-        self.assertEqual(361923, ScanLimits().max_semantic_units)
-        self.assertEqual(361923, math.ceil(301602 * 1.2))
+        self.assertEqual(434339, ScanLimits().max_semantic_units)
+        self.assertEqual(434339, math.ceil(361949 * 1.2))
 
     def test_recalibrated_budget_still_fail_closes_on_excess(self):
         # The recalibrated default is a hard limit, not a waiver: a fixture

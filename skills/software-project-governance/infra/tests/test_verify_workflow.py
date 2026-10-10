@@ -25934,5 +25934,551 @@ class FEAT093AuthorityLedgerReworkR0Tests(unittest.TestCase):
         self.assertEqual(bad["source"], "plan-tracker")
 
 
+class FEAT094ReviewTrustChainTests(unittest.TestCase):
+    """FEAT-094 — 审查可信链: the five-step indivisible review transaction.
+
+    The RPG long-haul session's three trust failures (report §3.5) are the
+    RED shapes these tests pin GREEN:
+
+    * REV-009 phantom revision — the reviewed object was untracked +
+      concurrently rewritten; now every record pins the report's byte
+      sha256 + the HEAD commit + optional git hash-object blob pins, and a
+      post-record rewrite is machine-detected (verify_review_trust).
+    * REV-001/002 evaporating R2 obligations — a NEEDS_CHANGE machine
+      record declared a revisit that then vanished; now the R2 obligation
+      registers in the SAME authority-ledger transact batch as the review
+      event (atomic, append-only — evaporation structurally impossible)
+      and is uniquely dischargable (duplicate open registrations and
+      phantom clears refused at the writer).
+    * REV-009-R2 optimistic divergence — the machine record said APPROVED
+      while the report's own text said NEEDS_CHANGE; now that write is
+      REFUSED (CONFLICT, manual disposition; supervisor escalation states
+      BLOCKED/ABORTED/UNKNOWN exempt — 复审必达 T1/T2 semantics unchanged).
+
+    Agent death (⑤): the supervisor records ABORTED/UNKNOWN terminal
+    records; death never discharges an open recheck obligation.
+
+    Run (from repo root):
+        python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v -k FEAT094
+    """
+
+    _R0_ID = "REVIEW-FEAT-094-R0"
+    _R0_FILE = "review-FEAT-094-R0.md"
+    _R1_KEY = "RECHECK-FEAT-094-R1"
+    _NC = "# r\n\n**NEEDS_CHANGE**\n"
+
+    def _git_repo(self, prefix):
+        """A temp dir that IS a one-commit git repo (real SHAs to pin)."""
+        td = Path(tempfile.gettempdir()) / (
+            prefix + uuid.uuid4().hex[:12])
+        td.mkdir()
+        (Path(td) / "seed.txt").write_text("seed\n", encoding="utf-8")
+        for argv in (
+            ["init", "--quiet"],
+            ["add", "-A"],
+            ["-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "--quiet", "-m", "init"],
+        ):
+            subprocess.run(["git", "-C", str(td), *argv],
+                           capture_output=True, timeout=30, check=True)
+        return td
+
+    def _gov(self, root):
+        return Path(root) / ".governance"
+
+    def _read(self, root, name):
+        return (self._gov(root) / name).read_text(encoding="utf-8")
+
+    def _write(self, root, *, result="APPROVED", report_text="# report\n",
+               task="FEAT-094", round_n=0, reviewer=None, bind_files=(),
+               abort_reason=None, report_name="report.md", force=False):
+        import review_record
+        report = Path(root) / report_name
+        report.write_text(report_text, encoding="utf-8")
+        return review_record.write_review_record(
+            task_id=task, round_n=round_n, result=result,
+            report_path=str(report), reviewer=reviewer,
+            bind_files=bind_files, abort_reason=abort_reason,
+            root=root, force=force)
+
+    def _ledger_events(self, root):
+        events_path = (self._gov(root) / "authority-ledger" /
+                       "events.jsonl")
+        self.assertTrue(events_path.is_file(),
+                        "the review transaction must land ledger events")
+        lines = [ln for ln in
+                 events_path.read_text(encoding="utf-8").splitlines()
+                 if ln.strip()]
+        return [json.loads(ln) for ln in lines]
+
+    # ── 验收①: snapshot binding + report hash fields ─────────────────────
+
+    def test_acceptance1_report_hash_and_snapshot_fields(self):
+        import hashlib
+        import review_record
+        td = self._git_repo("feat094-pin-")
+        try:
+            report = Path(td) / "report.md"
+            report.write_text("# 审查报告\n正文\n", encoding="utf-8")
+            # commit the report so the worktree face is CLEAN at record
+            # time (the dirty face has its own test below)
+            subprocess.run(
+                ["git", "-C", str(td), "add", "report.md"],
+                capture_output=True, timeout=30, check=True)
+            subprocess.run(
+                ["git", "-C", str(td), "-c", "user.email=t@t",
+                 "-c", "user.name=t", "commit", "--quiet", "-m", "report"],
+                capture_output=True, timeout=30, check=True)
+            summary = review_record.write_review_record(
+                task_id="FEAT-094", round_n=0, result="APPROVED",
+                report_path=str(report), reviewer="Code Reviewer",
+                root=td)
+            self.assertFalse(summary.get("error"), summary)
+            expected_sha = hashlib.sha256(
+                report.read_bytes()).hexdigest()
+            # the record pins the report's BYTES (recomputable, no trust me)
+            record_text = self._read(td, self._R0_FILE)
+            self.assertIn("- report_sha256: {0}".format(expected_sha),
+                          record_text)
+            self.assertRegex(record_text,
+                             r"(?m)^- snapshot_commit: [0-9a-f]{40}$")
+            self.assertIn("- snapshot_worktree: clean", record_text)
+            # summary face + evidence row carry the same pins (grep-able)
+            self.assertEqual(summary["trust"]["report_sha256"], expected_sha)
+            self.assertEqual(summary["trust"]["commit_status"], "resolved")
+            row = self._read(td, "evidence-log.md")
+            self.assertIn("report_sha256={0}".format(expected_sha[:12]), row)
+            # and the whole record re-verifies CLEAN against the repo
+            face = review_record.verify_review_trust(
+                self._gov(td) / self._R0_FILE, repo_root=td)
+            self.assertEqual(face["verdict"], "CLEAN", face)
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    def test_acceptance1_untracked_bind_detects_concurrent_rewrite(self):
+        # REV-009 shape: the reviewed object was UNTRACKED and rewritten
+        # underneath the review — the blob pin makes the drift detectable.
+        import review_record
+        td = self._git_repo("feat094-phantom-")
+        try:
+            target = Path(td) / "reviewed_module.py"
+            target.write_text("def api():\n    return 1\n",
+                              encoding="utf-8")  # untracked
+            report = Path(td) / "report.md"
+            report.write_text("# report\n", encoding="utf-8")
+            summary = review_record.write_review_record(
+                task_id="FEAT-094", round_n=0, result="APPROVED",
+                report_path=str(report), reviewer="Code Reviewer",
+                bind_files=[str(target)], root=td)
+            self.assertFalse(summary.get("error"), summary)
+            self.assertEqual(len(summary["trust"]["bindings"]), 1)
+            self.assertRegex(summary["trust"]["bindings"][0]["hash"],
+                             r"^[0-9a-f]{40}$")
+            record = self._gov(td) / self._R0_FILE
+            self.assertEqual(
+                review_record.verify_review_trust(record, repo_root=td)
+                ["verdict"], "CLEAN")
+            # the concurrent rewrite: same path, different bytes
+            target.write_text("def api():\n    return 2  # rewritten\n",
+                              encoding="utf-8")
+            face = review_record.verify_review_trust(record, repo_root=td)
+            self.assertEqual(face["verdict"], "CONFLICT", face)
+            drifted = [c for c in face["checks"]
+                       if c["check"] == "snapshot_bind"]
+            self.assertEqual(drifted[0]["state"], "mismatch", face)
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+    def test_acceptance1_worktree_dirt_disclosed_and_git_unavailable_honest(self):
+        td = self._git_repo("feat094-dirty-")
+        try:
+            (Path(td) / "wip.txt").write_text("work in progress\n",
+                                              encoding="utf-8")
+            summary = self._write(td, result="APPROVED")
+            self.assertFalse(summary.get("error"), summary)
+            self.assertTrue(summary["trust"]["worktree"].startswith(
+                "dirty("), summary["trust"])
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+        # non-git dir: binding fields stay honest (never a fabricated hash)
+        with _governance_temp_dir(prefix="feat094-nogit-") as nd:
+            summary = self._write(Path(nd), result="APPROVED")
+            self.assertFalse(summary.get("error"), summary)
+            self.assertEqual(summary["trust"]["commit"], "git:unavailable")
+            self.assertEqual(summary["trust"]["commit_status"], "unavailable")
+            self.assertEqual(summary["trust"]["worktree"], "unavailable")
+            record_text = self._read(nd, self._R0_FILE)
+            self.assertIn("- snapshot_commit: git:unavailable",
+                          record_text)
+
+    # ── 验收③: CONFLICT determination + manual disposition ───────────────
+
+    def test_acceptance3_conflict_refused_nothing_written(self):
+        # REV-009-R2 shape: report's own text says NEEDS_CHANGE, the claim
+        # says APPROVED — refused (禁乐观者胜出), zero partial writes.
+        import review_record
+        with _governance_temp_dir(prefix="feat094-conflict-") as td:
+            report = Path(td) / "report.md"
+            report.write_text(
+                "# report\n\n**NEEDS_CHANGE** — 问题清单…\n",
+                encoding="utf-8")
+            summary = review_record.write_review_record(
+                task_id="FEAT-094", round_n=0, result="APPROVED",
+                report_path=str(report), reviewer="Code Reviewer",
+                root=td)
+            self.assertIn("error", summary)
+            self.assertEqual(summary.get("code"), "conflict_report_vs_record")
+            self.assertEqual(summary["conflict"]["report_verdicts"],
+                             ["NEEDS_CHANGE"])
+            self.assertIn("Disposition (manual)", summary["error"])
+            # NOTHING written: no record file, no evidence row, no ledger
+            gov = self._gov(td)
+            self.assertFalse((gov / self._R0_FILE).exists())
+            self.assertFalse((gov / "evidence-log.md").exists())
+            self.assertFalse((gov / "authority-ledger").exists())
+
+    def test_acceptance3_supervisor_escalation_states_exempt(self):
+        # T2 semantics preserved (non_goal guard): BLOCKED over a
+        # NEEDS_CHANGE report (round≥3 escalation) still lands; ditto
+        # ABORTED (agent death) — escalations are not inconsistencies.
+        with _governance_temp_dir(prefix="feat094-t2-") as td:
+            blocked = self._write(
+                td, result="BLOCKED",
+                report_text="# r\n\n**NEEDS_CHANGE** — 需修订\n")
+            self.assertFalse(blocked.get("error"), blocked)
+            self.assertFalse(blocked["revisit_required"])
+            aborted = self._write(
+                td, result="ABORTED", report_name="report2.md",
+                report_text="# r2\n\n**NEEDS_CHANGE** — 中途死亡\n",
+                reviewer="Supervisor", round_n=1,
+                abort_reason="reviewer agent died mid-round")
+            self.assertFalse(aborted.get("error"), aborted)
+            record_text = self._read(td, "review-FEAT-094-R1.md")
+            self.assertIn("**审查结论**: **ABORTED**", record_text)
+            self.assertIn("- abort_reason: reviewer agent died mid-round",
+                          record_text)
+            # abort_reason is rejected outside the terminal states
+            bad = self._write(td, result="APPROVED", report_name="r3.md",
+                              abort_reason="not allowed")
+            self.assertIn("error", bad)
+
+    # ── 验收②: R2 obligation — atomic, unique, uniquely dischargable ─────
+
+    def test_acceptance2_needs_change_registers_r2_obligation_atomically(self):
+        import authority_ledger as al
+        with _governance_temp_dir(prefix="feat094-r2-") as td:
+            summary = self._write(td, result="NEEDS_CHANGE",
+                                  report_text=self._NC)
+            self.assertFalse(summary.get("error"), summary)
+            events = self._ledger_events(td)
+            review_ev = [e for e in events
+                         if e["kind"] == "review_recorded"]
+            oblig_ev = [e for e in events
+                        if e["kind"] == "recheck_obligation_registered"]
+            self.assertEqual(len(review_ev), 1)
+            self.assertEqual(len(oblig_ev), 1)
+            # ATOMICITY: both events share ONE transaction id
+            self.assertEqual(review_ev[0]["transaction_id"],
+                             oblig_ev[0]["transaction_id"])
+            self.assertEqual(oblig_ev[0]["payload"]["obligation_id"],
+                             self._R1_KEY)
+            self.assertEqual(oblig_ev[0]["payload"]["created_by"],
+                             self._R0_ID)
+            # durable + readable: a fresh writer fold keeps it open
+            w = al.LedgerWriter(self._gov(td))
+            self.assertEqual(
+                [al.obligation_key(i) for i in
+                 w.state["open_recheck_obligations"]],
+                [self._R1_KEY])
+            # summary + evidence row disclose the obligation (grep-able)
+            self.assertEqual(summary["obligations"],
+                             [{"id": self._R1_KEY,
+                               "state": "registered",
+                               "by": self._R0_ID}])
+            row = self._read(td, "evidence-log.md")
+            self.assertIn("obligation={0}".format(self._R1_KEY), row)
+
+    def test_acceptance2_duplicate_open_obligation_refused_and_retry_converges(self):
+        # 唯一: the writer refuses a duplicate OPEN registration; a retry
+        # of the whole review transaction (the crash-recovery shape)
+        # converges on already_open without a second registration event.
+        import authority_ledger as al
+        with _governance_temp_dir(prefix="feat094-dup-") as td:
+            gov = self._gov(td)
+            gov.mkdir(parents=True, exist_ok=True)
+            w = al.LedgerWriter(gov)
+            w.record_event("recheck_obligation_registered", {
+                "task_id": "FEAT-094",
+                "obligation_id": self._R1_KEY})
+            with self.assertRaises(al.LedgerError) as dup:
+                w.record_event("recheck_obligation_registered", {
+                    "task_id": "FEAT-094",
+                    "obligation_id": self._R1_KEY})
+            self.assertIn("duplicate", str(dup.exception))
+            with self.assertRaises(al.LedgerError) as phantom:
+                w.record_event("recheck_obligation_cleared", {
+                    "task_id": "FEAT-094",
+                    "obligation_id": "RECHECK-FEAT-094-R9"})
+            self.assertIn("phantom", str(phantom.exception))
+            # the whole-batch posture: one bad obligation event refuses
+            # the entire batch (no partial transaction)
+            events_before = len(w.events)
+            with self.assertRaises(al.LedgerError):
+                w.transact([
+                    ("review_recorded", {"review_id": "REVIEW-FEAT-094-R2",
+                                         "task_id": "FEAT-094",
+                                         "verdict": "APPROVED"}),
+                    ("recheck_obligation_registered", {
+                        "task_id": "FEAT-094",
+                        "obligation_id": self._R1_KEY}),
+                ])
+            self.assertEqual(len(w.events), events_before)
+            # retry convergence through the review writer itself
+            first = self._write(td, result="NEEDS_CHANGE",
+                                report_text=self._NC)
+            self.assertFalse(first.get("error"), first)
+            retry = self._write(td, result="NEEDS_CHANGE",
+                                report_text=self._NC, force=True)
+            self.assertFalse(retry.get("error"), retry)
+            self.assertEqual(
+                retry["obligations"],
+                [{"id": self._R1_KEY, "state": "already_open",
+                  "by": self._R0_ID}])
+            registered = [e for e in self._ledger_events(td)
+                          if e["kind"] == "recheck_obligation_registered"]
+            self.assertEqual(len(registered), 1)
+
+    def test_acceptance2_obligation_cleared_by_discharging_round(self):
+        # 唯一可消解: the ONLY discharger is the discharging round's own
+        # review transaction (R1's verdict clears RECHECK-R1 in the SAME
+        # batch as R1's review_recorded event).
+        with _governance_temp_dir(prefix="feat094-clear-") as td:
+            self.assertFalse(
+                self._write(td, result="NEEDS_CHANGE",
+                            report_text="# r0\n\n**NEEDS_CHANGE**\n")
+                .get("error"))
+            r1 = self._write(td, result="APPROVED", round_n=1,
+                             report_name="r1.md",
+                             report_text="# r1\n\n**APPROVED**\n")
+            self.assertFalse(r1.get("error"), r1)
+            self.assertEqual(r1["obligations"],
+                             [{"id": self._R1_KEY,
+                               "state": "cleared",
+                               "by": "REVIEW-FEAT-094-R1"}])
+            events = self._ledger_events(td)
+            r1_review = [e for e in events
+                         if e["kind"] == "review_recorded"
+                         and e["payload"]["round"] == 1][0]
+            cleared = [e for e in events
+                       if e["kind"] == "recheck_obligation_cleared"][0]
+            self.assertEqual(r1_review["transaction_id"],
+                             cleared["transaction_id"])
+            import authority_ledger as al
+            w = al.LedgerWriter(self._gov(td))
+            self.assertEqual(w.state["open_recheck_obligations"], [])
+            # a NEEDS_CHANGE chain rolls the obligation forward: R1 NC
+            # clears R1's and opens R2's in one batch
+            self._write(td, result="NEEDS_CHANGE", round_n=0, force=True,
+                        report_name="nc0.md",
+                        report_text="# nc0\n\n**NEEDS_CHANGE**\n")
+            nc1 = self._write(td, result="NEEDS_CHANGE", round_n=1,
+                              report_name="nc1.md", force=True,
+                              report_text="# nc1\n\n**NEEDS_CHANGE**\n")
+            self.assertFalse(nc1.get("error"), nc1)
+            states = {(o["id"], o["state"]) for o in nc1["obligations"]}
+            self.assertIn((self._R1_KEY, "cleared"), states)
+            self.assertIn(("RECHECK-FEAT-094-R2", "registered"), states)
+
+    # ── 验收④(½) + ⑤: ABORTED terminal records + death not discharging ──
+
+    def test_acceptance5_aborted_does_not_discharge_obligation(self):
+        # agent death at R1 leaves the R1 obligation OPEN (the round still
+        # owes a real verdict); the redo round's verdict discharges it.
+        with _governance_temp_dir(prefix="feat094-abort-") as td:
+            self.assertFalse(
+                self._write(td, result="NEEDS_CHANGE",
+                            report_text=self._NC)
+                .get("error"))
+            aborted = self._write(
+                td, result="ABORTED", round_n=1, reviewer="Dead Agent",
+                report_name="dead.md",
+                report_text="# partial\n\n(no conclusion reached)\n",
+                abort_reason="agent died mid-review")
+            self.assertFalse(aborted.get("error"), aborted)
+            self.assertEqual(aborted["obligations"], [])
+            import authority_ledger as al
+            w = al.LedgerWriter(self._gov(td))
+            self.assertEqual(
+                [al.obligation_key(i) for i in
+                 w.state["open_recheck_obligations"]],
+                [self._R1_KEY])  # death ≠ discharge
+            # the redo: a DIFFERENT reviewer completes R1 (namespaced file)
+            redo = self._write(
+                td, result="APPROVED", round_n=1, reviewer="Relief Agent",
+                report_name="redo.md",
+                report_text="# redo\n\n**APPROVED**\n")
+            self.assertFalse(redo.get("error"), redo)
+            self.assertEqual(redo["obligations"],
+                             [{"id": self._R1_KEY,
+                               "state": "cleared",
+                               "by": "REVIEW-FEAT-094-R1-RELIEF-AGENT"}])
+            w2 = al.LedgerWriter(self._gov(td))
+            self.assertEqual(w2.state["open_recheck_obligations"], [])
+
+    # ── trust verification faces (tamper detection / legacy honesty) ─────
+
+    def test_verify_trust_tamper_and_legacy_faces(self):
+        import review_record
+        with _governance_temp_dir(prefix="feat094-verify-") as td:
+            report = Path(td) / "report.md"
+            report.write_text("# original report\n", encoding="utf-8")
+            review_record.write_review_record(
+                task_id="FEAT-094", round_n=0, result="APPROVED",
+                report_path=str(report), root=td)
+            record = self._gov(td) / self._R0_FILE
+            # CLEAN while the bytes match the pin
+            self.assertEqual(
+                review_record.verify_review_trust(record, repo_root=td)
+                ["verdict"], "CLEAN")
+            # report rewritten AFTER the record → CONFLICT (manual
+            # disposition; the record itself is never edited)
+            report.write_text("# tampered report\n", encoding="utf-8")
+            face = review_record.verify_review_trust(record, repo_root=td)
+            self.assertEqual(face["verdict"], "CONFLICT", face)
+            mismatch = [c for c in face["checks"]
+                        if c["check"] == "report_sha256"]
+            self.assertEqual(mismatch[0]["state"], "mismatch")
+            # a legacy pre-FEAT-094 record (no pins) is UNPINNED — not a
+            # conflict by design (assumption_record compatibility)
+            legacy = self._gov(td) / "review-FEAT-095-R0.md"
+            legacy.write_text(
+                "# Review Record (machine-written by review-record)\n\n"
+                "- task: FEAT-095\n- round: R0\n- date: 2026-10-10\n"
+                "- report: gone.md\n\n**审查结论**: **APPROVED**\n",
+                encoding="utf-8")
+            legacy_face = review_record.verify_review_trust(legacy)
+            self.assertEqual(legacy_face["verdict"], "UNPINNED")
+
+    # ── fail-closed: broken ledger refuses new review transactions ──────
+
+    def test_torn_ledger_tail_refuses_whole_transaction(self):
+        # 异常不隐藏: a torn event log refuses NEW review transactions
+        # (structured error, nothing written) until adjudicated.
+        with _governance_temp_dir(prefix="feat094-torn-") as td:
+            self.assertFalse(
+                self._write(td, result="APPROVED").get("error"))
+            events_path = (self._gov(td) / "authority-ledger" /
+                           "events.jsonl")
+            with open(events_path, "a", encoding="utf-8") as fh:
+                fh.write('{"seq": 99, "kind": "review_record')
+            refused = self._write(td, result="APPROVED", round_n=1,
+                                  report_name="r1.md")
+            self.assertIn("error", refused)
+            self.assertEqual(refused.get("code"), "ledger_refused")
+            self.assertFalse((self._gov(td) /
+                              "review-FEAT-094-R1.md").exists())
+
+    # ── five-step atomicity: no half-commit window on the file pair ─────
+
+    def test_row_failure_compensates_fresh_review_file(self):
+        # a crash between the review file and the evidence row is
+        # compensated for a file THIS transaction created (unlinked again,
+        # error discloses the durable ledger transaction).
+        with _governance_temp_dir(prefix="feat094-comp-") as td:
+            gov = self._gov(td)
+            gov.mkdir(parents=True, exist_ok=True)
+            (gov / "evidence-log.md").mkdir()  # append will raise OSError
+            summary = self._write(td, result="NEEDS_CHANGE",
+                                  report_text=self._NC)
+            self.assertIn("error", summary)
+            self.assertEqual(summary.get("code"), "evidence_row_unwritable")
+            self.assertFalse((gov / self._R0_FILE).exists())
+            self.assertIn("ledger", summary)  # durable events disclosed
+            # the durable obligation survives for the retry to converge on
+            import authority_ledger as al
+            w = al.LedgerWriter(gov)
+            self.assertEqual(
+                [al.obligation_key(i) for i in
+                 w.state["open_recheck_obligations"]],
+                [self._R1_KEY])
+
+    # ── hard gate 4: 复审必达 trigger semantics unchanged ────────────────
+
+    def test_revisit_trigger_fields_byte_compatible(self):
+        # T1 unchanged: NEEDS_CHANGE keeps next_round=REVIEW-{task}-R{n+1}
+        # + prev_report (record fields AND summary keys) — only trust
+        # binding was added around them, never trigger semantics.
+        with _governance_temp_dir(prefix="feat094-t1-") as td:
+            summary = self._write(td, result="NEEDS_CHANGE",
+                                  report_text=self._NC)
+            self.assertFalse(summary.get("error"), summary)
+            self.assertTrue(summary["revisit_required"])
+            self.assertEqual(summary["next_round"], "REVIEW-FEAT-094-R1")
+            report_path = (Path(td) / "report.md")
+            self.assertEqual(summary["prev_report"], str(report_path))
+            record_text = self._read(td, self._R0_FILE)
+            self.assertIn("## 复审必达（NEEDS_CHANGE）", record_text)
+            self.assertIn("- next_round: REVIEW-FEAT-094-R1", record_text)
+            self.assertIn("- prev_report: {0}".format(report_path),
+                          record_text)
+
+    # ── P2-1 (review R0 prescription): death terminals in Check 30 ──────
+
+    def test_p2_1_death_terminals_check30_warn_and_fail_directions(self):
+        # ABORTED/UNKNOWN join Check 30's RECOGNIZED vocabulary (honest
+        # labels) but NOT the legal-closure set — two directions: an
+        # aborted review on an UNCOMPLETED task expects a re-spawn (WARN),
+        # the same terminal on a COMPLETED task is a broken chain (FAIL).
+        entry = {"id": "REVIEW-FEAT-094-R0", "task_ref": "FEAT-094",
+                 "conclusion": "ABORTED", "date": "2026-10-10"}
+        uncompleted = vw.check_review_closure(
+            review_sequence=[dict(entry)], plan_tracker_completed={})
+        self.assertEqual([v for v in uncompleted["violations"]
+                          if v.get("task_id") == "FEAT-094"], [])
+        warn = [w for w in uncompleted["warnings"]
+                if w.get("task_id") == "FEAT-094" and w["rule"] == "V1"]
+        self.assertEqual(len(warn), 1, uncompleted["warnings"])
+        self.assertIn("R0=ABORTED non-terminal", warn[0]["reason"])
+        self.assertIn("re-spawn expected", warn[0]["reason"])
+        completed = vw.check_review_closure(
+            review_sequence=[dict(entry)],
+            plan_tracker_completed={"FEAT-094": True})
+        viol = [v for v in completed["violations"]
+                if v.get("task_id") == "FEAT-094" and v["rule"] == "V1"]
+        self.assertEqual(len(viol), 1, completed["violations"])
+        self.assertIn("marked completed", viol[0]["reason"])
+        # parse honesty: an explicit conclusion line carries the real
+        # label, while the bare-token fallback stays CLOSED to death
+        # words (prose "aborted"/"unknown" never fabricates one)
+        from checks import review_domain as rd
+        self.assertEqual(
+            rd._extract_review_conclusion_from_text(
+                "**审查结论**: **ABORTED**"), "ABORTED")
+        self.assertEqual(
+            rd._normalize_review_conclusion("aborted"), "ABORTED")
+        self.assertEqual(
+            rd._extract_review_conclusion_from_text(
+                "the reviewer aborted; outcome unknown"),
+            "UNKNOWN")
+
+    # ── quality budget (performance): wall-clock guard on the write ──────
+
+    def test_transaction_write_wall_clock_guard(self):
+        # low-frequency op, no hard gate — a generous ceiling guarding
+        # against accidental O(n) blowups in the hash/ledger path (the
+        # measured value lands in the EVD line; non-repo dir = zero git
+        # subprocesses on the happy path).
+        import time as _time_mod
+        with _governance_temp_dir(prefix="feat094-perf-") as td:
+            t0 = _time_mod.perf_counter()
+            summary = self._write(td, result="NEEDS_CHANGE",
+                                  report_text=self._NC)
+            elapsed = _time_mod.perf_counter() - t0
+        self.assertFalse(summary.get("error"), summary)
+        self.assertLess(elapsed, 2.0,
+                        "review transaction wall clock blew the guard: "
+                        "{0:.2f}s".format(elapsed))
+
+
 if __name__ == "__main__":
     unittest.main()

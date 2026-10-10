@@ -238,6 +238,20 @@ def new_transaction_id() -> str:
     return "txn-" + uuid.uuid4().hex
 
 
+def obligation_key(payload: dict) -> str:
+    """FEAT-094 — the SINGLE definition of a recheck-obligation's identity
+    key (anti-drift: fold_state, the batch contract check and the
+    review-record writer all consume this one function).
+
+    ``obligation_id`` when present (the FEAT-094 canonical shape,
+    ``RECHECK-{task}-R{n}`` — the round whose verdict creates it); the bare
+    ``task_id`` otherwise (the FEAT-093 legacy payload shape, kept readable
+    so pre-FEAT-094 events fold under the same keying they were written
+    with).
+    """
+    return payload.get("obligation_id") or payload.get("task_id") or ""
+
+
 # ── physical carrier ────────────────────────────────────────────────────────
 
 
@@ -451,10 +465,15 @@ def fold_state(events):
             reviews.append(dict(payload,
                                 _seq=event.get("seq")))
         elif kind == "recheck_obligation_registered":
-            recheck_open[payload["task_id"]] = dict(
+            # FEAT-094: keyed by the single-source obligation key — an
+            # obligation is UNIQUELY identifiable (唯一可消解) and never
+            # silently overwritten by a same-key re-registration (the
+            # writer's batch contract refuses duplicates; the fold keeps
+            # the last-wins read face only for direct raw appends).
+            recheck_open[obligation_key(payload)] = dict(
                 payload, _seq=event.get("seq"))
         elif kind == "recheck_obligation_cleared":
-            recheck_open.pop(payload["task_id"], None)
+            recheck_open.pop(obligation_key(payload), None)
         elif kind == "goal_budget_recorded":
             goal_budgets.append(dict(payload, _seq=event.get("seq")))
         elif kind in ("historical_identity_conflict",
@@ -587,6 +606,13 @@ class LedgerWriter:
         # fold): a violation refuses the ENTIRE batch before any byte is
         # appended.
         self._check_batch_identity(batch)
+        # FEAT-094 obligation-contract pre-check (same whole-batch
+        # posture): duplicate OPEN registrations and phantom clears refuse
+        # the entire batch — an R2 recheck obligation cannot be
+        # double-registered (唯一) nor cleared by a phantom key (可消解
+        # has exactly one legal discharger: the round's own review
+        # transaction).
+        self._check_batch_obligations(batch)
         transaction_id = new_transaction_id()
         seq = self.integrity["last_seq"]
         prev_hash = self.integrity["last_event_hash"]
@@ -688,6 +714,58 @@ class LedgerWriter:
                         "unregistered task_id {0} — orphan state event "
                         "refused (register the identity first; "
                         "`migrate --write` seeds the history)".format(tid))
+
+    def _check_batch_obligations(self, batch):
+        """FEAT-094 — obligation-contract validation over the WHOLE batch.
+
+        Mirrors :meth:`_check_batch_identity`'s simulated-fold posture
+        (same style, deliberately NOT merged into it: the identity face
+        and the obligation face are separate contracts with separate
+        refusal semantics).  Starts from the writer's folded OPEN
+        obligations and applies the batch's registrations/clears in
+        order, so intra-batch events are validated against what earlier
+        events in the SAME batch established:
+
+        * ``recheck_obligation_registered`` for a key that is already
+          OPEN (folded state or earlier in this batch) ⇒ the whole batch
+          is refused — a recheck obligation is registered at most once
+          (唯一: the RPG "R2 义务蒸发后重建" class cannot double-track);
+        * ``recheck_obligation_cleared`` for a key that is NOT open ⇒
+          the whole batch is refused — a phantom clear (the
+          task_state_changed orphan class) can never silently satisfy an
+          obligation that does not exist.
+
+        Keying is the single-source :func:`obligation_key`.
+        """
+        open_keys = {
+            obligation_key(item) for item in
+            self.state.get("open_recheck_obligations", ())}
+        for kind, payload in batch:
+            if kind == "recheck_obligation_registered":
+                key = obligation_key(payload)
+                if not key:
+                    raise LedgerError(
+                        "obligation_contract: recheck_obligation_registered "
+                        "payload carries no obligation key (obligation_id / "
+                        "task_id)")
+                if key in open_keys:
+                    raise LedgerError(
+                        "obligation_contract: recheck obligation {0} is "
+                        "already OPEN — duplicate registration refused "
+                        "(FEAT-094 唯一可消解: one open obligation per key; "
+                        "discharge it via the round's review transaction or "
+                        "an explicit recheck_obligation_cleared event "
+                        "first)".format(key))
+                open_keys.add(key)
+            elif kind == "recheck_obligation_cleared":
+                key = obligation_key(payload)
+                if key not in open_keys:
+                    raise LedgerError(
+                        "obligation_contract: recheck_obligation_cleared "
+                        "for {0!r} but no such obligation is OPEN — phantom "
+                        "clear refused (the obligation must be registered "
+                        "first)".format(key))
+                open_keys.discard(key)
 
     def _refuse_identity_conflict(self, task_id, existing_anchor, payload):
         """Land the refusal's audit event, then raise — NO business event
@@ -1435,6 +1513,12 @@ def status(governance_dir, *, plan_tracker=None):
         "counts": _fold_counts_facets(state),
         "open_recheck_obligations": len(
             state["open_recheck_obligations"]),
+        # FEAT-094: grep-able open-obligation keys (the evaporating-R2
+        # face — a Coordinator can list exactly which recheck rounds are
+        # still owed; additive key, absent obligations → empty list).
+        "open_recheck_obligation_keys": [
+            obligation_key(item) for item in
+            state["open_recheck_obligations"]],
         "snapshot": snapshot_face,
     }
 

@@ -1553,6 +1553,14 @@ REVIEW_MAX_ROUNDS = 3  # behavior-protocol.md M7.4 step 4.6 (C3) fuse.
 _REVIEW_APPROVAL_CONCLUSIONS = ("APPROVED", "APPROVED_WITH_NOTES")
 _REVIEW_TERMINAL_CONCLUSIONS = (*_REVIEW_APPROVAL_CONCLUSIONS, "BLOCKED")
 _REVIEW_NON_TERMINAL_ALIASES = {"NEEDS_CHANGES": "NEEDS_CHANGE"}
+# FEAT-094 (review R0 P2-1 prescription): supervisor-recorded agent-death
+# terminal states — RECOGNIZED conclusions (the parse vocabulary) that are
+# NOT legal closure states: the round still owes a real verdict, so V1
+# keeps the non-terminal arm (task not completed → WARN "re-spawn
+# expected"; task marked completed → FAIL, fail-closed) and a
+# death-terminal R+1 never discharges the 复审必达 revisit expectation
+# (same principle as the UNKNOWN-conclusion record, see _index_record).
+_REVIEW_DEATH_TERMINALS = ("ABORTED", "UNKNOWN")
 
 _UNRESOLVED_BLOCKERS_KEY_RE = re.compile(
     r"(?<![A-Za-z0-9_])unresolved_blockers(?![A-Za-z0-9_])",
@@ -1628,22 +1636,37 @@ def _review_revisit_window_hours():
 
 
 def _normalize_review_conclusion(value):
-    """Return a recognized review state, normalizing only plural NEEDS_CHANGE."""
+    """Return a recognized review state, normalizing only plural NEEDS_CHANGE.
+
+    FEAT-094: the recognized vocabulary includes the agent-death terminal
+    states (ABORTED/UNKNOWN) — recognized for PARSING, deliberately NOT
+    legal closure states (see _REVIEW_DEATH_TERMINALS).
+    """
     _resolve_shared()
     normalized = str(value or "").strip().upper()
     normalized = _REVIEW_NON_TERMINAL_ALIASES.get(normalized, normalized)
-    if normalized in (*_REVIEW_TERMINAL_CONCLUSIONS, "NEEDS_CHANGE"):
+    if normalized in (*_REVIEW_TERMINAL_CONCLUSIONS, "NEEDS_CHANGE",
+                      *_REVIEW_DEATH_TERMINALS):
         return normalized
     return ""
 
 
 def _extract_review_conclusion_from_text(text):
-    """Extract one explicit review conclusion; ambiguous/malformed text is UNKNOWN."""
+    """Extract one explicit review conclusion; ambiguous/malformed text is UNKNOWN.
+
+    FEAT-094: the death terminals match ONLY the explicit conclusion line
+    (审查结论： ABORTED/UNKNOWN) — the bare-token fallback stays closed to
+    them ("UNKNOWN"/"aborted" occur in ordinary prose; a death state must
+    be an explicit conclusion, never a stray word).
+    """
     _resolve_shared()
     upper = str(text or "").upper()
     status_pattern = r"(APPROVED_WITH_NOTES|APPROVED|NEEDS_CHANGES?|BLOCKED)"
+    explicit_pattern = (
+        r"(APPROVED_WITH_NOTES|APPROVED|NEEDS_CHANGES?|BLOCKED"
+        r"|ABORTED|UNKNOWN)")
     explicit = re.findall(
-        rf"(?:审查结论|评审结论|REVIEW CONCLUSION|CONCLUSION)\**\s*[:：]\s*\**\s*{status_pattern}(?![A-Z_])",
+        rf"(?:审查结论|评审结论|REVIEW CONCLUSION|CONCLUSION)\**\s*[:：]\s*\**\s*{explicit_pattern}(?![A-Z_])",
         upper,
     )
     candidates = explicit or re.findall(
@@ -3548,7 +3571,11 @@ def check_review_machine_provenance(review_rows=None, review_files=None,
             _index_record(
                 _parsed[0], _parsed[1],
                 rec_date=_file_date(_text),
-                valid=_extract_review_conclusion_from_text(_text) != "UNKNOWN",
+                # FEAT-094: a death-terminal conclusion (ABORTED/UNKNOWN)
+                # is not a proven revisit either — same class as the
+                # UNKNOWN-conclusion record (死亡不解除复审义务).
+                valid=(_extract_review_conclusion_from_text(_text)
+                       not in _REVIEW_DEATH_TERMINALS),
             )
     for _raw in rows:
         _stripped = str(_raw or "").strip()
@@ -3576,7 +3603,8 @@ def check_review_machine_provenance(review_rows=None, review_files=None,
                 _index_record(
                     _m.group(1), int(_m.group(2) or 0),
                     rec_date=_row_date,
-                    valid=bool(_conclusion),
+                    valid=bool(_conclusion)
+                    and _conclusion not in _REVIEW_DEATH_TERMINALS,
                 )
 
     # ── V7/V8 over files ────────────────────────────────────────────────

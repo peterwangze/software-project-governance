@@ -24136,6 +24136,8 @@ def cmd_review_record(args):
         gate_id=args.gate,
         scope=getattr(args, "scope", "full"),
         delta_base=getattr(args, "delta_base", None),
+        bind_files=getattr(args, "bind_file", None) or (),
+        abort_reason=getattr(args, "abort_reason", None),
         root=HOST_PROJECT_ROOT,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -27500,7 +27502,11 @@ def main(argv=None):
     )
 
     # review-record (FIX-236.1 / ADR-017 §3.4 Wiring A — the single
-    # machine-written review-conclusion persistence path)
+    # machine-written review-conclusion persistence path; FEAT-094 extends
+    # it into the five-step review trust transaction: report-hash pin +
+    # immutable snapshot binding + CONFLICT refusal + R2 obligation
+    # auto-registration in the authority ledger + supervisor ABORTED /
+    # UNKNOWN terminal states)
     rr_p = subparsers.add_parser(
         "review-record",
         help="Machine-write one review conclusion + wire it to the loop engine (FIX-236)",
@@ -27511,10 +27517,15 @@ def main(argv=None):
                       help="Review round (default 0 = R0)")
     rr_p.add_argument("--result", required=True,
                       choices=["APPROVED", "APPROVED_WITH_NOTES",
-                               "NEEDS_CHANGE", "BLOCKED"],
-                      help="Review conclusion")
+                               "NEEDS_CHANGE", "BLOCKED",
+                               "ABORTED", "UNKNOWN"],
+                      help="Review conclusion (ABORTED/UNKNOWN = supervisor-"
+                           "recorded agent-death terminal states, FEAT-094 — "
+                           "no revisit, no obligation discharge)")
     rr_p.add_argument("--report", required=True,
-                      help="Path to the reviewer's full report")
+                      help="Path to the reviewer's full report (MUST be "
+                            "readable — its bytes are sha256-pinned into "
+                            "the record, FEAT-094)")
     rr_p.add_argument("--reviewer", default=None,
                       help="Reviewer/agent name")
     rr_p.add_argument("--unit", default=None,
@@ -27530,6 +27541,14 @@ def main(argv=None):
     rr_p.add_argument("--delta-base", default=None,
                       help="Delta anchor for --scope delta (FEAT-091): "
                            "prev-round review report path or diff anchor")
+    rr_p.add_argument("--bind-file", action="append", default=None,
+                      metavar="PATH",
+                      help="FEAT-094: pin one reviewed repo file with a "
+                           "git hash-object blob hash (repeatable; "
+                           "untracked-safe immutable binding)")
+    rr_p.add_argument("--abort-reason", default=None,
+                      help="FEAT-094: supervisor's reason for an ABORTED / "
+                           "UNKNOWN terminal record (agent death)")
 
     # next-candidates (FIX-236.3 / ADR-017 §3.4, P3-5 — read end of the
     # loop_exit → next-unit recommendation bridge)

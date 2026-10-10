@@ -46,6 +46,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -1527,6 +1528,211 @@ class DshAdapterTests(unittest.TestCase):
                 exit_code = launch.smoke_preset()
             self.assertNotEqual(exit_code, 0)
             self.assertEqual(sequence, [], "expected exactly two witnesses")
+
+    # ── FIX-442: concurrent-write tolerance (dual-factor attribution) ──────
+    #
+    # Evidence base: release-checklist-0.81.0 (2026-09-13) and the 2026-10-10
+    # deep check both caught Check 28u failing on a write the smoke never
+    # made — a live dsh session on the same machine re-rendering its OWN
+    # `novel-writing` preset inside the smoke window. The fix judges each
+    # write-face delta entry with TWO factors (time window AND entry
+    # semantics); only their conjunction is excluded as a concurrent-session
+    # write. A single-factor miss stays a conservative FAIL — the isolation
+    # guarantee (FEAT-040 invariant) never loosens: the adapter's own
+    # `governance` face is not attributable away.
+
+    @staticmethod
+    def _fix442_sample(write_surface):
+        """Minimal witness sample for synthetic write-surface deltas."""
+        return {"state": "present", "write_surface": list(write_surface),
+                "top_level": []}
+
+    def test_fix442_concurrent_preset_write_is_attributed_not_failed(self):
+        # Acceptance ① (unit half, real filesystem): a sibling preset that
+        # APPEARS inside the window — the exact novel-writing false-positive
+        # shape — is attributed and disclosed, not failed.
+        launch = _load_launch_module()
+        with _sandbox_td() as td:
+            home = Path(td) / "real-home"
+            governance = home / ".agent-presets" / "governance"
+            governance.mkdir(parents=True)
+            (governance / "preset.yml").write_text(
+                "name: governance\n", encoding="utf-8")
+            window_start = time.time_ns()
+            before = launch._real_home_witness(home)
+            novel = home / ".agent-presets" / "novel-writing"
+            novel.mkdir()
+            (novel / "preset.yml").write_text("name: novel\n", encoding="utf-8")
+            after = launch._real_home_witness(home)
+            window_end = time.time_ns()
+        result = launch.witness_verdict(
+            (before, after), window=(window_start, window_end))
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertFalse(result["failures"], result)
+        self.assertTrue(result["advisories"], result)
+        self.assertTrue(
+            all("novel-writing" in entry
+                for entry in result["attributed_writes"]),
+            result["attributed_writes"])
+        self.assertEqual(len(result["attributed_writes"]), 2, result)
+
+    def test_fix442_inplace_sibling_rewrite_is_fully_attributed(self):
+        # An in-place rewrite produces TWO delta strings (the old
+        # fingerprint disappears, the new one appears): the appeared half
+        # is proven in-window by its mtime, the disappeared half by
+        # sample-bounded removal — both must be attributed or the gate
+        # would still false-positive on a concurrent preset refresh.
+        launch = _load_launch_module()
+        with _sandbox_td() as td:
+            home = Path(td) / "real-home"
+            novel = home / ".agent-presets" / "novel-writing"
+            novel.mkdir(parents=True)
+            (novel / "preset.yml").write_text("v: 1\n", encoding="utf-8")
+            window_start = time.time_ns()
+            before = launch._real_home_witness(home)
+            (novel / "preset.yml").write_text("v: 2\n", encoding="utf-8")
+            after = launch._real_home_witness(home)
+            window_end = time.time_ns()
+        result = launch.witness_verdict(
+            (before, after), window=(window_start, window_end))
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertFalse(result["failures"], result)
+        self.assertEqual(len(result["attributed_writes"]), 2, result)
+
+    def test_fix442_adapter_own_face_delta_is_never_attributable(self):
+        # Acceptance ② / FEAT-040 invariant: a delta on the adapter's OWN
+        # write face fails even when the time factor is satisfied — the
+        # semantics factor alone vetoes attribution, so a real isolation
+        # breach cannot be laundered as "concurrent".
+        launch = _load_launch_module()
+        now = time.time_ns()
+        window = (now - 10 ** 9, now + 10 ** 9)
+        entry = f"f:governance/preset.yml:1:{now}"
+        result = launch.witness_verdict(
+            (self._fix442_sample([]), self._fix442_sample([entry])),
+            window=window)
+        self.assertEqual(result["verdict"], "FAIL", result)
+        self.assertEqual(result["attributed_writes"], [], result)
+        self.assertTrue(
+            any("write surface" in failure for failure in result["failures"]),
+            result["failures"])
+
+    def test_fix442_out_of_window_entry_conservatively_fails(self):
+        # Single-factor red-green (time half missing): the entry semantics
+        # point at a sibling preset, but the mtime predates the window — a
+        # sampling race, not a provable concurrent write. Conservative FAIL.
+        launch = _load_launch_module()
+        now = time.time_ns()
+        window = (now - 10 ** 6, now + 10 ** 6)
+        stale = f"f:novel-writing/preset.yml:12:{now - 10 ** 12}"
+        result = launch.witness_verdict(
+            (self._fix442_sample([]), self._fix442_sample([stale])),
+            window=window)
+        self.assertEqual(result["verdict"], "FAIL", result)
+        self.assertEqual(result["attributed_writes"], [], result)
+
+    def test_fix442_unparsable_mtime_conservatively_fails(self):
+        # Fail-closed parsing half: an entry whose mtime field cannot be
+        # read cannot prove the time factor, so it fails regardless of its
+        # sibling-preset semantics.
+        launch = _load_launch_module()
+        now = time.time_ns()
+        broken = "f:novel-writing/preset.yml:not-a-number"
+        result = launch.witness_verdict(
+            (self._fix442_sample([]), self._fix442_sample([broken])),
+            window=(now - 10 ** 9, now + 10 ** 9))
+        self.assertEqual(result["verdict"], "FAIL", result)
+        self.assertEqual(result["attributed_writes"], [], result)
+
+    def test_fix442_no_window_disables_attribution_legacy_semantics(self):
+        # Backward-compat contract: every legacy caller passes samples
+        # without a window; the comparison must keep the pre-FIX-442
+        # zero-tolerance semantics (nothing is attributable then).
+        launch = _load_launch_module()
+        now = time.time_ns()
+        entry = f"d:novel-writing:0:{now}"
+        result = launch.witness_verdict(
+            (self._fix442_sample([]), self._fix442_sample([entry])))
+        self.assertEqual(result["verdict"], "FAIL", result)
+        self.assertEqual(result["attributed_writes"], [], result)
+
+    def test_fix442_smoke_tolerates_concurrent_session_write(self):
+        # Acceptance ① (gate level): while the smoke runs, a concurrent
+        # session writes its own preset into the real home — the gate must
+        # PASS with the attribution advisory instead of the 2026-10-10
+        # false positive, and still report real-home writes : 0.
+        launch = _load_launch_module()
+        with _sandbox_td() as td:
+            isolated = Path(td) / "isolated"
+            fake_real = Path(td) / "real-home"
+            governance = fake_real / ".agent-presets" / "governance"
+            governance.mkdir(parents=True)
+            (governance / "preset.yml").write_text(
+                "name: governance\n", encoding="utf-8")
+            real_verify = launch.verify_preset_loading
+
+            def concurrent_session_then_verify(directory):
+                novel = fake_real / ".agent-presets" / "novel-writing"
+                if not novel.is_dir():
+                    novel.mkdir(parents=True)
+                    (novel / "preset.yml").write_text(
+                        "name: novel-writing\n", encoding="utf-8")
+                return real_verify(directory)
+
+            buffer = io.StringIO()
+            with patch.dict(
+                    os.environ, {"DSH_HOME": str(isolated)}, clear=False), \
+                    patch.object(launch, "real_dsh_home",
+                                 return_value=fake_real), \
+                    patch.object(launch, "verify_preset_loading",
+                                 side_effect=concurrent_session_then_verify):
+                with redirect_stdout(buffer):
+                    exit_code = launch.smoke_preset()
+        output = buffer.getvalue()
+        self.assertEqual(0, exit_code, output)
+        self.assertIn("[SMOKE] Result: PASS", output)
+        self.assertIn("[SMOKE] real-home writes : 0", output)
+        self.assertIn("attributed concurrent writes : 2", output)
+        self.assertIn("[SMOKE] [ADVISORY]", output)
+        self.assertIn("novel-writing", output)
+
+    def test_fix442_smoke_still_fails_when_concurrent_write_hits_adapter_face(self):
+        # Acceptance ② (gate level, FEAT-040 invariant): the same mid-smoke
+        # injection aimed at the adapter's OWN face must still FAIL —
+        # attribution excludes concurrent sessions, never isolation
+        # breaches.
+        launch = _load_launch_module()
+        with _sandbox_td() as td:
+            isolated = Path(td) / "isolated"
+            fake_real = Path(td) / "real-home"
+            governance = fake_real / ".agent-presets" / "governance"
+            governance.mkdir(parents=True)
+            (governance / "preset.yml").write_text(
+                "name: governance\n", encoding="utf-8")
+            real_verify = launch.verify_preset_loading
+
+            def rogue_write_then_verify(directory):
+                rogue = fake_real / ".agent-presets" / "governance" / "rogue.yml"
+                if not rogue.exists():
+                    rogue.write_text("rogue: true\n", encoding="utf-8")
+                return real_verify(directory)
+
+            buffer = io.StringIO()
+            err_buffer = io.StringIO()
+            with patch.dict(
+                    os.environ, {"DSH_HOME": str(isolated)}, clear=False), \
+                    patch.object(launch, "real_dsh_home",
+                                 return_value=fake_real), \
+                    patch.object(launch, "verify_preset_loading",
+                                 side_effect=rogue_write_then_verify):
+                with redirect_stdout(buffer), redirect_stderr(err_buffer):
+                    exit_code = launch.smoke_preset()
+        output = buffer.getvalue() + err_buffer.getvalue()
+        self.assertNotEqual(0, exit_code, output)
+        self.assertIn("[SMOKE] Result: FAIL", output)
+        self.assertIn("real DSH home preset write surface changed", output)
+        self.assertIn("[SMOKE] real-home writes : 1", output)
+        self.assertIn("attributed concurrent writes : 0", output)
 
     def test_smoke_reports_absent_dsh_cli_without_false_live_claim(self):
         # Quality budget (reliability): a missing dsh CLI must be reported

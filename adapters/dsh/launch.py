@@ -55,6 +55,13 @@ Modes:
                        unset or resolves to (or around) the real ${HOME}/.dsh,
                        and the real home is fingerprinted before/after
                        (metadata only) so a write would be detected.
+                       Write-face deltas attributable to a concurrent active
+                       session (FIX-442: changed inside the snapshot window
+                       AND outside this adapter's own preset face — e.g. a
+                       live session re-rendering its ``novel-writing``
+                       preset) are disclosed as advisories, not FAILs;
+                       everything else, including any change on the
+                       adapter's own ``governance`` face, still FAILs.
                        Resolution-level only: it never claims LLM session
                        behavior (printed as NOT_RUN).
   --bootstrap-project DIR [--force]
@@ -922,30 +929,24 @@ def _refuse_write(reason: str) -> int:
     return SMOKE_EXIT_REFUSED
 
 
-def _home_fingerprint(home: Path) -> dict:
-    """Read-only metadata fingerprint of a DSH home (no file content read).
+def _smoke_attribution():
+    """Load the pure witness + FIX-442 attribution module (sibling file).
 
-    Returns ``{"state": "absent"|"present", "entries": [kind:rel:size:mtime_ns]}``.
-    Only ``lstat`` metadata is collected — file contents (e.g.
-    ``credentials.yaml``) are never opened or printed.
+    Lazy, mirroring :func:`_fact`: importing this launcher never depends on
+    the sibling being importable by name from anywhere else. The module is
+    PURE with respect to the host contract — the one contract fact the
+    attribution needs (this adapter's own preset id) is injected by the
+    wrappers below from ``_fact("PRESET_ID")``, never re-declared there.
     """
-    if not home.exists():
-        return {"state": "absent", "entries": []}
-    entries = []
-    for dirpath, dirnames, filenames in os.walk(home, followlinks=False):
-        dirnames.sort()
-        for name in sorted(dirnames) + sorted(filenames):
-            path = Path(dirpath) / name
-            try:
-                stat = path.lstat()
-            except OSError:  # pragma: no cover - transient/racy entry
-                continue
-            kind = "d" if (stat.st_mode & 0o170000) == 0o040000 else "f"
-            entries.append(
-                f"{kind}:{path.relative_to(home).as_posix()}:"
-                f"{stat.st_size}:{stat.st_mtime_ns}"
-            )
-    return {"state": "present", "entries": entries}
+    if str(ADAPTER_DIR) not in sys.path:
+        sys.path.insert(0, str(ADAPTER_DIR))
+    import smoke_attribution  # noqa: PLC0415 — deliberate: lazy (see above)
+    return smoke_attribution
+
+
+def _home_fingerprint(home: Path) -> dict:
+    """Delegate to ``smoke_attribution.home_fingerprint`` (FIX-442 split)."""
+    return _smoke_attribution().home_fingerprint(home)
 
 
 def _real_home_witness(home: Path) -> dict:
@@ -987,87 +988,20 @@ def _real_home_witness(home: Path) -> dict:
     }
 
 
-def witness_deltas(before: dict, after: dict) -> dict:
-    """Compare two witness samples → ``{"write_surface", "top_level"}`` deltas.
+def witness_verdict(samples, *, resample=None, window=None) -> dict:
+    """Thin launch-side binding for ``smoke_attribution.witness_verdict``.
 
-    The comparison式 is the one design §3.3 (row 11, D-54) fixes, and the two
-    components are deliberately **not** symmetric:
-
-    * ``write_surface`` — the adapter's ONLY write face, so a difference is a
-      finding on the first comparison; no race is tolerated there.
-    * ``top_level`` — only the **name set** is compared. A size/mtime change is
-      not even visible here any more (the witness no longer records them), so
-      host activity on ``settings.yaml`` cannot produce a delta at all.
+    Injects the one contract fact the pure module must not re-declare —
+    this adapter's own preset id — so the FIX-442 dual-factor attribution
+    (time window + entry semantics, one cohesive judgment in
+    ``smoke_attribution.attribute_concurrent_write``) runs with the real
+    identity. Signature and semantics are unchanged for every legacy
+    caller: ``window=None`` keeps the pre-FIX-442 conservative comparison.
+    See the split module's docstrings for the full D-54 + FIX-442 contract.
     """
-    return {
-        "write_surface": [entry for entry in before["write_surface"]
-                          if entry not in after["write_surface"]]
-                         + [entry for entry in after["write_surface"]
-                            if entry not in before["write_surface"]],
-        "top_level": [name for name in before["top_level"]
-                      if name not in after["top_level"]]
-                     + [name for name in after["top_level"]
-                        if name not in before["top_level"]],
-    }
-
-
-def witness_verdict(samples, *, resample=None) -> dict:
-    """D-54 comparison: ``{"failures", "advisories", "verdict"}``.
-
-    ``samples`` is ``(before, after_first)``. Design §3.3's sampling definition:
-    a *suspected* top-level change (one seen in the first post-sample but not
-    reproducing on a second) is a host race → **advisory, not FAIL**; the write
-    surface has no such tolerance.
-
-    ``resample`` — when given, it is called at most once to take the second
-    post-sample **only if** a top-level delta was suspected (the sampling
-    moment is "immediately after the first post-sample, interval 0"); the delta
-    then has to reproduce for the gate to fail. **Without a resampler a
-    top-level delta is a failure**: the caller is asserting a single sample, so
-    there is nothing that could downgrade it to a race.
-
-    Reproduced-ness is judged **against the baseline**, not against the first
-    post-sample (N-5). Design §3.3 fixes both outcomes — "seen once = advisory,
-    reproduced = FAIL" — and only the baseline comparison yields both: comparing
-    the two post-samples would invert each (a persistent write would look like
-    a one-shot race, and a one-shot race would look like a persistent write).
-    The trade-off is deliberately the fail-closed side: a *different* top-level
-    change present at the resample (not the same entry) still counts as
-    reproduced, because "some top-level change survives a resample" is the
-    signal this gate acts on. Marked here rather than left to be inferred.
-    """
-    before, after_first = samples
-    deltas = witness_deltas(before, after_first)
-    failures = []
-    advisories = []
-    if deltas["write_surface"]:
-        # The adapter's own write face: never a race, always a real write.
-        failures.append(
-            "real DSH home preset write surface changed: "
-            + ", ".join(deltas["write_surface"]))
-    if deltas["top_level"]:
-        reproduced = True
-        if resample is not None:
-            # "复现同样变化" = a top-level change is still present relative to the
-            # BASELINE (not relative to the first post-sample): a real write
-            # persists, a host race is gone by the second sample. See the
-            # fail-closed note above (N-5).
-            after_second = resample()
-            reproduced = bool(witness_deltas(before, after_second)["top_level"])
-        if reproduced:
-            failures.append(
-                "real DSH home top level changed: "
-                + ", ".join(deltas["top_level"]))
-        else:
-            advisories.append(
-                "real DSH home top level changed once and did not reproduce "
-                "on resample (host activity, not an adapter write): "
-                + ", ".join(deltas["top_level"]))
-    return {
-        "failures": failures,
-        "advisories": advisories,
-        "verdict": "FAIL" if failures else "PASS",
-    }
+    return _smoke_attribution().witness_verdict(
+        samples, resample=resample, window=window,
+        preset_id=_fact("PRESET_ID"))
 
 
 def _custom_skill_dir_entries(composition: str) -> list:
@@ -1570,6 +1504,12 @@ def smoke_preset() -> int:
 
     print(f"[SMOKE] isolated {home_var}: {isolated}")
     print(f"[SMOKE] real DSH home    : {home}")
+    # FIX-442: the attribution window brackets the two witness samples. A
+    # write-face entry the smoke could not have produced (dual factor:
+    # changed inside this window AND off the adapter's own preset face) is
+    # disclosed as a concurrent-session advisory instead of failing the
+    # gate; anything else still fails.
+    window_start_ns = time.time_ns()
     before = _real_home_witness(home)
     print(f"[SMOKE] real home before : state={before['state']} "
           f"write_surface={len(before['write_surface'])} entry(ies), "
@@ -1627,14 +1567,25 @@ def smoke_preset() -> int:
     # when a top-level delta is suspected — a second one taken immediately after
     # it, so a host race that does not reproduce is disclosed instead of
     # failing the gate. The write surface is never re-sampled: it is the
-    # adapter's own write face and a difference there is always a real write.
+    # adapter's own write face and a difference there is always a real write —
+    # except the FIX-442 dual-factor concurrent-session attribution, which is
+    # judged per entry against the window bracketing the two samples.
     after = _real_home_witness(home)
+    window_end_ns = time.time_ns()
     comparison = witness_verdict(
-        (before, after), resample=lambda: _real_home_witness(home))
+        (before, after), resample=lambda: _real_home_witness(home),
+        window=(window_start_ns, window_end_ns))
     for advisory in comparison["advisories"]:
         print(f"[SMOKE] [ADVISORY] {advisory}")
     for failure in comparison["failures"]:
         issues.append(f"{failure} — the isolation guarantee is broken")
+    attributed = comparison.get("attributed_writes", [])
+    print(f"[SMOKE] attributed concurrent writes : {len(attributed)} "
+          + ("(dual-factor attributed to an active session — in-window + "
+             "off the adapter write face; excluded from the isolation "
+             "verdict, FIX-442)" if attributed
+             else "(no write-face delta was attributable to a concurrent "
+                  "session)"))
     print(f"[SMOKE] real-home writes : {len(comparison['failures'])} "
           f"({'witness unchanged — top-level names + preset write surface '
              'recursive' if comparison['verdict'] == 'PASS' else 'WITNESS CHANGED'})")

@@ -350,16 +350,20 @@ STATIC_PIN_EXEMPTIONS = {
         # FIX-421 re-anchor +46: the Check 28c status-cell regression tests
         # inserted after the FIX-399 block shifted both rows below — tokens
         # unchanged, re-anchored to the actual token lines.
-        (21071, "0.93.0", _REASON_FUTURE_TARGET),
-        (21103, "0.93.0", _REASON_FUTURE_TARGET),
+        # FIX-442 re-anchor +97: the Check 28u concurrent-write-tolerance
+        # test class inserted after the FEAT-016 release-gate block shifted
+        # all four rows below without touching the tokens (rot-guard caught
+        # the stale ledger); re-anchored to the actual token lines.
+        (21168, "0.93.0", _REASON_FUTURE_TARGET),
+        (21200, "0.93.0", _REASON_FUTURE_TARGET),
         # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
         # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
         # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
         # 目标版本 column — scenario payload written while 0.93.1 was active,
         # surfacing exactly once at this bump; the word-set judgement
         # consumes the row text, never the version cell.
-        (20573, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
-        (20576, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        (20670, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        (20673, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.95.0 bump-time rows (the FIX-361 designed double signal): the
     # FEAT-076 Q6 date-window fallback fail-closed fixture (roadmap row

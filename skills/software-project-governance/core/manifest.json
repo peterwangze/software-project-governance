@@ -719,6 +719,7 @@
       "adapters/*/README.md",
       "adapters/*/adapter-manifest.json",
       "adapters/*/launch.py",
+      "adapters/*/smoke_attribution.py",
       "adapters/dsh/fixtures/*.json",
       ".claude-plugin/*.json",
       ".claude-plugin/assets/*",

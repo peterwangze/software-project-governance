@@ -8419,6 +8419,103 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
             "the temp redirected DSH_HOME must be removed after the gate run")
 
 
+class Fix442Check28uConcurrentWriteToleranceTests(unittest.TestCase):
+    """FIX-442: Check 28u tolerates write-face changes a concurrent active
+    session made into the real home during the smoke window, and still
+    refuses PASS on non-attributable real-home writes.
+
+    The engine layer owns the OUTPUT contract: it parses the launcher's
+    ``[SMOKE] real-home writes`` / ``[SMOKE] attributed concurrent writes``
+    lines and must (a) accept a PASS whose attributed count is disclosed
+    with a truthful reason, (b) stay backward-compatible when the launcher
+    emits no attributed line, and (c) refuse a PASS that reports
+    non-attributable real-home writes — the FEAT-040 fail-closed invariant
+    at the engine face (attribution is the launcher's dual-factor judgment,
+    never something the engine re-derives)."""
+
+    @staticmethod
+    def _fake_launcher(root, lines):
+        adapter = Path(root) / "adapters" / "dsh"
+        adapter.mkdir(parents=True, exist_ok=True)
+        script = ["import sys"]
+        script += [f"print({line!r})" for line in lines]
+        script.append("sys.exit(0)")
+        (adapter / "launch.py").write_text(
+            "\n".join(script) + "\n", encoding="utf-8")
+
+    def test_pass_with_attributed_concurrent_writes_is_accepted_and_disclosed(self):
+        # A launcher that attributed N concurrent-session writes reports
+        # real-home writes : 0 and exits PASS — the engine accepts it and
+        # discloses the attribution in the reason instead of claiming the
+        # real home was untouched outright.
+        with _governance_temp_dir("fix442-engine-") as td:
+            self._fake_launcher(td, [
+                "[SMOKE] real-home writes : 0",
+                "[SMOKE] attributed concurrent writes : 2 (fixture)",
+                "[SMOKE] Result: PASS",
+            ])
+            result = vw.check_dsh_preset_smoke(root=td)
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["isolation"]["real_home_writes"], 0)
+        self.assertEqual(
+            result["isolation"]["attributed_concurrent_writes"], 2)
+        self.assertIn("untouched by the smoke", result["reason"])
+        self.assertIn("2 write-face change(s) attributed", result["reason"])
+        self.assertIn("FIX-442", result["reason"])
+
+    def test_attributed_line_absent_keeps_none_and_plain_reason(self):
+        # Backward-compatible parsing: a launcher with nothing attributed
+        # (or built before FIX-442) emits no attributed line — the field
+        # stays None and the PASS reason keeps the plain wording.
+        with _governance_temp_dir("fix442-engine-") as td:
+            self._fake_launcher(td, [
+                "[SMOKE] real-home writes : 0",
+                "[SMOKE] Result: PASS",
+            ])
+            result = vw.check_dsh_preset_smoke(root=td)
+        self.assertEqual(result["verdict"], "PASS", result)
+        self.assertIsNone(result["isolation"]["attributed_concurrent_writes"])
+        self.assertNotIn("attributed", result["reason"])
+        self.assertIn("untouched by the smoke", result["reason"])
+
+    def test_pass_with_non_attributed_real_home_writes_is_refused(self):
+        # FEAT-040 invariant, engine face: Result: PASS plus real-home
+        # writes >= 1 is refused — the smoke's isolation guarantee cannot
+        # be waived by a launcher claiming PASS over unattributed writes.
+        with _governance_temp_dir("fix442-engine-") as td:
+            self._fake_launcher(td, [
+                "[SMOKE] real-home writes : 1",
+                "[SMOKE] attributed concurrent writes : 0",
+                "[SMOKE] Result: PASS",
+            ])
+            result = vw.check_dsh_preset_smoke(root=td)
+        self.assertEqual(result["verdict"], "FAIL", result)
+        self.assertEqual(result["isolation"]["real_home_writes"], 1)
+        self.assertIn("refusing to accept", result["reason"])
+
+    def test_cli_summary_discloses_attributed_concurrent_writes(self):
+        # UX face: the standalone CLI summary names the excluded
+        # concurrent writes so a human reader sees WHY the run passed
+        # while the real home was being written by another session.
+        with _governance_temp_dir("fix442-engine-") as td:
+            self._fake_launcher(td, [
+                "[SMOKE] real-home writes : 0",
+                "[SMOKE] attributed concurrent writes : 2 (fixture)",
+                "[SMOKE] Result: PASS",
+            ])
+            fake_result = vw.check_dsh_preset_smoke(root=td)
+            self.assertEqual(fake_result["verdict"], "PASS", fake_result)
+            args = SimpleNamespace(fail_on_issues=False)
+            out = io.StringIO()
+            with patch.object(vw, "check_dsh_preset_smoke",
+                              return_value=fake_result), redirect_stdout(out):
+                vw.cmd_check_dsh_preset_smoke(args)
+        text = out.getvalue()
+        self.assertIn("attributed concurrent writes: 2", text)
+        self.assertIn("Result: PASSED", text)
+
+
 class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
     """FIX-299: cmd_check_release derives the CLI topline verdict from the
     merged issue list instead of unconditionally forcing result["pass"]

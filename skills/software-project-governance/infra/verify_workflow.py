@@ -7141,6 +7141,8 @@ def emit_injection_budget_section(indent="  ", result=None):
 # temp home is removed afterwards so the gate leaves no residue.
 DSH_SMOKE_REAL_HOME_WRITES_RE = re.compile(
     r"\[SMOKE\]\s*real-home writes\s*:\s*(\d+)")
+DSH_SMOKE_ATTRIBUTED_CONCURRENT_WRITES_RE = re.compile(
+    r"\[SMOKE\]\s*attributed concurrent writes\s*:\s*(\d+)")
 DSH_SMOKE_RESULT_PASS_RE = re.compile(r"\[SMOKE\]\s*Result:\s*PASS")
 
 
@@ -7150,7 +7152,14 @@ def check_dsh_preset_smoke(root=None, timeout=120):
     ``root`` overrides the package root (test seam); it defaults to
     PLUGIN_ROOT, where ``adapters/dsh/launch.py`` lives. Returns
     ``{"verdict": "PASS"|"FAIL", "reason", "exit_code", "details",
-    "isolation": {"temp_home", "real_home_writes"}}``.
+    "isolation": {"temp_home", "real_home_writes",
+    "attributed_concurrent_writes"}}``.
+
+    FIX-442: ``attributed_concurrent_writes`` carries the launcher's count
+    of write-face changes attributed to a concurrent active session
+    (dual factor: inside the smoke window AND off the adapter's own preset
+    face). The engine does not re-judge attribution — it only refuses a
+    PASS whose ``real-home writes`` count is non-zero, exactly as before.
     """
     package_root = Path(root) if root is not None else PLUGIN_ROOT
     launcher = package_root / "adapters" / "dsh" / "launch.py"
@@ -7159,7 +7168,11 @@ def check_dsh_preset_smoke(root=None, timeout=120):
         "reason": "",
         "exit_code": None,
         "details": [],
-        "isolation": {"temp_home": None, "real_home_writes": None},
+        "isolation": {
+            "temp_home": None,
+            "real_home_writes": None,
+            "attributed_concurrent_writes": None,
+        },
     }
     if not launcher.is_file():
         result["reason"] = f"dsh launcher missing: {launcher.as_posix()}"
@@ -7196,6 +7209,10 @@ def check_dsh_preset_smoke(root=None, timeout=120):
     writes = DSH_SMOKE_REAL_HOME_WRITES_RE.search(output)
     if writes:
         result["isolation"]["real_home_writes"] = int(writes.group(1))
+    attributed = DSH_SMOKE_ATTRIBUTED_CONCURRENT_WRITES_RE.search(output)
+    if attributed:
+        result["isolation"]["attributed_concurrent_writes"] = int(
+            attributed.group(1))
 
     if proc.returncode == 0 and DSH_SMOKE_RESULT_PASS_RE.search(output):
         if result["isolation"]["real_home_writes"] not in (0, None):
@@ -7205,9 +7222,21 @@ def check_dsh_preset_smoke(root=None, timeout=120):
                 "accept the run as PASS")
             return result
         result["verdict"] = "PASS"
-        result["reason"] = (
+        # FIX-442: the reason must stay truthful when the launcher excluded
+        # concurrent-session writes — the smoke touched nothing, but the
+        # real home DID change during the window, and that is disclosed
+        # here instead of the blanket "real ~/.dsh untouched" claim.
+        reason = (
             "isolated preset-session smoke PASSED (skill catalog + "
-            "/governance gesture resolved; real ~/.dsh untouched)")
+            "/governance gesture resolved; real ~/.dsh untouched by the "
+            "smoke")
+        attributed_count = result["isolation"]["attributed_concurrent_writes"]
+        if attributed_count:
+            reason += (
+                f"; {attributed_count} write-face change(s) attributed to "
+                "a concurrent active session and excluded (time-window + "
+                "entry-semantics dual factor, FIX-442)")
+        result["reason"] = reason + ")"
         return result
 
     diagnostics = [
@@ -18086,8 +18115,13 @@ def _run_full_engine_checks(args):
         print("\n┌─ Check 28u: DSH Preset Session Smoke (FEAT-015) ────┐")
         dsmk28u = check_dsh_preset_smoke()
         iso28u = dsmk28u["isolation"]
-        print(f"│  exit code: {dsmk28u['exit_code']}; "
-              f"real-home writes: {iso28u['real_home_writes']}")
+        header28u = (f"│  exit code: {dsmk28u['exit_code']}; "
+                     f"real-home writes: {iso28u['real_home_writes']}")
+        if iso28u.get("attributed_concurrent_writes"):
+            header28u += (f"; attributed concurrent writes: "
+                          f"{iso28u['attributed_concurrent_writes']} "
+                          "(FIX-442 dual-factor, excluded)")
+        print(header28u)
         if dsmk28u["verdict"] == "PASS":
             print(f"│  [PASS] {dsmk28u['reason']}")
         else:
@@ -23186,9 +23220,16 @@ def cmd_check_dsh_preset_smoke(args):
         pass
     result = check_dsh_preset_smoke()
     print("\n=== DSH Preset Session Smoke Check (FEAT-015 / RISK-049 ②) ===")
-    print(f"  Exit code: {result['exit_code']}; "
-          f"real-home writes: {result['isolation']['real_home_writes']}; "
-          f"temp DSH_HOME: {result['isolation']['temp_home']} (removed)")
+    summary_line = (
+        f"  Exit code: {result['exit_code']}; "
+        f"real-home writes: {result['isolation']['real_home_writes']}; "
+        f"temp DSH_HOME: {result['isolation']['temp_home']} (removed)")
+    if result["isolation"].get("attributed_concurrent_writes"):
+        summary_line += (
+            f"; attributed concurrent writes: "
+            f"{result['isolation']['attributed_concurrent_writes']} "
+            "(FIX-442 dual-factor, excluded)")
+    print(summary_line)
     if result["verdict"] == "PASS":
         print(f"\n  Result: PASSED — {result['reason']}")
     else:

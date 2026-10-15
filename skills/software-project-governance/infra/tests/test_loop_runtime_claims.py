@@ -1083,6 +1083,72 @@ class LoopRuntimePerformanceAndGoldenTests(unittest.TestCase):
             self.assertEqual((), lrc._relations("ordinary project documentation"))
         spy.assert_not_called()
 
+    def test_accounting_passes_leave_no_reference_cycles(self):
+        # FIX-443: the per-candidate accounting/units passes historically
+        # recursed through CLOSURES (container_chain / the two walk
+        # helpers) whose self-referencing cells kept parse state alive
+        # until the cycle collector ran — per candidate, per scan
+        # (container_chain additionally retained `parents` +
+        # `container_cache`, i.e. the WHOLE parsed AST).  After the fix
+        # the passes hold no reference cycle: once the caller drops its
+        # references, everything internal dies by plain refcount.
+        # Verified by counting what a manual gc.collect() can only reach
+        # through cycles (test-local freeze with finally restore; the
+        # performance guard itself never manipulates GC).
+        import gc
+        import json as _json
+        import checks.loop_runtime_claims as lrc
+
+        py_source = (
+            "class Outer:\n"
+            "    def method(self):\n"
+            "        greeting = \"hello claim\"  # a comment\n"
+            "        return f\"{greeting} goal\"\n"
+            "def helper(value):\n"
+            "    return {'k': value}\n"
+        )
+        py_raw = py_source.encode("utf-8")
+        json_text = _json.dumps({
+            "outer": {"items": ["goal claim", 17, True, None],
+                      "flag": "RUNNING"}})
+        json_raw = json_text.encode("utf-8")
+        py_candidate = lrc.Candidate(
+            "product_root", "skills/x.py", Path("x.py"), "python",
+            py_raw, len(py_raw), hashlib.sha256(py_raw).hexdigest())
+        json_candidate = lrc.Candidate(
+            "product_root", "skills/x.json", Path("x.json"), "json",
+            json_raw, len(json_raw), hashlib.sha256(json_raw).hexdigest())
+        cases = {
+            "python_accounting":
+                lambda: lrc._python_accounting(py_candidate, py_source),
+            "json_accounting":
+                lambda: lrc._json_accounting(json_candidate, json_text),
+            "json_units":
+                lambda: lrc._json_units(json_candidate, json_text),
+        }
+        for name, run in cases.items():
+            with self.subTest(case=name):
+                gc.collect()  # quiesce everything predating this call
+                auto = gc.isenabled()
+                gc.disable()
+                try:
+                    result = run()
+                    # only cycle-reachable objects may exist past the
+                    # return; the caller keeps the RESULT alive below:
+                    unreachable = gc.collect()
+                finally:
+                    if auto:
+                        gc.enable()
+                self.assertIsInstance(result, list)
+                if name != "json_units":  # units are hint-gated, may be []
+                    self.assertTrue(result, name)
+                self.assertEqual(
+                    0, unreachable,
+                    "{0} left {1} object(s) reachable only via reference "
+                    "cycles (recursive-closure retention)".format(
+                        name, unreachable))
+                del result
+
     def test_three_run_performance_identity_and_median(self):
         import checks.loop_runtime_claims as lrc
         import statistics

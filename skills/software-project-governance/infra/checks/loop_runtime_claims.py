@@ -755,6 +755,38 @@ class _JsonNumber(str):
     pass
 
 
+def _json_walk(value: Any, pointer: str, context: list[dict[str, Any]], *,
+               emit, escaped, checked_string) -> None:
+    """FIX-443: module-level recursion.  The previous nested `walk`
+    closure referenced itself through its own cell, so every candidate
+    left a function↔cell reference cycle for the cycle collector —
+    per candidate, per scan.  Body, traversal, and emission order are
+    unchanged; the helpers arrive as parameters instead of cells."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_pointer = f"{pointer}/{escaped(key)}"
+            emit("json_key", child_pointer, "key", key, context)
+            key_context = context + [_account_context("json_key", payload=key, pointer=child_pointer)]
+            _json_walk(child, child_pointer, key_context,
+                       emit=emit, escaped=escaped, checked_string=checked_string)
+    elif isinstance(value, list):
+        for item_index, child in enumerate(value):
+            child_pointer = f"{pointer}/{item_index}"
+            _json_walk(child, child_pointer, context + [
+                _account_context("json_array_index", index=item_index, pointer=child_pointer)
+            ], emit=emit, escaped=escaped, checked_string=checked_string)
+    elif isinstance(value, str) and not isinstance(value, _JsonNumber):
+        emit("json_string", pointer or "", "value", checked_string(value), context)
+    elif isinstance(value, _JsonNumber):
+        emit("json_number", pointer or "", "value", str(value), context)
+    elif value is True or value is False:
+        emit("json_boolean", pointer or "", "value", "true" if value else "false", context)
+    elif value is None:
+        emit("json_null", pointer or "", "value", "null", context)
+    else:
+        raise ValueError("unsupported JSON value")
+
+
 def _json_accounting(candidate: Candidate, text: str) -> list[dict[str, Any]]:
     def checked_string(value: str) -> str:
         try:
@@ -789,31 +821,8 @@ def _json_accounting(candidate: Candidate, text: str) -> list[dict[str, Any]]:
             candidate, len(records), kind, _pointer_locator(pointer, role), context, payload,
         ))
 
-    def walk(value: Any, pointer: str, context: list[dict[str, Any]]) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                child_pointer = f"{pointer}/{escaped(key)}"
-                emit("json_key", child_pointer, "key", key, context)
-                key_context = context + [_account_context("json_key", payload=key, pointer=child_pointer)]
-                walk(child, child_pointer, key_context)
-        elif isinstance(value, list):
-            for item_index, child in enumerate(value):
-                child_pointer = f"{pointer}/{item_index}"
-                walk(child, child_pointer, context + [
-                    _account_context("json_array_index", index=item_index, pointer=child_pointer)
-                ])
-        elif isinstance(value, str) and not isinstance(value, _JsonNumber):
-            emit("json_string", pointer or "", "value", checked_string(value), context)
-        elif isinstance(value, _JsonNumber):
-            emit("json_number", pointer or "", "value", str(value), context)
-        elif value is True or value is False:
-            emit("json_boolean", pointer or "", "value", "true" if value else "false", context)
-        elif value is None:
-            emit("json_null", pointer or "", "value", "null", context)
-        else:
-            raise ValueError("unsupported JSON value")
-
-    walk(data, "", [])
+    _json_walk(data, "", [], emit=emit, escaped=escaped,
+               checked_string=checked_string)
     return records
 
 
@@ -834,22 +843,35 @@ def _python_accounting(candidate: Candidate, text: str,
     container_cache: dict[ast.AST, tuple[dict[str, Any], ...]] = {}
 
     def container_chain(container: ast.AST) -> tuple[dict[str, Any], ...]:
-        cached = container_cache.get(container)
-        if cached is not None:
-            return cached
-        outer = parents.get(container)
-        while outer is not None and not isinstance(
-            outer, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
-        ):
-            outer = parents.get(outer)
-        prefix = container_chain(outer) if outer is not None else ()
-        if isinstance(container, ast.ClassDef):
-            context = _account_context("py_class", name=container.name)
-        else:
-            context = _account_context("py_function", name=container.name)
-        cached = (*prefix, context)
-        container_cache[container] = cached
-        return cached
+        # FIX-443: iterative ancestry walk.  The previous recursive form
+        # referenced itself through its own closure cell, so every
+        # candidate left a function↔cell cycle that retained `parents`
+        # + `container_cache` — i.e. the WHOLE parsed AST — until the
+        # cycle collector ran, per candidate per scan.  Same qualifying-
+        # ancestor hops, same cache entries, same tuples as before.
+        ancestry: list[ast.AST] = []
+        node: ast.AST | None = container
+        prefix: tuple[dict[str, Any], ...] = ()
+        while node is not None:
+            cached = container_cache.get(node)
+            if cached is not None:
+                prefix = cached
+                break
+            ancestry.append(node)
+            outer = parents.get(node)
+            while outer is not None and not isinstance(
+                outer, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                outer = parents.get(outer)
+            node = outer
+        for node in reversed(ancestry):
+            if isinstance(node, ast.ClassDef):
+                context = _account_context("py_class", name=node.name)
+            else:
+                context = _account_context("py_function", name=node.name)
+            prefix = (*prefix, context)
+            container_cache[node] = prefix
+        return prefix
 
     def containers(node: ast.AST) -> list[dict[str, Any]]:
         current = parents.get(node)
@@ -2508,6 +2530,56 @@ def _python_units(candidate: Candidate, text: str,
     return units
 
 
+def _json_units_walk(value: Any, pointer: str, parent_key: str = "",
+                     context: tuple[str, ...] = (), *, candidate: Candidate,
+                     units: list, policy_schema: bool,
+                     authority_schema: bool, exemptions_schema: bool) -> None:
+    """FIX-443: module-level recursion (cycle-free) — the previous
+    nested `walk` closure self-referenced through its own cell (see
+    _json_walk).  Body, traversal, and unit emission unchanged; the
+    captured locals arrive as parameters instead of cells."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            escaped = str(key).replace("~", "~0").replace("/", "~1")
+            _json_units_walk(child, f"{pointer}/{escaped}", str(key), (*context, str(key)),
+                             candidate=candidate, units=units,
+                             policy_schema=policy_schema,
+                             authority_schema=authority_schema,
+                             exemptions_schema=exemptions_schema)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _json_units_walk(child, f"{pointer}/{index}", parent_key, (*context, str(index)),
+                             candidate=candidate, units=units,
+                             policy_schema=policy_schema,
+                             authority_schema=authority_schema,
+                             exemptions_schema=exemptions_schema)
+    else:
+        rendered = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        state_field = parent_key.casefold() in {
+            "state", "status", "mode", "capability", "readiness", "activation",
+        }
+        loop_context = any(_has_claim_potential_hint(item) for item in context[:-1])
+        assertion = (
+            parent_key in SUBJECT_PATTERNS
+            or parent_key in {"runtime_activation", "migration_validity"}
+            or (state_field and loop_context)
+        )
+        content = f"{parent_key}: {rendered}" if assertion else str(rendered)
+        schema_role = (policy_schema and parent_key in {
+            "claim_id", "notice_id", "normalized_relative_path", "claim_payload",
+            "claim_payload_sha256", "locator_sha256", "claim_class", "status",
+        }) or (authority_schema and parent_key in {
+            "record_id", "path", "line_prefix", "sha256", "policy_sha256", "authority_ids",
+            "effective_version", "capability", "runtime_activation", "migration_validity",
+            "criteria_2_3_4_5_6", "criterion_7", "criterion_8", "open_risks",
+        }) or exemptions_schema
+        if _claim_potential_hint(content, context):
+            units.append(_unit(candidate, f"json:{pointer or '/'}", (1, 0, 1, 0), content,
+                               "data" if schema_role else ("structured_assertion" if assertion else "data"),
+                               ("json_schema_role" if schema_role else f"json_pointer:{pointer or '/'}"),
+                               context=context))
+
+
 def _json_units(candidate: Candidate, text: str) -> list[SemanticUnit]:
     data = json.loads(text)
     units: list[SemanticUnit] = []
@@ -2534,40 +2606,10 @@ def _json_units(candidate: Candidate, text: str) -> list[SemanticUnit]:
         and "exemptions" in data
     )
 
-    def walk(value: Any, pointer: str, parent_key: str = "", context: tuple[str, ...] = ()) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                escaped = str(key).replace("~", "~0").replace("/", "~1")
-                walk(child, f"{pointer}/{escaped}", str(key), (*context, str(key)))
-        elif isinstance(value, list):
-            for index, child in enumerate(value):
-                walk(child, f"{pointer}/{index}", parent_key, (*context, str(index)))
-        else:
-            rendered = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-            state_field = parent_key.casefold() in {
-                "state", "status", "mode", "capability", "readiness", "activation",
-            }
-            loop_context = any(_has_claim_potential_hint(item) for item in context[:-1])
-            assertion = (
-                parent_key in SUBJECT_PATTERNS
-                or parent_key in {"runtime_activation", "migration_validity"}
-                or (state_field and loop_context)
-            )
-            content = f"{parent_key}: {rendered}" if assertion else str(rendered)
-            schema_role = (policy_schema and parent_key in {
-                "claim_id", "notice_id", "normalized_relative_path", "claim_payload",
-                "claim_payload_sha256", "locator_sha256", "claim_class", "status",
-            }) or (authority_schema and parent_key in {
-                "record_id", "path", "line_prefix", "sha256", "policy_sha256", "authority_ids",
-                "effective_version", "capability", "runtime_activation", "migration_validity",
-                "criteria_2_3_4_5_6", "criterion_7", "criterion_8", "open_risks",
-            }) or exemptions_schema
-            if _claim_potential_hint(content, context):
-                units.append(_unit(candidate, f"json:{pointer or '/'}", (1, 0, 1, 0), content,
-                                   "data" if schema_role else ("structured_assertion" if assertion else "data"),
-                                   ("json_schema_role" if schema_role else f"json_pointer:{pointer or '/'}"),
-                                   context=context))
-    walk(data, "")
+    _json_units_walk(data, "", candidate=candidate, units=units,
+                     policy_schema=policy_schema,
+                     authority_schema=authority_schema,
+                     exemptions_schema=exemptions_schema)
     return units
 
 

@@ -47,6 +47,7 @@ from archive_migration_engine import (
     _guard_row_family_write_migration,
     _row_family_journal_category,
     _write_archive_file,
+    _write_archive_file_never_overwrite,
     _big_table_target_lock,
 )
 from archive_verdicts import _decision_narrative_verdict
@@ -423,8 +424,16 @@ def _migrate_evidence_impl(version_start, version_end, task_versions,
     archive_body = list(_row_family_archive_table_header(row_family))
     archive_body.extend(line for line, _ver in archived)
     if row_family == "EVD":
+        # FIX-446 (DEC-350; R15 §3.2): the EVD leg's target name goes
+        # through the existing host-routed never-overwrite naming
+        # (_next_evidence_archive_filename → _make_incremental_archive_
+        # filename_impl) — the same discipline the non-EVD family legs
+        # already use below. The base name is no longer constructed here:
+        # a same-range rerun must land in its OWN incremental file, never
+        # overwrite the previous archive (the R14 W-A2 silent-loss defect).
         archive_path = host["_archive_dir"]() / "evidence" / \
-            f"evidence-v{version_start}-{version_end}.md"
+            host["_next_evidence_archive_filename"](version_start,
+                                                    version_end)
     else:
         # FEAT-076: family legs get their own never-overwrite filename.
         archive_path = host["_archive_dir"]() / "evidence" / \
@@ -434,8 +443,34 @@ def _migrate_evidence_impl(version_start, version_end, task_versions,
                                    _row_family_journal_category(row_family),
                                    len(archived),
                                    prev_file=None, next_file=None)
-    _write_archive_file(archive_path, header, archive_body)
-    elog.write_text("\n".join(kept_lines), encoding="utf-8")
+    if row_family == "EVD":
+        # FIX-446 (DEC-350; R15 §3.2 + N-R15-3; R17 DEC-351/352 S1): the
+        # never-overwrite publish is EVD-ONLY — O_EXCL exclusive creation
+        # with the full payload fsynced through the held fd BEFORE any hot
+        # row is removed; an existing target is judged on the real entry
+        # (identity + byte-equal AND durability-completed → idempotent
+        # skip / foreign, non-regular, swapped or undurable →
+        # archive_target_conflict refusal with the old bytes preserved).
+        _write_archive_file_never_overwrite(archive_path, header,
+                                            archive_body)
+        # FIX-446: the EVD hot rewrite goes through the atomic-write
+        # discipline (temp+fsync+os.replace, host-routed so the
+        # crash-injection tests keep their patch surface) — an
+        # interrupted rewrite can never truncate the hot table and lose
+        # the kept rows. Archive-first, hot-after order preserved.
+        host["_atomic_write_text"](elog, "\n".join(kept_lines))
+    else:
+        # FIX-446 R17 (DEC-351/352 S1): the non-EVD family legs keep
+        # their EXACT pre-FIX-446 writer semantics — the legacy plain
+        # text _write_archive_file publish (a same-name collision is a
+        # plain overwrite, not a structured refusal) and the direct
+        # elog.write_text hot rewrite (NOT atomic). R16 had wrongly
+        # routed these legs through the EVD-only never-overwrite and
+        # atomic-hot hardening at a shared call site; the corrective
+        # ruling scopes that hardening to the legacy evidence leg alone.
+        # Hardening the family legs requires its own explicit ruling.
+        _write_archive_file(archive_path, header, archive_body)
+        elog.write_text("\n".join(kept_lines), encoding="utf-8")
     return len(archived)
 
 # ── Rollback recovery (FIX-435 moved verbatim; host-routed paths) ──

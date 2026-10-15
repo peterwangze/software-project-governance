@@ -40,6 +40,7 @@ covered only when the journal/batch writer itself is the patched name.
 import contextlib
 import json
 import os
+import stat
 import subprocess
 import tempfile
 from datetime import date, datetime
@@ -72,11 +73,16 @@ _DECISION_AUTHORITY_MARKER_NAME = ".decision-store-state.json"
 # minimal packaging may lack the peers; local fallbacks keep the same
 # durability guarantees instead of silently downgrading.
 try:
-    from governance_store import _TargetLock, _atomic_write_bytes
+    from governance_store import (
+        _TargetLock,
+        _atomic_write_bytes,
+        _fsync_dir,
+    )
     import decision_repository as _decision_repository
 except Exception:  # pragma: no cover — fallback path, exercised by layout
     _TargetLock = None
     _atomic_write_bytes = None
+    _fsync_dir = None
     _decision_repository = None
 
 
@@ -213,6 +219,298 @@ class DecisionStoreAuthorityConflict(BigTableMigrationError):
     (FEAT-061 decision-store state != MD_ACTIVE) — decision-log.md is a
     projection and must never be rewritten as if it were authority. The
     store-backed DEC archive read route belongs to the cutover ticket."""
+
+
+def _verify_existing_archive_target(target, payload):
+    """FIX-446 (DEC-350; R17 DEC-351/352 S2): the EEXIST judgment for the
+    never-overwrite publish — REAL entry type, SAME-PATH identity held
+    across every reopen, BOUNDED byte-wise comparison read from the open
+    descriptor, and durability completion.
+
+    Judged on the kernel's truth, never a path follow-read: an ``lstat``
+    pre-check refuses non-regular entries (symlink/dir/fifo/… — a link
+    whose TARGET happens to carry byte-equal content must never license
+    the hot rewrite), the descriptor is opened O_NOFOLLOW where the
+    platform provides it, and EVERY ``fstat`` re-check compares both the
+    entry type and the (st_dev, st_ino) identity against the lstat
+    baseline — a same-path regular→regular swap inside the lstat→open
+    window or the readonly→O_RDWR reopen window (the R16 EVD-1692
+    counterexample: byte-equal judgment made on one file, durability
+    completed on a DIFFERENT file moved into the path) is refused as
+    ``identity_changed`` instead of returning a false idempotent_skip.
+    The O_RDWR durability retry re-verifies type, identity, size AND
+    bytes on the reopened descriptor before its fsync, so the durability
+    completed is provably the durability of the judged bytes.
+
+    Bounded reads (R17 F6): the entry's fstat size is compared with the
+    payload length BEFORE any byte is read — a size mismatch is a
+    ``foreign_bytes`` refusal at zero read I/O, and the byte comparison
+    only ever reads at most len(payload) bytes (a hostile squatter file
+    can no longer force an unbounded memory read).
+
+    Byte-equal is accepted ONLY after the durability of those bytes is
+    COMPLETED: a previous writer's crashed-before-fsync leftover carries
+    full bytes only in the OS cache, so the idempotent branch fsyncs
+    through a descriptor before returning "idempotent_skip" (POSIX
+    flushes the file's dirty pages regardless of which fd wrote them).
+    Windows FlushFileBuffers needs write access → an O_RDWR retry (no
+    truncation, zero writes) covers it; if durability cannot be completed
+    the refusal is loud and the hot rows stay.
+
+    Disclosed limits (F2/F7): the identity comparison detects swaps
+    ACROSS our own judgment windows only — it does NOT prevent an
+    arbitrary write-capable party from modifying the SAME inode after
+    the judgment, and no inode comparison is claimed to stop future
+    modification by a privileged writer; that residual is inherited from
+    the platform, not closed here. uid-equality is deliberately NOT
+    gated — st_uid is meaningless on the primary deployment platform
+    (win32 ≈ 0) and a uid gate would refuse legitimately restored
+    archives; the conservative refusals are entry type, identity, bytes,
+    and durability. The legacy hot table's lock-free read-modify-rewrite
+    race (F7) is likewise pre-existing and NOT claimed solved by this
+    judgment.
+
+    The existing bytes are never modified on any path; every refusal
+    keeps the hot rows (fail-closed).
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        lst = os.lstat(str(target))
+    except OSError as exc:
+        raise BigTableMigrationError({
+            "code": "archive_target_conflict",
+            "detail": f"{target} exists but cannot be stat-ed ({exc}) — "
+                      "refusing the never-overwrite judgment",
+            "existing_kind": "unreadable",
+        }) from exc
+    if not stat.S_ISREG(lst.st_mode):
+        raise BigTableMigrationError({
+            "code": "archive_target_conflict",
+            "detail": (
+                f"{target} exists but is not a regular file "
+                f"(mode {stat.S_IFMT(lst.st_mode):o}) — a symlink/foreign "
+                "entry is never accepted as the preserved archive, and a "
+                "follow-read that happens to equal the payload never "
+                "licenses the hot rewrite"),
+            "existing_kind": "not_regular",
+        })
+    identity = (lst.st_dev, lst.st_ino)
+    try:
+        fd = os.open(str(target), os.O_RDONLY | nofollow)
+    except OSError as exc:
+        raise BigTableMigrationError({
+            "code": "archive_target_conflict",
+            "detail": f"{target} already exists and cannot be read ({exc}) "
+                      "— refusing to overwrite (FIX-446 never-overwrite "
+                      "discipline)",
+            "existing_kind": "unreadable",
+        }) from exc
+    try:
+        fst = os.fstat(fd)
+        if not stat.S_ISREG(fst.st_mode):
+            raise BigTableMigrationError({
+                "code": "archive_target_conflict",
+                "detail": (
+                    f"{target} was swapped to a non-regular entry "
+                    f"mid-judgment (mode {stat.S_IFMT(fst.st_mode):o}) — "
+                    "refusing"),
+                "existing_kind": "not_regular",
+            })
+        if (fst.st_dev, fst.st_ino) != identity:
+            raise BigTableMigrationError({
+                "code": "archive_target_conflict",
+                "detail": (
+                    f"{target} resolved to a DIFFERENT regular file than "
+                    "the one the lstat judged (identity "
+                    f"{fst.st_dev}:{fst.st_ino} vs {identity[0]}:"
+                    f"{identity[1]}) — a same-path swap inside the "
+                    "judgment window never licenses the hot rewrite "
+                    "(FIX-446 R17, EVD-1692 class)"),
+                "existing_kind": "identity_changed",
+            })
+        if fst.st_size != len(payload):
+            # F6: size gate BEFORE any byte is read — zero-I/O refusal.
+            raise BigTableMigrationError({
+                "code": "archive_target_conflict",
+                "detail": (
+                    f"{target} already exists with FOREIGN content "
+                    f"({fst.st_size}B on disk vs {len(payload)}B payload, "
+                    "refused on fstat size before any read) — refusing to "
+                    "overwrite; the existing bytes are preserved verbatim"),
+                "existing_kind": "foreign_bytes",
+            })
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        existing = b"".join(chunks)
+        if existing != payload:
+            raise BigTableMigrationError({
+                "code": "archive_target_conflict",
+                "detail": (
+                    f"{target} already exists with FOREIGN content "
+                    f"({len(existing)}B on disk vs {len(payload)}B "
+                    "payload) — refusing to overwrite; the existing bytes "
+                    "are preserved verbatim"),
+                "existing_kind": "foreign_bytes",
+            })
+        try:
+            os.fsync(fd)
+            return "idempotent_skip"
+        except OSError:
+            # win32: FlushFileBuffers needs write access — retry O_RDWR.
+            pass
+    finally:
+        os.close(fd)
+    try:
+        wfd = os.open(str(target), os.O_RDWR | nofollow)
+    except OSError as exc:
+        raise BigTableMigrationError({
+            "code": "archive_target_conflict",
+            "detail": (
+                f"{target} carries byte-equal content but its "
+                f"durability cannot be completed ({exc}) — equal-but-"
+                "undurable bytes never license the hot rewrite; the "
+                "hot rows stay"),
+            "existing_kind": "durability_unverifiable",
+        }) from exc
+    try:
+        wst = os.fstat(wfd)
+        if not stat.S_ISREG(wst.st_mode) or (wst.st_dev, wst.st_ino) != identity:
+            # S2 / EVD-1692: the reopen window — the already-made
+            # byte-equal judgment can never be transferred onto a
+            # replaced object; refuse instead of returning a false
+            # idempotent success.
+            raise BigTableMigrationError({
+                "code": "archive_target_conflict",
+                "detail": (
+                    f"{target} was swapped to a different entry before "
+                    "the write-access durability retry (mode "
+                    f"{stat.S_IFMT(wst.st_mode):o}, identity "
+                    f"{wst.st_dev}:{wst.st_ino} vs {identity[0]}:"
+                    f"{identity[1]}) — refusing; the fsync below would "
+                    "have certified a file that is not the judged one "
+                    "(FIX-446 R17, EVD-1692)"),
+                "existing_kind": "identity_changed",
+            })
+        if wst.st_size != len(payload):
+            raise BigTableMigrationError({
+                "code": "archive_target_conflict",
+                "detail": (
+                    f"{target} carries byte-different content at the "
+                    f"write-access retry ({wst.st_size}B on disk vs "
+                    f"{len(payload)}B payload, refused on fstat size "
+                    "before any read) — refusing to overwrite; the "
+                    "existing bytes are preserved verbatim"),
+                "existing_kind": "foreign_bytes",
+            })
+        chunks = []
+        while True:
+            chunk = os.read(wfd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        reopened = b"".join(chunks)
+        if reopened != payload:
+            raise BigTableMigrationError({
+                "code": "archive_target_conflict",
+                "detail": (
+                    f"{target} was modified in place between the judgment "
+                    "and the write-access durability retry (bytes no "
+                    "longer equal the payload) — refusing; the existing "
+                    "bytes are preserved verbatim"),
+                "existing_kind": "foreign_bytes",
+            })
+        os.fsync(wfd)
+    except OSError as exc:
+        raise BigTableMigrationError({
+            "code": "archive_target_conflict",
+            "detail": (
+                f"{target} carries byte-equal content but its "
+                f"durability cannot be completed ({exc}) — equal-but-"
+                "undurable bytes never license the hot rewrite; the "
+                "hot rows stay"),
+            "existing_kind": "durability_unverifiable",
+        }) from exc
+    finally:
+        os.close(wfd)
+    return "idempotent_skip"
+
+
+def _write_archive_file_never_overwrite(filepath, header, body_lines):
+    """FIX-446 (DEC-350; R15 §3.2 + N-R15-3): never-overwrite archive
+    publish — the SINGLE algorithm for the legacy EVD evidence leg.
+
+    O_CREAT|O_EXCL exclusive creation; the full payload is written
+    through the held descriptor, flush+fsync, then a best-effort
+    directory fsync (the FEAT-060 durability discipline, reused from
+    governance_store._fsync_dir — POSIX crash-durability nicety for the
+    directory entry, swallowed on Windows). The caller may remove hot
+    rows ONLY after this returns. There is deliberately NO temp+os.replace
+    branch: replace would clobber a concurrent winner (N-R15-3 —
+    exclusive creation and atomic replace are NOT synonyms), and unique
+    naming alone does not close the compute-name→publish race; the race
+    lands here as EEXIST and is judged by _verify_existing_archive_target
+    (byte-equal AND durability-completed → idempotent skip / anything
+    else → loud refusal with the old bytes preserved).
+
+    A crash or failure between creation and the successful fsync leaves
+    THIS migration's own half-piece under the final name — fail-loud,
+    identifiable for reconciliation, never silently deleted and never
+    treated as a completed migration.
+
+    Windows reports an existing DIRECTORY under CREATE_NEW as EACCES
+    rather than EEXIST; that case is classified through the real entry
+    (lstat) and routed to the same judgment — a genuinely absent target
+    re-raises the environment error unchanged (never mislabeled a
+    conflict).
+
+    Durability wording (R17 F4, disclosed): on "created" the FILE's
+    bytes are fsynced and the directory entry gets the best-effort
+    _fsync_dir nicety (swallowed on Windows, absent in minimal
+    packaging) — a file fsync is NOT directory durability, and no
+    whole-platform power-loss guarantee is claimed for the directory
+    entry. "idempotent_skip" certifies an EXISTING entry (type,
+    identity, bytes judged; file-data durability completed) — that
+    entry's directory-record persistence is the filesystem's
+    pre-existing state, not something this call creates. New
+    synchronization dependencies fail loudly (the payload fsync and the
+    verify fsyncs all propagate; F7) — no new silent no-op was
+    introduced; the legacy _fsync_dir swallow is the pre-existing
+    FEAT-060 discipline, unchanged here.
+
+    Returns "created" | "idempotent_skip".
+    """
+    target = Path(filepath)
+    payload = (header + "\n" + "\n".join(body_lines) + "\n").encode("utf-8")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(target),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        return _verify_existing_archive_target(target, payload)
+    except PermissionError as exc:
+        # win32: CREATE_NEW on an existing non-regular entry (e.g. a
+        # directory) surfaces as EACCES, not EEXIST. Exists → the same
+        # EEXIST judgment; genuinely absent → the environment error
+        # propagates unchanged (never mislabeled a conflict).
+        try:
+            os.lstat(str(target))
+        except FileNotFoundError:
+            raise exc
+        return _verify_existing_archive_target(target, payload)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    if _fsync_dir is not None:
+        _fsync_dir(target.parent)
+    # else: minimal packaging — the data fsync above already pinned the
+    # file's bytes; the directory-entry nicety is skipped.
+    return "created"
+
 
 def _atomic_write_text(path, text):
     """Durable same-directory atomic write of UTF-8 text (LF bytes).

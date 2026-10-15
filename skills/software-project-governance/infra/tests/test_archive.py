@@ -8,6 +8,14 @@ Tests cover:
   - verify_archive_integrity: detects inconsistencies
   - backward compatibility: no archive/ directory = no-op
   - Dry-Run mode: does not modify files
+  - FIX-446: legacy EVD evidence leg never-overwrite archive publish
+    (incremental naming, O_EXCL exclusive create, existing-target
+    byte/durability/file-type judgment, crash-window hot preservation)
+  - FIX-446 R17 (DEC-351/352): EVD-only scope isolation for the hardened
+    publish/hot-write (other row families keep their pre-FIX-446 writer
+    semantics) and existing-target identity re-verification across the
+    lstat→open and readonly→O_RDWR reopen windows (EVD-1692 false
+    idempotent success), plus the bounded size-gate read discipline
 
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_archive.py -v
@@ -6218,6 +6226,721 @@ class TestFix435SplitSurface(unittest.TestCase):
             result = mod.migrate_by_version("0.1.0", "0.2.0", dry_run=True)
             self.assertTrue(result["success"])
             self.assertEqual(result["tasks_archived"], 0)
+
+
+# ────────────────────────────────────────────────────────────
+# FIX-446 (DEC-350): legacy EVD never-overwrite archive publish
+# ────────────────────────────────────────────────────────────
+
+
+class TestFix446LegacyEvidenceNeverOverwrite(unittest.TestCase):
+    """FIX-446 (DEC-350; R15 §3.2/§3.3 + N-R15-3): the legacy one-shot EVD
+    evidence leg must NEVER overwrite an existing archive file.
+
+    R14 W-A2 defect being fixed: `_migrate_evidence_impl` constructed the
+    base name `evidence-vX-Y.md` directly and published through
+    `_write_archive_file` (open "w")) — a same-range rerun (the legacy
+    leg's ONLY recovery mode after an interruption) rewrote the previous
+    archive with the new row set, silently destroying already-archived
+    rows in ordinary operations.
+
+    Contract under test (single publish algorithm: O_CREAT|O_EXCL
+    exclusive creation, the full payload fsynced through the held fd
+    BEFORE any hot row is removed; no temp+replace — replace would
+    clobber a concurrent winner):
+
+      * naming goes through the host-routed never-overwrite generator —
+        a same-range rerun lands in its OWN incremental file; the old
+        archive's bytes are preserved verbatim;
+      * an existing target is judged on the REAL entry: non-regular
+        entries (directory/symlink/…) are conservatively refused — a
+        follow-read that happens to equal the payload must NEVER license
+        the hot rewrite; foreign bytes → BigTableMigrationError
+        archive_target_conflict with the old bytes preserved;
+      * byte-equal is accepted as idempotent ONLY after the durability of
+        those bytes is completed (fsync through a fresh descriptor) — a
+        previous writer's crashed-before-fsync leftover carries full
+        bytes only in the OS cache, and equal-but-undurable must not
+        license the hot rewrite either;
+      * write interruption / fsync failure never removes hot rows — the
+        hot leg runs only after a clean publish and itself goes through
+        the atomic-write discipline;
+      * crash after the archive publish but before the hot rewrite: the
+        retry keeps the original archive bytes and loses no hot row (the
+        retried batch lands in a NEW incremental file — disclosed
+        conservative double-presence, never loss).
+    """
+
+    RANGE = ("0.1.0", "0.59.0")
+    BASENAME = "evidence-v0.1.0-0.59.0.md"
+    TASK_VERSIONS = {"FIX-084": "0.38.0", "REL-013": "0.38.0"}
+
+    def setUp(self):
+        import archive
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov = self.root / ".governance"
+        self.gov.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov / "archive"
+        for sub in ("tasks", "evidence", "decisions", "risks"):
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    # ── helpers ──
+
+    def _hot(self, entries):
+        _make_evidence_log(self.gov, entries)
+
+    def _hot_text(self):
+        return (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+
+    def _evd_dir(self):
+        return self.archive_dir / "evidence"
+
+    def _migrate(self, forced_name=None):
+        """Run the legacy one-shot EVD leg. ``forced_name`` simulates the
+        compute-name→publish race window (a competitor published under the
+        name this writer resolved) by pinning the naming seam's return."""
+        patches = [patch.object(self.archive, "ROOT", self.root),
+                   patch.object(self.archive, "PLUGIN_ROOT", self.root)]
+        if forced_name is not None:
+            patches.append(patch.object(
+                self.archive, "_next_evidence_archive_filename",
+                return_value=forced_name))
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            return self.archive._migrate_evidence(
+                self.RANGE[0], self.RANGE[1], self.TASK_VERSIONS,
+                dry_run=False)
+
+    def _incrementals(self):
+        return sorted(p.name for p in self._evd_dir().glob(
+            "evidence-v0.1.0-0.59.0-incremental-*.md"))
+
+    def _expected_payload(self, entries):
+        """The exact bytes a clean publish of ``entries`` produces (same
+        header/table-header/row construction as the leg itself)."""
+        from archive_migration_engine import _build_archive_header
+        from archive_parsing import _row_family_archive_table_header
+        header = _build_archive_header(
+            self.RANGE[0], self.RANGE[1], "evidence", len(entries))
+        body = list(_row_family_archive_table_header("EVD"))
+        for evd_id, task_ids, desc in entries:
+            body.append(
+                f"| {evd_id} | {task_ids} | {desc} | 2026-05-01 | 代码 | "
+                f"src/ | 阿速 | 老赵 | 通过 | — |")
+        return (header + "\n" + "\n".join(body) + "\n").encode("utf-8")
+
+    # ── V5 primary: same-range rerun never destroys the old archive ──
+
+    def test_same_range_second_batch_preserves_old_bytes_new_incremental(self):
+        """A same-range rerun with a NEW batch keeps the first archive's
+        bytes verbatim and lands in its own incremental file. RED on the
+        unfixed code: the base name was reconstructed and rewritten with
+        open("w") — the first batch's archive was silently destroyed."""
+        batch1 = [("EVD-001", "FIX-084", "first batch row one"),
+                  ("EVD-002", "REL-013", "first batch row two")]
+        self._hot(batch1)
+        self.assertEqual(self._migrate(), 2)
+        base = self._evd_dir() / self.BASENAME
+        self.assertTrue(base.is_file())
+        first_bytes = base.read_bytes()
+
+        batch2 = [("EVD-101", "FIX-084", "second batch row one"),
+                  ("EVD-102", "REL-013", "second batch row two")]
+        self._hot(batch2)
+        self.assertEqual(self._migrate(), 2)
+
+        # The original archive is byte-identical.
+        self.assertEqual(base.read_bytes(), first_bytes)
+        # The new batch landed in its OWN incremental file.
+        incrementals = self._incrementals()
+        self.assertEqual(len(incrementals), 1)
+        incremental_text = (self._evd_dir() / incrementals[0]).read_text(
+            encoding="utf-8")
+        self.assertIn("| EVD-101 |", incremental_text)
+        self.assertIn("| EVD-102 |", incremental_text)
+        self.assertNotIn("EVD-001", incremental_text)
+        # Hot table drained of the second batch.
+        hot = self._hot_text()
+        self.assertNotIn("EVD-101", hot)
+        self.assertNotIn("EVD-102", hot)
+
+    # ── existing-target judgment: foreign bytes → loud refusal ──
+
+    def test_forced_same_name_foreign_target_refused_unchanged(self):
+        """Race/preexisting branch: the computed target already carries
+        FOREIGN bytes → loud archive_target_conflict, old bytes preserved
+        verbatim, hot table untouched (refusal precedes the hot rewrite).
+        RED on the unfixed code: open("w") overwrote the foreign archive
+        and drained the hot rows."""
+        foreign = "# foreign archive payload\n" + ("x" * 64) + "\n"
+        target = self._evd_dir() / self.BASENAME
+        target.write_text(foreign, encoding="utf-8")
+        self._hot([("EVD-001", "FIX-084", "batch row"),
+                   ("EVD-050", "FIX-157", "live row — must stay")])
+        hot_before = self._hot_text()
+
+        with self.assertRaises(self.archive.BigTableMigrationError) as ctx:
+            self._migrate(forced_name=self.BASENAME)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "archive_target_conflict")
+        self.assertEqual(ctx.exception.payload["existing_kind"],
+                         "foreign_bytes")
+        # Old bytes preserved verbatim; hot table untouched.
+        self.assertEqual(target.read_text(encoding="utf-8"), foreign)
+        self.assertEqual(self._hot_text(), hot_before)
+
+    # ── existing-target judgment: byte-equal → idempotent, NO rewrite ──
+
+    def test_forced_same_name_equal_target_idempotent_no_rewrite(self):
+        """Equal-bytes branch: a competitor already published byte-equal
+        content under the same name → idempotent skip (NO rewrite — the
+        mtime sentinel proves it) and the hot leg still completes. RED on
+        the unfixed code: open("w") rewrote the file (mtime moved)."""
+        rows = [("EVD-001", "FIX-084", "same batch row")]
+        self._hot(rows)
+        with patch.object(self.archive, "_next_evidence_archive_filename",
+                          return_value=self.BASENAME):
+            self.assertEqual(self._migrate(), 1)
+        target = self._evd_dir() / self.BASENAME
+        published = target.read_bytes()
+
+        # Same pinned input again (the racing writer's world), same forced
+        # target name; pin a sentinel mtime to prove no rewrite happens.
+        self._hot(rows)
+        sentinel = 1000000
+        os.utime(target, (sentinel, sentinel))
+        self.assertEqual(self._migrate(forced_name=self.BASENAME), 1)
+        self.assertEqual(target.read_bytes(), published)
+        self.assertEqual(int(target.stat().st_mtime), sentinel)
+        # The idempotent completion still finishes the hot leg.
+        self.assertNotIn("EVD-001", self._hot_text())
+        self.assertEqual(self._incrementals(), [])
+
+    # ── existing-target judgment: real entry type, never a follow-read ──
+
+    def test_existing_directory_target_refused_loudly(self):
+        """A directory squatting the target name is refused on the REAL
+        entry type — never written through, hot rows stay. RED on the
+        unfixed code: open("w") raised a raw IsADirectoryError/
+        PermissionError instead of the structured refusal."""
+        self._hot([("EVD-001", "FIX-084", "directory refusal row"),
+                   ("EVD-050", "FIX-157", "live row")])
+        target = self._evd_dir() / self.BASENAME
+        target.mkdir()
+        hot_before = self._hot_text()
+        with self.assertRaises(self.archive.BigTableMigrationError) as ctx:
+            self._migrate(forced_name=self.BASENAME)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "archive_target_conflict")
+        self.assertEqual(ctx.exception.payload["existing_kind"],
+                         "not_regular")
+        self.assertTrue(target.is_dir())
+        self.assertEqual(self._hot_text(), hot_before)
+
+    def test_existing_symlink_target_refused_not_followed(self):
+        """A symlink whose TARGET carries byte-equal payload content must
+        NOT be accepted via a follow-read — byte equality through a link
+        never licenses the hot rewrite; the link and decoy stay intact.
+        (skipTest where the platform denies symlink creation.)"""
+        rows = [("EVD-001", "FIX-084", "symlink refusal row")]
+        self._hot(rows)
+        decoy = self._evd_dir() / "decoy-payload.md"
+        decoy.write_bytes(self._expected_payload(rows))
+        target = self._evd_dir() / self.BASENAME
+        try:
+            os.symlink(decoy, target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink creation unavailable on this platform")
+        hot_before = self._hot_text()
+        with self.assertRaises(self.archive.BigTableMigrationError) as ctx:
+            self._migrate(forced_name=self.BASENAME)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "archive_target_conflict")
+        self.assertEqual(ctx.exception.payload["existing_kind"],
+                         "not_regular")
+        # Not followed: the link survives, the decoy keeps its bytes, and
+        # no hot row was removed on the strength of a follow-read.
+        self.assertTrue(target.is_symlink())
+        self.assertEqual(decoy.read_bytes(), self._expected_payload(rows))
+        self.assertEqual(self._hot_text(), hot_before)
+
+    # ── durability gate on the idempotent branch ──
+
+    def test_equal_bytes_undurable_refused_then_healthy_retry_completes(self):
+        """Byte-equal alone is NOT an idempotent license: the equal bytes
+        may be a previous writer's crashed-before-fsync leftover (full
+        bytes in the OS cache, never flushed). While durability cannot be
+        completed the migration refuses loudly and keeps every hot row;
+        once the fsync completes, the SAME world is accepted as idempotent
+        (still no rewrite — the mtime sentinel proves it)."""
+        rows = [("EVD-001", "FIX-084", "durability gate row")]
+        self._hot(rows)
+        target = self._evd_dir() / self.BASENAME
+        # A previous writer's unflushed leftover: exact payload bytes on
+        # disk, never fsynced.
+        target.write_bytes(self._expected_payload(rows))
+        sentinel = 1000000
+        os.utime(target, (sentinel, sentinel))
+        hot_before = self._hot_text()
+
+        # fsync cannot complete → refusal, hot intact, no rewrite.
+        with patch("os.fsync",
+                   side_effect=OSError("simulated fsync refusal")):
+            with self.assertRaises(
+                    self.archive.BigTableMigrationError) as ctx:
+                self._migrate(forced_name=self.BASENAME)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "archive_target_conflict")
+        self.assertEqual(ctx.exception.payload["existing_kind"],
+                         "durability_unverifiable")
+        self.assertEqual(self._hot_text(), hot_before)
+        self.assertEqual(int(target.stat().st_mtime), sentinel)
+
+        # Durability completes → idempotent acceptance, still no rewrite,
+        # and only now does the hot leg finish.
+        self.assertEqual(self._migrate(forced_name=self.BASENAME), 1)
+        self.assertEqual(int(target.stat().st_mtime), sentinel)
+        self.assertNotIn("EVD-001", self._hot_text())
+        self.assertEqual(self._incrementals(), [])
+
+    # ── interruption inside the publish ──
+
+    def test_fsync_failure_keeps_hot_and_leaves_own_half_piece(self):
+        """Durability failure inside the publish: the error propagates
+        loudly, the hot table is untouched (rows are removed only after a
+        clean publish), and this migration's own half-piece remains under
+        the final name — fail-loud, identifiable, never silently deleted.
+        RED on the unfixed code: the writer had no fsync surface at all —
+        nothing failed and the hot rows were drained."""
+        self._hot([("EVD-001", "FIX-084", "batch row"),
+                   ("EVD-050", "FIX-157", "live row")])
+        hot_before = self._hot_text()
+        with patch("os.fsync",
+                   side_effect=OSError("simulated fsync failure")):
+            with self.assertRaises(OSError):
+                self._migrate()
+        # Hot table intact — the pre-failure world, byte for byte.
+        self.assertEqual(self._hot_text(), hot_before)
+        # The interrupted publish left its own artifact under the final
+        # name (an unsynced/torn half-piece is OURS, kept for inspection).
+        self.assertTrue((self._evd_dir() / self.BASENAME).is_file())
+
+    def test_torn_publish_never_deletes_hot_rows(self):
+        """Caller discipline: a publish that dies mid-write (torn artifact
+        under the final name) is NEVER treated as a completed migration —
+        no hot row is removed. RED on the unfixed code: the seam does not
+        exist (AttributeError at patch time)."""
+        import archive_entity_migration as entity_mod
+        self._hot([("EVD-001", "FIX-084", "batch row"),
+                   ("EVD-050", "FIX-157", "live row")])
+        hot_before = self._hot_text()
+        target = self._evd_dir() / self.BASENAME
+
+        def torn_publish(path, header, body_lines):
+            payload = (header + "\n" + "\n".join(body_lines) + "\n") \
+                .encode("utf-8")
+            Path(path).write_bytes(payload[: max(1, len(payload) // 2)])
+            raise OSError("simulated torn publish")
+
+        with patch.object(entity_mod,
+                          "_write_archive_file_never_overwrite",
+                          side_effect=torn_publish):
+            with self.assertRaises(OSError):
+                self._migrate()
+        # No hot row removed on the strength of a dead publish.
+        self.assertEqual(self._hot_text(), hot_before)
+        # The torn artifact is identifiable: a real, partial, half-piece.
+        half = target.read_bytes()
+        self.assertGreater(len(half), 0)
+
+    # ── V6: crash after the publish, before the hot rewrite ──
+
+    def test_crash_after_publish_before_hot_retry_loses_nothing(self):
+        """Crash window between the durable archive publish and the hot
+        rewrite → the retry re-publishes under a NEW incremental name
+        (never-overwrite), the original archive bytes are unchanged, and
+        no hot row is lost (disclosed conservative double-presence of the
+        crashed batch, never loss). RED on the unfixed code: the hot
+        rewrite did not route through the atomic primitive — the injected
+        crash never fired and the first run drained the hot table."""
+        self._hot([("EVD-001", "FIX-084", "batch row one"),
+                   ("EVD-002", "REL-013", "batch row two"),
+                   ("EVD-050", "FIX-157", "live row — must survive")])
+        real_atomic = self.archive._atomic_write_text
+
+        def crashing(path, text):
+            if Path(path).name == "evidence-log.md":
+                raise OSError("simulated crash before hot rewrite")
+            return real_atomic(path, text)
+
+        with patch.object(self.archive, "_atomic_write_text",
+                          side_effect=crashing):
+            with self.assertRaises(OSError):
+                self._migrate()
+        base = self._evd_dir() / self.BASENAME
+        self.assertTrue(base.is_file())
+        archived_bytes = base.read_bytes()
+        # Crash-window state: the hot table still carries EVERY row.
+        hot_at_crash = self._hot_text()
+        for evd in ("EVD-001", "EVD-002", "EVD-050"):
+            self.assertIn(evd, hot_at_crash)
+
+        # Retry (healthy writer): a NEW incremental file carries the batch,
+        # the original archive bytes are untouched, and only the live row
+        # stays hot — nothing is lost.
+        self.assertEqual(self._migrate(), 2)
+        self.assertEqual(base.read_bytes(), archived_bytes)
+        incrementals = self._incrementals()
+        self.assertEqual(len(incrementals), 1)
+        incremental_text = (self._evd_dir() / incrementals[0]).read_text(
+            encoding="utf-8")
+        self.assertIn("| EVD-001 |", incremental_text)
+        self.assertIn("| EVD-002 |", incremental_text)
+        hot_after = self._hot_text()
+        self.assertNotIn("EVD-001", hot_after)
+        self.assertNotIn("EVD-002", hot_after)
+        self.assertIn("EVD-050", hot_after)
+        # No-loss conservation: every original id is still reachable
+        # (hot or archive) — the crashed batch appears twice (disclosed).
+        cold = base.read_text(encoding="utf-8") + incremental_text
+        for evd in ("EVD-001", "EVD-002", "EVD-050"):
+            self.assertTrue(evd in hot_after or evd in cold)
+
+    # ── engine primitive unit contract ──
+
+    def test_never_overwrite_primitive_contract(self):
+        """Engine primitive unit contract: exclusive create publishes the
+        exact payload; EEXIST+equal → idempotent_skip with bytes AND mtime
+        untouched (durability completed through the fresh descriptor);
+        EEXIST+foreign → archive_target_conflict, foreign bytes preserved.
+        RED on the unfixed code: the primitive does not exist."""
+        from archive_migration_engine import (
+            BigTableMigrationError, _write_archive_file_never_overwrite)
+        target = self._evd_dir() / "prim.md"
+        header = "# header\n"
+        body = ["| EVD-1 | a |", "| EVD-2 | b |"]
+        self.assertEqual(
+            _write_archive_file_never_overwrite(target, header, body),
+            "created")
+        expected = (header + "\n" + "\n".join(body) + "\n").encode("utf-8")
+        self.assertEqual(target.read_bytes(), expected)
+
+        sentinel = 1000000
+        os.utime(target, (sentinel, sentinel))
+        self.assertEqual(
+            _write_archive_file_never_overwrite(target, header, body),
+            "idempotent_skip")
+        self.assertEqual(target.read_bytes(), expected)
+        self.assertEqual(int(target.stat().st_mtime), sentinel)
+
+        target.write_bytes(b"foreign bytes")
+        with self.assertRaises(BigTableMigrationError) as ctx:
+            _write_archive_file_never_overwrite(target, header, body)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "archive_target_conflict")
+        self.assertEqual(ctx.exception.payload["existing_kind"],
+                         "foreign_bytes")
+        self.assertEqual(target.read_bytes(), b"foreign bytes")
+
+
+# ────────────────────────────────────────────────────────────
+# FIX-446 R17 (DEC-351/352): EVD-only scope isolation + existing
+# target identity re-verification across every reopen window
+# ────────────────────────────────────────────────────────────
+
+
+class TestFix446R17EvdScopeAndTargetIdentity(unittest.TestCase):
+    """FIX-446 R17 (DEC-351/352 corrective round): the two Coordinator
+    admission blockers against the R16 delivery, as permanent
+    regressions.
+
+    S1 (scope): the never-overwrite publish and the atomic hot rewrite
+    are EVD-ONLY. The other row families (REVIEW/TRIAGE/RECO) keep their
+    exact pre-FIX-446 writer semantics — the FEAT-076 never-overwrite
+    NAMING, then the legacy plain-text ``_write_archive_file`` publish
+    and the direct ``elog.write_text`` hot rewrite (same-name collision =
+    plain overwrite; hot rewrite NOT atomic). R16 had wrongly hardened
+    these family legs through the shared call site.
+
+    S2 (false idempotent success): an existing target is judged for
+    entry type, (st_dev, st_ino) IDENTITY and bytes at EVERY window —
+    the lstat→readonly-open window and the readonly→O_RDWR durability
+    retry (the R16 EVD-1692 counterexample: a regular→regular swap
+    before the O_RDWR reopen made the implementation fsync the swapped-in
+    object and return idempotent_skip while the judged bytes no longer
+    lived at the path). A swapped target is refused (identity_changed)
+    and the hot rows never move. Disclosed limit, not claimed here: an
+    inode comparison cannot stop an arbitrary write-capable party from
+    modifying the same inode AFTER the judgment.
+
+    F6 (bounded reads): an existing target whose fstat size already
+    mismatches the payload length is refused at ZERO bytes read.
+    """
+
+    RANGE = ("0.1.0", "0.90.0")
+    TASK_VERSIONS = {"FIX-950": "0.80.0", "FIX-951": "0.85.0"}
+    EVD_BASENAME = "evidence-v0.1.0-0.90.0.md"
+    REVIEW_BASENAME = "evidence-review-v0.1.0-0.90.0.md"
+
+    def setUp(self):
+        import archive
+        self.archive = archive
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self.tempdir.name)
+        self.gov = self.root / ".governance"
+        self.gov.mkdir(parents=True, exist_ok=True)
+        self.archive_dir = self.gov / "archive"
+        for sub in ("tasks", "evidence", "decisions", "risks"):
+            (self.archive_dir / sub).mkdir(parents=True, exist_ok=True)
+        # FEAT-076-shaped hot table: REVIEW rows reference FIX-950/951
+        # (both archived, both in range) → a REVIEW leg migrates exactly
+        # the two REVIEW rows.
+        (self.gov / "evidence-log.md").write_text("\n".join([
+            "# 当前项目证据记录",
+            "| REVIEW-FIX-950-CODE-R0 | FIX-950 | 产品代码 | review r0 |",
+            "| REVIEW-FIX-951-R1 | FIX-951 | 产品代码 | review r1 |",
+            "| TRIAGE-FIX-950 | FIX-950 | 变更控制 | triage row |",
+            "| EVD-1 | FIX-950 | 产品代码 | evd row |",
+        ]), encoding="utf-8")
+        (self.gov / "plan-tracker.md").write_text(
+            "### 优先级一览\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.tempdir.cleanup()
+
+    # ── helpers ──
+
+    def _hot_text(self):
+        return (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+
+    def _migrate(self, row_family, forced_name=None):
+        """Run the legacy one-shot leg for ``row_family``. ``forced_name``
+        pins the family-appropriate naming seam's return to simulate a
+        compute-name→publish race landing on a pre-existing entry."""
+        seam = ("_next_evidence_archive_filename" if row_family == "EVD"
+                else "_next_family_archive_filename")
+        patches = [patch.object(self.archive, "ROOT", self.root),
+                   patch.object(self.archive, "PLUGIN_ROOT", self.root)]
+        if forced_name is not None:
+            patches.append(patch.object(self.archive, seam,
+                                        return_value=forced_name))
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            return self.archive._migrate_evidence(
+                self.RANGE[0], self.RANGE[1], self.TASK_VERSIONS,
+                dry_run=False, row_family=row_family)
+
+    def _expected_evd_payload(self, entries):
+        """The exact bytes a clean EVD publish of ``entries`` produces."""
+        from archive_migration_engine import _build_archive_header
+        from archive_parsing import _row_family_archive_table_header
+        header = _build_archive_header(
+            self.RANGE[0], self.RANGE[1], "evidence", len(entries))
+        body = list(_row_family_archive_table_header("EVD"))
+        for evd_id, task_ids, desc in entries:
+            body.append(
+                f"| {evd_id} | {task_ids} | {desc} | 2026-05-01 | 代码 | "
+                f"src/ | 阿速 | 老赵 | 通过 | — |")
+        return (header + "\n" + "\n".join(body) + "\n").encode("utf-8")
+
+    # ── S1: the hardened publish/hot-write is EVD-only ──
+
+    def test_non_evd_families_not_routed_to_evd_only_primitives(self):
+        """S1 (RED on R16): a REVIEW-family legacy migration must not
+        touch the EVD-only never-overwrite publish nor the atomic hot
+        rewrite — R16 hardened every family leg through the shared call
+        site; poisoning both EVD-only primitives must leave the REVIEW
+        leg fully functional on its legacy writer pair."""
+        import archive_entity_migration as entity_mod
+        with patch.object(
+                entity_mod, "_write_archive_file_never_overwrite",
+                side_effect=AssertionError(
+                    "never-overwrite publish is EVD-only (DEC-351/352)")), \
+            patch.object(
+                self.archive, "_atomic_write_text",
+                side_effect=AssertionError(
+                    "atomic hot rewrite is EVD-only (DEC-351/352)")):
+            self.assertEqual(self._migrate("REVIEW"), 2)
+        hot = self._hot_text()
+        self.assertNotIn("REVIEW-FIX-950-CODE-R0", hot)
+        self.assertNotIn("REVIEW-FIX-951-R1", hot)
+        # Rows of OTHER families in the same hot table are untouched by
+        # a REVIEW leg.
+        self.assertIn("TRIAGE-FIX-950", hot)
+        self.assertIn("| EVD-1 |", hot)
+        family_archive = (self.archive_dir / "evidence" /
+                          self.REVIEW_BASENAME)
+        self.assertTrue(family_archive.is_file())
+        content = family_archive.read_text(encoding="utf-8")
+        self.assertIn("| REVIEW-FIX-950-CODE-R0 |", content)
+        self.assertIn("| REVIEW-FIX-951-R1 |", content)
+
+    def test_non_evd_family_keeps_legacy_collision_overwrite_semantics(self):
+        """S1 (RED on R16): the pre-FIX-446 byte semantics are PINNED for
+        the non-EVD families — a same-name collision goes through the
+        legacy plain writer (plain overwrite, no structured refusal, no
+        never-overwrite judgment) and the hot rewrite is the direct
+        write_text. This unchanged legacy surface is exactly what
+        DEC-351/352 authorized FIX-446 to leave alone; hardening it is a
+        separate, explicitly-ruled ticket."""
+        foreign = "# independently written family archive\n" \
+                  "| REVIEW-OLD | FIX-000 | 产品代码 | old row |\n"
+        target = self.archive_dir / "evidence" / self.REVIEW_BASENAME
+        target.write_text(foreign, encoding="utf-8")
+        self.assertEqual(
+            self._migrate("REVIEW", forced_name=self.REVIEW_BASENAME), 2)
+        content = target.read_text(encoding="utf-8")
+        self.assertNotIn("REVIEW-OLD", content)
+        self.assertIn("| REVIEW-FIX-950-CODE-R0 |", content)
+        self.assertIn("| REVIEW-FIX-951-R1 |", content)
+        hot = self._hot_text()
+        self.assertNotIn("REVIEW-FIX-950-CODE-R0", hot)
+        self.assertNotIn("REVIEW-FIX-951-R1", hot)
+
+    def test_evd_leg_keeps_never_overwrite_semantics(self):
+        """Guard (green before AND after R17): the EVD leg KEEPS the
+        FIX-446 never-overwrite publish + atomic hot rewrite — poisoning
+        the legacy plain writer must not affect an EVD migration. The
+        scope split must be a real split, not a global rollback."""
+        import archive_entity_migration as entity_mod
+        _make_evidence_log(self.gov, [("EVD-001", "FIX-950",
+                                       "evd guard row")])
+        with patch.object(entity_mod, "_write_archive_file",
+                          side_effect=AssertionError(
+                              "legacy plain writer must not serve EVD")):
+            self.assertEqual(self._migrate("EVD"), 1)
+        self.assertNotIn("| EVD-001 |", self._hot_text())
+        self.assertTrue((self.archive_dir / "evidence" /
+                         self.EVD_BASENAME).is_file())
+
+    # ── S2: identity re-verification across the reopen windows ──
+
+    def test_target_swap_before_rdwr_retry_refused_no_false_success(self):
+        """S2 / EVD-1692 (RED on R16): byte-equal target whose readonly
+        fsync is refused (the win32 FlushFileBuffers contract), then a
+        DIFFERENT regular archive replaces the target before the O_RDWR
+        durability retry — R16 fsynced the swapped-in object and returned
+        idempotent_skip while the path no longer carried the payload
+        (false idempotent success, reproduced by the Coordinator probe
+        FIX-446-target-swap-probe.py). The corrected judgment re-verifies
+        identity on the reopened descriptor: refusal identity_changed,
+        the swapped-in bytes stay untouched, NO hot row is removed."""
+        entries = [("EVD-001", "FIX-950", "swap refusal row")]
+        _make_evidence_log(self.gov, entries)
+        hot_before = self._hot_text()
+        target = self.archive_dir / "evidence" / self.EVD_BASENAME
+        target.write_bytes(self._expected_evd_payload(entries))
+        foreign = b"# competitor archive\n| EVD-FOREIGN | FIX-x | foreign |\n"
+        swap_source = self.archive_dir / "evidence" / "competitor.md"
+        real_open, real_fsync = os.open, os.fsync
+        first_fsync = [True]
+
+        def fsync_one_readonly_failure(fd):
+            if first_fsync[0]:
+                first_fsync[0] = False
+                raise OSError("simulated readonly fsync refusal")
+            return real_fsync(fd)
+
+        def open_swaps_regular_target(path, flags, *args, **kwargs):
+            # At this hook the readonly descriptor is already closed by
+            # the production finally — replace ONLY our fixture target,
+            # exactly the EVD-1692 probe's deterministic seam.
+            if Path(path) == target and (flags & os.O_RDWR):
+                swap_source.write_bytes(foreign)
+                os.replace(swap_source, target)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch("os.fsync", side_effect=fsync_one_readonly_failure), \
+                patch("os.open",
+                      side_effect=open_swaps_regular_target):
+            with self.assertRaises(
+                    self.archive.BigTableMigrationError) as ctx:
+                self._migrate("EVD", forced_name=self.EVD_BASENAME)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "archive_target_conflict")
+        self.assertEqual(ctx.exception.payload["existing_kind"],
+                         "identity_changed")
+        # The swapped-in object keeps its own bytes (never written or
+        # deleted by us) and the hot rows stay — no false success.
+        self.assertEqual(target.read_bytes(), foreign)
+        self.assertEqual(self._hot_text(), hot_before)
+
+    def test_regular_swap_in_lstat_window_refused(self):
+        """S2 (RED on R16): the same-path judgment must hold ONE identity
+        across the lstat→open window — a regular→regular swap there (the
+        lstat judged a different object than the descriptor opened) is
+        refused instead of licensing an idempotent success."""
+        entries = [("EVD-001", "FIX-950", "lstat window row")]
+        _make_evidence_log(self.gov, entries)
+        hot_before = self._hot_text()
+        target = self.archive_dir / "evidence" / self.EVD_BASENAME
+        target.write_bytes(self._expected_evd_payload(entries))
+        decoy = self.archive_dir / "evidence" / "decoy.md"
+        decoy.write_bytes(b"# decoy regular file\n")
+        real_lstat = os.lstat
+
+        def lstat_reports_decoy_for_target(path):
+            if Path(path) == target:
+                # Deterministic simulation of a regular→regular swap
+                # between the judgment's lstat and its open().
+                return os.stat(decoy)
+            return real_lstat(path)
+
+        with patch("os.lstat", side_effect=lstat_reports_decoy_for_target):
+            with self.assertRaises(
+                    self.archive.BigTableMigrationError) as ctx:
+                self._migrate("EVD", forced_name=self.EVD_BASENAME)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "archive_target_conflict")
+        self.assertEqual(ctx.exception.payload["existing_kind"],
+                         "identity_changed")
+        self.assertEqual(self._hot_text(), hot_before)
+        self.assertEqual(target.read_bytes(),
+                         self._expected_evd_payload(entries))
+
+    # ── F6: bounded reads — size gate before any byte is read ──
+
+    def test_large_different_existing_target_refused_without_reading(self):
+        """F6 (RED on R16): an existing target whose size already
+        mismatches the payload is refused at ZERO bytes read — the fstat
+        size gate precedes any read; R16 read the whole foreign entry
+        into memory before comparing (unbounded memory exposure to a
+        hostile squatter file)."""
+        from archive_migration_engine import (
+            BigTableMigrationError, _write_archive_file_never_overwrite)
+        target = self.archive_dir / "evidence" / "prim-f6.md"
+        # 32 MiB foreign entry (truncate-extended: size without writing
+        # 32 MiB of content — sparse-friendly).
+        with open(target, "wb") as handle:
+            handle.truncate(32 * 1024 * 1024)
+        header = "# header\n"
+        body = ["| EVD-1 | a |"]
+        read_bytes_total = [0]
+        real_read = os.read
+
+        def read_counting(fd, size):
+            chunk = real_read(fd, size)
+            read_bytes_total[0] += len(chunk)
+            return chunk
+
+        with patch("os.read", side_effect=read_counting):
+            with self.assertRaises(BigTableMigrationError) as ctx:
+                _write_archive_file_never_overwrite(target, header, body)
+        self.assertEqual(ctx.exception.payload["code"],
+                         "archive_target_conflict")
+        self.assertEqual(ctx.exception.payload["existing_kind"],
+                         "foreign_bytes")
+        self.assertEqual(read_bytes_total[0], 0,
+                         "size-mismatched foreign targets must be "
+                         "refused WITHOUT reading them")
+        self.assertEqual(target.stat().st_size, 32 * 1024 * 1024)
 
 
 if __name__ == "__main__":

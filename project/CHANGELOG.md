@@ -2,6 +2,41 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.98.0] - （发布日期占位——FIX-349 口径：M-7 annotated tag `v0.98.0` taggerdate 权威回填）
+
+### 0.98.0 - **次版本线：可信有界执行内核（Minor Line: Trusted Bounded Execution Kernel）**：载荷七票（FEAT-093 权威账本 / FEAT-094 审查可信链 / FEAT-095 动作级执法 / FEAT-096 执行隔离 / FEAT-097 goal 桥接 + FIX-442/443/446 随版 / 发布链 REL-102）
+
+0.98.0 为 0.97.0 的次版本线（**「可信有界执行内核」批**——DEC-330 联合裁定，AUDIT-159 像素风RPG长程复盘驱动：意图识别/事务分解/落盘契约/循环演进/过程看护五维度实测缺口〔报告=docs/requirements/analysis-rpg-longhaul-capability-session-f3f46901-0.97.0.md〕）：**任务身份与状态进入权威账本时代（FEAT-093——同 ID 双语义写入被拒、plan-tracker 降级为可重建投影）+ 审查链不可变快照绑定与事务化（FEAT-094——报告/机录冲突判 CONFLICT、R2 义务自动登记、代理死亡 ABORTED）+ 六边界动作级执法（FEAT-095——协议级+CLI 级+如实降级披露：六平台无宿主级拦截，DSH 原语完备未接线，M-0 调研判定 docs/release/m-0-assembly-0.98.0.md §3）+ 执行隔离保守面（FEAT-096）+ goal 状态映射与多维权危险区收口（FEAT-097——blocked 后未授权续跑拒绝并落账）**。载荷重定 DEC-354（FEAT-098 P2 顺延 0.99.0）；FIX-444/445 顺延 0.99.0（DEC-358①——DEC-342 用户暂停维持，FAIL 面以 GO 终审披露）；版本载荷窗口 `dd5c2a2（v0.97.0 tag peel）..回填位`（M-8 批回填终值——窗口内 291b4f9/d0bac6e/daac2b8/504ee89/c46ad2a/M-1 版本面），发布链 REL-102 组装于 2026-10-15（+0800）。
+
+### Added
+
+- **权威账本与身份契约（FEAT-093，commit 42ddbca——R0 NEEDS_CHANGE→R1 AWN/0）**：task/attempt/review 稳定身份 + 核心状态事务更新（task-row-update 状态机 CAS：triaged→dev→review→approved→completed→committed/blocked + --expected-revision 内容级 CAS + ops 收据台账 sidecar）；同 ID 双语义写入侧被拒；plan-tracker 热区降级为可重建投影；历史数据迁移零丢失（默认 off 渐进开关——live migrate --write 与读切换为后续票）。
+- **审查可信链（FEAT-094，commit 099acbf——R0 AWN/0）**：被审对象不可变快照绑定（git hash-object blob + untracked-safe）+ 报告哈希 sha256 钉入机录 + R2 义务随 NEEDS_CHANGE 机录自动生成（不漏建）+ 报告/机录冲突判 CONFLICT（禁乐观者胜出）+ 代理死亡 supervisor 生成 ABORTED/UNKNOWN；五步审查事务原子化。
+- **动作级执法（FEAT-095，commit daac2b8——R0 AWN/0→P1-1 措辞收窄〔DEC-357〕→R1 AWN/0）**：`enforcement.py`（727 行独立模块）六边界（派发执行/派发审查/接受完成/合并/发布/goal 续跑）×三层策略（硬阻断/限流升级/提示重建）+ 审查债预算（未闭合义务按严重性×年龄构成，超阈限流）+ 冷面过期提示（Gate/总览/TPA/风险时效）+ `ENFORCEMENT-ACTION` jsonl 机录含 remedy + 故障注入 20 用例；CLI 面 `enforcement-check`（出口码 0/2/3/4）；**默认 GOVERNANCE_ENFORCEMENT=off 零漂移 advisory 基线**；commit 前不设卡（WIP checkpoint 始终允许）；harness 适配能力如实降级（协议级+CLI 级，无宿主级声明）。
+- **goal 与预算桥接（FEAT-097，commit daac2b8 归并——R0~R6 六轮，R6=DEC-333 修复后 delta 复审 AWN/0）**：`goal_bridge.py`（1040 行）RUNNING→DRAINING→CHECKPOINTED→BLOCKED 状态映射 + 多维权预算危险区（轮次/token/墙钟/成本任一入区即收口，70% 轮量必要不充分）+ checkpoint 工件跨会话携带账本/义务/修订/规则版本/预算消耗 + blocked 后未授权续跑拒绝并落 unauthorized_attempts；CLI 面 `goal-bridge`。
+- **legacy evidence 归档不覆写保护（FIX-446，commit d0bac6e——R16→R17 AWN/0，DEC-350/351/352 限修三 file）**：异物/字节不匹配目标明确拒绝、真同目标 already-preserved 不重写、冲突/竞态/中断写保全旧档与热行；(st_dev,st_ino) 身份窗口复验；红→绿永久回归 + 全量 206 passed。
+
+### Changed
+
+- **执行隔离保守面（FEAT-096，commit bf6942d——R0 NEE→R1 AWN/0）**：共享文件写并发限制 + 同文件域「被审/在写」互斥 + 审查快照只读化 + 租约回收带失权验证（宿主 worktree/沙箱能力调研落盘——保守面先行）。
+- **运行时声明扫描性能修复（FIX-443，commit 291b4f9——R0 AWN/0，DEC-333）**：闭包→模块级递归纯性能重构，原 CPU 27.8s/CLI 36s 门限与语义/资源面（434339/32MiB）不变。
+- **DSH preset 冒烟并发写入容忍度（FIX-442，commit 75cc7e5——R0 AWN/0）**：Check 28u 把活跃会话同机并发合法写入误判隔离破坏——before/after diff 归因排除，真实越界仍 FAIL。
+- **archguard 基线与 FEAT-020 契约快照 sanctioned regen（DEC-358③，commit daac2b8 rider）**：R1 锚点 28160→28204（+44=FEAT-095 enforcement 接线增量）/R5 冻结键 99→107（enforcement-check+goal-bridge 等入册）/R7 committed==fresh——七轴 fatal gate green。
+- **单测时钟敏感断言修复（REL-102 C4，commit c46ad2a——REVIEW-REL-102-R0 AWN/0）**：FEAT075 渲染测试 fixture 过期日动态化（原硬编码 2026-10-12 过钟后 fail-closed expired 误报为回归）——产品行为正确，断言过时；全量 test_verify_workflow 1135 tests 0F/0E。
+- **M-1 版本面再生纪律**：权威源 bump（SKILL frontmatter）→ 17 针脚（六 REQUIRED_SNIPPETS 引擎针/四 hooks @version/四 plugin.json/双 marketplace/manifest）→ `release-projection --write`（written=7，write_then_probe PASS，sd_integrity 28/0）→ 双根 entry sync ×4（repo root + e2e 的 AGENTS.md/CLAUDE.md bootstrap 段经 sync_entry_projection.py --write 再生）。
+
+### Breaking changes
+
+**无**——依据：①新增面均为追加（enforcement-check/goal-bridge 新 CLI 子命令、ops 收据台账 sidecar、ENFORCEMENT-ACTION jsonl——合法调用方零破坏）；②FEAT-095 执法默认 off（GOVERNANCE_ENFORCEMENT=off 零漂移 advisory 基线，DEC-357 口径钉死）；③身份契约执法（同 ID 双语义拒绝）为写入器侧 fail-closed——手写绕过面披露不消除；④`.governance` 数据面追加式（plan-tracker 投影化渐进，读切换为后续票）；⑤回归基线：全量 test_verify_workflow **Ran 1135 OK**（EVD-1707 双实测）+ archguard 七轴 0 violations + 版本一致性 PASS@0.98.0 + check-release 静态 16 面 PASS（M-0 实测基线，M-2 复跑定谳）。
+
+**行为变更（用户可感知）**：开启 GOVERNANCE_ENFORCEMENT 后六边界违规从静默变为结构化拒绝+remedy 机录（默认关闭零感知）；goal 长程运行进入危险区后带范围裁决回用户（禁静默续跑）——回退 = git revert 发布 commit 序列（rollback-plan-0.98.0.md，M-4 落盘后生效）；执法面可经 env 开关关闭。
+
+**升级路径**：/plugin update → 下次会话 bootstrap 自升级（FEAT-035 升级确认门，用户未响应前零写操作）；无迁移动作（数据面追加式）。
+
+**决策链**：DEC-330（六票联合立项）/ DEC-333（FIX-443 修复路径）/ DEC-334（FIX-444→FIX-445 承接）/ DEC-342（FIX-445 用户暂停）/ DEC-350/351/352（FIX-446 限修授权）/ DEC-353/354（0.98 启动与载荷重定）/ DEC-357（FEAT-095 措辞收窄）/ DEC-358（M-0 定谳三项）；**证据**：EVD-1363~1367（载荷交付）/ EVD-1432~1471（FEAT-097 链）/ EVD-1695~1707（FIX-446 终态→C4 收口）+ 审查链 REVIEW-FEAT-093~097 / FIX-442/443/446 / REL-102-R0 全 AWN/0 + M-0 GO 报告 `docs/release/m-0-assembly-0.98.0.md`。
+
+**准备态注记**：本段为 REL-102 组装时点（2026-10-15 +0800）的**准备态**——发布日期不预填（FIX-349 口径以 M-7 tag taggerdate 权威回填）；发布终账、Commit 区间终值、故障注入六项验证结论（DEC-330 底线）与 GO 终审披露面（FIX-444/445 顺延态/28s 数据体量）随发布链 M-2+ 补记。
+
 ## [0.97.0] - 2026-10-09（taggerdate 18:14:55 +0800 权威〔FIX-349〕——tag v0.97.0→dd5c2a2〔transition：M-5a candidate b54c754→M-6b manifest-only〕；ledger NATIVE_RELEASED 本地+remote 双 PASS）
 <!-- 发布日期占位（FIX-349 口径）：已按 M-7 taggerdate 权威回填。 -->
 

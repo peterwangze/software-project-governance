@@ -24347,7 +24347,22 @@ class FEAT075ExceptionAnnotationTests(unittest.TestCase):
     # ── engine wiring (annotation-only, inert without a registry) ──
 
     def test_archguard_render_carries_suffix_and_underlying_counts(self):
-        self._registry()
+        # Clock-window pin: this is the ONE test in the class whose verdict
+        # rides the renderer's real clock — vw._archguard_print_findings ->
+        # _exception_note -> exception_registry.exception_note(today=None)
+        # -> date.today() (no injection point on the render path), while the
+        # shared _registry() fixture pins expires_on="2026-10-12" (a future
+        # date when FEAT-075 landed, 2026-09-28). Once the wall clock passed
+        # 2026-10-12 the effective-exception annotation expired and the
+        # assertIn below went deterministically RED (EVD-1697 unit-test gate
+        # 3F+1E face; same clock_window_sensitive family as the FIX-364
+        # snapshot-freshness face). Fix: derive the fixture expiry relative
+        # to the real clock (today + 14 d, mirroring the DEC-280 two-week
+        # registration horizon) so the effective state is stable; every
+        # other test in the class injects today=_today() explicitly and
+        # keeps the static date.
+        expires = (date.today() + timedelta(days=14)).isoformat()
+        self._registry(expires_on=expires)
         result = {
             "summary": {"errors": 1, "warnings": 0},
             "findings": self._findings(),
@@ -24362,7 +24377,7 @@ class FEAT075ExceptionAnnotationTests(unittest.TestCase):
         self.assertIn("[ERROR] governance_data_size:", rendered)
         self.assertIn("bytes=300000", rendered)
         self.assertIn("exception accepted (EXC-001, ref=DEC-280, "
-                      "expires=2026-10-12)", rendered)
+                      f"expires={expires})", rendered)
         # Summary counts returned unchanged (annotation is not a status).
         self.assertEqual((errors, warnings), (1, 0))
         self.assertEqual(result["findings"][0]["severity"], "ERROR")

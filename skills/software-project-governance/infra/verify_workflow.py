@@ -116,6 +116,26 @@ from execution_isolation import (cmd_isolation_capability,
                                  cmd_isolation_snapshot,
                                  cmd_isolation_status,
                                  cmd_isolation_write)
+# FEAT-097 (0.98.0): the goal↔budget bridge — state mapping
+# (RUNNING→DRAINING→CHECKPOINTED→BLOCKED) + multi-dimension danger-zone
+# collection (rounds/tokens/wall-clock/cost, any-dimension danger
+# collects) + checkpoint artifacts (ledger/obligations/revision/
+# rules_version/budget) + resume authorization (blocked 后禁未授权续跑).
+# Self-contained stdlib-only module; the engine wires dispatch only
+# (same pattern). Boundaries: no harness-goal replacement, no
+# mid-session hot upgrade (DEC-330), no FEAT-095 enforcement face.
+import goal_bridge
+from goal_bridge import cmd_goal_bridge
+# FEAT-095 (0.98.0): action-level enforcement — six boundaries × three
+# layers (hard block / review-debt-budget throttle / stale-surface
+# notice) as a strategy-TABLE + generic-executor module (table/executor
+# separation: adding a boundary edits data, not executor code).
+# Capability honesty: the delivered face is PROTOCOL+CLI only (research
+# report docs/research/feat-095-harness-enforcement-capability-2026-10-10
+# .md §7 U1-U7) — NO host-level interception claim.  The engine wires
+# dispatch only (RISK-039 thin-entry discipline, same pattern).
+import enforcement
+from enforcement import cmd_enforcement_check
 
 ROOT = Path(__file__).resolve().parents[3]
 INTERACTION_BOUNDARY_PATH = ROOT / "skills/software-project-governance/references/interaction-boundary.md"
@@ -25649,6 +25669,33 @@ def cmd_isolation_capability_engine(args):
         args, governance_dir=GOVERNANCE_DIR, repo_root=HOST_PROJECT_ROOT)
 
 
+# FEAT-097 (0.98.0): goal-bridge engine thin entry — all validation and
+# writing live in goal_bridge.py (RISK-039 thin-entry discipline); this
+# glue injects the ENGINE-resolved governance dir (read at call time so
+# an explicit --project-root override applies) and returns the module's
+# exit code (0 ok / 2 refusal; judge's any_danger also exits 2).
+
+
+def cmd_goal_bridge_engine(args):
+    """Thin entry — goal-bridge CLI (all actions)."""
+    return cmd_goal_bridge(args, governance_dir=GOVERNANCE_DIR)
+
+
+# FEAT-095 (0.98.0): enforcement engine thin entry — all validation and
+# record-writing live in enforcement.py (RISK-039 thin-entry
+# discipline); this glue injects the ENGINE-resolved governance dir
+# (read at call time so an explicit --project-root override applies)
+# and returns the module's family exit code (0 allow / 2 hard block
+# incl. fail-closed / 3 throttle / 4 stale notice; switch off = 0 with
+# zero side effects — zero drift vs the advisory baseline).
+
+
+def cmd_enforcement_check_engine(args):
+    """Thin entry — enforcement-check CLI (FEAT-095 six boundaries)."""
+    return cmd_enforcement_check(
+        args, governance_dir=GOVERNANCE_DIR, repo_root=HOST_PROJECT_ROOT)
+
+
 def cmd_governance_write_guard(args):
     """Thin entry — governance-write-guard CLI (FEAT-011 / G3 extension).
 
@@ -27970,6 +28017,34 @@ def main(argv=None):
     )
     execution_isolation.add_capability_arguments(isc_p)
 
+    # FEAT-097 (0.98.0 — goal↔budget bridge): args and handler live in
+    # goal_bridge.py — the engine only wires dispatch (governance_cost
+    # pattern; ArchGuard R4 print budget untouched). Exit 0 ok /
+    # 2 refusal (blocked/scope-ruling gate; judge's any_danger also 2).
+    gbr_p = subparsers.add_parser(
+        "goal-bridge",
+        help="FEAT-097 goal↔budget bridge (--action record/checkpoint/"
+             "ruling/status/judge/thresholds/mapping): state mapping + "
+             "danger-zone collection + checkpoint artifacts + resume "
+             "authorization (blocked 后禁未授权续跑)",
+    )
+    goal_bridge.add_goal_bridge_arguments(gbr_p)
+
+    # FEAT-095 (0.98.0 — action-level enforcement): args and handler
+    # live in enforcement.py — the engine only wires dispatch (same
+    # pattern).  Exit 0 allow / 2 hard block (incl. fail-closed) /
+    # 3 throttle (review-debt budget) / 4 stale notice (non-blocking);
+    # GOVERNANCE_ENFORCEMENT=off = zero-drift advisory baseline.
+    enf_p = subparsers.add_parser(
+        "enforcement-check",
+        help="FEAT-095 action-level enforcement (--facts JSON / "
+             "--print-strategy): six boundaries × three layers — "
+             "hard block exit 2 / throttle exit 3 / stale notice "
+             "exit 4 / allow exit 0 (protocol+CLI face, no host-level "
+             "interception claim)",
+    )
+    enforcement.add_enforcement_check_arguments(enf_p)
+
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -28091,6 +28166,15 @@ def main(argv=None):
         "isolation-lease-reclaim": cmd_isolation_lease_reclaim_engine,
         "isolation-status": cmd_isolation_status_engine,
         "isolation-capability": cmd_isolation_capability_engine,
+        # FEAT-097 (0.98.0): goal-bridge dispatch (state mapping + budget
+        # collection + checkpoints + resume authorization; exit 0 ok /
+        # 2 refusal — the handler resolves governance_dir from the
+        # ENGINE's resolved paths, read at call time).
+        "goal-bridge": cmd_goal_bridge_engine,
+        # FEAT-095 (0.98.0): enforcement dispatch (six boundaries ×
+        # three layers; exit 0 allow / 2 hard block incl. fail-closed /
+        # 3 throttle / 4 stale notice).
+        "enforcement-check": cmd_enforcement_check_engine,
     }
 
     cmd = args.command or "verify"

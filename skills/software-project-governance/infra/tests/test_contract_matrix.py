@@ -111,14 +111,33 @@ from contract_matrix import generator as cmg  # noqa: E402
 # not a FEAT-093 contract change. Segments unchanged at 73.
 # FEAT-096 (0.98.0 window, DEC-330 batch): 100→105 keys — the five
 # `isolation-*` execution-isolation conservative-surface commands (write
-# concurrency limit + under-review/being-written mutex + read-only review
-# snapshots + lease reclaim with loss-of-authority verification; engine
-# thin entries in verify_workflow.py, module logic in
+# concurrency limit + under-review/being-written mutex + read-only
+# review snapshots + lease reclaim with loss-of-authority verification;
+# engine thin entries in verify_workflow.py, module logic in
 # execution_isolation.py). Snapshot regenerated + registry rows + this
 # count re-baselined in the same change (the documented contract-change
 # path). Segments unchanged at 73 (no check-governance segment rides the
 # isolation surface).
-FROZEN_CLI_KEY_COUNT = 105
+# FEAT-097 (0.98.0 window, DEC-330 batch): 105→106 keys — the
+# `goal-bridge` goal↔budget bridge (state mapping + multi-dimension
+# danger-zone collection + checkpoint artifacts + resume authorization;
+# engine thin entry in verify_workflow.py, module logic in goal_bridge.py
+# — the isolation pattern). Snapshot + counts re-baselined in the same
+# change. Segments unchanged at 73.
+# FEAT-097 (same ticket, R2-window make-up regen — the FEAT-093
+# precedent): the same regen also absorbed ONE live-data leaf flip in
+# result_shapes (check_governance_write_shapes
+# deferred_observation.skip_kind str→NoneType). The FEAT-097 regen had
+# frozen the leaf while the M2 deferred detector read zero fired hits
+# on the then-current governance rows; THIS session's own machine-
+# written rows (R1 review-record + RECHECK-FEAT-097-R2 registration,
+# verify_workflow.py _stamp_deferred_observation: fired>0 ⇒ skip_kind
+# None) flipped the detector's live fired-hit state, so the probe now
+# signs NoneType. Disclosed as a make-up rider — a live-state leaf
+# change, NOT a contract change (keys stay 106 / segments 73;
+# guard_output_pin byte-stable); the leaf remains free to flip back
+# with live governance state under the same regen discipline.
+FROZEN_CLI_KEY_COUNT = 106
 FROZEN_CHECK_SEGMENT_COUNT = 73
 
 

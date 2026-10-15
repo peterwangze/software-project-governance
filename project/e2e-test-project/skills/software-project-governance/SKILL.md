@@ -224,7 +224,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ### 关键行为契约（MUST；完整规则：references/behavior-protocol.md M7.4/M7.7/M7.8）
 
-九条与铁律同级，违反任一 = 流程违规（本段为 canonical 投影；persona 携带压缩形式，`check-injection-contract` 锚点守护；第 7~9 条为 FEAT-090 协调开销纪律，完整规则 M7.8）：
+十条与铁律同级，违反任一 = 流程违规（本段为 canonical 投影；persona 携带压缩形式，`check-injection-contract` 锚点守护；第 7~9 条为 FEAT-090 协调开销纪律，完整规则 M7.8；第 10 条为 FEAT-097 goal 预算桥接）：
 
 1. **复审必达（M7.4 step 4.6，T1-T4）**：收到 Reviewer 审查结论后 MUST 立即判定并执行——结论含 NEEDS_CHANGE 且 round<3（触发器 T1）→ spawn 同一 Reviewer 复审（round+1，prompt 注入前轮 review 报告路径为强制读取项），不得跳过、不得询问；round≥3 仍 NEEDS_CHANGE（触发器 T2）→ BLOCKED + escalation AskUserQuestion；APPROVED 或带 `unresolved_blockers=0` 的 APPROVED_WITH_NOTES 为唯一通过终态；BLOCKED → escalation。**delta 注入面（FEAT-091）**：R2+ 复审注入面 = 修复 diff + 前轮报告路径 + 验收标准，不默认全量重审；结构性变更时 Reviewer 可要求全量（M7.4 T1）。
 2. **完成必推荐（M7.4 step 6，FIX-223/237.5 增强；FEAT-072/DEC-266 三要素推荐卡）**：任务标记已完成→MUST 运行 `task-priority-analysis`（fail-closed 不跳过），快照记入 evidence-log→按依赖推荐 1~3 项；AskUserQuestion 前 MUST 给正文三要素推荐卡（服务目标/解决问题/方案要点，附可追溯依赖理由）；依据缺失 MUST 明示、不得编造，影响执行则先澄清；按 DEC-143 用对应短选项确认，MUST NOT 默认自主执行；空推荐→结构化空原因；MUST NOT 直接结束会话。
@@ -235,6 +235,31 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 7. **并行优先派发（M7.8.1，FEAT-090）**：独立无依赖任务 MUST 单步批量 spawn；等待子代理期间 Start-Sleep/轮询 = 违规；等待期有就绪任务 MUST 继续派发。
 8. **健康检查事件化（M7.8.2，FEAT-090）**：全量深检仅三类触发——会话首检/推进类动作前/异常信号；逐轮例行全量 = 违规。
 9. **热路径单源（M7.8.3，FEAT-090，write-guard 同级）**：热数据唯一读取路径 governance-bootstrap --format json；直读 plan-tracker/execution-packets/evidence-log = 违规。
+10. **goal 预算必收口（FEAT-097，RPG §3.1/§3.8 意图断层修复）**：harness goal 续跑的每一轮经 `goal-bridge --action record` 采集预算信号——四维权（轮次/token/墙钟/成本）任一入危险区即收口（RUNNING→DRAINING→CHECKPOINTED；70% 轮量为必要不充分：仅危险区触发收口，warning 仅披露）；DRAINING 只允许在途任务收尾（`--in-flight`）；CHECKPOINTED MUST AskUserQuestion 带范围裁决选项（缩范围/扩预算/继续/终止）——**禁静默续跑**；BLOCKED 后未授权续跑/执行被拒并机器留痕（恢复仅经 `--action ruling --decision reduce-scope/extend-budget --authorized-by <用户>`）；checkpoint 工件（`.governance/goal-bridge/<goal_id>.json`）携账本/义务/修订/规则版本/预算消耗跨会话恢复（幂等；规则版本变化=响亮披露不静默——DEC-330 禁 mid-session 热升级）；映射表与危险区阈值为配置面数据（`goal-bridge --action thresholds/mapping --text` 可 grep；调整不动状态机）；`GOVERNANCE_GOAL_BRIDGE=off` 回退既有 goal 行为。
+11. **六边界动作级执法（FEAT-095，DEC-330「检查必须影响执行权限」）**：Coordinator 在六边界动作（派发执行/派发审查/接受完成/合并/发布/goal 续跑）前 MUST 过执法判定——CLI 面 `verify_workflow.py enforcement-check --facts <边界动作 facts JSON>`（出口码 0=放行 / 2=硬阻断（含 fail-closed）/ 3=限流 / 4=提示重建），非 0 即 MUST 停下按 remedy 解除后重试，不得绕行；完整分层语义与降级披露见下方「动作级执法（FEAT-095）」段。
+
+### 动作级执法（FEAT-095）——六边界分层阻断（protocol 级契约；CLI 面 `enforcement-check` 强制）
+
+> DEC-330 arch 联合裁定「检查必须影响执行权限否则 advisory 无效」。本段是六边界执法的**协议级落地面**（Coordinator 侧 MUST 检查与阻断语义）；CLI 级落地面为 `infra/enforcement.py` + `verify_workflow.py enforcement-check`（出口码三态可区分），两面对齐由守护测试 `test_enforcement_skill_protocol_face_matches_cli_face` 机守。**降级披露（M-0 调研结论）**：六平台均无已接线宿主级拦截（`docs/research/feat-095-harness-enforcement-capability-2026-10-10.md` §5-§7 U1-U7）——本执法面 = 协议级 + CLI 级，**不做宿主级拦截能力声明**；绕过面（不调用 CLI 直接动作）由本段 MUST 纪律补位，RPG §3.4 实证即此形态衰减来源。
+
+**六边界 × 三层策略表**（策略表与执行器分离——新增边界改表 `enforcement.py STRATEGY` 不动执行器；`--print-strategy` 可 grep）：
+
+| 边界 | 硬阻断（exit 2） | 限流升级（exit 3） | 提示重建（exit 4） |
+|---|---|---|---|
+| `dispatch-execute` 派发执行 | 四类零漏放（见下） | 审查债预算超阈 | 冷面过期提示 |
+| `dispatch-review` 派发审查 | 四类零漏放（修订错配的复审派发同样被拒——白名单不豁免错配） | — | 冷面过期提示 |
+| `accept-completion` 接受完成 | 四类零漏放 | —（无关任务不冻结——scoped 非全局） | 冷面过期提示 |
+| `merge` 合并 commit/组装 | 四类零漏放（**WIP checkpoint 豁免一切：`wip_checkpoint=true` 始终放行——commit 前不设卡**） | — | 冷面过期提示 |
+| `release` 发布 tag/push | 四类零漏放 | — | 冷面过期提示 |
+| `goal-resume` goal 续跑 | 四类零漏放 | 审查债预算超阈（21 轮静默续跑的执法补位） | 冷面过期提示 |
+
+**四类硬阻断（零漏放）**：`revision-mismatch` 修订错配（派发目标修订 ≠ 治理期望修订）/ `unauthorized-write` 未授权写入（actor 不在 write 目标授权面）/ `duplicate-identity` 重复身份（actor 身份已 active）/ `unresolved-blocking-review` 相关阻塞复审未闭合（该 task 有未闭合阻塞审查——仅 `fix`/`re-review`/`forensics` 白名单通道豁免本规则，豁免是策略表数据 `allowlist_exempt`；白名单**不**豁免其余三类）。
+
+**审查债预算（限流层，reason_code=`review-debt-budget-exceeded`）**：`Σ min(severity,5) × min(age_days,30)`（未闭合义务按严重性×年龄），默认阈 100（表数据）；超阈 → 新工作准入边界（dispatch-execute / goal-resume）限流（exit 3），白名单通道不受冻。**冷面提示（第 3 层）**：gate/总览/TPA/风险 touch 时效超 7 天 → 非阻断提示重建（exit 4，动作仍放行）。
+
+**执法语义铁边界**：①scoped 语义（DEC-357）：硬阻断与未闭合复审按任务/通道 scoped；审查债预算是**全局新工作准入限流**（仅 dispatch-execute/goal-resume 两 admission 面），修复/复审/取证白名单通道与用户裁定额度逃生门保留；②commit 前不设卡（WIP checkpoint 始终放行）；③不改各 Check 判定语义（执法只消费检查输出 facts 投影）；④fail-closed（执法器自身异常/未知边界/非法开关值 → 保守阻断 exit 2 并披露，绝不静默放行）；⑤零漂移开关 `GOVERNANCE_ENFORCEMENT=off` → advisory 基线（一切放行、零记录、零副作用）；⑥每次判定留机器可读记录（`<record-dir>/enforcement-log.jsonl`，grep 锚点 `ENFORCEMENT-ACTION`，含 reason 与解除路径 remedy）。
+
+**Coordinator MUST 用法**：六边界动作前组装 facts JSON（boundary/action/state——修订号、channel、actor、write_paths、未闭合审查、义务账、冷面时效），运行 `python <plugin_home>/infra/verify_workflow.py enforcement-check --facts <path>`；exit 2 → 按 remedy 解除（重对齐修订/走授权写者/释放身份/闭合复审）后重试，禁止 `--facts` 造假绕行；exit 3 → 先闭合义务或经用户裁决提额；exit 4 → 重建展示面后继续（动作本身放行）。
 
 ### 产品代码 vs 治理记录边界
 

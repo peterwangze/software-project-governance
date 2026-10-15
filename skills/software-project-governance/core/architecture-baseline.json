@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "099acbf0efa1ad1b309593960cc526ed1d68a90d",
+    "git_head": "bf6942dd9b961a7f707db295171b1f2c8bc3c21c",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 28120,
+    "anchor_loc": 28204,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -554,8 +554,8 @@
     "snapshot_present_at_regen": true
   },
   "r6_startup_budget": {
-    "import_count": 207,
-    "import_set_sha256": "d189a12905eb988f374d6f0cf2c3edec46fd5f6e1c3a2b51d0f3ecf7ace9c400",
+    "import_count": 209,
+    "import_set_sha256": "426af56be53bd3b973b066a32ff37d3383b36a29c56c3e53fb79ea8fe6cf6e38",
     "note": "collection + comparison frame only; FEAT-018's tolerance table fills threshold, then the face tightens — advisory until then, never fatal in v1",
     "probe": "python -I -B -c 'import verify_workflow' (isolated)",
     "threshold": null

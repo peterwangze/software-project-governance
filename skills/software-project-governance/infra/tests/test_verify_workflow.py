@@ -23224,10 +23224,19 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # 按需, full text lives in behavior-protocol.md M7.8); the thin pointer
     # is untouched (pointer semantics). Same guard discipline: the
     # deliberate re-price rides the FEAT-090 ticket.
+    #
+    # FEAT-097 (2026-10-10): the 关键行为契约第 10 条 goal-预算必收口
+    # trigger line entered the lightweight (+83 B) and standard/strict
+    # (+83 B each) Step 7 templates — trigger-line-only form (契约 v2:
+    # the full rule lives in SKILL.md 关键行为契约 item 10); the thin
+    # pointer is untouched.  The resident strict face now sits at
+    # 6197/6200 tok — the deliberate re-price (including the thin-line
+    # sizing against the frozen DEC-211③ hard gate) rides the FEAT-097
+    # ticket.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
-        "lightweight": 5586,
-        "standard": 10603,
-        "strict": 11491,
+        "lightweight": 5669,
+        "standard": 10686,
+        "strict": 11574,
         "secondary-thin": 2840,
     }
 
@@ -26707,6 +26716,551 @@ class Feat096ExecutionIsolationWiringTests(unittest.TestCase):
                 for a in face_sub._actions
                 if a.dest not in ("help", "command")}
             self.assertEqual(canonical_opts, face_opts, command)
+
+
+class Feat097GoalBridgeWiringTests(unittest.TestCase):
+    """FEAT-097 engine-dispatch regression — the goal↔budget bridge.
+
+    RPG 实测 (报告 §3.1/§3.8): goal blocked 后静默续跑 21 轮、38h 仅 2
+    次 ask — the intent break.  These tests pin the ENGINE wiring (thin
+    entry injects the engine-resolved GOVERNANCE_DIR; exit 0 ok / 2
+    refusal) for the four acceptance faces:
+
+      ① state mapping + resume-authorization gate (record through the
+         engine thin entry: blocked → exit 2);
+      ② multi-dimension danger-zone collection (judge through the
+         engine face);
+      ③ checkpoint artifact (five schema faces on disk);
+      ④ blocked-unauthorized fault injection (zero new executions).
+
+    Deep unit coverage lives in test_goal_bridge.py; this class guards
+    the dispatch face only (temp-dir fixtures throughout)."""
+
+    def _make_world(self, td):
+        root = Path(td)
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        return root, gov
+
+    def _run_engine(self, **fields):
+        args = SimpleNamespace(command="goal-bridge", **fields)
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = vw.cmd_goal_bridge_engine(args)
+        try:
+            payload = json.loads(buffer.getvalue())
+        except ValueError:
+            payload = {"raw": buffer.getvalue()}
+        return code, payload
+
+    def test_goal_bridge_engine_record_checkpoint_blocked_gate(self):
+        # ①+④ through the engine face: seed → checkpoint → the blocked
+        # (scope-ruling-required) execution refuses with exit 2 and the
+        # artifact stays CHECKPOINTED (未授权新增执行 = 0).
+        with _governance_temp_dir(prefix="feat097-gb-") as td:
+            root, gov = self._make_world(td)
+            with patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 patch.object(vw, "HOST_PROJECT_ROOT", root):
+                seeded = self._run_engine(
+                    action="record", goal="wiring-goal",
+                    task="", rounds=10, tokens=1000, seconds=10.0,
+                    cost=0.0, in_flight=False, decision="",
+                    authorized_by="", new_limits="", rules_version="",
+                    obligations="", text=False)
+                self.assertEqual(seeded[0], 0, seeded[1])
+                checked = self._run_engine(
+                    action="checkpoint", goal="wiring-goal",
+                    task="FEAT-097", rounds=0, tokens=0, seconds=0.0,
+                    cost=0.0, in_flight=False, decision="",
+                    authorized_by="", new_limits="", rules_version="",
+                    obligations="", text=False)
+                self.assertEqual(checked[0], 0, checked[1])
+                refused = self._run_engine(
+                    action="record", goal="wiring-goal",
+                    task="", rounds=11, tokens=1000, seconds=10.0,
+                    cost=0.0, in_flight=False, decision="",
+                    authorized_by="", new_limits="", rules_version="",
+                    obligations="", text=False)
+            self.assertEqual(refused[0], 2)
+            self.assertEqual(refused[1]["code"], "scope_ruling_required")
+            artifact = json.loads(
+                (gov / "goal-bridge" / "wiring-goal.json")
+                .read_text(encoding="utf-8"))
+            self.assertEqual(artifact["state"], "CHECKPOINTED")
+
+    def test_goal_bridge_engine_judge_danger_exits_2(self):
+        with _governance_temp_dir(prefix="feat097-jg-") as td:
+            root, gov = self._make_world(td)
+            with patch.object(vw, "GOVERNANCE_DIR", gov):
+                code, judged = self._run_engine(
+                    action="judge", goal="", task="", rounds=50,
+                    tokens=100, seconds=10.0, cost=0.0, in_flight=False,
+                    decision="", authorized_by="", new_limits="",
+                    rules_version="", obligations="", text=False)
+            self.assertEqual(code, 2)  # any_danger → gate verdict exit 2
+            self.assertTrue(judged["any_danger"])
+
+    def test_goal_bridge_checkpoint_artifact_five_faces(self):
+        # ③ 账本+义务+修订+规则版本+预算消耗 through the engine face.
+        with _governance_temp_dir(prefix="feat097-cp-") as td:
+            root, gov = self._make_world(td)
+            with patch.object(vw, "GOVERNANCE_DIR", gov):
+                self._run_engine(
+                    action="record", goal="schema-goal", task="",
+                    rounds=10, tokens=1000, seconds=10.0, cost=0.0,
+                    in_flight=False, decision="", authorized_by="",
+                    new_limits="", rules_version="", obligations="",
+                    text=False)
+                code, _ = self._run_engine(
+                    action="checkpoint", goal="schema-goal",
+                    task="FEAT-097", rounds=0, tokens=0, seconds=0.0,
+                    cost=0.0, in_flight=False, decision="",
+                    authorized_by="", new_limits="", rules_version="",
+                    obligations="REVIEW-FEAT-097-R1", text=False)
+            self.assertEqual(code, 0)
+            artifact = json.loads(
+                (gov / "goal-bridge" / "schema-goal.json")
+                .read_text(encoding="utf-8"))
+            self.assertIn("ledger", artifact)
+            self.assertEqual(artifact["obligations"][0]["obligation_id"],
+                             "REVIEW-FEAT-097-R1")
+            self.assertGreaterEqual(artifact["revision"], 1)
+            self.assertTrue(artifact["rules_version"])
+            self.assertIn("rounds", artifact["budget_consumption"])
+
+    def test_goal_bridge_thresholds_and_mapping_greppable(self):
+        with redirect_stdout(io.StringIO()) as buf:
+            rc = vw.main(["goal-bridge", "--action", "thresholds",
+                          "--text"])
+        self.assertEqual(rc, 0)
+        text = buf.getvalue()
+        self.assertIn("dimension=rounds", text)
+        self.assertIn("danger_ratio=", text)
+        with redirect_stdout(io.StringIO()) as buf:
+            rc = vw.main(["goal-bridge", "--action", "mapping", "--text"])
+        self.assertEqual(rc, 0)
+        self.assertIn("RUNNING --danger_zone--> DRAINING", buf.getvalue())
+
+    def test_goal_bridge_module_shares_one_option_fact_source(self):
+        # FEAT-047 P2-1 caliber (module side): the add_arguments face
+        # defines EXACTLY the option set of build_parser's own
+        # subparser — engine subparser and module CLI cannot drift.
+        import goal_bridge as gbm
+        parser = gbm.build_parser()
+        group = next(a for a in parser._subparsers._group_actions
+                     if a.dest == "command")
+        face_parser = argparse.ArgumentParser()
+        sub = face_parser.add_subparsers(dest="command")
+        face_sub = sub.add_parser("goal-bridge")
+        gbm.add_goal_bridge_arguments(face_sub)
+        canonical_opts = {
+            a.dest: (a.required, getattr(a, "option_strings", []))
+            for a in group.choices["goal-bridge"]._actions
+            if a.dest not in ("help", "command")}
+        face_opts = {
+            a.dest: (a.required, getattr(a, "option_strings", []))
+            for a in face_sub._actions
+            if a.dest not in ("help", "command")}
+        self.assertEqual(canonical_opts, face_opts)
+
+
+class TestFeat095EnforcementBoundaries(unittest.TestCase):
+    """FEAT-095 — action-level enforcement: six boundaries, three layers.
+
+    Layered strategy (strategy-table DATA + generic executor, separated —
+    adding a boundary must not touch executor code):
+      * hard block — 4 rules (revision-mismatch / unauthorized-write /
+        duplicate-identity / unresolved-blocking-review), zero leak;
+      * throttle — review-debt budget (severity x age of unclosed
+        obligations) over threshold rate-limits new-work admission;
+      * rebuild notice — stale display surfaces (gate/overview/TPA/risk
+        touch age) prompt a rebuild, never block.
+    Iron borders under test: scoped not global (fix/re-review/forensics
+    channels stay open; unrelated tasks not frozen), WIP checkpoint
+    commits ALWAYS allowed (commit 前不设卡), fail-closed on enforcer
+    faults, zero behavioral drift when GOVERNANCE_ENFORCEMENT=off.
+    Degradation disclosure (research report §7 U1-U7): protocol+CLI face
+    only — no host-level interception is claimed anywhere.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import enforcement
+        cls.enf = enforcement
+        cls.record_root = tempfile.mkdtemp(prefix="enf095-rec-")
+        # In-repo sandbox root (FEAT-095 task instruction): env redirects
+        # for subprocess fault-injection runs land under .governance/
+        # incidents/FEAT-095-sandbox/, never under the real HOME/DSH_HOME.
+        cls.sandbox_root = (_INFRA_DIR.parents[2] / ".governance" / "incidents"
+                            / "FEAT-095-sandbox")
+        cls.sandbox_root.mkdir(parents=True, exist_ok=True)
+
+    def _facts(self, boundary="dispatch-execute", **over):
+        action = {"task_id": "T-1", "revision": 1, "channel": "normal",
+                  "wip_checkpoint": False, "actor": "dev-1"}
+        state = {
+            "expected_revision": {"T-1": 1},
+            "active_identities": [],
+            "authorized_writers": {"dev-1": ["skills/**", "docs/**"]},
+            "unresolved_reviews": [],
+            "review_obligations": [],
+            "surface_age_days": {"gate": 0, "overview": 0, "tpa": 0,
+                                 "risk": 0},
+        }
+        action_keys = {"task_id", "revision", "channel", "wip_checkpoint",
+                       "actor", "write_paths"}
+        state_keys = {"expected_revision", "active_identities",
+                      "authorized_writers", "unresolved_reviews",
+                      "review_obligations", "surface_age_days"}
+        for key, value in over.items():
+            if key in action_keys:
+                action[key] = value
+            elif key in state_keys:
+                state[key] = value
+            else:
+                raise AssertionError(f"unknown facts key: {key}")
+        return {"boundary": boundary, "action": action, "state": state}
+
+    def _run(self, facts, record_dir=None, env_extra=None):
+        """In-process CLI run — returns (rc, payload-or-text, stderr)."""
+        if record_dir is None:
+            record_dir = tempfile.mkdtemp(prefix="enf095-run-",
+                                          dir=self.record_root)
+        # facts.json lives in its OWN dir: a fault-injection record_dir may
+        # deliberately be unwritable (a regular file) — the facts payload
+        # must not collide with that.
+        facts_dir = tempfile.mkdtemp(prefix="enf095-facts-",
+                                     dir=self.record_root)
+        facts_path = Path(facts_dir) / "facts.json"
+        if isinstance(facts, (dict, list)):
+            facts_path.write_text(json.dumps(facts), encoding="utf-8")
+        else:
+            facts_path.write_text(facts, encoding="utf-8")
+        argv = ["enforcement-check", "--facts", str(facts_path),
+                "--record-dir", record_dir]
+        with mock.patch.dict(os.environ, env_extra or {}, clear=False):
+            with redirect_stdout(io.StringIO()) as out:
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    rc = vw.main(argv)
+        text = out.getvalue()
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            payload = text
+        return rc, payload, err.getvalue()
+
+    def _record_lines(self, record_dir):
+        log = Path(record_dir) / "enforcement-log.jsonl"
+        if not log.exists():
+            return []
+        return log.read_text(encoding="utf-8").splitlines()
+
+    # ── layer 1: four hard-block categories, zero leak ────────────────
+
+    def test_enforcement_hard_block_revision_mismatch_on_review_dispatch(self):
+        facts = self._facts("dispatch-review", revision=3,
+                            expected_revision={"T-1": 2})
+        rc, payload, err = self._run(facts)
+        self.assertEqual(rc, self.enf.EXIT_HARD_BLOCK)
+        self.assertEqual(payload["decision"], "HARD_BLOCK")
+        self.assertEqual(payload["reason_code"], "revision-mismatch")
+        # Multi-channel adversarial (research U7): the allowlist must NOT
+        # buy a mismatched-revision re-review through — 修订错配的审查
+        # 派发被硬阻断并留痕 is THE acceptance scenario.
+        facts2 = self._facts("dispatch-review", revision=3, channel="re-review",
+                             expected_revision={"T-1": 2})
+        rc2, payload2, _ = self._run(facts2)
+        self.assertEqual(rc2, self.enf.EXIT_HARD_BLOCK)
+        self.assertEqual(payload2["reason_code"], "revision-mismatch")
+
+    def test_enforcement_hard_block_unauthorized_write(self):
+        facts = self._facts("accept-completion",
+                            write_paths=[".governance/plan-tracker.md"])
+        rc, payload, _ = self._run(facts)
+        self.assertEqual(rc, self.enf.EXIT_HARD_BLOCK)
+        self.assertEqual(payload["reason_code"], "unauthorized-write")
+
+    def test_enforcement_hard_block_duplicate_identity(self):
+        facts = self._facts("dispatch-execute",
+                            active_identities=["dev-1"])
+        rc, payload, _ = self._run(facts)
+        self.assertEqual(rc, self.enf.EXIT_HARD_BLOCK)
+        self.assertEqual(payload["reason_code"], "duplicate-identity")
+
+    def test_enforcement_hard_block_unresolved_blocking_review_and_closure_channel(self):
+        review = [{"task_id": "T-1", "blocking": True, "closed": False}]
+        facts = self._facts("accept-completion",
+                            unresolved_reviews=review)
+        rc, payload, _ = self._run(facts)
+        self.assertEqual(rc, self.enf.EXIT_HARD_BLOCK)
+        self.assertEqual(payload["reason_code"],
+                         "unresolved-blocking-review")
+        # Scoped semantics: the re-review closure channel stays open —
+        # blocking the re-review would deadlock M7.4 T1 复审必达.
+        facts_rr = self._facts("dispatch-review", channel="re-review",
+                               unresolved_reviews=review)
+        rc_rr, payload_rr, _ = self._run(facts_rr)
+        self.assertEqual(rc_rr, self.enf.EXIT_ALLOW)
+        self.assertEqual(payload_rr["decision"], "ALLOW")
+
+    def test_enforcement_hard_block_zero_leak_across_all_six_boundaries(self):
+        triggers = {
+            "revision-mismatch": self._facts(revision=3,
+                                             expected_revision={"T-1": 2}),
+            "unauthorized-write": self._facts(
+                write_paths=[".governance/plan-tracker.md"]),
+            "duplicate-identity": self._facts(
+                active_identities=["dev-1"]),
+            "unresolved-blocking-review": self._facts(
+                unresolved_reviews=[{"task_id": "T-1", "blocking": True,
+                                     "closed": False}]),
+        }
+        self.assertEqual(sorted(triggers), sorted(self.enf.HARD_BLOCK_RULES))
+        for boundary in self.enf.BOUNDARIES:
+            for rule, template in triggers.items():
+                facts = dict(template)
+                facts["boundary"] = boundary
+                decision = self.enf.decide(facts)
+                self.assertEqual(
+                    decision["decision"], "HARD_BLOCK",
+                    f"LEAK: {rule} did not block boundary={boundary}")
+                self.assertEqual(decision["reason_code"], rule)
+
+    # ── layer 2: review-debt budget throttle ──────────────────────────
+
+    def _debt_facts(self, boundary="dispatch-execute", **over):
+        heavy = [{"id": "R2-T9", "severity": 5, "age_days": 25}]
+        return self._facts(boundary, review_obligations=heavy, **over)
+
+    def test_enforcement_review_debt_budget_over_threshold_throttles(self):
+        rc, payload, _ = self._run(self._debt_facts())
+        self.assertEqual(rc, self.enf.EXIT_THROTTLE)
+        self.assertEqual(payload["decision"], "THROTTLE")
+        self.assertEqual(payload["reason_code"],
+                         "review-debt-budget-exceeded")
+        self.assertGreater(payload["debt_points"],
+                           self.enf.STRATEGY["thresholds"]
+                           ["review_debt_budget"])
+
+    def test_enforcement_allowlist_channels_not_frozen_and_goal_resume_throttled(self):
+        for channel in self.enf.ALLOWLIST_CHANNELS:
+            rc, payload, _ = self._run(self._debt_facts(channel=channel))
+            self.assertEqual(rc, self.enf.EXIT_ALLOW, f"channel={channel}")
+            self.assertEqual(payload["decision"], "ALLOW")
+        # goal 续跑 is new-work admission too — 21-round silent resume
+        # (RPG §3.6) is exactly what this throttle face covers.
+        rc_g, payload_g, _ = self._run(self._debt_facts("goal-resume"))
+        self.assertEqual(rc_g, self.enf.EXIT_THROTTLE)
+        self.assertEqual(payload_g["reason_code"],
+                         "review-debt-budget-exceeded")
+
+    def test_enforcement_accept_completion_non_admission_not_debt_throttled(self):
+        # Actual verified surface (DEC-357 caliber): accept-completion is
+        # a NON-admission boundary — the strategy table gives it no
+        # throttle face, so the global review-debt budget (admission
+        # rate-limit on dispatch-execute/goal-resume) does not apply to
+        # it. NOT a universal "unrelated tasks are never frozen" claim.
+        rc, payload, _ = self._run(self._debt_facts("accept-completion"))
+        self.assertEqual(rc, self.enf.EXIT_ALLOW)
+        self.assertEqual(payload["decision"], "ALLOW")
+
+    # ── iron border: WIP checkpoint commits always allowed ────────────
+
+    def test_enforcement_wip_checkpoint_commit_always_allowed(self):
+        facts = self._facts("merge", wip_checkpoint=True, revision=3,
+                            expected_revision={"T-1": 2},
+                            active_identities=["dev-1"],
+                            unresolved_reviews=[{"task_id": "T-1",
+                                                 "blocking": True,
+                                                 "closed": False}])
+        rc, payload, _ = self._run(facts)
+        self.assertEqual(rc, self.enf.EXIT_ALLOW)
+        self.assertEqual(payload["decision"], "ALLOW")
+        self.assertEqual(payload["reason_code"], "wip-checkpoint-carve-out")
+
+    # ── layer 3: stale display surfaces → rebuild notice, never block ─
+
+    def test_enforcement_stale_surface_notice_is_non_blocking(self):
+        facts = self._facts("accept-completion",
+                            surface_age_days={"gate": 9, "overview": 2,
+                                              "tpa": 1, "risk": 0})
+        rc, payload, _ = self._run(facts)
+        self.assertEqual(rc, self.enf.EXIT_STALE_NOTICE)
+        self.assertEqual(payload["decision"], "STALE_NOTICE")
+        self.assertEqual(payload["stale_surfaces"], ["gate"])
+
+    # ── fail-closed + fault injection (验收⑤) ─────────────────────────
+
+    def test_enforcement_fail_closed_on_internal_type_fault_and_unknown_boundary(self):
+        # Injected fault: expected_revision value is a mapping, not an
+        # int — the enforcer must fail CLOSED (conservative block +
+        # disclosure), never silently allow.
+        facts = self._facts(revision=1,
+                            expected_revision={"T-1": {"bad": "type"}})
+        rc, payload, _ = self._run(facts)
+        self.assertEqual(rc, self.enf.EXIT_HARD_BLOCK)
+        self.assertEqual(payload["reason_code"], "enforcement-fail-closed")
+        # Unknown boundary: strategy table lookup miss → fail-closed.
+        facts2 = self._facts(boundary="teleport")
+        rc2, payload2, _ = self._run(facts2)
+        self.assertEqual(rc2, self.enf.EXIT_HARD_BLOCK)
+        self.assertEqual(payload2["reason_code"], "enforcement-fail-closed")
+
+    def test_enforcement_fail_closed_on_corrupted_facts_subprocess_sandboxed(self):
+        # End-to-end fault injection in a fully sandboxed subprocess:
+        # HOME/USERPROFILE/DSH_HOME/TEMP/TMP redirected under the
+        # in-repo FEAT-095 sandbox; python -B -X utf8 (task contract).
+        for name in ("home", "userprofile", "dsh-home", "tmp"):
+            (self.sandbox_root / name).mkdir(parents=True, exist_ok=True)
+        record_dir = tempfile.mkdtemp(prefix="enf095-corrupt-",
+                                      dir=self.record_root)
+        facts_path = Path(record_dir) / "facts.json"
+        facts_path.write_text("{not-json", encoding="utf-8")
+        env = dict(os.environ)
+        env.update({
+            "HOME": str(self.sandbox_root / "home"),
+            "USERPROFILE": str(self.sandbox_root / "userprofile"),
+            "DSH_HOME": str(self.sandbox_root / "dsh-home"),
+            "TEMP": str(self.sandbox_root / "tmp"),
+            "TMP": str(self.sandbox_root / "tmp"),
+        })
+        proc = subprocess.run(
+            [sys.executable, "-B", "-X", "utf8",
+             str(_INFRA_DIR / "verify_workflow.py"),
+             "enforcement-check", "--facts", str(facts_path),
+             "--record-dir", record_dir],
+            capture_output=True, text=True, encoding="utf-8",
+            env=env, cwd=str(_INFRA_DIR.parents[2]), timeout=120)
+        self.assertEqual(proc.returncode, self.enf.EXIT_HARD_BLOCK)
+        self.assertIn("enforcement-fail-closed", proc.stdout)
+        # The fail-closed refusal itself leaves a machine record.
+        lines = self._record_lines(record_dir)
+        self.assertTrue(any("ENFORCEMENT-ACTION" in line for line in lines))
+        self.assertTrue(any("enforcement-fail-closed" in line
+                            for line in lines))
+
+    def test_enforcement_record_write_failure_disclosed_not_crashed(self):
+        # Injected fault: record dir path is a regular FILE — the
+        # decision must still be returned, with the bookkeeping failure
+        # disclosed (record_error), not silently swallowed.
+        blocker = Path(self.record_root) / "blocker.txt"
+        blocker.write_text("not a dir", encoding="utf-8")
+        facts = self._facts(revision=3,
+                            expected_revision={"T-1": 2})
+        rc, payload, _ = self._run(facts, record_dir=str(blocker))
+        self.assertEqual(rc, self.enf.EXIT_HARD_BLOCK)
+        self.assertEqual(payload["reason_code"], "revision-mismatch")
+        self.assertTrue(payload.get("record_error"))
+
+    # ── switch off = zero drift vs the advisory baseline ──────────────
+
+    def test_enforcement_switch_off_zero_drift_against_advisory_baseline(self):
+        fresh = tempfile.mkdtemp(prefix="enf095-off-",
+                                 dir=self.record_root)
+        facts = self._facts(revision=3, expected_revision={"T-1": 2})
+        rc, payload, _ = self._run(
+            facts, record_dir=fresh,
+            env_extra={self.enf.ENFORCEMENT_SWITCH_ENV: "off"})
+        self.assertEqual(rc, self.enf.EXIT_ALLOW)
+        self.assertEqual(payload["decision"], "ALLOW")
+        self.assertEqual(payload["mode"], "advisory-baseline")
+        # Zero drift = zero side effects: no record file at all (facts
+        # live in their own dir — the record dir must stay empty).
+        self.assertEqual(os.listdir(fresh), [])
+
+    def test_enforcement_switch_invalid_value_fails_closed(self):
+        # 非法值不猜 (behavior_profile pattern): an unrecognized switch
+        # value is a conservative block + disclosure, never a guess.
+        facts = self._facts()
+        rc, payload, _ = self._run(
+            facts, env_extra={self.enf.ENFORCEMENT_SWITCH_ENV: "banana"})
+        self.assertEqual(rc, self.enf.EXIT_HARD_BLOCK)
+        self.assertEqual(payload["reason_code"],
+                         "enforcement-switch-invalid")
+
+    # ── machine-readable records + UX of the refusal message ──────────
+
+    def test_enforcement_records_greppable_and_refusal_names_remedy(self):
+        record_dir = tempfile.mkdtemp(prefix="enf095-grep-",
+                                      dir=self.record_root)
+        facts = self._facts(revision=3, expected_revision={"T-1": 2})
+        rc, payload, err = self._run(facts, record_dir=record_dir)
+        self.assertEqual(rc, self.enf.EXIT_HARD_BLOCK)
+        lines = self._record_lines(record_dir)
+        self.assertEqual(len(lines), 1)
+        row = json.loads(lines[0])
+        self.assertEqual(row["anchor"], self.enf.RECORD_ANCHOR)
+        self.assertEqual(row["reason_code"], "revision-mismatch")
+        self.assertTrue(row["remedy"])
+        # UX contract: the refusal itself must carry the reason AND the
+        # 解除路径 (remedy), both machine (stdout JSON) and human (stderr).
+        self.assertTrue(payload["remedy"])
+        self.assertIn("HARD_BLOCK", err)
+        self.assertIn("revision-mismatch", err)
+
+    def test_enforcement_print_strategy_greppable_and_covers_six_boundaries(self):
+        with redirect_stdout(io.StringIO()) as out:
+            with contextlib.redirect_stderr(io.StringIO()):
+                rc = vw.main(["enforcement-check", "--print-strategy"])
+        self.assertEqual(rc, 0)
+        table = json.loads(out.getvalue())
+        self.assertEqual(sorted(table["boundaries"]),
+                         sorted(self.enf.BOUNDARIES))
+        for boundary, row in table["boundaries"].items():
+            self.assertIn(row["hard_block"], (True, "all"))
+            self.assertIn("throttle", row)
+            self.assertIn("stale_notice", row)
+
+    # ── strategy table / executor separation ──────────────────────────
+
+    def test_enforcement_new_boundary_via_table_only_executor_untouched(self):
+        import copy
+        custom = copy.deepcopy(self.enf.STRATEGY)
+        custom["boundaries"]["custom-boundary"] = copy.deepcopy(
+            custom["boundaries"]["dispatch-execute"])
+        ok = self.enf.decide(
+            self._facts(boundary="custom-boundary"), strategy=custom)
+        self.assertEqual(ok["decision"], "ALLOW")
+        blocked = self.enf.decide(
+            self._facts(boundary="custom-boundary", revision=3,
+                        expected_revision={"T-1": 2}), strategy=custom)
+        self.assertEqual(blocked["decision"], "HARD_BLOCK")
+        self.assertEqual(blocked["reason_code"], "revision-mismatch")
+        # Executor default strategy still rejects unknown boundaries —
+        # extensions are explicit table edits, not silent accepts.
+        self.assertEqual(
+            self.enf.decide(self._facts(boundary="custom-boundary"))[
+                "reason_code"],
+            "enforcement-fail-closed")
+
+    # ── performance guard: dispatch-path decision ≤10ms order ─────────
+
+    def test_enforcement_dispatch_path_decision_wallclock_guard(self):
+        import time
+        facts = self._debt_facts()  # heaviest path: debt + rules + stale
+        facts["state"]["surface_age_days"] = {"gate": 9, "overview": 9,
+                                              "tpa": 9, "risk": 9}
+        self.enf.decide(facts)  # warm-up
+        n = 200
+        t0 = time.perf_counter()
+        for _ in range(n):
+            self.enf.decide(facts)
+        avg = (time.perf_counter() - t0) / n
+        self.assertLessEqual(avg, 0.010,
+                             f"enforcement decision too slow: {avg:.6f}s")
+
+    # ── protocol face ↔ CLI face consistency (SKILL.md contract) ─────
+
+    def test_enforcement_skill_protocol_face_matches_cli_face(self):
+        skill_text = (_INFRA_DIR.parent / "SKILL.md").read_text(
+            encoding="utf-8")
+        anchors = ["动作级执法", "enforcement-check", "GOVERNANCE_ENFORCEMENT",
+                   "re-review", "forensics", "WIP", "fail-closed",
+                   "dispatch-execute", "dispatch-review", "accept-completion",
+                   "merge", "release", "goal-resume",
+                   "review-debt", "硬阻断"]
+        for anchor in anchors:
+            self.assertIn(anchor, skill_text, f"SKILL.md missing {anchor}")
 
 
 if __name__ == "__main__":

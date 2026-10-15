@@ -138,7 +138,13 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # frozen counts re-baselined in the same change (the documented
 # contract-change path). Segments stay at 73 (no check-governance segment
 # rides the isolation surface).
-FROZEN_CLI_KEYS = 105
+# FEAT-097 (0.98.0 window, DEC-330 batch): 105 -> 106 CLI keys — the
+# `goal-bridge` goal↔budget bridge (state mapping + multi-dimension
+# danger-zone collection + checkpoint artifacts + resume authorization;
+# engine thin entry in verify_workflow.py, module logic in goal_bridge.py
+# — the isolation pattern). Snapshot + frozen counts re-baselined in the
+# same change. Segments stay at 73.
+FROZEN_CLI_KEYS = 106
 FROZEN_SEGMENTS = 73
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
@@ -176,7 +182,13 @@ FROZEN_SEGMENTS = 73
 # datetime / pathlib — all already in the cold face, so the face grows by
 # exactly this one module; measured 207 live). Baseline regenerated in
 # the same change.
-FROZEN_ENGINE_IMPORT_COUNT = 207
+# FEAT-097: 207 -> 208 — the engine imports the self-contained
+# ``goal_bridge`` module (stdlib-only at import time: argparse / json /
+# os / re / sys / tempfile / time / pathlib — all already in the cold
+# face, so the face grows by exactly this one module; authority_ledger
+# is function-local for the checkpoint ledger face, the peer-leaf
+# pattern; measured 208 live). Baseline regenerated in the same change.
+FROZEN_ENGINE_IMPORT_COUNT = 208
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {

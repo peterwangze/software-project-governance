@@ -168,8 +168,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 102,
-      "key_count": 105,
+      "handler_count": 104,
+      "key_count": 107,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -237,6 +237,7 @@
         "dynamic-flow-gate-migration",
         "dynamic-lifecycle-migration",
         "e2e-check",
+        "enforcement-check",
         "evidence-append",
         "execution-packet",
         "external-project-validation",
@@ -246,6 +247,7 @@
         "gates",
         "gemini-auth-preflight",
         "generate-deterministic-scaffold",
+        "goal-bridge",
         "governance-bootstrap",
         "governance-context",
         "governance-cost-report",
@@ -439,14 +441,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "099acbf0efa1ad1b309593960cc526ed1d68a90d",
+    "git_head": "bf6942dd9b961a7f707db295171b1f2c8bc3c21c",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-10-10T12:52:47+00:00"
+    "timestamp_utc": "2026-10-15T07:20:43+00:00"
   },
   "python_family_pins": [
     {

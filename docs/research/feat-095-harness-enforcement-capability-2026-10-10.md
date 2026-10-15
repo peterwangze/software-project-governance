@@ -274,3 +274,16 @@ DEC-330（S18 L197）发布验证六项中与本调研直接相关：「blocked 
 | 分析基于事实、无编造 | ✅ 每条结论可回溯 §2 信息源；平台原语与插件接线严格分开表述 |
 
 **报告边界声明**：本报告为 M-0 前置调研产出，FEAT-095 实施面决策（尤其 8.2 dsh 宿主级试点是否立项、host_row 契约变更 DEC）归 Coordinator/用户；报告中的「架构可达」「建议」均为调研推断或提案，不是已验证能力。
+
+---
+
+## 10. 实施落地补充（FEAT-095 dev 批，2026-10-10）——降级披露更新
+
+本节由 FEAT-095 实施（Governance Developer）追加，记录 §7 降级声明在实施面的**实际兑现形态**（非新的调研结论；调研结论 §5-§7 不变）：
+
+1. **按预授权降级落地（assumption_record L1513 兑现）**：六边界执法以**协议级 + CLI 级**交付，未做任何宿主级接线——`own.host_row` 未改、无 pre-execute guard 注册、manifest 未新增 enforcement 能力键。本票全部文档/代码不含宿主级拦截能力声明。
+2. **CLI 级落地面（已交付）**：新增 `infra/enforcement.py`（策略表 `STRATEGY` 数据 + 通用执行器 `decide()` 分离——新增边界改表不动执行器）+ `verify_workflow.py enforcement-check` 子命令（`--facts <边界动作 facts JSON>` / `--print-strategy` / `--record-dir`）。出口码四态：`0` 放行 / `2` 硬阻断（含 fail-closed 与非法开关值）/ `3` 限流（审查债预算 `review-debt-budget-exceeded`，`Σ min(severity,5) × min(age_days,30)`，阈 100 表数据）/ `4` 提示重建（冷面过期，非阻断）。机器记录 `<record-dir>/enforcement-log.jsonl`，grep 锚点 `ENFORCEMENT-ACTION`，每行含 reason 与解除路径 remedy。
+3. **协议级落地面（已交付）**：`SKILL.md`「关键行为契约」第 11 条 +「动作级执法（FEAT-095）」专段（六边界 × 三层策略表、四类硬阻断、白名单通道、WIP checkpoint 豁免、fail-closed、零漂移开关、Coordinator MUST 用法）；协议↔CLI 两面锚点一致性由守护测试 `test_enforcement_skill_protocol_face_matches_cli_face` 机守。
+4. **铁边界兑现（均有测试）**：scoped 白名单（`fix`/`re-review`/`forensics`）不被限流冻结且不豁免修订错配等其余硬阻断；无关任务不受他票审查债冻结（accept-completion 无限流面）；merge 边界 `wip_checkpoint=true` 始终放行（优先于一切硬阻断）；fail-closed（输入类型故障/未知边界/记录写失败披露/非法开关值 → 保守阻断）；`GOVERNANCE_ENFORCEMENT=off` → advisory 基线（一切放行、零记录、零副作用）。
+5. **绕过面如实披露（§6 发现4 维持有效）**：CLI 级执法可被「不调用即绕过」（RPG 后段 ~45 子代理绕锁实证同形态）——协议面 MUST 纪律是当前唯一补位；dsh 宿主级试点（§8.2）仍为**未立项建议**，U1 PoC 未做，本票不改变其未证实状态。
+6. **验证载体**：`infra/tests/test_verify_workflow.py` 类 `TestFeat095EnforcementBoundaries`（20 用例：四类硬阻断零漏放 4×6 矩阵、审查债限流、白名单不冻、WIP 放行、fail-closed ×3、开关 off 零漂移、非法开关值、记录可 grep+报错含解除路径、策略表/执行器分离、性能守护 ≤10ms/次墙钟、沙箱化 subprocess 故障注入）；执行留痕 `.governance/incidents/FEAT-095-validation.log`。

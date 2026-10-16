@@ -1,4 +1,4 @@
-# Codex / Chrys 项目指引
+# Codex 项目指引
 
 ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
 

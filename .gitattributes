@@ -12,3 +12,14 @@
 # leaves core/releases/*.json as CRLF stat noise (git reports "M" with zero
 # content diff). The index is already LF — renormalizing is zero commit diff.
 *.json text eol=lf
+# FIX-451: governance hooks must stay LF in the working tree. A fresh
+# Windows clone/worktree under core.autocrlf=true materializes the four
+# infra/hooks files as CRLF, which both breaks git-bash hook execution and
+# starves the `$`-anchored version-projection patterns (count 0 -> every
+# projection face BLOCKED). The projection ENGINE tolerates CRLF matches
+# (release/projection.py FIX-451), and this anchor removes the CRLF source
+# itself for new checkouts. The index is already 100% LF (git ls-files
+# --eol: i/lf x4), so no renormalization is needed — and none is performed:
+# `git add --renormalize` is deliberately NOT run because it would stage the
+# FIX-445 work-in-progress infra/hooks/commit-msg (preserved untouched).
+skills/software-project-governance/infra/hooks/* text eol=lf

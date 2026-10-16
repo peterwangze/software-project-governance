@@ -178,6 +178,116 @@ class ProjectionPlanOverlapTests(unittest.TestCase):
                              "resolved bytes exactly, \\r\\n included")
 
 
+class CrlfHookProjectionTests(unittest.TestCase):
+    """FIX-451: `$`-anchored hook patterns must survive CRLF working trees.
+
+    Live specimen (2026-10-16): core.autocrlf=true checkouts materialize the
+    infra/hooks files as CRLF, the ``(?m)^# @version: x.y.z$`` family matched
+    0 lines, and every projection face BLOCKED (release-projection /
+    check-projection-sync / the SdIntegrity live-plan face). The engine now
+    matches through an EOL-normalized view and splices edits back onto the
+    native bytes. Both tests below ERROR on the pre-fix engine (its
+    ``re.subn`` on raw CRLF text raises the count-mismatch ValueError), so
+    they are genuine red-on-buggy guards.
+    """
+
+    def fixture(self, root):
+        (root / "skills/software-project-governance/core").mkdir(parents=True)
+        (root / "skills/software-project-governance/SKILL.md").write_text(
+            f"---\nversion: {NEW_VERSION}\n---\nbody\n", encoding="utf-8")
+        (root / "inventory.py").write_text(
+            "REQUIRED_SNIPPETS = {'x': ['required-marker']}\n"
+            "PROJECTION_SYNC_PATTERNS = ('mirror-pattern',)\n", encoding="utf-8")
+        contract = {
+            "projection_ids": ["hook", "hook-mirror"],
+            "projection_kinds": ["byte_copy", "transformed_text"],
+            "validation_inventories": [
+                {"id": "required-snippets", "source": "inventory.py",
+                 "symbol": "REQUIRED_SNIPPETS", "value_type": "dict",
+                 "min_entries": 1, "required_members": ["required-marker"]},
+                {"id": "fixture-mirror-patterns", "source": "inventory.py",
+                 "symbol": "PROJECTION_SYNC_PATTERNS", "value_type": "sequence",
+                 "min_entries": 1, "member_match": "exact",
+                 "required_members": ["mirror-pattern"]}]}
+        (root / "skills/software-project-governance/core/manifest.json").write_text(
+            json.dumps({"release_projection_contract": contract}), encoding="utf-8")
+        # The registry-pattern family under test: the exact `$`-anchored
+        # hook version line from core/version-projections.json.
+        config = {
+            "schema_version": 1,
+            "authority": {"kind": "skill_frontmatter_version",
+                          "path": "skills/software-project-governance/SKILL.md"},
+            "validation_inventories": [
+                {"id": "required-snippets", "source": "inventory.py",
+                 "symbol": "REQUIRED_SNIPPETS"},
+                {"id": "fixture-mirror-patterns", "source": "inventory.py",
+                 "symbol": "PROJECTION_SYNC_PATTERNS"}],
+            "projections": [
+                {"id": "hook", "kind": "transformed_text", "target": "hook",
+                 "pattern": "(?m)^# @version: [0-9]+\\.[0-9]+\\.[0-9]+$",
+                 "replacement": "# @version: {version}", "count": 1},
+                {"id": "hook-mirror", "kind": "byte_copy", "source": "hook",
+                 "target": "hook.mirror"}]}
+        (root / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    @staticmethod
+    def _hook_crlf(version):
+        return (f"#!/bin/sh\r\n# @version: {version}\r\nexit 0\r\n").encode("utf-8")
+
+    def test_in_sync_crlf_hook_plans_to_its_own_bytes(self):
+        """The live FIX-451 face: an in-sync CRLF hook must BUILD (no count
+        mismatch), plan to its own bytes exactly, PASS the check, and drive
+        ZERO writes — a preserved CRLF work tree (FIX-445's commit-msg) is
+        never rewritten by a release-projection --write."""
+        with _sandbox_tmp_dir(prefix="fix451-insync-") as td:
+            root = Path(td)
+            self.fixture(root)
+            hook_crlf = self._hook_crlf(NEW_VERSION)
+            (root / "hook").write_bytes(hook_crlf)
+            (root / "hook.mirror").write_bytes(hook_crlf)
+            _version, plan = build_projection_plan(root, root / "config.json")
+            writes = {write.relative_path: write for write in plan}
+            self.assertEqual(writes["hook"].content, hook_crlf,
+                             "an in-sync CRLF target must plan to its own "
+                             "bytes — no EOL churn")
+            self.assertEqual(writes["hook.mirror"].content, hook_crlf,
+                             "the byte_copy mirror of an in-sync CRLF target "
+                             "stays byte-identical")
+            self.assertEqual(check_projections(root, root / "config.json").state,
+                             "PASS")
+            result = write_projections(root, root / "config.json")
+            self.assertEqual(result.state, "PASS", result.issues)
+            self.assertEqual(result.facts["written"], 0,
+                             "nothing may be written for an in-sync CRLF "
+                             "target (red line: FIX-445 work trees)")
+            self.assertEqual((root / "hook").read_bytes(), hook_crlf)
+
+    def test_version_bump_on_crlf_hook_keeps_native_crlf(self):
+        """FIX-366 F-1 byte-faithfulness, pinned for the anchored family: a
+        real version bump on a CRLF hook rewrites the version line in the
+        file's own CRLF endings (NOT an LF-normalized rewrite, which would
+        drift the byte_copy mirror on every autocrlf tree)."""
+        with _sandbox_tmp_dir(prefix="fix451-bump-") as td:
+            root = Path(td)
+            self.fixture(root)
+            (root / "hook").write_bytes(self._hook_crlf(OLD_VERSION))
+            (root / "hook.mirror").write_bytes(self._hook_crlf(OLD_VERSION))
+            expected = self._hook_crlf(NEW_VERSION)
+            _version, plan = build_projection_plan(root, root / "config.json")
+            writes = {write.relative_path: write for write in plan}
+            self.assertEqual(writes["hook"].content, expected,
+                             "the bump must keep the hook's native \\r\\n")
+            self.assertEqual(writes["hook.mirror"].content, expected)
+            result = write_projections(root, root / "config.json")
+            self.assertEqual(result.state, "PASS", result.issues)
+            self.assertEqual((root / "hook").read_bytes(), expected)
+            self.assertEqual((root / "hook.mirror").read_bytes(), expected)
+            self.assertEqual(check_projections(root, root / "config.json").state,
+                             "PASS")
+            self.assertEqual(
+                write_projections(root, root / "config.json").facts["written"], 0)
+
+
 class WriteThenProbeTests(unittest.TestCase):
     """FIX-409 (RISK-061 root fix): projection writes must land READABLE.
 

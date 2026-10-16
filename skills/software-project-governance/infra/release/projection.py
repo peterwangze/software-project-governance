@@ -49,6 +49,47 @@ def _projection_matches(write: PlannedWrite, current: bytes) -> bool:
     return current.replace(b"\r\n", b"\n") == write.content.replace(b"\r\n", b"\n")
 
 
+def _crlf_tolerant_subn(text: str, pattern: str, replacement: str,
+                        expected: int, target_label: object) -> str:
+    """FIX-451: match a transformed_text projection through an EOL-normalized
+    VIEW, then splice the edits back onto the file's native bytes.
+
+    A ``core.autocrlf=true`` Windows checkout materializes text targets as
+    CRLF, and a ``$``-anchored multiline pattern (``^# @version: 1.2.3$``)
+    cannot match a line whose last content char is followed by ``\\r`` — the
+    previous single ``re.subn`` on the raw text returned count 0 and BLOCKED
+    every projection face (live specimen: ``infra/hooks/commit-msg``, 2026-10).
+    Matching therefore runs against ``text.replace("\\r\\n", "\\n")``; each
+    matched span is translated back to a native offset (``\\r\\n`` collapses
+    to ``\\n``, so native advances by two chars exactly where a ``\\r`` was
+    dropped) and spliced into the ORIGINAL text. Consequences, both pinned by
+    tests: a target already in sync plans to its own bytes exactly (zero EOL
+    churn — a preserved CRLF work tree such as FIX-445's commit-msg is never
+    rewritten), and a real version bump rewrites only the matched regions in
+    the file's own line endings (the FIX-366 F-1 byte-faithfulness contract,
+    so a byte_copy mirroring the target stays byte-identical).
+    """
+    normalized = text.replace("\r\n", "\n")
+    matches = list(re.finditer(pattern, normalized, flags=re.MULTILINE))
+    if len(matches) < expected:
+        raise ValueError(f"projection pattern count mismatch for `{target_label}`")
+    # native offset of every normalized index, plus the end sentinel.
+    native_of = [0] * (len(normalized) + 1)
+    native = 0
+    for index in range(len(normalized)):
+        native_of[index] = native
+        native += 2 if text.startswith("\r\n", native) else 1
+    native_of[len(normalized)] = len(text)
+    spliced: list[str] = []
+    last_native = 0
+    for match in matches[:expected]:
+        spliced.append(text[last_native:native_of[match.start()]])
+        spliced.append(match.expand(replacement))
+        last_native = native_of[match.end()]
+    spliced.append(text[last_native:])
+    return "".join(spliced)
+
+
 def _inventory_value(source: Path, symbol: str) -> tuple[str, int, set[str]]:
     try:
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
@@ -231,10 +272,13 @@ def build_projection_plan(root: Path, config_path: Optional[Path] = None) -> tup
             if not isinstance(pattern, str):
                 raise ValueError("transformed_text requires a pattern")
             replacement = str(item.get("replacement", "{version}")).replace("{version}", version)
-            transformed, count = re.subn(pattern, replacement, text, count=int(item.get("count", 1)), flags=re.MULTILINE)
-            if count != int(item.get("count", 1)):
-                raise ValueError(f"projection pattern count mismatch for `{item.get('target')}`")
-            content = transformed.encode("utf-8")
+            # FIX-451: match through the CRLF-tolerant view (see
+            # _crlf_tolerant_subn) — a raw re.subn on CRLF text starves
+            # $-anchored hook patterns (count 0 -> BLOCKED) under
+            # core.autocrlf=true working trees.
+            content = _crlf_tolerant_subn(
+                text, pattern, replacement, int(item.get("count", 1)),
+                item.get("target")).encode("utf-8")
         resolved[target] = content
 
     writes: Dict[str, tuple[bytes, str]] = {}

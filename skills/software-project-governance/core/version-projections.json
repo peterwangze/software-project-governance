@@ -54,12 +54,6 @@
       "pointer": "/version"
     },
     {
-      "id": "chrys-plugin",
-      "kind": "structured_json",
-      "target": ".chrys-plugin/plugin.json",
-      "pointer": "/version"
-    },
-    {
       "id": "package",
       "kind": "structured_json",
       "target": "package.json",

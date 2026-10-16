@@ -60,7 +60,7 @@ python skills/software-project-governance/infra/verify_workflow.py check-runtime
 - `browser`：**degraded**（有 web_search，无浏览器自动化）。
 - `mcp`：**degraded**（安装含 MCP client 包，服务器可用性取决于主机配置）。
 - `git_hooks`：**native**（仓库级控制）。
-- workflow closure：**degraded**（仅 browser 与 MCP 依赖主机），与 Chrys 并列最强的原生能力画像。
+- workflow closure：**degraded**（仅 browser 与 MCP 依赖主机），当前最强的原生能力画像。
 
 本适配器不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 生产就绪。
 

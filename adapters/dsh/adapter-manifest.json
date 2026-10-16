@@ -64,7 +64,7 @@
     },
     "workflow_closure": {
       "status": "degraded",
-      "evidence": "dsh has native ask_user_question, sub_agent, tool_calling, and git_hooks; the strongest native profile together with Chrys. Only browser automation and MCP remain host-dependent.",
+      "evidence": "dsh has native ask_user_question, sub_agent, tool_calling, and git_hooks; the strongest native profile. Only browser automation and MCP remain host-dependent.",
       "degraded_capabilities": ["browser", "mcp"]
     }
   },

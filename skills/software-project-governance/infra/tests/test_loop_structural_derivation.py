@@ -1,5 +1,7 @@
 """Unit tests for loop_migration.py's structure-anchored derivation — FEAT-071.
 
+NOTE (FEAT-101): chrys 字样为合成夹具数据，非平台适配面——FEAT-101 决策保留。
+
 DEC-254 (arch 混合方案 A 后手) landed the structure-anchored shadow pipeline:
 ``derive_structural_units_shadow`` derives task→unit candidates from THREE
 machine-recorded evidence sources (change-triage ``files``, agent-locks

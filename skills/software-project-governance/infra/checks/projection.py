@@ -40,7 +40,6 @@ def _legacy_projection_sync(root: Path, target_dir: Path, patterns) -> dict:
         ("source core manifest", root / "skills/software-project-governance/core/manifest.json", "json"),
         ("source Claude plugin", root / ".claude-plugin/plugin.json", "json"),
         ("source Codex plugin", root / ".codex-plugin/plugin.json", "json"),
-        ("source Chrys plugin", root / ".chrys-plugin/plugin.json", "json"),
         ("target workflow skill", target_dir / "skills/software-project-governance/SKILL.md", "skill"),
         ("target plan-tracker", target_dir / ".governance/plan-tracker.md", "plan"),
     ]

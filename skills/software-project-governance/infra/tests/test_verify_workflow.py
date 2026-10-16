@@ -897,7 +897,6 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
             # FIX-182: every VERSION_FILES plugin.json dir must be present so
             # this test isolates the REQUIRED_SNIPPETS failure it targets.
             (root / ".zcode-plugin").mkdir()
-            (root / ".chrys-plugin").mkdir()
             (root / "project").mkdir()
 
             (root / "skills/software-project-governance/SKILL.md").write_text(
@@ -924,10 +923,6 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
                 json.dumps({"version": "9.9.9"}),
                 encoding="utf-8",
             )
-            (root / ".chrys-plugin/plugin.json").write_text(
-                json.dumps({"version": "9.9.9"}),
-                encoding="utf-8",
-            )
             (root / "project/CHANGELOG.md").write_text(
                 "## [9.9.9]\n",
                 encoding="utf-8",
@@ -945,12 +940,14 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
             issues,
         )
 
-    def test_fix182_version_files_covers_zcode_and_chrys_plugin(self):
-        """FIX-182: VERSION_FILES must include .zcode-plugin and .chrys-plugin.
+    def test_fix182_version_files_covers_zcode_plugin(self):
+        """FIX-182: VERSION_FILES must include .zcode-plugin (FEAT-101 note:
+        the 0.99.0 platform-set reduction left the invariant at THREE
+        plugin.json faces — Claude/Codex/Zcode — all covered by
+        check_version_consistency).
 
-        The repo ships four plugin.json manifest dirs (Claude/Codex/Zcode/
-        Chrys). Before FIX-182 only three were in VERSION_FILES, so a version
-        bump that forgot .zcode-plugin or .chrys-plugin would slip past
+        Before FIX-182 the per-plugin face was under-covered, so a version
+        bump that forgot .zcode-plugin would slip past
         check_version_consistency undetected — a real coverage blind spot.
 
         This test:
@@ -958,10 +955,25 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
             drifted .zcode-plugin/plugin.json and reports a [FAIL] issue
             naming .zcode-plugin.
           * FAIL-on-buggy — re-running the same VERSION_FILES loop with the
-            pre-FIX-182 (3-entry plugin) dict does NOT detect the drift,
+            pre-FIX-182 (3-entry plugin-less) dict does NOT detect the drift,
             which is exactly the blind spot the fix closes.
+          * FEAT-101 coverage assertion — VERSION_PATHS now carries exactly
+            three plugin.json entries (Claude/Codex/Zcode); a platform-set
+            reduction must not silently drop the per-plugin coverage face.
         """
         import re as _re
+
+        plugin_entries = sorted(
+            key for key in vw.version_checks.VERSION_PATHS
+            if key.endswith("plugin.json")
+        )
+        self.assertEqual(
+            plugin_entries,
+            [".claude-plugin/plugin.json", ".codex-plugin/plugin.json",
+             ".zcode-plugin/plugin.json"],
+            "VERSION_PATHS must cover exactly the three plugin.json faces "
+            "(FEAT-101 platform-set reduction)",
+        )
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -970,7 +982,7 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
                 "skills/software-project-governance/core",
                 "skills/software-project-governance/infra/hooks",
                 ".claude-plugin", ".codex-plugin",
-                ".zcode-plugin", ".chrys-plugin", "project",
+                ".zcode-plugin", "project",
             ):
                 (root / d).mkdir(parents=True)
 
@@ -987,8 +999,6 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
             # FIX-182 target: .zcode-plugin drifts away from the source of truth.
             (root / ".zcode-plugin/plugin.json").write_text(
                 json.dumps({"version": "0.0.1"}), encoding="utf-8")
-            (root / ".chrys-plugin/plugin.json").write_text(
-                json.dumps({"version": truth}), encoding="utf-8")
             (root / "project/CHANGELOG.md").write_text(
                 f"## [{truth}]\n", encoding="utf-8")
             (root / "skills/software-project-governance/infra/verify_workflow.py").write_text(
@@ -1013,7 +1023,7 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
                 )
 
                 # ── FAIL-on-buggy ──
-                # Replay the pre-FIX-182 VERSION_FILES (no zcode/chrys entries)
+                # Replay the pre-FIX-182 VERSION_FILES (no zcode entry)
                 # through the *same* detection loop to demonstrate the blind
                 # spot the fix closes: the drift is silently missed.
                 buggy_version_files = {
@@ -2598,32 +2608,6 @@ class AgentAdapterContractTests(unittest.TestCase):
                 "Gemini auth missing or not configured; configure GEMINI_API_KEY, "
                 "GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth."
             )
-        if adapter_id == "chrys":
-            manifest["runtime_capabilities"]["ask_user_question"] = {
-                "status": "native",
-                "evidence": "Chrys has a native ask_user tool.",
-            }
-            manifest["runtime_capabilities"]["sub_agent"] = {
-                "status": "native",
-                "evidence": "Chrys has native explore_agent, plan_agent, and general_agent tools.",
-            }
-            manifest["runtime_capabilities"]["tool_calling"] = {
-                "status": "native",
-                "evidence": "Chrys has a rich native tool set.",
-            }
-            manifest["runtime_capabilities"]["workflow_closure"]["degraded_capabilities"] = [
-                "browser", "mcp"
-            ]
-            manifest["runtime_e2e"]["version_command"] = (
-                "chrys is the agent running this verification session"
-            )
-            manifest["runtime_e2e"]["full_e2e_verified"] = True
-            manifest["runtime_e2e"]["agent_runtime_e2e"] = {
-                "status": "passed",
-                "command": "Chrys session reading .governance/plan-tracker.md from project cwd",
-                "verified_on": "2026-07-01",
-                "evidence": "Chrys is the active runtime in this session.",
-            }
         if adapter_id == "dsh":
             manifest["runtime_capabilities"]["ask_user_question"] = {
                 "status": "native",
@@ -2744,7 +2728,7 @@ class AgentAdapterContractTests(unittest.TestCase):
         (adapter_dir / "adapter-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
     def _write_all_adapters(self, root):
-        for adapter_id in ["claude", "codex", "gemini", "opencode", "chrys", "dsh", "pi"]:
+        for adapter_id in ["claude", "codex", "gemini", "opencode", "dsh", "pi"]:
             self._write_adapter(root, adapter_id)
 
     def test_agent_adapter_contract_accepts_verified_and_explicit_unsupported(self):
@@ -3369,7 +3353,6 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             "| codex | PASS | Codex CLI target-cwd read E2E passed. |\n"
             "| gemini | PASS | Gemini target-cwd read E2E passed with headless workspace trust. |\n"
             "| opencode | PASS | opencode real target cwd E2E passed. |\n"
-            "| chrys | PASS | Chrys session executed from project cwd. |\n"
             if include_runtime_result_table
             else ""
         )
@@ -3382,7 +3365,6 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             f"| codex | {codex_status} | DEGRADED | codex --version | full_e2e_verified=true; real codex exec target-cwd read E2E passed. |\n"
             f"| gemini | {gemini_status} | DEGRADED | gemini --version | full_e2e_verified=true; Gemini target-cwd read E2E passed with headless workspace trust. |\n"
             "| opencode | PASS | DEGRADED | opencode --version | full_e2e_verified=true; agent_runtime_e2e passed; opencode real target cwd E2E passed. |\n"
-            "| chrys | PASS | DEGRADED | chrys is the agent running this verification session | full_e2e_verified=true; agent_runtime_e2e passed; Chrys is the active runtime in this session. |\n"
             "| dsh | PASS | DEGRADED | dsh --version | full_e2e_verified=true; agent_runtime_e2e passed; dsh is the active runtime in this fixture. |\n"
             "| pi | PASS | DEGRADED | pi --version | full_e2e_verified=true; agent_runtime_e2e passed; extension-bridged ask_user_question/sub_agent native per DEC-359 (EVD-1715/1716); browser/MCP not native. |\n"
             f"| cursor | {cursor_status} | NOT_RUNTIME_VERIFIED | manual research | Cursor entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
@@ -8671,7 +8653,6 @@ class ProjectionSyncTests(unittest.TestCase):
             target / "agents",
             root / ".claude-plugin",
             root / ".codex-plugin",
-            root / ".chrys-plugin",
             target / ".governance",
         ]:
             path.mkdir(parents=True, exist_ok=True)
@@ -8690,7 +8671,6 @@ class ProjectionSyncTests(unittest.TestCase):
         (target_skill / "core/manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         (root / ".claude-plugin/plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
         (root / ".codex-plugin/plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
-        (root / ".chrys-plugin/plugin.json").write_text(json.dumps({"version": version}), encoding="utf-8")
 
         command_text = "# governance\nScenario F\n"
         (root / "commands/governance.md").write_text(command_text, encoding="utf-8")

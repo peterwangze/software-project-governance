@@ -1057,7 +1057,9 @@ class K10StructuralTests(RepoCase):
             (boundary.Subject(_PACKAGE_ROOT).core_manifest).read_text(encoding="utf-8"))
         declared = set(manifest["cleanup_scope"]["directories"])
         self.assertIn("adapters", declared)
-        self.assertEqual(len(declared), 11)
+        # FEAT-101: the platform-set reduction dropped one plugin dir, so the
+        # synchronized scope carries 10 directories (was 11).
+        self.assertEqual(len(declared), 10)
 
     def test_negative_an_undeclared_host_facts_fixture_is_named(self):
         manifest = boundary.Subject(_PACKAGE_ROOT).core_manifest

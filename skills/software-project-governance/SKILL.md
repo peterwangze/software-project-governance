@@ -495,7 +495,6 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 | Codex | `adapters/codex/` | `.codex-plugin/` |
 | Gemini | `adapters/gemini/` | — |
 | opencode | `adapters/opencode/` | — |
-| Chrys | `adapters/chrys/` | — |
 | DeepSeek Harness | `adapters/dsh/` + `agent-presets/governance/` | `${DSH_HOME}/.agent-presets/governance/`（由包内宿主行 `lib/index.js` 或 `adapters/dsh/launch.py --install` 渲染 `agent.cordis.yml.template` 生成） |
 | Pi | `adapters/pi/` + `adapters/pi/extension/` | — |
 | 国内 Agent CLI | — | `.agents/` |

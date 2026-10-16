@@ -1,5 +1,7 @@
 """Unit tests for loop_migration.py's unit approval manifest — FEAT-070.
 
+NOTE (FEAT-101): chrys 字样为合成夹具数据，非平台适配面——FEAT-101 决策保留。
+
 DEC-254 (arch 混合方案 B 先手) landed the §2.6 human confirmation path:
 ``record_unit_approval`` / ``record_unit_block`` are the ONLY sanctioned
 writers of ``.governance/flow-unit-approval-manifest.json``, and the dry-run

@@ -864,7 +864,7 @@ class DshAdapterTests(unittest.TestCase):
             vw.MAINSTREAM_AGENT_LOADING_ADAPTERS["dsh"]["display"], "DeepSeek Harness"
         )
         # Deliberate absence: dsh has no headless CLI, so the live-session E2E
-        # path (Chrys style) is used instead of the agent-runtime-e2e matrix.
+        # path is used instead of the agent-runtime-e2e matrix.
         self.assertNotIn("dsh", vw.AGENT_RUNTIME_E2E_PLATFORMS)
 
     def test_supported_agents_and_loading_docs_include_dsh(self):

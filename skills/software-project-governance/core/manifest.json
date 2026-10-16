@@ -12,7 +12,6 @@
       "claude-marketplace",
       "codex-plugin",
       "zcode-plugin",
-      "chrys-plugin",
       "package",
       "fixture-plan",
       "hook-pre-commit",
@@ -313,14 +312,6 @@
       {
         "path": ".zcode-plugin/assets/",
         "type": "dir"
-      },
-      {
-        "path": ".chrys-plugin/",
-        "type": "dir"
-      },
-      {
-        "path": ".chrys-plugin/plugin.json",
-        "type": "file"
       },
       {
         "path": ".agents/",
@@ -931,7 +922,6 @@
       "lib",
       "skills",
       ".agents",
-      ".chrys-plugin",
       ".claude-plugin",
       ".codex-plugin",
       ".zcode-plugin"

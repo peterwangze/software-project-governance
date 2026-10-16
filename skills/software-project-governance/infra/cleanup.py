@@ -58,7 +58,6 @@ PLUGIN_SCOPE_DIRS = {
     ".claude-plugin",
     ".codex-plugin",
     ".zcode-plugin",
-    ".chrys-plugin",
     ".agents",
 }
 

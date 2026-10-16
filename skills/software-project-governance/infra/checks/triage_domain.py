@@ -88,7 +88,6 @@ TRIAGE_PRODUCT_CODE_PATTERNS = (
     ".claude-plugin/",
     ".codex-plugin/",
     ".zcode-plugin/",
-    ".chrys-plugin/",
     ".agents/",
 )
 

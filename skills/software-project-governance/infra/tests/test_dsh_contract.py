@@ -2472,11 +2472,13 @@ class TestManifestDeclaration(unittest.TestCase):
         self.assertIn("adapters/dsh/host-contract.json", product_files)
 
     def test_cleanup_scope_is_unchanged_and_covers_the_contract(self):
-        # C-8 zero change: `adapters` is already in the 11-directory set, and
+        # C-8 zero change: `adapters` is already in the directory set, and
         # `cleanup.py` expands dir entries recursively (§2.9.2).
+        # FEAT-101: the platform-set reduction dropped one plugin dir, so
+        # the scope carries 10 directories (the C-8 era count was 11).
         directories = self.manifest["cleanup_scope"]["directories"]
         self.assertIn("adapters", directories)
-        self.assertEqual(len(directories), 11)
+        self.assertEqual(len(directories), 10)
         cleanup_text = _read(_REPO_ROOT / "skills"
                              / "software-project-governance" / "infra"
                              / "cleanup.py")

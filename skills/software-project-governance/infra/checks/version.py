@@ -14,7 +14,6 @@ VERSION_PATHS = {
     ".claude-plugin/marketplace.json": (".claude-plugin/marketplace.json", "/plugins/0/version"),
     ".codex-plugin/plugin.json": (".codex-plugin/plugin.json", "/version"),
     ".zcode-plugin/plugin.json": (".zcode-plugin/plugin.json", "/version"),
-    ".chrys-plugin/plugin.json": (".chrys-plugin/plugin.json", "/version"),
 }
 
 
@@ -362,16 +361,20 @@ STATIC_PIN_EXEMPTIONS = {
         # incremental+fix-round test insertions above shifted all four rows
         # below without touching the tokens (rot-guard caught the stale
         # ledger); re-anchored to the actual token lines, same discipline.
-        (21244, "0.93.0", _REASON_FUTURE_TARGET),
-        (21276, "0.93.0", _REASON_FUTURE_TARGET),
+        # FEAT-101 re-anchor -20: the platform-set reduction fixture removals
+        # above (adapter branch/loop/matrix/projection fixtures) shifted all
+        # four rows below without touching the tokens (rot-guard caught the
+        # stale ledger); re-anchored to the actual token lines, same discipline.
+        (21224, "0.93.0", _REASON_FUTURE_TARGET),
+        (21256, "0.93.0", _REASON_FUTURE_TARGET),
         # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
         # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
         # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
         # 目标版本 column — scenario payload written while 0.93.1 was active,
         # surfacing exactly once at this bump; the word-set judgement
         # consumes the row text, never the version cell.
-        (20746, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
-        (20749, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        (20726, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        (20729, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.95.0 bump-time rows (the FIX-361 designed double signal): the
     # FEAT-076 Q6 date-window fallback fail-closed fixture (roadmap row

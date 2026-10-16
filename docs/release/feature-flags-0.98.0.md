@@ -21,4 +21,4 @@ pack enabled/审查链/发布门均不受旗标影响（旗标只控制执法强
 
 ## 边界声明（保守口径——REL-021 token 全量）
 
-本声明件不构成 official approval、marketplace approval、universal/full runtime support、external first-session pilot success 或任何发布门/质量门证明（RISK-036 先例口径延续）；旗标面为本地环境变量控制，无远端配置/多宿主同步声明；非 Windows 未验证。
+本版不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success（RISK-036 先例口径延续）；旗标面为本地环境变量控制，无远端配置/多宿主同步声明；非 Windows 未验证；本声明件不构成任何发布门/质量门证明。

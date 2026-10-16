@@ -77,4 +77,4 @@
 
 ## 边界声明（保守口径——REL-021 token 全量）
 
-本版不声明 official approval、marketplace approval、universal/full runtime support、宿主级拦截能力（FEAT-095=协议级+CLI 级执法+降级披露——M-0 §3 调研判定）；非 Windows 未验证；dsh upgrade regression=隔离环境安装冒烟（非 live marketplace upgrade）；DEC-330 故障注入六项验证结论随 M-8 落盘（机器承载：task-row-update CAS/review-record CONFLICT+R2/goal_bridge refuse/enforcement scoped——见 M-3 RELEASE 半面核验）。
+本版不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success（RISK-036 先例口径延续）；非 Windows 未验证；dsh upgrade regression=隔离环境安装冒烟（非 live marketplace upgrade）；FEAT-095=协议级+CLI 级执法+降级披露（M-0 §3 调研判定——六平台无宿主级拦截，DSH 原语完备未接线）；DEC-330 故障注入六项验证结论随 M-8 落盘（机器承载：task-row-update CAS/review-record CONFLICT+R2/goal_bridge refuse/enforcement scoped——M-3 RELEASE 半面 8/8 实测）。

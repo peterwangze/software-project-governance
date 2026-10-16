@@ -57,3 +57,7 @@ git tag -d v0.98.0 && git push origin :refs/tags/v0.98.0   # 删除远端 tag（
 - 已推送 tag 的历史可见性（删除远端 tag 属破坏性——需用户裁定）；
 - 追加式治理台账行（EVD/DEC/REVIEW/ENFORCEMENT-ACTION）——按设计保留；
 - ledger 事件（release-ledger candidate→released 事件为追加式——transition 记录随 commit revert 回退，ledger 事件链保留并标注）。
+
+## 边界声明（保守口径——REL-021 token 全量）
+
+本回滚方案不声明 official approval、marketplace approval、universal/full runtime support、external first-session pilot success（RISK-036 先例口径延续）；回滚验证判据以本仓实测命令为准，非 Windows 未验证；下游真实环境回退效果以下游 /plugin update 实测为准（本方案提供路径不代行）。

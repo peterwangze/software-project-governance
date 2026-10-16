@@ -6,7 +6,7 @@
 
 ### 0.98.0 - **次版本线：可信有界执行内核（Minor Line: Trusted Bounded Execution Kernel）**：载荷七票（FEAT-093 权威账本 / FEAT-094 审查可信链 / FEAT-095 动作级执法 / FEAT-096 执行隔离 / FEAT-097 goal 桥接 + FIX-442/443/446 随版 / 发布链 REL-102）
 
-0.98.0 为 0.97.0 的次版本线（**「可信有界执行内核」批**——DEC-330 联合裁定，AUDIT-159 像素风RPG长程复盘驱动：意图识别/事务分解/落盘契约/循环演进/过程看护五维度实测缺口〔报告=docs/requirements/analysis-rpg-longhaul-capability-session-f3f46901-0.97.0.md〕）：**任务身份与状态进入权威账本时代（FEAT-093——同 ID 双语义写入被拒、plan-tracker 降级为可重建投影）+ 审查链不可变快照绑定与事务化（FEAT-094——报告/机录冲突判 CONFLICT、R2 义务自动登记、代理死亡 ABORTED）+ 六边界动作级执法（FEAT-095——协议级+CLI 级+如实降级披露：六平台无宿主级拦截，DSH 原语完备未接线，M-0 调研判定 docs/release/m-0-assembly-0.98.0.md §3）+ 执行隔离保守面（FEAT-096）+ goal 状态映射与多维权危险区收口（FEAT-097——blocked 后未授权续跑拒绝并落账）**。载荷重定 DEC-354（FEAT-098 P2 顺延 0.99.0）；FIX-444/445 顺延 0.99.0（DEC-358①——DEC-342 用户暂停维持，FAIL 面以 GO 终审披露）；版本载荷窗口 `dd5c2a2（v0.97.0 tag peel）..回填位`（M-8 批回填终值——窗口内 291b4f9/d0bac6e/daac2b8/504ee89/c46ad2a/M-1 版本面），发布链 REL-102 组装于 2026-10-15（+0800）。
+0.98.0 为 0.97.0 的次版本线（**「可信有界执行内核」批**——DEC-330 联合裁定，AUDIT-159 像素风RPG长程复盘驱动：意图识别/事务分解/落盘契约/循环演进/过程看护五维度实测缺口〔报告=docs/requirements/analysis-rpg-longhaul-capability-session-f3f46901-0.97.0.md〕）：**任务身份与状态进入权威账本时代（FEAT-093——同 ID 双语义写入被拒、plan-tracker 降级为可重建投影）+ 审查链不可变快照绑定与事务化（FEAT-094——报告/机录冲突判 CONFLICT、R2 义务自动登记、代理死亡 ABORTED）+ 六边界动作级执法（FEAT-095——协议级+CLI 级+如实降级披露：六平台无宿主级拦截，DSH 原语完备未接线，M-0 调研判定 docs/release/m-0-assembly-0.98.0.md §3）+ 执行隔离保守面（FEAT-096）+ goal 状态映射与多维权危险区收口（FEAT-097——blocked 后未授权续跑拒绝并落账）**。载荷重定 DEC-354（FEAT-098 P2 顺延 0.99.0）；FIX-444/445 顺延 0.99.0（DEC-358①——DEC-342 用户暂停维持，FAIL 面以 GO 终审披露）；版本载荷窗口 `dd5c2a2（v0.97.0 tag peel）..回填位`（M-8 批回填终值——窗口内 12 commits：载荷 42ddbca〔FEAT-093〕/099acbf〔FEAT-094〕/75cc7e5〔FIX-442〕/bf6942d〔FEAT-096〕/291b4f9〔FIX-443〕/d0bac6e〔FIX-446〕/daac2b8〔FEAT-095+097〕+ 治理 c783cff〔AUDIT-159〕/9950076〔REL-101 M-8〕/504ee89〔REL-102 M-0 docs〕+ C4 c46ad2a + M-1 3b1a847），发布链 REL-102 组装于 2026-10-15（+0800）。
 
 ### Added
 
@@ -23,7 +23,7 @@
 - **DSH preset 冒烟并发写入容忍度（FIX-442，commit 75cc7e5——R0 AWN/0）**：Check 28u 把活跃会话同机并发合法写入误判隔离破坏——before/after diff 归因排除，真实越界仍 FAIL。
 - **archguard 基线与 FEAT-020 契约快照 sanctioned regen（DEC-358③，commit daac2b8 rider）**：R1 锚点 28160→28204（+44=FEAT-095 enforcement 接线增量）/R5 冻结键 99→107（enforcement-check+goal-bridge 等入册）/R7 committed==fresh——七轴 fatal gate green。
 - **单测时钟敏感断言修复（REL-102 C4，commit c46ad2a——REVIEW-REL-102-R0 AWN/0）**：FEAT075 渲染测试 fixture 过期日动态化（原硬编码 2026-10-12 过钟后 fail-closed expired 误报为回归）——产品行为正确，断言过时；全量 test_verify_workflow 1135 tests 0F/0E。
-- **M-1 版本面再生纪律**：权威源 bump（SKILL frontmatter）→ 17 针脚（六 REQUIRED_SNIPPETS 引擎针/四 hooks @version/四 plugin.json/双 marketplace/manifest）→ `release-projection --write`（written=7，write_then_probe PASS，sd_integrity 28/0）→ 双根 entry sync ×4（repo root + e2e 的 AGENTS.md/CLAUDE.md bootstrap 段经 sync_entry_projection.py --write 再生）。
+- **M-1 版本面再生纪律**：权威源 bump（SKILL frontmatter）→ 17 针脚（六 REQUIRED_SNIPPETS 引擎针/四 hooks @version/四 plugin.json/marketplace/manifest/package.json）→ `release-projection --write`（written=7，write_then_probe PASS，sd_integrity 28/0）→ 双根 entry sync ×4（repo root + e2e 的 AGENTS.md/CLAUDE.md bootstrap 段经 sync_entry_projection.py --write 再生）。**注入预算（M-2 实测）**：resident 4441 ≤ 6200 **PASS**（等长数字替换零漂移）；skill 报告面 17484 > 16000（**report-only**，超 1484/+9.3%——FEAT-095/097 契约段增文所致，非 resident 硬门；随版披露基线，REVIEW-REL-102-R1 P3-N1 闭环）。
 
 ### Breaking changes
 

@@ -78,8 +78,8 @@ pi 的「项目上下文」分两层：**context files（无需信任，永远�
 
 | 能力键 | 判定 | 证据 |
 |---|---|---|
-| `ask_user_question` | **无原生 ask-user 工具**。内置工具仅 read/bash/powershell/edit/write/grep/find/ls（`pi --help` "Built-in Tool Names" 节，exit 0；cli.md L140-149）。docs 全量 grep `ask_question\|askUser` 零命中；`--help` 示例中 `--exclude-tools ask_question` 仅为扩展示例名（**未证实**为任何内置工具）。可达路径：扩展注册 `model-only` 工具问用户（extensions.md L157）、`ctx.ui.confirm`/dialogs（L174、L244）、RPC 模式可转发对话框（L250；rpc-extension-ui.md）——但 JSON/print 模式无 UI（extensions.md L250-251）→ **headless 场景无交互通道**。本机装有 `@narumitw/pi-plan-mode` 包（`pi list`，exit 0）是否提供 ask-user 类工具**未证实** | 如左 |
-| `sub_agent` | **无原生子代理机制**。docs 全量 grep `subagent\|sub-agent\|spawn.*agent\|delegate` 仅无关命中。替代面：扩展内嵌套模型调用 `ctx.modelRegistry.streamSimple()`（extensions.md L212）、`codemode` 工具并行编排工具调用（cli.md L155）、SDK 进程内嵌 agent（docs\index.md L29）——均非 Agent Team 式角色子代理 → **unsupported**（诚实降级，参照 opencode 先例 adapters/opencode/adapter-manifest.json L41-45） | 如左 |
+| `ask_user_question` | **无原生 ask-user 工具**。内置工具仅 read/bash/powershell/edit/write/grep/find/ls（`pi --help` "Built-in Tool Names" 节，exit 0；cli.md L140-149）。docs 全量 grep 正则（ask_question、askUser 两词）零命中；`--help` 示例中 `--exclude-tools ask_question` 仅为扩展示例名（**未证实**为任何内置工具）。可达路径：扩展注册 `model-only` 工具问用户（extensions.md L157）、`ctx.ui.confirm`/dialogs（L174、L244）、RPC 模式可转发对话框（L250；rpc-extension-ui.md）——但 JSON/print 模式无 UI（extensions.md L250-251）→ **headless 场景无交互通道**。本机装有 `@narumitw/pi-plan-mode` 包（`pi list`，exit 0）是否提供 ask-user 类工具**未证实** | 如左 |
+| `sub_agent` | **无原生子代理机制**。docs 全量 grep 正则（subagent、sub-agent、spawn.*agent、delegate 四式）仅无关命中。替代面：扩展内嵌套模型调用 `ctx.modelRegistry.streamSimple()`（extensions.md L212）、`codemode` 工具并行编排工具调用（cli.md L155）、SDK 进程内嵌 agent（docs\index.md L29）——均非 Agent Team 式角色子代理 → **unsupported**（诚实降级，参照 opencode 先例 adapters/opencode/adapter-manifest.json L41-45） | 如左 |
 | `tool_calling` | **native**。8 内置工具；`powershell` 仅原生 Windows（windows.md L47，`-NoProfile -NonInteractive -ExecutionPolicy Bypass`，windows.md L35）；`--tools/-t` 允许列表 + `+name/-name` 增减 + `*` 模式 + `--exclude-tools`（cli.md L119-128；settings.md L40-58）；本机 defaultTools 已 +powershell/+grep/+find/+ls/+codemode/+tool_search（`C:\Users\peter\.pi\agent\settings.json` L18-29） | 如左 |
 | `browser` | 无内置浏览器自动化工具（内置工具表无；docs 未见）→ **unsupported**。本机装有 `pi-web-access@0.38.0` 包（`pi list`，exit 0）是否构成可声明浏览器通道**未证实** | 如左 |
 | `mcp` | **degraded（host-dependent）**：机制 native（§3.4），服务器可用性取决于主机配置——与本仓 chrys/dsh 同口径（adapters/chrys/adapter-manifest.json L55-59） | 如左 |
@@ -96,7 +96,7 @@ pi 的「项目上下文」分两层：**context files（无需信任，永远�
 | agent 目录文件面 | settings.json / keybindings.json / mcp.json / models.json / auth.json / AGENTS.md（等 5 变体）/ SYSTEM.md / APPEND_SYSTEM.md / extensions/ / skills/ / prompts/ / themes/ / trust.json / sessions/ / npm/ | configuration.md L11-24；security.md L67-73；本机实测目录列表（Get-ChildItem，只读） |
 | 本机现状 | `C:\Users\peter\.pi\agent\` 已存在且在用：settings.json、AGENTS.md、mcp.json、models.json、auth.json、provider-keys.json、bin/、npm/、sessions/、web-search-cache/ | pwsh 只读列目录（本会话） |
 | 本机全局注册实证 | settings.json `packages`=[pi-web-access@0.38.0, @upstash/context7-pi@0.1.2, @narumitw/pi-plan-mode@0.59.2]（L12-16）；**`skills`=["D:/AI/agent/pi/developer-kit/skills"]、`prompts`=["D:/AI/agent/pi/developer-kit/prompts"]（L40-45）——用户已用 settings 路径数组模式外接外部 skill/command 目录**；defaultProvider=cc-switch-zhipu-glm / glm-5.3-flash（L38-39） | `C:\Users\peter\.pi\agent\settings.json` L1-46（只读） |
-| 外部 skill/command 包「全局接线」官方机制 | 四选一：① `pi install <source>` → 写 settings.json `packages`（npm/git/本地路径，本地不拷贝）；② settings.json `skills`/`prompts`/`extensions` 路径数组（支持绝对路径/~/glob 排除）；③ drop-in 到 `<agent-dir>/skills\|prompts\|extensions/` 惯例目录；④ 单次 `-e/--skill/--prompt-template` 旗标 | packages.md L9-19；settings.md L149-158；configuration.md L21-24；cli.md L194-207 |
+| 外部 skill/command 包「全局接线」官方机制 | 四选一：① `pi install <source>` → 写 settings.json `packages`（npm/git/本地路径，本地不拷贝）；② settings.json `skills`/`prompts`/`extensions` 路径数组（支持绝对路径/~/glob 排除）；③ drop-in 到 `<agent-dir>` 下 skills／prompts／extensions 三惯例目录；④ 单次 `-e/--skill/--prompt-template` 旗标 | packages.md L9-19；settings.md L149-158；configuration.md L21-24；cli.md L194-207 |
 | 项目信任 | 受保护资源（.pi/settings.json、.pi/mcp.json、.pi/{extensions,skills,prompts,themes}、.pi/SYSTEM*.md、项目 .agents/skills）触发信任决策；决策序：CLI `--approve/--no-approve` → 扩展 project_trust 事件 → 已存决策（trust.json）→ `defaultProjectTrust`（默认 ask）；**print/JSON/RPC 无信任提示**，ask/never 时跳过受保护资源 → 自动化运行必须显式 `-a` 或 `-na` | security.md L37-45、L61-82 |
 
 ## 6. 无头/冒烟方式（`pi --help` 实测为准）
@@ -167,7 +167,7 @@ pi 的「项目上下文」分两层：**context files（无需信任，永远�
 | `infra/checks/projection.py` | L43（source Chrys plugin） | 同上 |
 | `infra/checks/triage_domain.py` | L91（`.chrys-plugin/`） | 同上 |
 | `infra/contract_matrix/golden_samples.txt` | L97、L283-295、L1358（chrys 契约金样） | adapter 集变更后需再生成/更新 |
-| `skills/software-project-governance/SKILL.md` | L492-500 适配层平台表 | +`\| Pi \| adapters/pi/ \| — \|`（e2e 镜像 `project/e2e-test-project/skills/.../SKILL.md` L498 由 byte_copy 投影随发布同步） |
+| `skills/software-project-governance/SKILL.md` | L492-500 适配层平台表 | +Pi 行（三列语义：平台名 Pi、adapter 路径 adapters/pi/、plugin 包 —）（e2e 镜像 `project/e2e-test-project/skills/.../SKILL.md` L498 由 byte_copy 投影随发布同步） |
 | 根 `README.md` | L26-34 Tier 1 表 | +Pi 行（zcode 行 L34 先例） |
 | `docs/requirements/runtime-readiness-matrix-0.43.0.md` | Summary 表 + 运行时结果表 | +pi 行（check L3175 消费此文档——**改代码常量必须同步改此文档行**，否则 FAIL） |
 | `docs/requirements/mainstream-agent-loading-0.47.0.md` | 平台表 | +Pi 行（check-mainstream-agent-loading 消费） |

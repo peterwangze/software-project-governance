@@ -788,6 +788,36 @@ def _poc_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class FEAT100AttestorCellSplitSyncTests(unittest.TestCase):
+    """FEAT-100: the attestation leaf's cell splitter stays in sync with the
+    semantic scanner's twin.
+
+    This leaf intentionally has no dependency on the scanner (module
+    docstring), so the FEAT-100 dangling-escape backtrack root fix lives in
+    BOTH implementations. These locks fail if either copy drifts: the
+    identity fixture used to raise the same false
+    ``ACCOUNTING_MARKDOWN_AMBIGUOUS_BOUNDARY: ragged table row`` on the
+    pi-doc L97 shape because its splitter copy still consumed the closing
+    delimiter of `` `C:\\Users\\peter\\.pi\\agent\\` `` as an escaped
+    backtick."""
+
+    def test_dangling_trailing_backslash_span_backtracks_to_close(self):
+        line = ("| 验证状态 | `C:\\Users\\peter\\.pi\\agent\\` 已存在并可用"
+                "（settings.json、mcp.json） | pwsh 只读目录内会话 |")
+        lra_cells = lra._split_markdown_cells(line)
+        lrc_cells = lrc._split_markdown_cells(line)
+        self.assertEqual(3, len(lra_cells), repr(lra_cells))
+        self.assertEqual(3, len(lrc_cells), repr(lrc_cells))
+        self.assertEqual(lrc_cells, lra_cells)
+
+    def test_in_span_escaped_backticks_stay_one_span(self):
+        line = "| F-05 | `String.raw\\`...\\`` 与模板串 | 均漏过 |"
+        lra_cells = lra._split_markdown_cells(line)
+        lrc_cells = lrc._split_markdown_cells(line)
+        self.assertEqual(3, len(lra_cells), repr(lra_cells))
+        self.assertEqual(lrc_cells, lra_cells)
+
+
 if __name__ == "__main__":
     if "--fix216-poc" in sys.argv or "--validate-fix216-poc" in sys.argv:
         try:

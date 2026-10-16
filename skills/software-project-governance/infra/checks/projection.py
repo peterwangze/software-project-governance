@@ -80,9 +80,18 @@ def check_projection_sync(root: Path, target_dir: Optional[Path] = None, pattern
     if target_dir is not None or patterns is not None:
         return _legacy_projection_sync(root, target_dir or root / "project/e2e-test-project", patterns or ())
     result = check_projections(root, config_path).as_dict()
-    return {**result, "mirrors_checked": result.get("projections_checked", 0),
+    # FEAT-100: the release CheckResult only carries facts on its built-plan
+    # paths — a BLOCKED plan build returns an EMPTY facts dict, and this
+    # adapter used to forward that hole to callers that index
+    # ``source_version`` directly (check-governance Check 28b and the
+    # standalone check-projection-sync both crashed with KeyError). The
+    # adapter owns the stable schema shared by BOTH return paths of this
+    # function (the legacy path builds the same keys literally): every key
+    # the callers index must exist on every path.
+    return {**result, "source_version": result.get("source_version", ""),
+            "mirrors_checked": result.get("projections_checked", 0),
             "mirrors_discovered": result.get("projections_checked", 0), "mirrors_skipped_untracked": 0,
-            "version_checks": []}
+            "version_checks": result.get("version_checks", [])}
 
 
 def write_projection_sync(root: Path, config_path: Optional[Path] = None) -> dict:

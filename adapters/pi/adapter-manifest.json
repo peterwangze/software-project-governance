@@ -36,14 +36,12 @@
   },
   "runtime_capabilities": {
     "ask_user_question": {
-      "status": "degraded",
-      "evidence": "extension-bridged: adapters/pi/extension registers model-only tool ask_user_question rendering via ctx.ui dialog methods (select/confirm/input) — available in tui and rpc modes (rpc via extension_ui_request/response subprotocol); headless json/print modes have no UI and the tool fails fast with GOV_ASK_USER_HEADLESS (official precedent examples/extensions/question.ts L53-62). Design FEASIBLE per docs/requirements/pi-adapter-design-0.99.0.md evidence table; runtime E2E verification pending → degraded until then (same enumeration precedent as claude adapter: native tool exists, verified surface limited).",
-      "degraded_mode": "In headless pi runs (-p / --mode json), use the outer host conversation for interaction boundaries; interactive/RPC pi sessions use the bridged tool."
+      "status": "native",
+      "evidence": "extension-bridged: adapters/pi/extension registers model-only tool ask_user_question rendering via ctx.ui dialog methods (select/confirm/input) — available in tui and rpc modes (rpc via extension_ui_request/response subprotocol). Runtime E2E verified 2026-10-16 (EVD-1715): tool visible in the pi tool inventory and the headless fallback criterion PASS — in headless runs (-p / --mode json) with no UI the tool fails fast with the structured GOV_ASK_USER_HEADLESS error, which is bounded behavior on the no-UI boundary, not a capability gap; interactive boundaries route to the outer host conversation there. DEC-359 upgrade threshold satisfied (EVD-1716)."
     },
     "sub_agent": {
-      "status": "degraded",
-      "evidence": "extension-bridged: adapters/pi/extension registers model-only tool dispatch_agent spawning a nested pi process (--mode json -p --no-session --append-system-prompt <role definition> --tools <subset> --exclude-tools ask_user_question,dispatch_agent) per the official examples/extensions/subagent reference; role-definition + task-spec + dispatch-prompt semantics align with references/agent-dispatch-template.md. Design FEASIBLE; runtime E2E verification pending → degraded until then.",
-      "degraded_mode": "Until agent-runtime E2E passes, require external reviewer evidence for Producer-Reviewer separation claims; after E2E passes, upgrade status with machine-recorded evidence."
+      "status": "native",
+      "evidence": "extension-bridged: adapters/pi/extension registers model-only tool dispatch_agent spawning a nested pi process (--mode json -p --no-session --append-system-prompt <role definition> --tools <subset> --exclude-tools ask_user_question,dispatch_agent — recursion blocked per review F-3); role-definition + task-spec + dispatch-prompt semantics align with references/agent-dispatch-template.md. Runtime E2E verified 2026-10-16 (EVD-1715/1716): dispatch_agent real-dispatch three steps machine-recorded — role read (agents/analyst.md injected via --append-system-prompt), nested run (pi --mode json -p --no-session child process), structured return (nested Analyst read adapters/pi/README.md and returned '# Pi Adapter' verbatim, exit 0); tool visible in the pi tool inventory. DEC-359 two-step upgrade threshold satisfied."
     },
     "tool_calling": {
       "status": "native",
@@ -65,8 +63,8 @@
     },
     "workflow_closure": {
       "status": "degraded",
-      "evidence": "pi achieves extension-bridged ask_user_question and sub_agent (tui/rpc interactive scope), native tool_calling and git_hooks; browser/mcp remain host-dependent; bridge runtime E2E pending.",
-      "degraded_capabilities": ["ask_user_question", "sub_agent", "browser", "mcp"]
+      "evidence": "pi achieves extension-bridged ask_user_question and sub_agent verified by runtime E2E (EVD-1715/1716, DEC-359 upgrade), native tool_calling and git_hooks; browser remains unsupported and mcp remains host-dependent.",
+      "degraded_capabilities": ["browser", "mcp"]
     }
   },
   "exploration_channels": {
@@ -87,7 +85,7 @@
       "consult": {
         "status": "degraded",
         "mapping": "dispatch_agent extension bridge (nested pi role agents) for structured second opinions; no external source verified",
-        "evidence": "Extension-bridged sub_agent can carry consult-style role prompts (design FEASIBLE, E2E pending); no external (web or cross-model) professional source is verified; ask_user is a user channel, not an external consult channel; draw-style generation is not consultation (R0 F-3).",
+        "evidence": "Extension-bridged sub_agent (dispatch_agent, runtime E2E passed — EVD-1715/1716) can carry consult-style role prompts; no external (web or cross-model) professional source is verified; ask_user is a user channel, not an external consult channel; draw-style generation is not consultation (R0 F-3).",
         "degraded_mode": "Record the external-source limit per EXP-03 when consult needs information or judgment beyond the host's own bridged sub-agents."
       },
       "validate": {
@@ -99,22 +97,24 @@
     "degraded_mode": "When a channel is unavailable, record 判定=受限 in the exploration block (M10.2) per EXP-03; never mark offline knowledge as channel results."
   },
   "runtime_e2e": {
-    "e2e_level": "runtime-version-probe",
+    "e2e_level": "real-agent-target-cwd",
     "command": "pi",
     "version_command": "pi --version",
-    "verified_on": "2026-10-14",
-    "evidence": "Runtime version probe verified: pi --version returns 1.1.0 (exit 0, machine-recorded in docs/research/pi-adapter-integration-research-0.98.0.md §1). Adapter landed with FEAT-100; agent-runtime E2E upgrades this to real-agent-target-cwd when it executes (mixed scope: real agent-dir read-only credentials + --no-session, zero write surface).",
+    "verified_on": "2026-10-16",
+    "evidence": "Runtime version probe verified: pi --version returns 1.1.0 (exit 0, machine-recorded in docs/research/pi-adapter-integration-research-0.98.0.md §1). FEAT-100 acceptance E2E passed the full gate chain on 2026-10-16 (EVD-1715): L0 static check-agent-adapters 7/7, L1 isolated install smoke (PI_CODING_AGENT_DIR redirected to temp dir), L2 extension load probe, L3 agent-runtime-e2e --agent pi matrix PASS (real pi loaded the e2e-test-project governance bootstrap) plus the headless fallback criterion PASS (GOV_ASK_USER_HEADLESS fast-fail, exit 0).",
     "target_cwd_e2e": {
-      "status": "blocked",
-      "evidence": "Scheduled with FEAT-100 implementation acceptance.",
-      "blocked_reason": "Pending FEAT-100 acceptance; mixed-scope approval granted by user ruling 3, execution scheduled"
+      "status": "passed",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent pi --timeout 90",
+      "verified_on": "2026-10-16",
+      "evidence": "The L3 matrix entry runs real pi headless in project/e2e-test-project cwd (mixed scope per user ruling 3: real agent-dir read-only credentials + --no-session + --tools read + -na, zero write surface) and returned E2E_PLATFORM=pi; E2E_AGENT=Coordinator (EVD-1715)."
     },
     "agent_runtime_e2e": {
-      "status": "blocked",
-      "evidence": "Matrix entry designed (design §6.3); run after implementation lands and registration diff is merged.",
-      "blocked_reason": "Pending FEAT-100 acceptance; matrix entry lands with the implementation, run agent-runtime-e2e --agent pi to upgrade"
+      "status": "passed",
+      "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent pi --timeout 90",
+      "verified_on": "2026-10-16",
+      "evidence": "Real pi runtime executed the e2e prompt in project/e2e-test-project and returned E2E_PLATFORM=pi; E2E_AGENT=Coordinator with structured fields matched; headless fallback criterion PASS (GOV_ASK_USER_HEADLESS, exit 0); ask_user_question/dispatch_agent visible in the tool inventory and dispatch_agent real-dispatch three steps machine-recorded (EVD-1716)."
     },
-    "full_e2e_verified": false
+    "full_e2e_verified": true
   },
   "launcher": "adapters/pi/launch.py"
 }

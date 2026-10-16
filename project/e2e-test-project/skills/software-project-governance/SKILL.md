@@ -522,7 +522,7 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 ### Pi 平台说明
 
 - **加载模型**：pi 原生双兼容 `AGENTS.md`/`CLAUDE.md` 上下文文件（免信任门）+ 原生 Agent Skills 规范（SKILL.md 递归发现、name/description 注入 system prompt、正文按需加载、`/skill:name` 命令）。接线 = `~/.pi/agent/settings.json` 三个路径数组（`skills`/`prompts`/`extensions`，指向本仓绝对路径，幂等追加；用户裁决①——零包改动、不动版本投影面）。详见 `adapters/pi/README.md`。
-- **能力面**：`ask_user_question` 与 `dispatch_agent` 均为 extension 桥（`adapters/pi/extension/`，model-only 工具）——设计裁定 FEASIBLE，runtime E2E 验证前 capability 诚实记 degraded；headless（`-p`/`--mode json`）下 ask_user 桥 fail-fast 返回 `GOV_ASK_USER_HEADLESS` 结构化错误，交互边界走外宿主会话。
+- **能力面**：`ask_user_question` 与 `dispatch_agent` 均为 extension 桥（`adapters/pi/extension/`，model-only 工具）——runtime E2E 已验证（EVD-1715/1716），DEC-359 升级门槛满足，capability 记 native（桥接证据链）；headless（`-p`/`--mode json`）下 ask_user 桥 fail-fast 返回 `GOV_ASK_USER_HEADLESS` 结构化错误——无 UI 边界上的有界行为而非能力缺失，交互边界走外宿主会话；browser 仍 unsupported、mcp 仍依赖主机配置。
 - **工具映射**（pi 会话中把本文件正文的 Claude 平台示例按下表替换）：
 
   | 本文件正文示例 | pi 等价 |

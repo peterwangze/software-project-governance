@@ -557,49 +557,79 @@ def _split_markdown_cells(line: str) -> list[str]:
                 break
     if not protected_pipe:
         return [cell.strip(" \t") for cell in body.split("|")]
-    cells: list[str] = []
-    current: list[str] = []
-    escaped = False
-    code_delimiter = 0
-    quoted = False
-    angle_literal = False
-    position = 0
-    while position < len(body):
-        character = body[position]
-        if escaped:
-            current.append(character)
-            escaped = False
-        elif character == "\\":
-            current.append(character)
-            escaped = True
-        elif character == "`":
-            end = position
-            while end < len(body) and body[end] == "`":
-                end += 1
-            run = end - position
-            current.extend("`" * run)
-            if code_delimiter == 0:
-                code_delimiter = run
-            elif code_delimiter == run:
-                code_delimiter = 0
-            position = end - 1
-        elif character == '"' and code_delimiter == 0:
-            current.append(character)
-            quoted = not quoted
-        elif character == "<" and code_delimiter == 0 and not quoted and position > 0 \
-                and body[position - 1].isalnum() and ">" in body[position + 1:]:
-            current.append(character)
-            angle_literal = True
-        elif character == ">" and angle_literal:
-            current.append(character)
-            angle_literal = False
-        elif character == "|" and code_delimiter == 0 and not quoted and not angle_literal:
-            cells.append("".join(current).strip(" \t"))
-            current = []
-        else:
-            current.append(character)
-        position += 1
-    cells.append("".join(current).strip(" \t"))
+    def _split_with(literal_backslashes: frozenset[int]) -> tuple[list[str], list[int], bool]:
+        # One deterministic pass over ``body``; ``literal_backslashes`` are
+        # in-span ``\``` positions a backtrack retry demoted from "escaped
+        # backtick" to "literal backslash + real delimiter".
+        cells: list[str] = []
+        current: list[str] = []
+        escaped = False
+        code_delimiter = 0
+        quoted = False
+        angle_literal = False
+        position = 0
+        span_escapes: list[int] = []
+        while position < len(body):
+            character = body[position]
+            if escaped:
+                current.append(character)
+                escaped = False
+            elif character == "\\" and not (
+                    code_delimiter and position in literal_backslashes):
+                # Outside spans ``\x`` is an escape (``\|`` stays a literal
+                # pipe); inside spans `` \` `` is this dialect's documented
+                # escaped-backtick form — archived review reports rely on it
+                # (review-REL-086-RELEASE-R1.md L44 quotes this protection
+                # by mechanism) — unless a backtrack demoted this position.
+                current.append(character)
+                escaped = True
+                if code_delimiter and position + 1 < len(body) \
+                        and body[position + 1] == "`":
+                    span_escapes.append(position)
+            elif character == "`":
+                end = position
+                while end < len(body) and body[end] == "`":
+                    end += 1
+                run = end - position
+                current.extend("`" * run)
+                if code_delimiter == 0:
+                    code_delimiter = run
+                elif code_delimiter == run:
+                    code_delimiter = 0
+                position = end - 1
+            elif character == '"' and code_delimiter == 0:
+                current.append(character)
+                quoted = not quoted
+            elif character == "<" and code_delimiter == 0 and not quoted and position > 0 \
+                    and body[position - 1].isalnum() and ">" in body[position + 1:]:
+                current.append(character)
+                angle_literal = True
+            elif character == ">" and angle_literal:
+                current.append(character)
+                angle_literal = False
+            elif character == "|" and code_delimiter == 0 and not quoted and not angle_literal:
+                cells.append("".join(current).strip(" \t"))
+                current = []
+            else:
+                current.append(character)
+            position += 1
+        cells.append("".join(current).strip(" \t"))
+        return cells, span_escapes, code_delimiter == 0
+
+    cells, span_escapes, closed = _split_with(frozenset())
+    if not closed and span_escapes:
+        # FEAT-100 dangling-escape backtrack: escape-first parsing can keep
+        # a span open when a legal CommonMark trailing backslash runs into
+        # the closing delimiter (`` `C:\Users\peter\.pi\agent\` ``), which
+        # used to surface as a false "ragged table row". Demote the LAST
+        # in-span `` \` `` pairs to literal-backslash form one by one until
+        # the span set closes. Rows the escape-first pass already closed are
+        # untouched — bit-identical with the pre-FEAT-100 dialect behavior.
+        ordered = sorted(span_escapes, reverse=True)
+        for take in range(1, len(ordered) + 1):
+            cells, _escapes, closed = _split_with(frozenset(ordered[:take]))
+            if closed:
+                break
     return cells
 
 

@@ -2648,9 +2648,18 @@ class AgentAdapterContractTests(unittest.TestCase):
                 "evidence": "dsh is the active runtime in this fixture.",
             }
         if adapter_id == "pi":
-            # FEAT-100: extension-bridged ask_user/sub_agent (degraded is the
-            # default template status), native tool_calling, unsupported
-            # browser — must match ADAPTER_RUNTIME_CAPABILITY_POLICY["pi"].
+            # FEAT-100 / DEC-359 upgrade: extension-bridged ask_user/sub_agent
+            # upgraded to native after runtime E2E passed (EVD-1715/1716),
+            # native tool_calling, unsupported browser — must match
+            # ADAPTER_RUNTIME_CAPABILITY_POLICY["pi"].
+            manifest["runtime_capabilities"]["ask_user_question"] = {
+                "status": "native",
+                "evidence": "pi has an extension-bridged ask_user_question tool verified by runtime E2E (EVD-1715).",
+            }
+            manifest["runtime_capabilities"]["sub_agent"] = {
+                "status": "native",
+                "evidence": "pi has an extension-bridged dispatch_agent tool verified by runtime E2E (EVD-1716).",
+            }
             manifest["runtime_capabilities"]["tool_calling"] = {
                 "status": "native",
                 "evidence": "pi has native read/bash/powershell/edit/write/grep/find/ls tools.",
@@ -2661,7 +2670,7 @@ class AgentAdapterContractTests(unittest.TestCase):
                 "degraded_mode": "mark browser validation blocked",
             }
             manifest["runtime_capabilities"]["workflow_closure"]["degraded_capabilities"] = [
-                "ask_user_question", "sub_agent", "browser", "mcp"
+                "browser", "mcp"
             ]
         if adapter_id == "claude":
             manifest["runtime_capabilities"]["sub_agent"] = {
@@ -3375,7 +3384,7 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             "| opencode | PASS | DEGRADED | opencode --version | full_e2e_verified=true; agent_runtime_e2e passed; opencode real target cwd E2E passed. |\n"
             "| chrys | PASS | DEGRADED | chrys is the agent running this verification session | full_e2e_verified=true; agent_runtime_e2e passed; Chrys is the active runtime in this session. |\n"
             "| dsh | PASS | DEGRADED | dsh --version | full_e2e_verified=true; agent_runtime_e2e passed; dsh is the active runtime in this fixture. |\n"
-            "| pi | BLOCKED | DEGRADED | pi --version | Pending FEAT-100 acceptance; extension-bridged ask_user_question/sub_agent designed, runtime E2E pending. |\n"
+            "| pi | PASS | DEGRADED | pi --version | full_e2e_verified=true; agent_runtime_e2e passed; extension-bridged ask_user_question/sub_agent native per DEC-359 (EVD-1715/1716); browser/MCP not native. |\n"
             f"| cursor | {cursor_status} | NOT_RUNTIME_VERIFIED | manual research | Cursor entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
             "| copilot | RESEARCH_ONLY | NOT_RUNTIME_VERIFIED | manual research | Copilot entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
             f"{runtime_table}"
@@ -8782,6 +8791,34 @@ class ProjectionSyncTests(unittest.TestCase):
         self.assertTrue(result["pass"], result["issues"])
         self.assertEqual(result["mirrors_checked"], 2)
         self.assertGreaterEqual(result["mirrors_skipped_untracked"], 1)
+
+    def test_projection_sync_blocked_plan_face_keeps_caller_schema(self):
+        """FEAT-100: a BLOCKED plan build must not strip the caller schema.
+
+        Check 28b in check-governance and the standalone
+        check-projection-sync both index ``result['source_version']``
+        directly. The release CheckResult carries facts only on its
+        built-plan paths — a BLOCKED build (plan unreadable) returns EMPTY
+        facts, and the adapter used to forward that hole: every caller
+        crashed with KeyError instead of reporting the blockage. The
+        adapter owns the stable schema on BOTH of its return paths (the
+        legacy path builds the same keys literally)."""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            # An empty root cannot build a projection plan (missing
+            # core/version-projections.json), so check_projections returns
+            # BLOCKED with an empty facts dict.
+            result = vw.check_projection_sync(root=root)
+        self.assertEqual("BLOCKED", result["state"])
+        self.assertFalse(result["pass"])
+        self.assertTrue(result["issues"])
+        # Caller-indexed keys must exist on EVERY return path; the bare
+        # subscripts below KeyError against the pre-FEAT-100 adapter.
+        self.assertEqual("", result["source_version"])
+        self.assertEqual(0, result["mirrors_checked"])
+        self.assertEqual(0, result["mirrors_discovered"])
+        self.assertEqual(0, result["mirrors_skipped_untracked"])
+        self.assertEqual([], result["version_checks"])
 
 
 class E2ECommandMatrixTests(unittest.TestCase):

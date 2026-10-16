@@ -5506,8 +5506,11 @@ ADAPTER_RUNTIME_CAPABILITY_POLICY = {
         "git_hooks": {"native"},
     },
     "pi": {
-        "ask_user_question": {"degraded"},
-        "sub_agent": {"degraded"},
+        # DEC-359 upgrade (EVD-1715/1716): extension-bridged ask_user_question
+        # and dispatch_agent passed runtime E2E — native with bridged evidence;
+        # headless GOV_ASK_USER_HEADLESS is bounded behavior, not a gap.
+        "ask_user_question": {"native"},
+        "sub_agent": {"native"},
         "tool_calling": {"native"},
         "browser": {"unsupported"},
         "mcp": {"degraded"},

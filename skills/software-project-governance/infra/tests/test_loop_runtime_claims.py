@@ -2117,5 +2117,54 @@ class FIX369SemanticBudgetRecalibrationTests(unittest.TestCase):
         self.assertEqual("BLOCKED", report.verdict)
 
 
+class FEAT100MarkdownCellSplitTests(unittest.TestCase):
+    """FEAT-100: deterministic cell splitting for pipe-protected rows.
+
+    Root-cause regression locks for the false ``ACCOUNTING_MARKDOWN_
+    AMBIGUOUS_BOUNDARY: ragged table row`` finding on
+    docs/research/pi-adapter-integration-research-0.98.0.md L97: a legal
+    CommonMark code span whose payload ENDS in a Windows path backslash
+    (`` `C:\\Users\\peter\\.pi\\agent\\` ``) kept its span open — the
+    closing delimiter was consumed as an "escaped backtick" — so the NEXT
+    real column pipe was protected and the row read as ragged. Both tests
+    are FAIL-on-buggy against the pre-FEAT-100 splitter."""
+
+    def test_dangling_trailing_backslash_span_backtracks_to_close(self):
+        # The pi-doc L97 shape: escape-first parsing leaves the span open;
+        # the FEAT-100 backtrack demotes the last in-span `` \` `` pair so
+        # the span closes after the path and the real column pipe splits.
+        line = ("| 验证状态 | `C:\\Users\\peter\\.pi\\agent\\` 已存在并可用"
+                "（settings.json、mcp.json） | pwsh 只读目录内会话 |")
+        cells = lrc._split_markdown_cells(line)
+        self.assertEqual(3, len(cells), repr(cells))
+        self.assertEqual("验证状态", cells[0])
+        self.assertTrue(cells[1].startswith("`C:\\Users\\peter\\.pi\\agent\\`"))
+        self.assertTrue(cells[1].endswith("（settings.json、mcp.json）"))
+        self.assertEqual("pwsh 只读目录内会话", cells[2])
+
+    def test_in_span_escaped_backticks_stay_one_span(self):
+        # The archived-review shape (review-FEAT-030-CODE-R0/R1,
+        # review-FIX-373-CODE-R0, review-REL-086-RELEASE-R1): in-span
+        # `` \` `` pairs are the dialect's documented escaped-backtick form
+        # and must keep parsing as ONE span (pipes around it stay
+        # protected). The backtrack only fires on a DANGLING span — rows
+        # the escape-first pass already closed are bit-identical with the
+        # pre-FEAT-100 behavior.
+        line = "| F-05 | `String.raw\\`...\\`` 与模板串 | 均漏过 |"
+        cells = lrc._split_markdown_cells(line)
+        self.assertEqual(3, len(cells), repr(cells))
+        self.assertEqual("F-05", cells[0])
+        self.assertEqual("`String.raw\\`...\\`` 与模板串", cells[1])
+        self.assertEqual("均漏过", cells[2])
+
+    def test_out_of_span_escaped_pipe_is_still_literal(self):
+        # Escape semantics OUTSIDE spans are untouched by FEAT-100:
+        # ``\|`` in a plain cell stays a literal pipe and splits into two
+        # columns only at the bare pipe.
+        line = "| a \\| b | c |"
+        cells = lrc._split_markdown_cells(line)
+        self.assertEqual(["a \\| b", "c"], cells)
+
+
 if __name__ == "__main__":
     raise SystemExit(_fix215_cli_or_unittest())

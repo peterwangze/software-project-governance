@@ -2,11 +2,12 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
-## [0.98.0] - （发布日期占位——FIX-349 口径：M-7 annotated tag `v0.98.0` taggerdate 权威回填）
+## [0.98.0] - 2026-10-16（taggerdate 09:11:06 +0800 权威〔FIX-349〕——tag v0.98.0〔160a7f0〕→7f161a6〔transition：M-5a candidate a0cb78e→M-5b manifest-only〕；ledger NATIVE_RELEASED 本地 PASS + github-https 推送〔origin SSH 通道环境受限——先例披露面〕）
+<!-- 发布日期已按 M-7 taggerdate 权威回填（FIX-349 口径）。 -->
 
 ### 0.98.0 - **次版本线：可信有界执行内核（Minor Line: Trusted Bounded Execution Kernel）**：载荷七票（FEAT-093 权威账本 / FEAT-094 审查可信链 / FEAT-095 动作级执法 / FEAT-096 执行隔离 / FEAT-097 goal 桥接 + FIX-442/443/446 随版 / 发布链 REL-102）
 
-0.98.0 为 0.97.0 的次版本线（**「可信有界执行内核」批**——DEC-330 联合裁定，AUDIT-159 像素风RPG长程复盘驱动：意图识别/事务分解/落盘契约/循环演进/过程看护五维度实测缺口〔报告=docs/requirements/analysis-rpg-longhaul-capability-session-f3f46901-0.97.0.md〕）：**任务身份与状态进入权威账本时代（FEAT-093——同 ID 双语义写入被拒、plan-tracker 降级为可重建投影）+ 审查链不可变快照绑定与事务化（FEAT-094——报告/机录冲突判 CONFLICT、R2 义务自动登记、代理死亡 ABORTED）+ 六边界动作级执法（FEAT-095——协议级+CLI 级+如实降级披露：六平台无宿主级拦截，DSH 原语完备未接线，M-0 调研判定 docs/release/m-0-assembly-0.98.0.md §3）+ 执行隔离保守面（FEAT-096）+ goal 状态映射与多维权危险区收口（FEAT-097——blocked 后未授权续跑拒绝并落账）**。载荷重定 DEC-354（FEAT-098 P2 顺延 0.99.0）；FIX-444/445 顺延 0.99.0（DEC-358①——DEC-342 用户暂停维持，FAIL 面以 GO 终审披露）；版本载荷窗口 `dd5c2a2（v0.97.0 tag peel）..回填位`（M-8 批回填终值——窗口内 12 commits：载荷 42ddbca〔FEAT-093〕/099acbf〔FEAT-094〕/75cc7e5〔FIX-442〕/bf6942d〔FEAT-096〕/291b4f9〔FIX-443〕/d0bac6e〔FIX-446〕/daac2b8〔FEAT-095+097〕+ 治理 c783cff〔AUDIT-159〕/9950076〔REL-101 M-8〕/504ee89〔REL-102 M-0 docs〕+ C4 c46ad2a + M-1 3b1a847），发布链 REL-102 组装于 2026-10-15（+0800）。
+0.98.0 为 0.97.0 的次版本线（**「可信有界执行内核」批**——DEC-330 联合裁定，AUDIT-159 像素风RPG长程复盘驱动：意图识别/事务分解/落盘契约/循环演进/过程看护五维度实测缺口〔报告=docs/requirements/analysis-rpg-longhaul-capability-session-f3f46901-0.97.0.md〕）：**任务身份与状态进入权威账本时代（FEAT-093——同 ID 双语义写入被拒、plan-tracker 降级为可重建投影）+ 审查链不可变快照绑定与事务化（FEAT-094——报告/机录冲突判 CONFLICT、R2 义务自动登记、代理死亡 ABORTED）+ 六边界动作级执法（FEAT-095——协议级+CLI 级+如实降级披露：六平台无宿主级拦截，DSH 原语完备未接线，M-0 调研判定 docs/release/m-0-assembly-0.98.0.md §3）+ 执行隔离保守面（FEAT-096）+ goal 状态映射与多维权危险区收口（FEAT-097——blocked 后未授权续跑拒绝并落账）**。载荷重定 DEC-354（FEAT-098 P2 顺延 0.99.0）；FIX-444/445 顺延 0.99.0（DEC-358①——DEC-342 用户暂停维持，FAIL 面以 GO 终审披露）；版本载荷窗口 `dd5c2a2（v0.97.0 tag peel）..7f161a6`（终值——15 commits：载荷 42ddbca〔FEAT-093〕/099acbf〔FEAT-094〕/75cc7e5〔FIX-442〕/bf6942d〔FEAT-096〕/291b4f9〔FIX-443〕/d0bac6e〔FIX-446〕/daac2b8〔FEAT-095+097〕+ 治理 c783cff〔AUDIT-159〕/9950076〔REL-101 M-8〕/504ee89〔REL-102 M-0 docs〕+ C4 c46ad2a + M-1 3b1a847 + M-4 4b8d925/M-4b 91d73fe/M-4c ccfc1d9 + M-5a a0cb78e/M-5b 7f161a6），发布链 REL-102 组装于 2026-10-15（+0800）、tag 于 2026-10-16 09:11:06 +0800。
 
 ### Added
 
@@ -35,7 +36,7 @@
 
 **决策链**：DEC-330（六票联合立项）/ DEC-333（FIX-443 修复路径）/ DEC-334（FIX-444→FIX-445 承接）/ DEC-342（FIX-445 用户暂停）/ DEC-350/351/352（FIX-446 限修授权）/ DEC-353/354（0.98 启动与载荷重定）/ DEC-357（FEAT-095 措辞收窄）/ DEC-358（M-0 定谳三项）；**证据**：EVD-1363~1367（载荷交付）/ EVD-1432~1471（FEAT-097 链）/ EVD-1695~1707（FIX-446 终态→C4 收口）+ 审查链 REVIEW-FEAT-093~097 / FIX-442/443/446 / REL-102-R0 全 AWN/0 + M-0 GO 报告 `docs/release/m-0-assembly-0.98.0.md`。
 
-**准备态注记**：本段为 REL-102 组装时点（2026-10-15 +0800）的**准备态**——发布日期不预填（FIX-349 口径以 M-7 tag taggerdate 权威回填）；发布终账、Commit 区间终值、故障注入六项验证结论（DEC-330 底线）与 GO 终审披露面（FIX-444/445 顺延态/28s 数据体量）随发布链 M-2+ 补记。
+**终账注记（M-8 回填）**：发布链 M-0~M-8 全链收口——M-2 三拍定谳（三件套 REL-021 token 面 M-4b/c 闭环后 release docs 0 issues）、M-3 双审 AWN/0×2（REVIEW-REL-102-R1/R2，ledger seq59/60）、M-5a/b 相邻重排（transition parent==candidate commit 的 ledger 相邻性约束）、M-6 ledger 本地 PASS、M-7 tag v0.98.0→7f161a6 + github-https 原子推送（origin SSH 环境受限先例披露）；**DEC-330 故障注入六项验证落盘=docs/release/fault-injection-0.98.0.md（承载测试定向实跑 8 passed——M-3 RELEASE 半面）**；GO 终审披露集终态=4 FAIL（18d-RB2 FIX-444/445×2+28s+Check30 V1，DEC-358①）。回滚=docs/release/rollback-plan-0.98.0.md。
 
 ## [0.97.0] - 2026-10-09（taggerdate 18:14:55 +0800 权威〔FIX-349〕——tag v0.97.0→dd5c2a2〔transition：M-5a candidate b54c754→M-6b manifest-only〕；ledger NATIVE_RELEASED 本地+remote 双 PASS）
 <!-- 发布日期占位（FIX-349 口径）：已按 M-7 taggerdate 权威回填。 -->

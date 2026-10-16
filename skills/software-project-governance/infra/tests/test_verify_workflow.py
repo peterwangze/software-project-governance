@@ -2647,6 +2647,22 @@ class AgentAdapterContractTests(unittest.TestCase):
                 "verified_on": "2026-07-08",
                 "evidence": "dsh is the active runtime in this fixture.",
             }
+        if adapter_id == "pi":
+            # FEAT-100: extension-bridged ask_user/sub_agent (degraded is the
+            # default template status), native tool_calling, unsupported
+            # browser — must match ADAPTER_RUNTIME_CAPABILITY_POLICY["pi"].
+            manifest["runtime_capabilities"]["tool_calling"] = {
+                "status": "native",
+                "evidence": "pi has native read/bash/powershell/edit/write/grep/find/ls tools.",
+            }
+            manifest["runtime_capabilities"]["browser"] = {
+                "status": "unsupported",
+                "evidence": "No built-in browser automation tool.",
+                "degraded_mode": "mark browser validation blocked",
+            }
+            manifest["runtime_capabilities"]["workflow_closure"]["degraded_capabilities"] = [
+                "ask_user_question", "sub_agent", "browser", "mcp"
+            ]
         if adapter_id == "claude":
             manifest["runtime_capabilities"]["sub_agent"] = {
                 "status": "native",
@@ -2719,7 +2735,7 @@ class AgentAdapterContractTests(unittest.TestCase):
         (adapter_dir / "adapter-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
     def _write_all_adapters(self, root):
-        for adapter_id in ["claude", "codex", "gemini", "opencode", "chrys", "dsh"]:
+        for adapter_id in ["claude", "codex", "gemini", "opencode", "chrys", "dsh", "pi"]:
             self._write_adapter(root, adapter_id)
 
     def test_agent_adapter_contract_accepts_verified_and_explicit_unsupported(self):
@@ -3359,6 +3375,7 @@ class RuntimeReadinessMatrixTests(unittest.TestCase):
             "| opencode | PASS | DEGRADED | opencode --version | full_e2e_verified=true; agent_runtime_e2e passed; opencode real target cwd E2E passed. |\n"
             "| chrys | PASS | DEGRADED | chrys is the agent running this verification session | full_e2e_verified=true; agent_runtime_e2e passed; Chrys is the active runtime in this session. |\n"
             "| dsh | PASS | DEGRADED | dsh --version | full_e2e_verified=true; agent_runtime_e2e passed; dsh is the active runtime in this fixture. |\n"
+            "| pi | BLOCKED | DEGRADED | pi --version | Pending FEAT-100 acceptance; extension-bridged ask_user_question/sub_agent designed, runtime E2E pending. |\n"
             f"| cursor | {cursor_status} | NOT_RUNTIME_VERIFIED | manual research | Cursor entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
             "| copilot | RESEARCH_ONLY | NOT_RUNTIME_VERIFIED | manual research | Copilot entry is research-only; no adapter manifest or real target-cwd E2E evidence. |\n"
             f"{runtime_table}"
@@ -9410,16 +9427,38 @@ class OpencodeProviderPreflightTests(unittest.TestCase):
 class AgentRuntimeE2EHarnessTests(unittest.TestCase):
     """FIX-076: real agent runtime E2E harness command matrix and schema."""
 
-    def test_agent_runtime_e2e_matrix_contains_four_platforms(self):
+    def test_agent_runtime_e2e_matrix_contains_five_platforms(self):
         with tempfile.TemporaryDirectory() as td:
             matrix = vw._agent_runtime_e2e_command_matrix(Path(td))
 
         agents = {entry["agent"] for entry in matrix}
-        self.assertEqual(agents, {"claude", "codex", "gemini", "opencode"})
+        # FEAT-100: pi joins the matrix (headless `-p` runner; dsh stays
+        # excluded — no headless CLI runner, see AGENT_RUNTIME_E2E_PLATFORMS).
+        self.assertEqual(agents, {"claude", "codex", "gemini", "opencode", "pi"})
         for entry in matrix:
             self.assertIn("command", entry)
             self.assertIn("validator", entry)
             self.assertEqual(entry["cwd"], Path(td))
+
+    def test_agent_runtime_e2e_pi_entry_uses_mixed_scope_readonly_flags(self):
+        # FEAT-100: pi entry must keep the user-ruling-#3 mixed scope —
+        # headless -p + read-only --tools read + --no-session (zero write
+        # surface) + -na (one-shot trust denial). The probe text must be the
+        # shared _agent_runtime_e2e_prompt("pi") so the validator contract
+        # (E2E_PLATFORM=pi; ...) is exercised verbatim.
+        with tempfile.TemporaryDirectory() as td:
+            matrix = vw._agent_runtime_e2e_command_matrix(Path(td))
+
+        entry = next(item for item in matrix if item["agent"] == "pi")
+        command = entry["command"]
+        self.assertEqual(command[0], "pi")
+        self.assertIn("-p", command)
+        self.assertIn(vw._agent_runtime_e2e_prompt("pi"), command)
+        tools_index = command.index("--tools")
+        self.assertEqual(command[tools_index + 1], "read")
+        self.assertIn("--no-session", command)
+        self.assertIn("-na", command)
+        self.assertIs(entry["validator"], vw._validate_agent_runtime_e2e_passed)
 
     def test_agent_runtime_passed_validator_requires_complete_structured_response(self):
         result = subprocess.CompletedProcess(

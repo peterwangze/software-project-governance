@@ -551,6 +551,9 @@ OPTIONAL_PROJECTION_FILES = {
     "Chrys Adapter Manifest": ROOT / "adapters/chrys/adapter-manifest.json",
     "Chrys Launcher": ROOT / "adapters/chrys/launch.py",
     "Chrys Plugin Definition": ROOT / ".chrys-plugin/plugin.json",
+    "Pi Adapter": ROOT / "adapters/pi/README.md",
+    "Pi Adapter Manifest": ROOT / "adapters/pi/adapter-manifest.json",
+    "Pi Launcher": ROOT / "adapters/pi/launch.py",
     "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
     "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
     "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
@@ -671,6 +674,24 @@ PROJECTION_SNIPPETS = {
     ],
     ROOT / "adapters/chrys/launch.py": [
         "Chrys Adapter Launcher",
+        "native_entry",
+        "read_order",
+        "validation",
+    ],
+    ROOT / "adapters/pi/README.md": [
+        "Tier 1",
+        "加载模型",
+        "能力边界",
+        "agent-runtime-e2e --agent pi",
+    ],
+    ROOT / "adapters/pi/adapter-manifest.json": [
+        "ask_user_question",
+        "dispatch_agent",
+        "生成≠咨询",
+        "adapters/pi/extension",
+    ],
+    ROOT / "adapters/pi/launch.py": [
+        "Pi Adapter Launcher",
         "native_entry",
         "read_order",
         "validation",
@@ -1606,7 +1627,7 @@ REQ_059_RELEASE_BLOCKERS = [
 ]
 FIX_069_RELEASE_VERSION = "0." + "35.0"
 FIX_069_READINESS_VERSION = "1." + "0.0"
-MAINSTREAM_AGENT_ADAPTERS = ["claude", "codex", "gemini", "opencode", "chrys", "dsh"]
+MAINSTREAM_AGENT_ADAPTERS = ["claude", "codex", "gemini", "opencode", "chrys", "dsh", "pi"]
 ADAPTER_REQUIRED_KEYS = [
     "adapter_id",
     "workflow_id",
@@ -2363,7 +2384,7 @@ def _run_version_command(command):
 
 
 RUNTIME_READINESS_MATRIX_PATH = ROOT / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
-RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "chrys", "dsh", "cursor", "copilot"]
+RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "chrys", "dsh", "pi", "cursor", "copilot"]
 RUNTIME_MATRIX_RESEARCH_ONLY_IDS = ["cursor", "copilot"]
 MAINSTREAM_AGENT_LOADING_DOC_PATH = ROOT / "docs/requirements/mainstream-agent-loading-0.47.0.md"
 MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS = [
@@ -2374,6 +2395,7 @@ MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS = [
     "adapters/opencode/README.md",
     "adapters/chrys/README.md",
     "adapters/dsh/README.md",
+    "adapters/pi/README.md",
     "docs/requirements/mainstream-agent-loading-0.47.0.md",
 ]
 MAINSTREAM_AGENT_LOADING_TIER1 = [
@@ -2383,6 +2405,7 @@ MAINSTREAM_AGENT_LOADING_TIER1 = [
     "opencode",
     "Chrys",
     "DeepSeek Harness",
+    "Pi",
 ]
 MAINSTREAM_AGENT_LOADING_TIER2 = [
     "Cursor",
@@ -2478,6 +2501,21 @@ MAINSTREAM_AGENT_LOADING_ADAPTERS = {
             "skills/software-project-governance/SKILL.md",
             "python adapters/dsh/launch.py",
             "check-agent-adapters",
+        ],
+    },
+    "pi": {
+        "display": "Pi",
+        "path": "adapters/pi/README.md",
+        "tokens": [
+            "Tier 1",
+            "Load",
+            "Verify",
+            "Boundary",
+            "AGENTS.md",
+            "skills/software-project-governance/SKILL.md",
+            "python adapters/pi/launch.py",
+            "check-agent-adapters",
+            "agent-runtime-e2e --agent pi",
         ],
     },
 }
@@ -5464,6 +5502,14 @@ ADAPTER_RUNTIME_CAPABILITY_POLICY = {
         "sub_agent": {"native"},
         "tool_calling": {"native"},
         "browser": {"degraded"},
+        "mcp": {"degraded"},
+        "git_hooks": {"native"},
+    },
+    "pi": {
+        "ask_user_question": {"degraded"},
+        "sub_agent": {"degraded"},
+        "tool_calling": {"native"},
+        "browser": {"unsupported"},
         "mcp": {"degraded"},
         "git_hooks": {"native"},
     },
@@ -12073,8 +12119,8 @@ def cmd_gates(args):
 # F-4: behavior-protocol.md M10.4 的触发入口引文是 SKILL.md 唯一注入面触发行的
 # 规范描述（A9：SKILL 只携带指针）。引文 span MUST 与 SKILL.md 实文逐字一致；
 # 任一侧单独改动即 FAIL——不建平行事实源（引文本身就是 SKILL 行的 spec）。
-# F-A2: 六平台 adapter-manifest exploration_channels.note 是 M10.3 consult-draw
-# 规则的转述拷贝（×6 同步债务）。每个 note MUST 携带规范标记，且规范源文件
+# F-A2: 七平台 adapter-manifest exploration_channels.note 是 M10.3 consult-draw
+# 规则的转述拷贝（×7 同步债务）。每个 note MUST 携带规范标记，且规范源文件
 # MUST 仍然携带该标记（双向 fail-closed）——转述/规则漂移均可机检。标记常量
 # 只是 join key，不是平行事实源：规则语义只活在 M10.3（FIX-272 动态锚先例）。
 QUOTE_SYNC_ADAPTER_MANIFESTS = (
@@ -12084,6 +12130,7 @@ QUOTE_SYNC_ADAPTER_MANIFESTS = (
     "adapters/opencode/adapter-manifest.json",
     "adapters/chrys/adapter-manifest.json",
     "adapters/dsh/adapter-manifest.json",
+    "adapters/pi/adapter-manifest.json",
 )
 CONSULT_DRAW_MARKER = "生成≠咨询"
 
@@ -12121,12 +12168,12 @@ def _check_quote_sync_issues():
             "surface — sync the SKILL.md trigger line and the M10.4 citation in one change"
         )
 
-    # F-A2: canonical consult-draw marker must live in M10.3 AND in all six notes.
+    # F-A2: canonical consult-draw marker must live in M10.3 AND in all seven notes.
     if CONSULT_DRAW_MARKER not in bp_text:
         issues.append(
             f"quote sync: canonical consult-draw marker '{CONSULT_DRAW_MARKER}' no "
             "longer present in behavior-protocol.md M10.3 (fail-closed; move the rule "
-            "marker, the six adapter notes and this guard together)"
+            "marker, the seven adapter notes and this guard together)"
         )
     else:
         for rel in QUOTE_SYNC_ADAPTER_MANIFESTS:
@@ -20094,7 +20141,7 @@ def _e2e_contract_checks():
 # dsh is deliberately absent: it has no headless CLI runner, so its adapter
 # uses Chrys-style live-session E2E evidence instead of an agent-runtime-e2e
 # matrix entry (DSH-ADAPTER-001). Do not add it without a real headless runner.
-AGENT_RUNTIME_E2E_PLATFORMS = ("claude", "codex", "gemini", "opencode")
+AGENT_RUNTIME_E2E_PLATFORMS = ("claude", "codex", "gemini", "opencode", "pi")
 
 
 def _agent_runtime_e2e_prompt(agent_id):
@@ -20175,6 +20222,25 @@ def _agent_runtime_e2e_command_matrix(e2e_dir=None):
                 "--format",
                 "json",
                 prompts["opencode"],
+            ],
+            "validator": _validate_agent_runtime_e2e_passed,
+        },
+        {
+            # FEAT-100: pi mixed-scope entry (user ruling #3) — real agent-dir
+            # read-only credentials + --no-session (zero write surface) +
+            # --tools read (read-only subset) + -na (one-shot trust denial;
+            # context files load without trust per pi security.md L57).
+            "agent": "pi",
+            "label": "pi CLI headless target cwd",
+            "cwd": e2e_dir,
+            "command": [
+                "pi",
+                "-p",
+                prompts["pi"],
+                "--tools",
+                "read",
+                "--no-session",
+                "-na",
             ],
             "validator": _validate_agent_runtime_e2e_passed,
         },
@@ -22671,7 +22737,7 @@ def cmd_check_exploration_channels(args):
             print(f"    - {issue}")
     else:
         print("  [PASS] All channel declarations conform (structure for all "
-              "six adapters; dated anchors on enrolled native declarations).")
+              "seven adapters; dated anchors on enrolled native declarations).")
     if result["advisories"]:
         print(f"  [ADVISORY] {len(result['advisories'])} staleness advisory(ies) "
               f"(WARN-only, not counted):")

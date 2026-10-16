@@ -145,6 +145,17 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      --budget flag + budget stamping block; _execution_packet_field_issues
 #      budget shape validation) in the same change; R2/R3/R5/R6 zero
 #      drift.)
+#   -> 1376 (0.99.0 target window, FEAT-100 pi adapter rider, 2026-10-16:
+#      R1 +66 (27934-era anchor 28204 -> 28270) — the seven pi registration
+#      faces in the engine (MAINSTREAM_AGENT_ADAPTERS/RUNTIME_MATRIX_AGENT_IDS/
+#      MAINSTREAM_AGENT_LOADING docs+TIER1+adapters dict, ADAPTER_RUNTIME_
+#      CAPABILITY_POLICY, QUOTE_SYNC tuple, PROJECTION files/snippets, the
+#      agent-runtime E2E matrix pi entry) plus the seven-note wording sync.
+#      Zero print calls (R4 total unchanged at 1376; census probes identical
+#      to the FEAT-090/091/092 rider). Sanctioned by FEAT-100 design
+#      (docs/requirements/pi-adapter-design-0.99.0.md §4.1 nine-point
+#      registration plan) + R0 design review APPROVED_WITH_NOTES
+#      (docs/reviews/review-FEAT-100-DESIGN-R0.md). R2/R3/R5/R6 zero drift.)
 FACTS_PRINT_TOTAL = 1376
 
 
@@ -670,7 +681,20 @@ class BaselineArtifactTests(unittest.TestCase):
         # regen (contract-matrix rider in the same change); R2 48/37, R3
         # matrix and R6 206/Δ0 (cold-import face +1 module:
         # authority_ledger) byte-stable outside the FEAT-093 attribution.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 27957)
+        # FEAT-100 pi adapter rider re-anchor (0.99.0 target window,
+        # 2026-10-16, DEC-320-family precedent isomorphic): committed
+        # anchor 28204 -> 28270, +66/-0 net, all attributed to the seven pi
+        # registration faces (see the FACTS_PRINT_TOTAL lineage note); R4
+        # print census byte-stable at 1376, R2/R3/R5/R6 zero drift.
+        # Make-up disclosure caught by this rider: the FEAT-093 -> FEAT-100
+        # window had already grown the committed anchor 27957 -> 28204
+        # (+247) WITHOUT a rider — this frozen literal was left at 27957
+        # and test_metadata_contract was red at baseline (pre-existing,
+        # verified against the FEAT-100 baseline run). This rider syncs the
+        # literal straight to 28270; the +247 lineage attribution stays
+        # registered for its own make-up ticket (same shape as the FEAT-081
+        # window note above).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28270)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

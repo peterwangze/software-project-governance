@@ -497,6 +497,7 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 | opencode | `adapters/opencode/` | — |
 | Chrys | `adapters/chrys/` | — |
 | DeepSeek Harness | `adapters/dsh/` + `agent-presets/governance/` | `${DSH_HOME}/.agent-presets/governance/`（由包内宿主行 `lib/index.js` 或 `adapters/dsh/launch.py --install` 渲染 `agent.cordis.yml.template` 生成） |
+| Pi | `adapters/pi/` + `adapters/pi/extension/` | — |
 | 国内 Agent CLI | — | `.agents/` |
 
 ### DeepSeek Harness（dsh）平台说明
@@ -515,6 +516,22 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
   | Agent 工具 spawn（`subagent_type="general-purpose"` 降级方案，第 204-208 行） | `subagent` 工具——prompt = 角色定义全文 + 任务规范 + 调度模板填充；DSH 无 subagent_type 概念，该降级方案不适用，无需降级 |
   | `isolation: "worktree"`（第 195 行） | DSH `subagent` 无此参数 → 同文件并发冲突时 MUST 串行化，或手工创建独立工作树 |
   | 斜杠命令 `/governance`（frontmatter 描述） | dsh 的 `/name` 用户手势加载同名投影 skill，行为一致 |
+
+> 仓库根目录的 `平台原生入口文件` 不是产品资产——它是当前仓库使用 Claude Code 开发的临时文件。
+
+### Pi 平台说明
+
+- **加载模型**：pi 原生双兼容 `AGENTS.md`/`CLAUDE.md` 上下文文件（免信任门）+ 原生 Agent Skills 规范（SKILL.md 递归发现、name/description 注入 system prompt、正文按需加载、`/skill:name` 命令）。接线 = `~/.pi/agent/settings.json` 三个路径数组（`skills`/`prompts`/`extensions`，指向本仓绝对路径，幂等追加；用户裁决①——零包改动、不动版本投影面）。详见 `adapters/pi/README.md`。
+- **能力面**：`ask_user_question` 与 `dispatch_agent` 均为 extension 桥（`adapters/pi/extension/`，model-only 工具）——设计裁定 FEASIBLE，runtime E2E 验证前 capability 诚实记 degraded；headless（`-p`/`--mode json`）下 ask_user 桥 fail-fast 返回 `GOV_ASK_USER_HEADLESS` 结构化错误，交互边界走外宿主会话。
+- **工具映射**（pi 会话中把本文件正文的 Claude 平台示例按下表替换）：
+
+  | 本文件正文示例 | pi 等价 |
+  |---|---|
+  | AskUserQuestion（第 38/53/189 行等） | `ask_user_question` extension 桥（tui/rpc 经 dialog 渲染；headless 报 `GOV_ASK_USER_HEADLESS` 走外宿主会话） |
+  | Write / Edit / Bash（铁律第 1 条） | `write` / `edit` / `bash`（Windows 原生 `powershell`；读取用 `read`/`grep`/`find`/`ls`） |
+  | Agent 工具 spawn（`subagent_type="general-purpose"` 降级方案，第 204-208 行） | `dispatch_agent` extension 桥——prompt = 角色定义路径 + 任务规范路径 + 调度模板填充（`references/agent-dispatch-template.md`）；嵌套 pi 子进程默认 `--exclude-tools ask_user_question,dispatch_agent` 阻断递归派发（review F-3） |
+  | `isolation: "worktree"`（第 195 行） | pi `dispatch_agent` 无此参数 → 同文件并发冲突时 MUST 串行化，或手工创建独立工作树 |
+  | 斜杠命令 `/governance`（frontmatter 描述） | prompts 数组注册的 `/governance` 模板命令（`commands/governance.md`；首行 description 展开语义待冒烟验证——O-3'） |
 
 > 仓库根目录的 `平台原生入口文件` 不是产品资产——它是当前仓库使用 Claude Code 开发的临时文件。
 

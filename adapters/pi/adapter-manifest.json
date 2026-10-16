@@ -1,0 +1,120 @@
+{
+  "adapter_id": "pi",
+  "workflow_id": "software-project-governance",
+  "entry_type": "thin-projection",
+  "support_status": "runtime-verified",
+  "supported_runtime": ["pi >= 1.1.0"],
+  "trigger": [
+    "Before starting a software project task that changes workflow assets from a pi session",
+    "When planning, reviewing, or validating project-governance work on the pi platform"
+  ],
+  "inputs": [
+    "skills/software-project-governance/SKILL.md",
+    "skills/software-project-governance/core/stage-gates.md",
+    "skills/software-project-governance/core/lifecycle.md",
+    ".governance/plan-tracker.md"
+  ],
+  "outputs": [
+    ".governance/plan-tracker.md",
+    ".governance/evidence-log.md",
+    ".governance/decision-log.md",
+    ".governance/risk-log.md"
+  ],
+  "gate_behavior": {
+    "on_fail": "block-next-stage",
+    "required_action": "update-risk-or-decision-log"
+  },
+  "validation": {
+    "command": "python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters",
+    "required": true
+  },
+  "native_entry": {
+    "project_instruction_file": "AGENTS.md",
+    "skill_loading": "native-agent-skills-spec",
+    "skill_path": "skills/software-project-governance/SKILL.md",
+    "note": "pi natively loads AGENTS.md/CLAUDE.md context files (no trust gate) and implements the Agent Skills spec: SKILL.md trees discovered recursively, name/description injected into the system prompt, full instructions loaded on demand, /skill:name commands. Global wiring uses settings.json skills/prompts path arrays pointing at repo-absolute paths (user ruling #1)."
+  },
+  "runtime_capabilities": {
+    "ask_user_question": {
+      "status": "degraded",
+      "evidence": "extension-bridged: adapters/pi/extension registers model-only tool ask_user_question rendering via ctx.ui dialog methods (select/confirm/input) — available in tui and rpc modes (rpc via extension_ui_request/response subprotocol); headless json/print modes have no UI and the tool fails fast with GOV_ASK_USER_HEADLESS (official precedent examples/extensions/question.ts L53-62). Design FEASIBLE per docs/requirements/pi-adapter-design-0.99.0.md evidence table; runtime E2E verification pending → degraded until then (same enumeration precedent as claude adapter: native tool exists, verified surface limited).",
+      "degraded_mode": "In headless pi runs (-p / --mode json), use the outer host conversation for interaction boundaries; interactive/RPC pi sessions use the bridged tool."
+    },
+    "sub_agent": {
+      "status": "degraded",
+      "evidence": "extension-bridged: adapters/pi/extension registers model-only tool dispatch_agent spawning a nested pi process (--mode json -p --no-session --append-system-prompt <role definition> --tools <subset> --exclude-tools ask_user_question,dispatch_agent) per the official examples/extensions/subagent reference; role-definition + task-spec + dispatch-prompt semantics align with references/agent-dispatch-template.md. Design FEASIBLE; runtime E2E verification pending → degraded until then.",
+      "degraded_mode": "Until agent-runtime E2E passes, require external reviewer evidence for Producer-Reviewer separation claims; after E2E passes, upgrade status with machine-recorded evidence."
+    },
+    "tool_calling": {
+      "status": "native",
+      "evidence": "pi has native read/bash/powershell/edit/write/grep/find/ls built-in tools; --tools allowlist with +name/-name deltas; powershell is native on Windows."
+    },
+    "browser": {
+      "status": "unsupported",
+      "evidence": "No built-in browser automation tool; pi-web-access package unverified for a declarable channel.",
+      "degraded_mode": "Mark browser validation blocked or run it from another host adapter."
+    },
+    "mcp": {
+      "status": "degraded",
+      "evidence": "MCP mechanism is native (mcp.json + pi mcp CLI + registerMcpServer) but server availability depends on host configuration.",
+      "degraded_mode": "Use local scripts and record MCP unavailable when not configured."
+    },
+    "git_hooks": {
+      "status": "native",
+      "evidence": "Git hooks are repository-level controls installed into .git/hooks/ and remain active for pi-driven changes."
+    },
+    "workflow_closure": {
+      "status": "degraded",
+      "evidence": "pi achieves extension-bridged ask_user_question and sub_agent (tui/rpc interactive scope), native tool_calling and git_hooks; browser/mcp remain host-dependent; bridge runtime E2E pending.",
+      "degraded_capabilities": ["ask_user_question", "sub_agent", "browser", "mcp"]
+    }
+  },
+  "exploration_channels": {
+    "source_of_truth": "skills/software-project-governance/references/behavior-protocol.md M10.3",
+    "note": "M10.3 four behavior-semantic channels materialized for this platform. consult never maps draw: generation is not consultation (生成≠咨询 — canonical rule marker synced from behavior-protocol.md M10.3, drift-guarded by check-cross-references; origin review-FEAT-085-DESIGN-R0 F-3). Honest degradation is legal; capability masquerade is an EXP-03 violation.",
+    "channels": {
+      "discover": {
+        "status": "unsupported",
+        "mapping": "none verified",
+        "evidence": "No native web search tool in the pi built-in set; pi-web-access package is not a verified declarable channel.",
+        "degraded_mode": "Record 判定=受限 per EXP-03; degrade to local knowledge with disclosed limits; never mark offline knowledge as search results."
+      },
+      "inspect": {
+        "status": "native",
+        "mapping": "read / grep / find / ls native tools",
+        "evidence": "Native inspection tools (runtime_capabilities.tool_calling native)."
+      },
+      "consult": {
+        "status": "degraded",
+        "mapping": "dispatch_agent extension bridge (nested pi role agents) for structured second opinions; no external source verified",
+        "evidence": "Extension-bridged sub_agent can carry consult-style role prompts (design FEASIBLE, E2E pending); no external (web or cross-model) professional source is verified; ask_user is a user channel, not an external consult channel; draw-style generation is not consultation (R0 F-3).",
+        "degraded_mode": "Record the external-source limit per EXP-03 when consult needs information or judgment beyond the host's own bridged sub-agents."
+      },
+      "validate": {
+        "status": "native",
+        "mapping": "bash / powershell + verify_workflow.py / test execution",
+        "evidence": "Native shell tools execute the validation contract commands (runtime_capabilities.tool_calling native)."
+      }
+    },
+    "degraded_mode": "When a channel is unavailable, record 判定=受限 in the exploration block (M10.2) per EXP-03; never mark offline knowledge as channel results."
+  },
+  "runtime_e2e": {
+    "e2e_level": "runtime-version-probe",
+    "command": "pi",
+    "version_command": "pi --version",
+    "verified_on": "2026-10-14",
+    "evidence": "Runtime version probe verified: pi --version returns 1.1.0 (exit 0, machine-recorded in docs/research/pi-adapter-integration-research-0.98.0.md §1). Adapter landed with FEAT-100; agent-runtime E2E upgrades this to real-agent-target-cwd when it executes (mixed scope: real agent-dir read-only credentials + --no-session, zero write surface).",
+    "target_cwd_e2e": {
+      "status": "blocked",
+      "evidence": "Scheduled with FEAT-100 implementation acceptance.",
+      "blocked_reason": "Pending FEAT-100 acceptance; mixed-scope approval granted by user ruling 3, execution scheduled"
+    },
+    "agent_runtime_e2e": {
+      "status": "blocked",
+      "evidence": "Matrix entry designed (design §6.3); run after implementation lands and registration diff is merged.",
+      "blocked_reason": "Pending FEAT-100 acceptance; matrix entry lands with the implementation, run agent-runtime-e2e --agent pi to upgrade"
+    },
+    "full_e2e_verified": false
+  },
+  "launcher": "adapters/pi/launch.py"
+}

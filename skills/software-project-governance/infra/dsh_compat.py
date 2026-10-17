@@ -552,12 +552,12 @@ def _contract_failure_report(report: dict, exc: Exception) -> dict:
 # ── the Node probe: the loader's own code, taken from the installed dsh ──────
 # Raw string: the JS uses \n inside string literals, which must reach Node
 # unchanged. The probe never imports anything by a relative specifier — every
-# module URL is derived from `request.nodeModules`, so the script itself can
+# module URL is derived from the selected resolution anchor, so the script can
 # live anywhere.
 PROBE_SCRIPT = r"""
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const request = JSON.parse(readFileSync(0, 'utf8'))
@@ -569,17 +569,60 @@ function fail(reason) {
   process.exit(0)
 }
 
-// Resolve bare package names exactly the way the loader does for a preset row:
-// an upward `node_modules` walk from the harness plane. Anchoring `createRequire`
-// at a path INSIDE the plane puts the plane's own `node_modules` first — the
-// plane IS a node_modules directory, so the walk finds it one level up.
+// A CLI's real manifest carries its dependency context (nested, hoisted or
+// pnpm-linked). A selected legacy profile retains its flat plane anchor even
+// when that profile also happens to contain a CLI package.
 let req
 try {
-  req = createRequire(join(request.nodeModules, '__dsh_compat_anchor__.js'))
+  req = createRequire(request.resolutionAnchor)
 } catch (error) {
-  fail(`createRequire(${request.nodeModules}) failed: ${error && error.message}`)
+  fail(`createRequire(${request.resolutionAnchor}) failed: ${error && error.message}`)
 }
-const fileUrl = (spec) => pathToFileURL(req.resolve(spec)).href
+const contextRoots = []
+for (let dir = dirname(request.resolutionAnchor); ; dir = dirname(dir)) {
+  if (basename(dir) !== 'node_modules') contextRoots.push(join(dir, 'node_modules'))
+  if (dirname(dir) === dir) break
+}
+function resolveBare(spec) {
+  const resolved = req.resolve(spec)
+  const parts = spec.split('/')
+  const name = parts[0].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
+  // Node also searches NODE_PATH/global folders. Those are unrelated planes;
+  // accept only a package reached through this context's node_modules links.
+  const local = contextRoots.some((root) => {
+    const candidate = join(root, name)
+    if (!existsSync(candidate)) return false
+    const rel = relative(realpathSync(candidate), resolved)
+    return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') && !rel.startsWith('..\\'))
+  })
+  if (!local) throw new Error(`${spec} resolved outside the selected context: ${resolved}`)
+  return resolved
+}
+const fileUrl = (spec) => pathToFileURL(resolveBare(spec)).href
+out.resolutionAnchor = request.resolutionAnchor
+out.oracle_packages = {}
+for (const name of request.oraclePackages) {
+  try {
+    const resolvedPath = resolveBare(name)
+    let dir = dirname(resolvedPath)
+    while (true) {
+      const manifest = join(dir, 'package.json')
+      if (existsSync(manifest)) {
+        const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
+        if (pkg.name === name) {
+          out.oracle_packages[name] = { version: typeof pkg.version === 'string' ? pkg.version : null, path: dir,
+            manifest, resolvedPath }
+          break
+        }
+      }
+      if (dirname(dir) === dir) throw new Error(`no package manifest for ${name}`)
+      dir = dirname(dir)
+    }
+  } catch (error) {
+    out.oracle_packages[name] = { version: null, path: null, resolvedPath: null,
+      error: error.message }
+  }
+}
 
 // Symbol names and package names are rendered in from the contract at request
 // build time (design §2.5 C-3): this script names nothing of its own.
@@ -604,10 +647,10 @@ for (const [name, value] of [['__ENTRY_LIST_SCHEMA__', entryListSchema],
     fail(`installed harness API is not callable: ${name}`)
   }
 }
-out.probe = { yaml: req.resolve('__YAML_PACKAGE__/package.json'),
-              include: req.resolve('__INCLUDE_PACKAGE__/package.json'),
-              loader: req.resolve('__LOADER_PACKAGE__/package.json'),
-              cordis: req.resolve('__CORDIS_PACKAGE__/package.json') }
+out.probe = { yaml: out.oracle_packages['__YAML_PACKAGE__'].manifest,
+              include: out.oracle_packages['__INCLUDE_PACKAGE__'].manifest,
+              loader: out.oracle_packages['__LOADER_PACKAGE__'].manifest,
+              cordis: out.oracle_packages['__CORDIS_PACKAGE__'].manifest }
 
 /* The loader's own recursive `!!js` interpolation (config/utils.ts). */
 function interpolate(ctx, value) {
@@ -847,7 +890,7 @@ async function walk(rows, at, ctx, entry, inheritedBy) {
       target = new URL(name, ctx.baseUrl).href
     } else {
       try {
-        target = pathToFileURL(req.resolve(name)).href
+        target = pathToFileURL(resolveBare(name)).href
       } catch (error) {
         entry.rows.push({ row: id, name, kind: 'MODULE_UNRESOLVED', message:
           `cannot resolve from the installed harness (${request.nodeModules}): ${message(error)}` })
@@ -1025,10 +1068,30 @@ def _package_version(node_modules: Path, name: str) -> Optional[dict]:
     }
 
 
-def _oracle_versions(node_modules: Path) -> dict:
+def _resolution_anchor(node_modules: Path, *, context: str) -> Path:
+    """Anchor the selected plane, never infer authority from CLI presence."""
+    if context == "cli":
+        return node_modules.joinpath(*_fact("_install_anchor_rel")).resolve()
+    if context == "profile":
+        return node_modules.resolve() / "__dsh_compat_anchor__.js"
+    raise ValueError(f"unknown dsh resolution context: {context!r}")
+
+
+def _oracle_versions(anchor: Path) -> dict:
+    # Read-only discovery metadata; the live probe replaces this with Node's
+    # actual entry resolution and owning manifests before any verdict is made.
+    roots = []
+    current = anchor.parent
+    while True:
+        if current.name != "node_modules":
+            roots.append(current / "node_modules")
+        if current.parent == current:
+            break
+        current = current.parent
     out = {}
     for name in _fact("_oracle_packages"):
-        found = _package_version(node_modules, name)
+        found = next((entry for root in roots
+                      if (entry := _package_version(root, name)) is not None), None)
         out[name] = found or {"version": None, "path": None}
     return out
 
@@ -1099,7 +1162,7 @@ def locate_dsh_install(env: Optional[dict] = None,
     be worse than ``NOT_RUN``.
 
     Returns ``{"status", "reason", "source", "plane", "node_modules",
-    "dsh_package", "dsh_version", "cli_package", "oracle_packages",
+    "dsh_package", "dsh_version", "cli_package", "resolution_context", "resolution_anchor", "oracle_packages",
     "other_planes"}``.
     """
     env = os.environ if env is None else env
@@ -1112,12 +1175,15 @@ def locate_dsh_install(env: Optional[dict] = None,
         "dsh_package": None,
         "dsh_version": None,
         "cli_package": None,
+        "resolution_context": None,
+        "resolution_anchor": None,
         "oracle_packages": {},
         "other_planes": [],
     }
 
     chosen = None
     chosen_plane = None
+    chosen_context = None
     candidates = []
     for key in (_fact("_install_dir_env"), _fact("_node_modules_env")):
         raw = _env_text(env, key)
@@ -1132,6 +1198,7 @@ def locate_dsh_install(env: Optional[dict] = None,
             result["source"] = f"${key} (invalid)"
             return result
         chosen, chosen_plane = resolved, f"${key}"
+        chosen_context = "cli"
         break
     else:
         candidates = _profile_planes(env)
@@ -1139,6 +1206,7 @@ def locate_dsh_install(env: Optional[dict] = None,
             if _package_version(plane, _fact("_oracle_packages")[0]) is not None \
                     or _looks_like_node_modules(plane):
                 chosen, chosen_plane = plane, label
+                chosen_context = "profile"
                 break
         if chosen is None:
             executable = which("dsh")
@@ -1146,6 +1214,7 @@ def locate_dsh_install(env: Optional[dict] = None,
                 found = _walk_up_for_node_modules(Path(executable).resolve().parent)
                 if found is not None:
                     chosen, chosen_plane = found, f"install anchor (`dsh` on PATH: {executable})"
+                    chosen_context = "cli"
                 else:
                     result["reason"] = (
                         f"`dsh` resolved to {executable}, but no node_modules "
@@ -1162,8 +1231,11 @@ def locate_dsh_install(env: Optional[dict] = None,
             f"${node_modules_env}, or put `dsh` on PATH")
         return result
 
+    anchor = _resolution_anchor(chosen, context=chosen_context)
     result.update(status="OK", source=chosen_plane, plane=chosen_plane,
-                  node_modules=str(chosen))
+                  node_modules=str(chosen),
+                  resolution_context=chosen_context,
+                  resolution_anchor=str(anchor))
     install_anchor = _fact("_install_anchor_rel")
     cli_package_name = "{0}/{1}".format(_fact("_scope"), _fact("_cli_package"))
     package_json = chosen.joinpath(*install_anchor)
@@ -1181,11 +1253,11 @@ def locate_dsh_install(env: Optional[dict] = None,
                                  note=("informational only — the installed CLI "
                                        "package version does not decide a row's "
                                        "schema; the oracle packages below do"))
-    result["oracle_packages"] = _oracle_versions(chosen)
+    result["oracle_packages"] = _oracle_versions(anchor)
     for label, plane in candidates:
         if plane == chosen:
             continue
-        versions = _oracle_versions(plane)
+        versions = _oracle_versions(_resolution_anchor(plane, context="profile"))
         if not any(entry["version"] for entry in versions.values()):
             continue  # a plane that carries none of the oracle packages is not a competing set
         result["other_planes"].append({
@@ -1232,6 +1304,10 @@ def _probe_request(install: dict, compositions: Sequence[Path],
     """
     return {
         "nodeModules": install["node_modules"],
+        "resolutionAnchor": install.get("resolution_anchor") or str(
+            _resolution_anchor(Path(install["node_modules"]),
+                               context=install.get("resolution_context") or "profile")),
+        "oraclePackages": list(_fact("_oracle_packages")),
         "output": str(output),
         "files": [{"path": str(path)} for path in compositions],
     }
@@ -1859,6 +1935,11 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         return _contract_failure_report(report, exc)
 
     report["isolation"] = probe["isolation"]
+    payload = probe.get("report") or {}
+    if "oracle_packages" in payload:
+        report["install"]["oracle_packages"] = dict(payload["oracle_packages"])
+    if payload.get("resolutionAnchor"):
+        report["install"]["resolution_anchor"] = payload["resolutionAnchor"]
     if probe["status"] != "OK":
         report["reason"] = probe["reason"]
         report["details"].append(probe["reason"])

@@ -284,6 +284,195 @@ class InstallDiscoveryTests(unittest.TestCase):
         self.assertTrue(oracle["path"])
 
 
+@unittest.skipUnless(shutil.which("node"), "Node resolution tests — NOT_RUN")
+class ResolutionContextTests(unittest.TestCase):
+    """Exercise Node resolution, without borrowing any installed oracle.
+
+    The tiny public-API fixtures test context selection only; they are not
+    substitutes for the live host schema tests below. JSON is valid YAML.
+    """
+
+    def _modules(self, plane, version="1.2.3"):
+        modules = {
+            "js-yaml": "exports.load = JSON.parse",
+            "@deepseek-ai/cordis-plugin-include": "exports.entryListSchema = {}",
+            "@deepseek-ai/cordis-plugin-loader": (
+                "exports.isJsExpr = x => !!(x && x.__jsExpr); "
+                "exports.evaluate = (ctx, x) => Function('return (' + x + ')')()"),
+            "@deepseek-ai/cordis": (
+                "exports.resolveConfig = (plugin, config) => { "
+                "if (!config || config.prefix !== 'selected') throw Error('prefix invalid'); "
+                "return config }"),
+            "probe-row": "exports.Config = {}",
+            "probe-no-schema": "exports.apply = () => {}",
+        }
+        for name, code in modules.items():
+            package = Path(plane).joinpath(*name.split("/"))
+            package.mkdir(parents=True, exist_ok=True)
+            (package / "package.json").write_text(json.dumps({
+                "name": name, "version": version, "main": "index.js",
+                # Manifest subpaths deliberately private: evidence must come
+                # from the owning manifest of the actual resolved entry.
+                "exports": {".": "./index.js"},
+            }), encoding="utf-8")
+            (package / "index.js").write_text(code, encoding="utf-8")
+        return Path(plane)
+
+    def _check(self, root, env, name="probe-row", config=None):
+        composition = Path(root) / "agent.cordis.yml"
+        composition.write_text(json.dumps([{
+            "id": "selected-row", "name": name,
+            "config": {"prefix": "selected"} if config is None else config,
+        }]), encoding="utf-8")
+        return dsh_compat.check_dsh_preset_compat(
+            root=root, compositions=[composition], env=env,
+            which=_which_map({"node": shutil.which("node")}))
+
+    def _assert_context(self, report, plane, version="1.2.3"):
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertEqual(report["rows_checked"], 1)
+        for name, metadata in report["install"]["oracle_packages"].items():
+            package = plane.joinpath(*name.split("/")).resolve()
+            self.assertEqual(metadata["version"], version)
+            self.assertEqual(Path(metadata["path"]), package)
+            self.assertEqual(Path(metadata["resolvedPath"]), package / "index.js")
+            self.assertEqual(Path(metadata["manifest"]), package / "package.json")
+
+    def test_flat_cli_context_preserves_hoisted_packages(self):
+        with _scratch("spg-context-flat-") as td:
+            plane = self._modules(_fake_install(Path(td) / "node_modules"))
+            report = self._check(td, {dsh_compat.INSTALL_DIR_ENV: str(td)})
+            self._assert_context(report, plane)
+
+    def test_nested_cli_wins_over_flat_and_unrelated_profile_packages(self):
+        with _scratch("spg-context-nested-") as td:
+            outer = _fake_install(Path(td) / "node_modules")
+            self._modules(outer, "0.0.1-old")
+            cli = outer / "@deepseek-ai" / "dsh"
+            plane = self._modules(cli / "node_modules")
+            profile = Path(td) / "home"
+            self._modules(profile / "profiles" / "web" / "node_modules", "0.0.2-old")
+            env = {dsh_compat.INSTALL_DIR_ENV: str(td),
+                   dsh_compat.DSH_HOME_ENV: str(profile)}
+            discovered = dsh_compat.locate_dsh_install(env, which=_which_map({}))
+            self.assertEqual(Path(discovered["resolution_anchor"]), cli / "package.json")
+            self.assertTrue(all(x["version"] == "1.2.3"
+                                for x in discovered["oracle_packages"].values()))
+            self._assert_context(self._check(td, env), plane)
+
+    def test_legacy_profile_without_cli_keeps_its_flat_context(self):
+        with _scratch("spg-context-profile-") as td:
+            plane = self._modules(Path(td) / "profiles" / "web" / "node_modules")
+            self._modules(Path(td) / "profiles" / "node_modules", "0.0.1-old")
+            report = self._check(td, {dsh_compat.DSH_HOME_ENV: str(td)})
+            self.assertEqual(Path(report["install"]["resolution_anchor"]),
+                             plane / "__dsh_compat_anchor__.js")
+            self._assert_context(report, plane)
+
+    def test_profile_cli_manifest_does_not_override_selected_profile_authority(self):
+        with _scratch("spg-context-profile-cli-") as td:
+            profile = _fake_install(Path(td) / "profiles" / "web" / "node_modules")
+            self._modules(profile, "1.2.3-profile-authority")
+            cli = profile / "@deepseek-ai" / "dsh"
+            nested = self._modules(cli / "node_modules", "0.0.1-cli-transitive")
+            for source, env, anchor, plane, version in (
+                ("DSH_HOME/profiles/web", {dsh_compat.DSH_HOME_ENV: str(td)},
+                 profile / "__dsh_compat_anchor__.js", profile, "1.2.3-profile-authority"),
+                ("$DSH_INSTALL_DIR", {dsh_compat.INSTALL_DIR_ENV: str(profile)},
+                 cli / "package.json", nested, "0.0.1-cli-transitive"),
+            ):
+                with self.subTest(selected_source=source):
+                    discovered = dsh_compat.locate_dsh_install(env, which=_which_map({}))
+                    self.assertEqual(discovered["source"], source)
+                    self.assertEqual(Path(discovered["resolution_anchor"]), anchor)
+                    for name, metadata in discovered["oracle_packages"].items():
+                        self.assertEqual(metadata["version"], version)
+                        self.assertEqual(Path(metadata["path"]),
+                                         plane.joinpath(*name.split("/")).resolve())
+                    report = self._check(td, env)
+                    self.assertEqual(report["install"]["source"], source)
+                    self.assertEqual(Path(report["install"]["resolution_anchor"]), anchor)
+                    self._assert_context(report, plane, version)
+
+    def test_pnpm_cli_link_uses_real_manifest_and_virtual_dependency_context(self):
+        with _scratch("spg-context-pnpm-") as td:
+            outer = Path(td) / "node_modules"
+            virtual = _fake_install(outer / ".pnpm" / "cli" / "node_modules")
+            plane = self._modules(virtual)
+            real_cli = virtual / "@deepseek-ai" / "dsh"
+            link = outer / "@deepseek-ai" / "dsh"
+            link.parent.mkdir(parents=True)
+            try:
+                link.symlink_to(real_cli, target_is_directory=True)
+            except OSError as exc:
+                if os.name != "nt":
+                    raise
+                # Windows junctions have the same realpath resolution and
+                # need no SeCreateSymbolicLinkPrivilege. Both paths are
+                # inside this test's disposable tree; no user config moves.
+                made = subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link), str(real_cli)],
+                    capture_output=True, timeout=30)
+                if made.returncode:
+                    self.skipTest(f"directory links unavailable: {exc}")
+            self._modules(outer, "0.0.1-old")
+            report = self._check(td, {dsh_compat.INSTALL_DIR_ENV: str(td)})
+            self.assertEqual(Path(report["install"]["resolution_anchor"]),
+                             real_cli / "package.json")
+            self._assert_context(report, plane)
+
+    def test_missing_schema_stays_not_run_after_successful_resolution(self):
+        with _scratch("spg-context-noschema-") as td:
+            self._modules(_fake_install(Path(td) / "node_modules"))
+            report = self._check(td, {dsh_compat.INSTALL_DIR_ENV: str(td)},
+                                 name="probe-no-schema")
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertEqual(report["rows_checked"], 0)
+        self.assertEqual(report["compositions"][0]["rows"][0]["kind"], "NO_SCHEMA")
+
+    def test_unrelated_profile_cannot_fill_a_missing_selected_cli_oracle(self):
+        with _scratch("spg-context-wrongplane-") as td:
+            _fake_install(Path(td) / "node_modules")
+            profile = Path(td) / "home"
+            self._modules(profile / "profiles" / "web" / "node_modules")
+            report = self._check(td, {dsh_compat.INSTALL_DIR_ENV: str(td),
+                                      dsh_compat.DSH_HOME_ENV: str(profile)})
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertEqual(report["rows_checked"], 0)
+        self.assertTrue(all(x["resolvedPath"] is None
+                            for x in report["install"]["oracle_packages"].values()))
+
+    def test_node_path_cannot_supply_an_unrelated_oracle(self):
+        with _scratch("spg-context-global-") as td:
+            _fake_install(Path(td) / "node_modules")
+            unrelated = self._modules(Path(td) / "old-cache" / "node_modules")
+            with mock.patch.dict(os.environ, {"NODE_PATH": str(unrelated)}):
+                report = self._check(td, {dsh_compat.INSTALL_DIR_ENV: str(td)})
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertIn("outside the selected context", report["reason"])
+
+    def test_schema_failure_is_not_a_resolution_pass(self):
+        with _scratch("spg-context-invalid-") as td:
+            outer = _fake_install(Path(td) / "node_modules")
+            self._modules(outer / "@deepseek-ai" / "dsh" / "node_modules")
+            report = self._check(td, {dsh_compat.INSTALL_DIR_ENV: str(td)},
+                                 config={"text": "old config"})
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertIn("prefix invalid", report["issues"][0])
+
+    def test_cli_package_directory_is_still_an_invalid_explicit_override(self):
+        with _scratch("spg-context-bad-override-") as td:
+            outer = _fake_install(Path(td) / "node_modules")
+            cli = outer / "@deepseek-ai" / "dsh"
+            self._modules(cli / "node_modules")
+            self._modules(Path(td) / "home" / "profiles" / "web" / "node_modules")
+            report = self._check(td, {dsh_compat.INSTALL_DIR_ENV: str(cli),
+                                      dsh_compat.DSH_HOME_ENV: str(Path(td) / "home")})
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertIn("refusing to fall back", report["reason"])
+        self.assertIsNone(report["install"]["resolution_anchor"])
+
+
 # ── composition discovery ───────────────────────────────────────────────────
 class CompositionDiscoveryTests(unittest.TestCase):
     def test_repo_compositions_are_discovered(self):

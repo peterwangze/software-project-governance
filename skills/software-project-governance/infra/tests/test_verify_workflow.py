@@ -25465,13 +25465,13 @@ class FEAT093AuthorityLedgerProjectionTests(unittest.TestCase):
         "### 优先级一览\n\n"
         "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
         "|--------|----|------|------|---------|---------|------|\n"
-        "| **P1** | FEAT-093 | **权威账本与身份契约——稳定身份**——细节 | — | 0.98.0 |"
+        "| **P1** | FEAT-093 | **权威账本与身份契约——稳定身份**——细节 | — | @@ACTIVE_VERSION@@ |"
         " 产品代码 | 🆕 triaged |\n"
-        "| **P1** | FEAT-094 | **审查可信链**——绑定 | FEAT-093 | 0.98.0 |"
+        "| **P1** | FEAT-094 | **审查可信链**——绑定 | FEAT-093 | @@ACTIVE_VERSION@@ |"
         " 产品代码 | 🆕 triaged |\n"
-        "| **P2** | FIX-442 | **冒烟检查并发容忍**——修复 | — | 0.98.0 |"
+        "| **P2** | FIX-442 | **冒烟检查并发容忍**——修复 | — | @@ACTIVE_VERSION@@ |"
         " 产品代码 | ✅ 完成 (2026-10-10) |\n"
-        "| **P1** | FEAT-093 | **同 ID 换义行——历史双语义** | — | 0.99.0 |"
+        "| **P1** | FEAT-093 | **同 ID 换义行——历史双语义** | — | @@CONFLICT_VERSION@@ |"
         " 产品代码 | ⏳ 待执行 |\n"
     )
     RISKS = (
@@ -25487,15 +25487,47 @@ class FEAT093AuthorityLedgerProjectionTests(unittest.TestCase):
         " — | — | — |\n"
     )
 
-    def _gov(self, td, *, plan_extra_rows=""):
+    @classmethod
+    def _gov(cls, td, *, plan_extra_rows=""):
         import authority_ledger as al
+        from resolve_entry import read_active_version
+
+        # FIX-449: build fixture versions from the same authority as the
+        # engine; the conflicting row keeps a distinct next-minor version.
+        active_version = read_active_version()
+        major, minor, _patch = map(int, active_version.split("."))
+        plan = (cls.PLAN + plan_extra_rows).replace(
+            "@@ACTIVE_VERSION@@", active_version).replace(
+            "@@CONFLICT_VERSION@@", f"{major}.{minor + 1}.0")
         gov = Path(td) / ".governance"
         gov.mkdir(parents=True, exist_ok=True)
         (gov / "plan-tracker.md").write_text(
-            self.PLAN + plan_extra_rows, encoding="utf-8", newline="\n")
+            plan, encoding="utf-8", newline="\n")
         (gov / "risk-log.md").write_text(
-            self.RISKS, encoding="utf-8", newline="\n")
+            cls.RISKS, encoding="utf-8", newline="\n")
         return al, gov
+
+    def test_fix449_versions_follow_authority_across_bumps(self):
+        from resolve_entry import read_active_version
+
+        current = read_active_version()
+        major, minor, _patch = map(int, current.split("."))
+        for version in (current, f"{major}.{minor + 1}.0", f"{major + 1}.0.0"):
+            with self.subTest(version=version), mock.patch(
+                    "resolve_entry.read_active_version", return_value=version):
+                with _governance_temp_dir(prefix="fix449-bump-") as td:
+                    al, gov = self._gov(td)
+                    plan = (gov / "plan-tracker.md").read_text(encoding="utf-8")
+                    versions = [line.split("|")[5].strip()
+                                for line in plan.splitlines()
+                                if line.startswith("| **P")]
+                    self.assertEqual(versions[:3], [version] * 3)
+                    self.assertNotEqual(versions[3], version)
+                    self.assertNotIn("@@", plan)
+                    report = al.migrate(gov, dry_run=False)
+                    self.assertEqual(report["status"], "PASS", report)
+                    self.assertEqual(report["counts_before"]["tasks"]["rows"], 4)
+                    self.assertEqual(report["plan"]["flagged_conflicts"], 1)
 
     def test_migration_dry_run_writes_zero_bytes(self):
         with _governance_temp_dir(prefix="feat093-mig-dry-") as td:
@@ -25594,10 +25626,11 @@ class FEAT093AuthorityLedgerProjectionTests(unittest.TestCase):
         # OFF (fail-closed, never guessed).
         with _governance_temp_dir(prefix="feat093-switch-") as td:
             al, gov = self._gov(td)
-            self.assertEqual(al.switch_state(self.PLAN)["state"], "off")
+            plan = (gov / "plan-tracker.md").read_text(encoding="utf-8")
+            self.assertEqual(al.switch_state(plan)["state"], "off")
             self.assertEqual(
-                al.switch_state(self.PLAN)["source"], "plan-tracker")
-            on_text = self.PLAN.replace(
+                al.switch_state(plan)["source"], "plan-tracker")
+            on_text = plan.replace(
                 "- **authority_ledger**: off", "- **authority_ledger**: on")
             self.assertEqual(
                 al.switch_state(on_text)["state"], "on")
@@ -25614,10 +25647,10 @@ class FEAT093AuthorityLedgerProjectionTests(unittest.TestCase):
                 al.switch_state(on_text, environ=env_off)["state"], "off")
             # invalid token: reported, never guessed
             env_bad = {"GOVERNANCE_AUTHORITY_LEDGER": "legacyy"}
-            bad = al.switch_state(self.PLAN, environ=env_bad)
+            bad = al.switch_state(plan, environ=env_bad)
             self.assertEqual(bad["state"], "invalid")
             self.assertEqual(bad["invalid"], "legacyy")
-            self.assertFalse(al.switch_enabled(self.PLAN, environ=env_bad))
+            self.assertFalse(al.switch_enabled(plan, environ=env_bad))
             # no key at all: default arm
             self.assertEqual(
                 al.switch_state("# 无配置\n")["source"], "default")
@@ -25674,7 +25707,7 @@ class FEAT093AuthorityLedgerProjectionTests(unittest.TestCase):
         import time as _time
         rows = "\n".join(
             "| **P2** | TASK-{0:03d} | **任务 {0} 标题——语义锚**——细节 | — |"
-            " 0.98.0 | 产品代码 | 🆕 ⏳ 待实施 |".format(i)
+            " @@ACTIVE_VERSION@@ | 产品代码 | 🆕 ⏳ 待实施 |".format(i)
             for i in range(1, 32))
         with _governance_temp_dir(prefix="feat093-perf-") as td:
             al, gov = self._gov(td, plan_extra_rows=rows + "\n")
@@ -25714,16 +25747,34 @@ class FEAT093AuthorityLedgerReworkR0Tests(unittest.TestCase):
     def _migrated_gov(self, td):
         # the projection fixture (task table with one historical
         # dual-semantics row + gates + risks), already migrated once.
-        import authority_ledger as al
-        fixture = FEAT093AuthorityLedgerProjectionTests
-        gov = Path(td) / ".governance"
-        gov.mkdir(parents=True, exist_ok=True)
-        (gov / "plan-tracker.md").write_text(
-            fixture.PLAN, encoding="utf-8", newline="\n")
-        (gov / "risk-log.md").write_text(
-            fixture.RISKS, encoding="utf-8", newline="\n")
+        al, gov = FEAT093AuthorityLedgerProjectionTests._gov(td)
         al.migrate(gov, dry_run=False)
         return al, gov
+
+    def test_fix449_migrated_fixture_versions_follow_authority(self):
+        from resolve_entry import read_active_version
+
+        current = read_active_version()
+        major, minor, _patch = map(int, current.split("."))
+        for version in (current, f"{major}.{minor + 1}.0", f"{major + 1}.0.0"):
+            with self.subTest(version=version), mock.patch(
+                    "resolve_entry.read_active_version", return_value=version):
+                with _governance_temp_dir(prefix="fix449-consumer-") as td:
+                    al, gov = self._migrated_gov(td)
+                    plan = (gov / "plan-tracker.md").read_text(encoding="utf-8")
+                    self.assertNotIn("@@", plan)
+                    versions = [line.split("|")[5].strip()
+                                for line in plan.splitlines()
+                                if line.startswith("| **P")]
+                    self.assertEqual(versions[:3], [version] * 3)
+                    vmajor, vminor, _vpatch = map(int, version.split("."))
+                    self.assertEqual(versions[3], f"{vmajor}.{vminor + 1}.0")
+                    writer = al.LedgerWriter(gov)
+                    self.assertTrue(writer.integrity["ok"])
+                    self.assertEqual({task["target_version"]
+                                      for task in writer.state["tasks"].values()}, {version})
+                    self.assertEqual(writer.state["counts"]["tasks"]["registered"], 3)
+                    self.assertEqual(writer.state["counts"]["tasks"]["identity_conflict_rows"], 1)
 
     # ── P1-1: intra-batch identity contract ─────────────────────────────
 
@@ -25948,6 +25999,9 @@ class FEAT093AuthorityLedgerReworkR0Tests(unittest.TestCase):
         # appended events left valid for the idempotent re-run.
         with _governance_temp_dir(prefix="feat093-r0-p35-") as td:
             import authority_ledger as al
+            from resolve_entry import read_active_version
+
+            active_version = read_active_version()
             gov = Path(td) / ".governance"
             gov.mkdir(parents=True, exist_ok=True)
             (gov / "plan-tracker.md").write_text(
@@ -25956,9 +26010,9 @@ class FEAT093AuthorityLedgerReworkR0Tests(unittest.TestCase):
                 "### 优先级一览\n\n"
                 "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
                 "|--------|----|------|------|---------|---------|------|\n"
-                "| **P1** | FEAT-093 | **有锚任务** | — | 0.98.0 |"
+                f"| **P1** | FEAT-093 | **有锚任务** | — | {active_version} |"
                 " 产品代码 | ⏳ 待执行 |\n"
-                "| **P2** | FIX-500 |  | — | 0.98.0 | 产品代码 |"
+                f"| **P2** | FIX-500 |  | — | {active_version} | 产品代码 |"
                 " ⏳ 待执行 |\n",
                 encoding="utf-8", newline="\n")
             dry = al.migrate(gov, dry_run=True)

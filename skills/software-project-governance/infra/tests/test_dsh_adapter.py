@@ -416,6 +416,20 @@ def _run_cwd_fault_probe(lib_path: Path, cwd: Path, home: Path,
 
 
 class DshAdapterTests(unittest.TestCase):
+    def test_launch_fstrings_keep_pre_pep701_expression_boundaries(self):
+        """Catch the multiline insertion that actually broke Python 3.11 CI.
+
+        feature_version alone accepts the old source on newer interpreters;
+        the expression-span assertion also catches that original regression.
+        """
+        import ast
+        source = (_REPO_ROOT / "adapters/dsh/launch.py").read_text(encoding="utf-8")
+        tree = ast.parse(source, filename="adapters/dsh/launch.py", feature_version=(3, 11))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FormattedValue):
+                self.assertEqual(node.value.lineno, node.value.end_lineno,
+                                 ast.get_source_segment(source, node.value))
+
     """Machine checks over the dsh adapter's installable artifacts."""
 
     maxDiff = None
@@ -942,8 +956,10 @@ class DshAdapterTests(unittest.TestCase):
             sys.path.insert(0, str(_INFRA_DIR))
         from release.projection import build_projection_plan
 
-        version, plan = build_projection_plan(_REPO_ROOT)
-        planned = {write.relative_path: write.content for write in plan}
+        from tests.test_projection_legacy_snapshots import isolated_projection_root
+        with isolated_projection_root(_REPO_ROOT) as fixture:
+            version, plan = build_projection_plan(fixture)
+            planned = {write.relative_path: write.content for write in plan}
         for relative, marker in (
             ("agent-presets/governance/agent.cordis.yml.template",
              f"治理工作流（v{version}）"),
@@ -1114,14 +1130,19 @@ class DshAdapterTests(unittest.TestCase):
         # section intro must count the live item total. FEAT-078 landed
         # six items (FIX-411 kept the count when the 「以下」 prefix went);
         # FEAT-090/091 raise it to nine (items 7/8/9 = M7.8 coordination
-        # cost discipline — the count follows the live contract list).
+        # cost discipline); FEAT-097 adds item 10 (goal budget closure).
         skill_text = (_REPO_ROOT / skill_rel).read_text(encoding="utf-8")
         self.assertIn(m1_compressed, skill_text, "SKILL.md clause 5 (compressed)")
         self.assertIn(m2_compressed, skill_text, "SKILL.md clause 6 (compressed)")
-        self.assertIn("九条与铁律同级", skill_text,
-                      "关键行为契约 intro must count nine items post-FEAT-090 "
-                      "(six-item era ended with FEAT-078/B1a; 7/8/9 = M7.8 "
-                      "coordination cost discipline)")
+        contract = skill_text.split("### 关键行为契约", 1)[1].split("\n### ", 1)[0]
+        ordinals = [int(value) for value in re.findall(r"(?m)^(\d+)\. \*\*", contract)]
+        self.assertEqual(ordinals, list(range(1, len(ordinals) + 1)))
+        count_words = ("零", "一", "二", "三", "四", "五", "六", "七", "八", "九",
+                       "十", "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十")
+        self.assertLess(len(ordinals), len(count_words))
+        self.assertIn(count_words[len(ordinals)] + "条与铁律同级", contract,
+                      "the intro must count the actual contract items, including enforcement")
+        self.assertIn("10. **goal 预算必收口", skill_text)
 
         # ③ DSH persona contract block — compressed bodies + the B1b-planned
         # extra anchor 「用户点名」 (ADR §2.1 registry row: persona 面另加).
@@ -1206,6 +1227,10 @@ class DshAdapterTests(unittest.TestCase):
         with _sandbox_td() as td:
             env = os.environ.copy()
             env["DSH_HOME"] = td
+            # This test covers rendered loading/isolation, not a user's
+            # installed DSH plugin set. An explicit absent install prevents
+            # fallback to that mutable set; the oracle honestly says NOT_RUN.
+            env["DSH_INSTALL_DIR"] = str(Path(td) / "absent-install")
             result = _run_smoke_cli(env)
             preset = Path(td) / ".agent-presets" / "governance"
             self.assertTrue((preset / "agent.cordis.yml").is_file())
@@ -1372,6 +1397,21 @@ class DshAdapterTests(unittest.TestCase):
                 for issue in result["issues"]),
             result["issues"],
         )
+
+    def test_smoke_verifier_preserves_schema_failure_without_live_install(self):
+        """Isolating the live oracle must never isolate away its FAIL result."""
+        launch = _load_launch_module()
+        with _sandbox_td() as td:
+            preset = Path(td) / "preset"
+            preset.mkdir()
+            (preset / "agent.cordis.yml").write_text("# fixture\n", encoding="utf-8")
+            rejected = {"verdict": "FAIL", "issues": ["persona requires prefix"],
+                        "reason": "controlled installed-schema rejection"}
+            with patch.object(launch, "_validate_composition_rows", return_value=rejected):
+                result = launch.verify_preset_loading(preset)
+        self.assertEqual(result["row_validation"]["verdict"], "FAIL")
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertTrue(any("persona requires prefix" in issue for issue in result["issues"]))
 
     def test_verify_preset_loading_accepts_a_contract_shaped_persona_row(self):
         launch = _load_launch_module()
@@ -1558,13 +1598,18 @@ class DshAdapterTests(unittest.TestCase):
             governance.mkdir(parents=True)
             (governance / "preset.yml").write_text(
                 "name: governance\n", encoding="utf-8")
-            window_start = time.time_ns()
+            # FIX-453: explicit filesystem timestamps prove the time factor
+            # without depending on Linux/Windows clock granularity or skew.
+            window_start = 1_700_000_000_000_000_000
             before = launch._real_home_witness(home)
             novel = home / ".agent-presets" / "novel-writing"
             novel.mkdir()
             (novel / "preset.yml").write_text("name: novel\n", encoding="utf-8")
+            os.utime(novel / "preset.yml",
+                     ns=(window_start + 1000, window_start + 1000))
+            os.utime(novel, ns=(window_start + 1000, window_start + 1000))
             after = launch._real_home_witness(home)
-            window_end = time.time_ns()
+            window_end = window_start + 10_000
         result = launch.witness_verdict(
             (before, after), window=(window_start, window_end))
         self.assertEqual(result["verdict"], "PASS", result)
@@ -1588,11 +1633,15 @@ class DshAdapterTests(unittest.TestCase):
             novel = home / ".agent-presets" / "novel-writing"
             novel.mkdir(parents=True)
             (novel / "preset.yml").write_text("v: 1\n", encoding="utf-8")
-            window_start = time.time_ns()
+            window_start = 1_700_000_000_000_000_000
+            os.utime(novel / "preset.yml",
+                     ns=(window_start - 1000, window_start - 1000))
             before = launch._real_home_witness(home)
             (novel / "preset.yml").write_text("v: 2\n", encoding="utf-8")
+            os.utime(novel / "preset.yml",
+                     ns=(window_start + 1000, window_start + 1000))
             after = launch._real_home_witness(home)
-            window_end = time.time_ns()
+            window_end = window_start + 10_000
         result = launch.witness_verdict(
             (before, after), window=(window_start, window_end))
         self.assertEqual(result["verdict"], "PASS", result)
@@ -1681,7 +1730,8 @@ class DshAdapterTests(unittest.TestCase):
 
             buffer = io.StringIO()
             with patch.dict(
-                    os.environ, {"DSH_HOME": str(isolated)}, clear=False), \
+                    os.environ, {"DSH_HOME": str(isolated),
+                                 "DSH_INSTALL_DIR": str(Path(td) / "absent-install")}, clear=False), \
                     patch.object(launch, "real_dsh_home",
                                  return_value=fake_real), \
                     patch.object(launch, "verify_preset_loading",
@@ -1740,7 +1790,8 @@ class DshAdapterTests(unittest.TestCase):
         # that implies session behavior was verified.
         launch = _load_launch_module()
         with _sandbox_td() as td, patch.dict(
-            os.environ, {"DSH_HOME": td}, clear=False
+            os.environ, {"DSH_HOME": td,
+                         "DSH_INSTALL_DIR": str(Path(td) / "absent-install")}, clear=False
         ), patch.object(launch.shutil, "which", return_value=None):
             buffer = io.StringIO()
             with redirect_stdout(buffer):
@@ -1756,7 +1807,10 @@ class DshAdapterTests(unittest.TestCase):
             sys.path.insert(0, str(_INFRA_DIR))
         import verify_workflow as vw
 
-        result = vw.check_dsh_preset_smoke()
+        with _sandbox_td() as td, patch.dict(
+            os.environ, {"DSH_INSTALL_DIR": str(Path(td) / "absent-install")}, clear=False
+        ):
+            result = vw.check_dsh_preset_smoke()
         self.assertEqual(result["verdict"], "PASS", result)
         self.assertEqual(result["exit_code"], 0)
         self.assertEqual(result["isolation"]["real_home_writes"], 0)

@@ -35,6 +35,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -245,10 +246,30 @@ def _call_representative(name: str):
 
 
 def extract_result_shapes() -> dict:
-    """Invoke each representative check function and sign its Result dict."""
+    """Sign representative Results against one isolated initialized host.
+
+    The guard's deferred-observation shape depends on whether its host exists.
+    A local ignored .governance must not choose a different static contract
+    than a clean checkout. The checks themselves still execute unchanged.
+    """
     shapes = {}
-    for name in REPRESENTATIVE_RESULT_CALLS:
-        shapes[name] = type_signature(_call_representative(name))
+    with tempfile.TemporaryDirectory(prefix="contract-shapes-") as td:
+        root = Path(td)
+        gov = root / ".governance"
+        gov.mkdir()
+        (gov / "plan-tracker.md").write_text(
+            "# Contract matrix host\n\n## 项目配置\n\n"
+            "- **项目名称**: contract-matrix-fixture\n", encoding="utf-8")
+        for filename in ("evidence-log.md", "risk-log.md", "decision-log.md"):
+            (gov / filename).write_text("# Contract fixture\n", encoding="utf-8")
+        with patch.multiple(
+            vw, HOST_PROJECT_ROOT=root, GOVERNANCE_DIR=gov,
+            SAMPLE_PATH=gov / "plan-tracker.md",
+            EVIDENCE_PATH=gov / "evidence-log.md",
+            RISK_PATH=gov / "risk-log.md",
+        ):
+            for name in REPRESENTATIVE_RESULT_CALLS:
+                shapes[name] = type_signature(_call_representative(name))
     return shapes
 
 

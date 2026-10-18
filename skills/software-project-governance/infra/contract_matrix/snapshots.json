@@ -441,14 +441,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "bf6942dd9b961a7f707db295171b1f2c8bc3c21c",
+    "git_head": "2aae6ff1f1cf49e3566e25c5d55b7fe1afdb762f",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-10-15T07:20:43+00:00"
+    "timestamp_utc": "2026-10-16T16:04:25+00:00"
   },
   "python_family_pins": [
     {

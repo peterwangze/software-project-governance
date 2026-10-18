@@ -144,7 +144,9 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # engine thin entry in verify_workflow.py, module logic in goal_bridge.py
 # — the isolation pattern). Snapshot + frozen counts re-baselined in the
 # same change. Segments stay at 73.
-FROZEN_CLI_KEYS = 106
+# FIX-453: FEAT-095's enforcement-check is already in the engine/snapshot;
+# restore its missing registry row and freeze the real 107-key surface.
+FROZEN_CLI_KEYS = 107
 FROZEN_SEGMENTS = 73
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
@@ -188,7 +190,9 @@ FROZEN_SEGMENTS = 73
 # face, so the face grows by exactly this one module; authority_ledger
 # is function-local for the checkpoint ledger face, the peer-leaf
 # pattern; measured 208 live). Baseline regenerated in the same change.
-FROZEN_ENGINE_IMPORT_COUNT = 208
+# FIX-453: FEAT-095 imports the stdlib-only enforcement peer at engine
+# startup; the already-committed cold-import baseline is 209, not 208.
+FROZEN_ENGINE_IMPORT_COUNT = 209
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {

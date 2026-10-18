@@ -381,6 +381,9 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_dynamic_lifecycle_migration"),
     ("dsh-doctor", "dsh_doctor.main"),
     ("e2e-check", "verify_workflow.cmd_e2e_check"),
+    # FIX-453: FEAT-095 shipped this six-boundary CLI entry, but omitted
+    # its registry row; declare the real engine handler without new routing.
+    ("enforcement-check", "verify_workflow.cmd_enforcement_check_engine"),
     # FEAT-055 (0.86.0 batch 2.0): the EVD-append writer of the
     # governance_store family (batch-1 module, engine wires dispatch only).
     ("evidence-append", "governance_store.cmd_evidence_append"),
@@ -456,7 +459,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("write-guard-bootstrap", "verify_workflow.cmd_write_guard_bootstrap"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""106 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
+"""107 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
 ``check-dsh-boundary`` and ``dsh-doctor``; FEAT-032 added
 ``governance-cost-report``; FEAT-037 added ``check-entry-bootstrap-sync``;
 FEAT-033 added ``governance-bootstrap``; FEAT-055 added the three governed
@@ -476,18 +479,20 @@ mutex + read-only snapshots + lease reclaim, snapshot + frozen counts
 re-baselined in the same change, the documented contract-change path;
 FEAT-097 added ``goal-bridge`` — the goal↔budget bridge state mapping +
 danger-zone collection + checkpoint artifacts + resume authorization,
-same re-baseline path),
+same re-baseline path); FIX-453 reconciles FEAT-095's already-shipped
+``enforcement-check`` entry (106 -> 107),
 each with the module that
 *defines* its handler (machine-derived: the ``commands`` dict of ``main()``
 cross-referenced with the defining module of every handler name — 17 keys are
-already outside the engine, the other 89 ride the monolith).  The docstring
+already outside the engine, the other 90 ride the monolith).  The docstring
 count shipped stale at FEAT-039 time (said 87 with 8 outside when the table
 held 88 with 9 outside); corrected here as part of the deliberate
 re-baseline rather than silently absorbed.  The FEAT-080 window repeated the
 stale-count shape (said 17 outside / 80 monolith at 97 total); both numbers
 re-censused at this FIX-438 re-baseline: 17 outside / 82 monolith at 99 —
 and again at this FEAT-096 re-baseline: 17 outside / 88 monolith at 105 —
-and at this FEAT-097 re-baseline: 17 outside / 89 monolith at 106."""
+and at this FEAT-097 re-baseline: 17 outside / 89 monolith at 106;
+FIX-453 restores the FEAT-095 row: 17 outside / 90 monolith at 107."""
 
 # ── check declaration: 71 segments → entry dotted path ──────────────────────
 

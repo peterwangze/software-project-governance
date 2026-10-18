@@ -55,16 +55,22 @@ def _run_engine_host_mode(product_gates=False):
     (check_gate_consistency → SAMPLE_PATH, check_release_readiness →
     GOVERNANCE_DIR, snapshot/evidence/risk/archive checks → the derived
     constant family) are import-frozen from the PROCESS cwd — patching the
-    roots alone cannot redirect them. Under a repo-root cwd they
-    accidentally hit the dogfood .governance (green by coincidence); under
-    an infra/ cwd they raised FileNotFoundError before the gate assertions.
-    Pin the facts face to the dogfood .governance explicitly (the same
-    constant family _apply_project_root_override rebinds for
-    --project-root) — identical read targets to the green baseline,
-    implicit cwd dependence made explicit (zero behaviour change).
+    roots alone cannot redirect them. Build a real isolated host fixture
+    and bind the same constant family as --project-root; no ignored local
+    dogfood state may decide whether the product-gate assertion is reached.
     """
     with tempfile.TemporaryDirectory() as td:
-        gov = Path(vw.ROOT) / ".governance"
+        gov = Path(td) / ".governance"
+        gov.mkdir()
+        (gov / "plan-tracker.md").write_text(
+            "# Isolated host\n\n## 项目配置\n\n"
+            "- **项目名称**: product-gate-fixture\n"
+            "- **当前阶段**: 维护与演进\n\n"
+            "## Gate 状态跟踪\n\n"
+            "| Gate | 名称 | 状态 |\n|---|---|---|\n| G1 | 立项 | passed |\n",
+            encoding="utf-8")
+        for name in ("evidence-log.md", "decision-log.md", "risk-log.md"):
+            (gov / name).write_text("# Isolated test host\n", encoding="utf-8")
         p1 = mock.patch.object(vw, "PLUGIN_ROOT", Path(vw.ROOT))
         p2 = mock.patch.object(vw, "HOST_PROJECT_ROOT", Path(td))
         with p1, p2, mock.patch.multiple(

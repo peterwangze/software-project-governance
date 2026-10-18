@@ -384,7 +384,9 @@ STATIC_PIN_EXEMPTIONS = {
     # fail-closed judgement consumes the released-status cell, never
     # the version cell.
     "skills/software-project-governance/infra/tests/test_archive.py": [
-        (5862, "0.95.0", _REASON_FIXTURE_ROW_TEXT),
+        # FIX-453: unchanged Q6 roadmap fixture/reason; intervening test
+        # additions moved the exact token anchor from 5862 to 5870.
+        (5870, "0.95.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

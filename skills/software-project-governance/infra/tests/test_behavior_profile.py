@@ -35,6 +35,7 @@ import ast
 import json
 import os
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -319,23 +320,34 @@ class AggregateFaceTests(unittest.TestCase):
     """Layer 3 — the switch is observable, and it changes nothing else.
 
     Both the resolve envelope and the host root stay REAL (so the fail-closed
-    authority and every governance face are exercised); only the plan-tracker
-    text is a fixture, so no test here reads a live ``behavior_profile`` cell.
+    authority and every governance face are exercised), using an isolated
+    host with a real fixture plan rather than ignored local governance state.
     """
 
     @classmethod
     def setUpClass(cls):
-        cls.host_root = Path(resolve_entry.resolve_host_root(str(ROOT)))
+        fixture = tempfile.TemporaryDirectory(prefix="behavior-profile-host-")
+        cls.addClassCleanup(fixture.cleanup)
+        cls.host_root = Path(fixture.name)
+        (cls.host_root / ".governance").mkdir()
+        (cls.host_root / ".governance/plan-tracker.md").write_text(
+            _fixture_plan_text(), encoding="utf-8")
         cls.envelope = resolve_entry.resolve(cls.host_root)
 
     def _payload(self, env, plan_text=None):
         plan_text = _fixture_plan_text() if plan_text is None else plan_text
+        (self.host_root / ".governance/plan-tracker.md").write_text(
+            plan_text, encoding="utf-8")
         with patch.dict(os.environ, env, clear=False):
             if not env:
                 os.environ.pop(bp.ENV_VAR, None)
-            with patch.object(ba, "_read_text", return_value=plan_text):
-                return ba._build_payload(self.host_root, self.envelope, 3000,
-                                         "standard", time.monotonic())
+            return ba._build_payload(self.host_root, self.envelope, 3000,
+                                     "standard", time.monotonic())
+
+    def test_initialized_fixture_uses_real_resolver(self):
+        self.assertTrue(self.envelope["resolved_root_ok"])
+        self.assertTrue(self.envelope["governance_initialized"])
+        self.assertEqual(self.envelope["host_project_root"], str(self.host_root))
 
     def test_face_is_present_and_modern_by_default(self):
         os.environ.pop(bp.ENV_VAR, None)
@@ -518,16 +530,22 @@ class AggregateFaceTests(unittest.TestCase):
 class CliSmokeTests(unittest.TestCase):
     """The documented one-click verification really runs."""
 
-    def _run(self, env=None):
+    def _run(self, env=None, initialized=True):
         import subprocess
         full_env = dict(os.environ)
         full_env.pop(bp.ENV_VAR, None)
         full_env.update(env or {})
-        proc = subprocess.run(
-            [sys.executable, str(INFRA / "verify_workflow.py"),
-             "--project-root", str(ROOT),
-             "governance-bootstrap", "--format", "json"],
-            capture_output=True, timeout=180, env=full_env)
+        with tempfile.TemporaryDirectory(prefix="behavior-profile-cli-") as td:
+            host = Path(td)
+            if initialized:
+                (host / ".governance").mkdir()
+                (host / ".governance/plan-tracker.md").write_text(
+                    _fixture_plan_text(), encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(INFRA / "verify_workflow.py"),
+                 "--project-root", str(host),
+                 "governance-bootstrap", "--format", "json"],
+                capture_output=True, timeout=180, env=full_env)
         out = proc.stdout.decode("utf-8", "replace")
         return proc.returncode, out
 
@@ -543,6 +561,14 @@ class CliSmokeTests(unittest.TestCase):
         payload = json.loads(out[out.index("{"):])
         self.assertEqual(payload["behavior"]["profile"], "legacy")
         self.assertIn("灰度回退生效", payload["next_actions"][0])
+
+    def test_cli_uninitialized_host_retains_initialization_boundary(self):
+        code, out = self._run({bp.ENV_VAR: "1"}, initialized=False)
+        self.assertEqual(code, 0, out[-800:])
+        payload = json.loads(out[out.index("{"):])
+        self.assertFalse(payload["resolve"]["governance_initialized"])
+        self.assertNotIn("project", payload)
+        self.assertIn("初始化", payload["next_actions"][0])
 
 
 class FailClosedUnaffectedTests(unittest.TestCase):

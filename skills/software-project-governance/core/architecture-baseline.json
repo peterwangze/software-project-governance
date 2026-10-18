@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "f392a0b7769f8638b26be602805d51e971c4e69d",
+    "git_head": "2aae6ff1f1cf49e3566e25c5d55b7fe1afdb762f",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 28270,
+    "anchor_loc": 28214,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -246,10 +246,10 @@
         "count": 4,
         "kind": "import_vw",
         "lines": [
-          261,
-          267,
-          480,
-          486
+          260,
+          266,
+          479,
+          485
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/triage_domain.py"
@@ -258,7 +258,7 @@
         "count": 1,
         "kind": "import_vw",
         "lines": [
-          51
+          52
         ],
         "owner_task": "FIX-303",
         "path": "contract_matrix/generator.py"

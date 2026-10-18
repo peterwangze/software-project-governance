@@ -161,6 +161,8 @@ class Check30cCliContractTests(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="rr260_")
         self.root = Path(self.tmpdir)
         (self.root / ".governance").mkdir()
+        from tests.test_review_record import _prepare_review_repository
+        _prepare_review_repository(self.root)
 
     def _record(self, result):
         return review_record.write_review_record(

@@ -26,6 +26,8 @@ guard that can actually fail:
 from __future__ import annotations
 
 import json
+import subprocess
+from contextlib import contextmanager
 import sys
 import tempfile
 import unittest
@@ -45,11 +47,64 @@ ROUTER = "commands/governance.md"
 ROUTER_FIXTURE = "project/e2e-test-project/commands/governance.md"
 
 
-class RouterProjectionTests(unittest.TestCase):
+@contextmanager
+def isolated_projection_root(source_root=ROOT):
+    """Replay the real registry against explicitly synthetic disposable copies.
+
+    Registered canonical bytes come from tracked product paths. Ignored local
+    installations and historical snapshot bytes are never borrowed or claimed
+    to ship. Legacy copies model the declared divergence/backport contract;
+    production validation and its rejection conditions remain unchanged.
+    """
+    source_root = Path(source_root)
+    tracked = subprocess.check_output(
+        ["git", "-C", str(source_root), "ls-files", "-z"]).decode("utf-8").split("\0")
+    with tempfile.TemporaryDirectory(prefix="projection-contract-fixture-") as td:
+        root = Path(td)
+        for relative in filter(None, tracked):
+            source = source_root / relative
+            if not source.is_file():
+                continue
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+        config = json.loads((root / CONFIG_REL).read_text(encoding="utf-8"))
+        for item in config["projections"]:
+            target = root / item["target"]
+            if item["kind"] == "byte_copy":
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((root / item["source"]).read_bytes())
+        for entry in config["declared_legacy_snapshots"]:
+            target = root / entry["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            content = "# SYNTHETIC contract fixture: " + entry["id"] + "\n"
+            for backport in entry.get("approved_backports", []):
+                content += "# " + backport["anchor_symbol"] + "\n"
+                content += "# " + backport["marker"] + "\n"
+            target.write_text(content, encoding="utf-8")
+        # Keep one explicit out-of-scope divergence for the census contract.
+        outside = root / "project/e2e-test-project/skills/code-review/SKILL.md"
+        outside.parent.mkdir(parents=True, exist_ok=True)
+        outside.write_text("# SYNTHETIC out-of-scope copy\n", encoding="utf-8")
+        _version, plan = build_projection_plan(root)
+        for write in plan:
+            (root / write.relative_path).write_bytes(write.content)
+        yield root
+
+
+class _ProjectionFixtureCase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        fixture = isolated_projection_root()
+        cls.root = fixture.__enter__()
+        cls.addClassCleanup(fixture.__exit__, None, None, None)
+
+
+class RouterProjectionTests(_ProjectionFixtureCase):
     """The router mirror is registry-driven, not hand-copied."""
 
     def test_router_is_a_declared_byte_copy_projection(self):
-        _version, plan = build_projection_plan(ROOT)
+        _version, plan = build_projection_plan(self.root)
         targeted = {write.relative_path: write for write in plan}
         self.assertIn(ROUTER_FIXTURE, targeted,
                       "the fixture router MUST be a declared projection — "
@@ -57,21 +112,21 @@ class RouterProjectionTests(unittest.TestCase):
                       "(FEAT-038 P2-4)")
         write = targeted[ROUTER_FIXTURE]
         self.assertEqual(write.kind, "byte_copy")
-        self.assertEqual(write.content, (ROOT / ROUTER).read_bytes())
+        self.assertEqual(write.content, (self.root / ROUTER).read_bytes())
 
     def test_projection_plan_is_current_on_disk(self):
-        """No drift: the shipped fixture already equals the registry output."""
-        result = check_projections(ROOT).as_dict()
+        """No drift after the real registry populates the isolated fixture."""
+        result = check_projections(self.root).as_dict()
         self.assertEqual(result["state"], "PASS", result["issues"])
         self.assertEqual(result["issues"], [])
 
     def test_registry_and_manifest_contract_agree(self):
         """Adding a projection without the manifest counterpart must fail."""
-        manifest = json.loads((ROOT / MANIFEST_REL).read_text(encoding="utf-8"))
+        manifest = json.loads((self.root / MANIFEST_REL).read_text(encoding="utf-8"))
         ids = manifest["release_projection_contract"]["projection_ids"]
         self.assertIn("fixture-command-governance-router", ids)
         # build_projection_plan enforces exact set equality between the two
-        _version, plan = build_projection_plan(ROOT)
+        _version, plan = build_projection_plan(self.root)
         targets = [write.relative_path for write in plan]
         self.assertEqual(len(targets), len(set(targets)),
                          "duplicate projection targets")
@@ -79,7 +134,7 @@ class RouterProjectionTests(unittest.TestCase):
     def test_fixture_mirror_inventory_matches_the_manifest(self):
         """FEAT-037 P3-4: patterns ↔ required_members stay exact."""
         import verify_workflow as vw
-        manifest = json.loads((ROOT / MANIFEST_REL).read_text(encoding="utf-8"))
+        manifest = json.loads((self.root / MANIFEST_REL).read_text(encoding="utf-8"))
         contract = manifest["release_projection_contract"]
         entry = next(item for item in contract["validation_inventories"]
                      if item["id"] == "fixture-mirror-patterns")
@@ -90,11 +145,11 @@ class RouterProjectionTests(unittest.TestCase):
             self.assertIn(pattern, vw.PROJECTION_SYNC_PATTERNS)
 
 
-class LegacySnapshotDeclarationTests(unittest.TestCase):
+class LegacySnapshotDeclarationTests(_ProjectionFixtureCase):
     """The declared divergences are on the record AND falsifiable."""
 
-    def test_shipped_declarations_pass(self):
-        result = check_legacy_snapshots(ROOT)
+    def test_registered_declarations_pass_in_synthetic_fixture(self):
+        result = check_legacy_snapshots(self.root)
         self.assertTrue(result["pass"], result["issues"])
         self.assertEqual(result["issues"], [])
         self.assertEqual(result["checked"], 10)
@@ -118,7 +173,7 @@ class LegacySnapshotDeclarationTests(unittest.TestCase):
         """
         import verify_workflow as vw
         from release.projection import FIXTURE_PREFIX
-        config = json.loads((ROOT / CONFIG_REL).read_text(encoding="utf-8"))
+        config = json.loads((self.root / CONFIG_REL).read_text(encoding="utf-8"))
         scopes = tuple(config["declared_legacy_snapshot_scope"])
         self.assertTrue(scopes)
         declared = {item["path"][len(FIXTURE_PREFIX):]
@@ -126,15 +181,15 @@ class LegacySnapshotDeclarationTests(unittest.TestCase):
         projected = {item["target"][len(FIXTURE_PREFIX):]
                      for item in config["projections"]
                      if item.get("target", "").startswith(FIXTURE_PREFIX)}
-        fixture_root = ROOT / "project/e2e-test-project"
+        fixture_root = self.root / "project/e2e-test-project"
         undeclared = []
-        for rel in sorted(vw._projection_source_files(ROOT)):
+        for rel in sorted(vw._projection_source_files(self.root)):
             if not rel.startswith(scopes):
                 continue
             fixture = fixture_root / rel
             if not fixture.is_file():
                 continue  # absent copies are a different class (partial tree)
-            if fixture.read_bytes() == (ROOT / rel).read_bytes():
+            if fixture.read_bytes() == (self.root / rel).read_bytes():
                 continue
             if rel not in declared and rel not in projected:
                 undeclared.append(rel)
@@ -146,7 +201,7 @@ class LegacySnapshotDeclarationTests(unittest.TestCase):
 
     def test_out_of_scope_divergence_is_reported_not_absorbed(self):
         """The wider fixture divergence is a disclosed census, not a silence."""
-        result = check_legacy_snapshots(ROOT)
+        result = check_legacy_snapshots(self.root)
         census = result["census"]
         self.assertGreater(census["divergent"], 0)
         self.assertEqual(census["declared"], len(result["declared"]))
@@ -178,17 +233,17 @@ class LegacySnapshotDeclarationTests(unittest.TestCase):
         """
         import verify_workflow as vw
         from release import projection as rp
-        result = check_legacy_snapshots(ROOT)
+        result = check_legacy_snapshots(self.root)
         self.assertTrue(result["pass"], result["issues"])
         census = result["census"]
-        fixture_root = ROOT / rp.FIXTURE_PREFIX.rstrip("/")
+        fixture_root = self.root / rp.FIXTURE_PREFIX.rstrip("/")
         if not fixture_root.is_dir():
             self.skipTest("fixture mirror is absent (partial tree)")
         # the mirror inventory IS the engine's resolution of the same patterns
         # release.projection extracts by AST — two independent readers, one set
         self.assertEqual(census["inventory"],
-                         len(vw._projection_source_files(ROOT)))
-        self.assertEqual(census["inventory"], len(rp._mirror_inventory(ROOT)))
+                         len(vw._projection_source_files(self.root)))
+        self.assertEqual(census["inventory"], len(rp._mirror_inventory(self.root)))
         self.assertGreater(census["inventory"], 0,
                            "an empty inventory makes the identity below "
                            "vacuous — the disclosure would be decoration")
@@ -212,14 +267,14 @@ class LegacySnapshotDeclarationTests(unittest.TestCase):
 
     def test_engine_copy_really_is_divergent(self):
         """The declaration is only honest while the divergence is real."""
-        config = json.loads((ROOT / CONFIG_REL).read_text(encoding="utf-8"))
+        config = json.loads((self.root / CONFIG_REL).read_text(encoding="utf-8"))
         entry = next(item for item in config["declared_legacy_snapshots"]
                      if item["id"] == "fixture-engine")
-        self.assertNotEqual((ROOT / entry["path"]).read_bytes(),
-                            (ROOT / entry["canonical"]).read_bytes())
+        self.assertNotEqual((self.root / entry["path"]).read_bytes(),
+                            (self.root / entry["canonical"]).read_bytes())
 
     def test_check_projections_reports_the_legacy_face(self):
-        facts = check_projections(ROOT).as_dict()
+        facts = check_projections(self.root).as_dict()
         self.assertIn("legacy_snapshot_check", facts)
         self.assertEqual(facts["declared_legacy_snapshots"], 10)
 
@@ -298,7 +353,7 @@ class LegacySnapshotDeclarationTests(unittest.TestCase):
         self.assertTrue(any("unreadable" in issue for issue in result["issues"]))
 
 
-class BackportPolicyTests(unittest.TestCase):
+class BackportPolicyTests(_ProjectionFixtureCase):
     """FIX-381 — the controlled-backport institution is machine-guarded."""
 
     LEDGER_ENTRY = {
@@ -341,21 +396,21 @@ class BackportPolicyTests(unittest.TestCase):
         return tmp, root, config_path
 
     # ── shipped registry: the institution is live, not decorative ────────
-    def test_shipped_policy_and_ledger_are_live(self):
-        result = check_legacy_snapshots(ROOT)
+    def test_registered_policy_and_ledger_validate_in_synthetic_fixture(self):
+        result = check_legacy_snapshots(self.root)
         self.assertTrue(result["pass"], result["issues"])
         face = result["backport_ledger"]
         self.assertTrue(face["policy_declared"])
         self.assertGreaterEqual(face["ledger_entries"], 1)
         self.assertEqual(face["anchors_resolved"], face["ledger_entries"])
 
-    def test_shipped_ledger_entry_resolves_in_the_real_copy(self):
-        config = json.loads((ROOT / CONFIG_REL).read_text(encoding="utf-8"))
+    def test_registered_ledger_entry_resolves_in_synthetic_copy(self):
+        config = json.loads((self.root / CONFIG_REL).read_text(encoding="utf-8"))
         entry = next(item for item in config["declared_legacy_snapshots"]
                      if item["id"] == "fixture-engine")
         ledger = entry["approved_backports"]
         self.assertTrue(ledger)
-        copy_text = (ROOT / entry["path"]).read_text(encoding="utf-8",
+        copy_text = (self.root / entry["path"]).read_text(encoding="utf-8",
                                                      errors="replace")
         for item in ledger:
             self.assertIn(item["anchor_symbol"], copy_text,

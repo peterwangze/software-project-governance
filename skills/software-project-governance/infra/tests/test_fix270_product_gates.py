@@ -126,7 +126,8 @@ class UntrackedFilesHostRootTests(unittest.TestCase):
 class HotFactSourceHostScopeTests(unittest.TestCase):
     """Check 28c 宿主场景降级/豁免：插件项目专属期望不再 FAIL 宿主数据。"""
 
-    def _host_style_plan(self):
+    @staticmethod
+    def _host_style_plan():
         # 宿主风格：无 0.38.0 roadmap、无 FIX-082~087、无 ### 1.0.0 依赖链
         return (
             "# 宿主计划\n\n"
@@ -182,14 +183,10 @@ class EngineProductGateTests(unittest.TestCase):
         reads (check_gate_consistency → SAMPLE_PATH, check_release_readiness
         → GOVERNANCE_DIR, snapshot/evidence/risk/archive checks → the
         derived constant family) are import-frozen from the PROCESS cwd —
-        patching the roots alone cannot redirect them. Under a repo-root
-        cwd they accidentally hit the dogfood .governance (green by
-        coincidence); under an infra/ cwd they raised FileNotFoundError
-        before the gate assertions. Pin the facts face to the dogfood
-        .governance explicitly (the same constant family
-        _apply_project_root_override rebinds for --project-root) —
-        identical read targets to the green baseline, implicit cwd
-        dependence made explicit (zero behaviour change).
+        patching the roots alone cannot redirect them. Pin the facts face
+        to a real isolated host fixture (the same constant family
+        _apply_project_root_override rebinds for --project-root). Local
+        ignored dogfood governance must not decide clean-checkout results.
         """
         stub = types.SimpleNamespace(
             verdict="PASS", issues=[], phase="staged_index",
@@ -199,7 +196,13 @@ class EngineProductGateTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as td:
             host = Path(td)
-            gov = Path(vw.ROOT) / ".governance"
+            gov = host / ".governance"
+            gov.mkdir()
+            (gov / "plan-tracker.md").write_text(
+                HotFactSourceHostScopeTests._host_style_plan(),
+                encoding="utf-8")
+            for name in ("evidence-log.md", "decision-log.md", "risk-log.md"):
+                (gov / name).write_text("# Isolated test host\n", encoding="utf-8")
             with mock.patch.object(vw, "scan_loop_runtime_claims",
                                    side_effect=AssertionError("product check ran: Check 31 claims")):
                 with mock.patch.object(vw, "_run_identity_attestation_fixture_only",

@@ -694,7 +694,10 @@ class BaselineArtifactTests(unittest.TestCase):
         # literal straight to 28270; the +247 lineage attribution stays
         # registered for its own make-up ticket (same shape as the FEAT-081
         # window note above).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28270)
+        # FIX-453 clean-checkout repair: FEAT-101 removed 56 engine lines
+        # with chrys support. Normal regen shrinks 28270 -> 28214; R2
+        # triage-domain line anchors also move by -1, with unchanged counts.
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28214)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

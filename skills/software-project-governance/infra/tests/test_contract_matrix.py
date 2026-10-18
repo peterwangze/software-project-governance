@@ -137,7 +137,9 @@ from contract_matrix import generator as cmg  # noqa: E402
 # change, NOT a contract change (keys stay 106 / segments 73;
 # guard_output_pin byte-stable); the leaf remains free to flip back
 # with live governance state under the same regen discipline.
-FROZEN_CLI_KEY_COUNT = 106
+# FIX-453: restore the FEAT-095 enforcement-check registration omitted from
+# the registry's former 106-key mirror; engine and snapshot already had 107.
+FROZEN_CLI_KEY_COUNT = 107
 FROZEN_CHECK_SEGMENT_COUNT = 73
 
 

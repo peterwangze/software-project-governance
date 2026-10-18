@@ -1586,9 +1586,12 @@ def smoke_preset() -> int:
              "verdict, FIX-442)" if attributed
              else "(no write-face delta was attributable to a concurrent "
                   "session)"))
+    witness_status = (
+        "witness unchanged — top-level names + preset write surface recursive"
+        if comparison["verdict"] == "PASS" else "WITNESS CHANGED"
+    )
     print(f"[SMOKE] real-home writes : {len(comparison['failures'])} "
-          f"({'witness unchanged — top-level names + preset write surface '
-             'recursive' if comparison['verdict'] == 'PASS' else 'WITNESS CHANGED'})")
+          f"({witness_status})")
 
     dsh_cli = shutil.which("dsh") or shutil.which("dsh.cmd") \
         or shutil.which("dsh.ps1")

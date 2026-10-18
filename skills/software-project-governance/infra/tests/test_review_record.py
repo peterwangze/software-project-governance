@@ -32,6 +32,34 @@ import verify_workflow as vw  # noqa: E402
 from tests.test_loop_paro_engine import _activated_payload, _write_payload  # noqa: E402
 
 
+def _prepare_review_repository(root):
+    """Real FEAT-094 report bytes and Git revision, wholly inside the fixture.
+
+    Verdict selection belongs to each test; this source report contains the
+    reviewed object's findings without an unrelated preselected verdict.
+    No trust-chain reader/writer or Git response is mocked.
+    """
+    root = Path(root)
+    (root / ".governance").mkdir(exist_ok=True)
+    empty_hooks = root / ".fixture-hooks"
+    empty_hooks.mkdir()
+    (root / ".gitignore").write_text(
+        ".governance/\n.fixture-hooks/\nreport*.md\nreview-*.md\n", encoding="utf-8")
+    (root / "subject.txt").write_text("Reviewed fixture revision.\n", encoding="utf-8")
+    git = ["git", "-C", str(root), "-c", "core.hooksPath=" + str(empty_hooks),
+           "-c", "user.name=Review Fixture", "-c", "user.email=fixture@example.invalid",
+           "-c", "commit.gpgsign=false"]
+    for args in (("init", "--quiet"), ("add", "subject.txt", ".gitignore"),
+                 ("commit", "--quiet", "-m", "Create reviewed fixture revision")):
+        subprocess.run([*git, *args], check=True, capture_output=True)
+    for name in ("report.md", "report-r1.md", "review-FIX-236-CODE-R0.md"):
+        (root / name).write_text(
+            "# Review source\n\nReviewed subject.txt at the fixture Git revision.\n"
+            "The verdict-specific persistence and wiring are exercised by the caller.\n",
+            encoding="utf-8")
+    return subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+
+
 def _new_reflect_unit(tmpdir, unit_id="shitu.story.Skeleton"):
     """Activated unit driven to the reflect node (same shape as gp tests)."""
     payload = _activated_payload(unit_id=unit_id, tier="inner", max_rounds=5)
@@ -53,6 +81,7 @@ class ReviewRecordPersistenceTests(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="rr_")
         self.root = Path(self.tmpdir)
         (self.root / ".governance").mkdir()
+        self.reviewed_commit = _prepare_review_repository(self.root)
 
     def _write(self, **overrides):
         kwargs = {
@@ -77,6 +106,9 @@ class ReviewRecordPersistenceTests(unittest.TestCase):
         self.assertIn("REVIEW-FIX-236-R0", ev)
         self.assertIn("| FIX-236 |", ev)
         self.assertIn("APPROVED", ev)
+        self.assertEqual(summary["trust"]["commit"], self.reviewed_commit)
+        self.assertEqual(review_record.verify_review_trust(
+            review_file, repo_root=self.root)["verdict"], "CLEAN")
 
     def test_approved_with_notes_writes_blocker_token(self):
         summary = self._write(result="APPROVED_WITH_NOTES")
@@ -142,6 +174,7 @@ class ReviewRecordScopeTests(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="rrs_")
         self.root = Path(self.tmpdir)
         (self.root / ".governance").mkdir()
+        _prepare_review_repository(self.root)
 
     def _write(self, **overrides):
         kwargs = {
@@ -217,6 +250,7 @@ class ReviewRecordWiringTests(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="rrw_")
         self.root = Path(self.tmpdir)
         (self.root / ".governance").mkdir()
+        _prepare_review_repository(self.root)
 
     def test_mapping_missing_skips_wiring_with_warn_but_writes(self):
         summary = review_record.write_review_record(
@@ -372,6 +406,7 @@ class ReviewRecordOverwriteGuardTests(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="rro_")
         self.root = Path(self.tmpdir)
         (self.root / ".governance").mkdir()
+        _prepare_review_repository(self.root)
         self.gov = self.root / ".governance"
         self.review_file = self.gov / "review-FIX-236-R0.md"
         self.evidence_log = self.gov / "evidence-log.md"

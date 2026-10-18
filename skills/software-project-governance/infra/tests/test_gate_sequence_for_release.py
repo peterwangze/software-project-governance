@@ -388,19 +388,16 @@ class Check37Br4WiringTests(unittest.TestCase):
     interlock in released mode (WARN), never mis-FAIL history."""
 
     def setUp(self):
-        # FIX-418 cwd-hermeticity pin: the embedded-call tests below run the
-        # REAL check_release_readiness → check_release_readiness_fact_source()
-        # (import-frozen GOVERNANCE_DIR) and check_hot_fact_source_consistency()
-        # (the _governance_dir() seam, which tracks the import-frozen
-        # SAMPLE_PATH) — both parameterless host-facts reads bound from the
-        # PROCESS cwd at verify_workflow import time. Under a repo-root cwd
-        # they accidentally hit the dogfood .governance (tests green by
-        # coincidence); under an infra/ cwd they raised FileNotFoundError
-        # before the wiring assertions. Pin both facts constants to the
-        # dogfood .governance explicitly — same read targets as the green
-        # baseline, implicit cwd dependence made explicit (zero behaviour
-        # change).
-        gov = vw.PLUGIN_ROOT / ".governance"
+        # These wiring probes exercise real readiness/hot-fact checks.
+        # Bind their import-frozen constants to an isolated, complete host;
+        # ignored dogfood governance must not decide clean-checkout results.
+        fixture = tempfile.TemporaryDirectory(prefix="gate-sequence-host-")
+        self.addCleanup(fixture.cleanup)
+        gov = Path(fixture.name) / ".governance"
+        gov.mkdir()
+        (gov / "plan-tracker.md").write_text(self.ROADMAP, encoding="utf-8")
+        for name in ("evidence-log.md", "risk-log.md", "decision-log.md"):
+            (gov / name).write_text("# Isolated release facts\n", encoding="utf-8")
         p1 = mock.patch.object(vw, "GOVERNANCE_DIR", gov)
         p2 = mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md")
         p1.start()

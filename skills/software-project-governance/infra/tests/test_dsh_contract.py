@@ -2057,7 +2057,7 @@ class TestGuardContractFailureVerdicts(unittest.TestCase):
             target.write_bytes(contract_bytes)
         return root
 
-    def _run_guard(self, root):
+    def _run_guard(self, root, *, without_host=False):
         """Import + run the guard in a fresh process; return the parsed outcome.
 
         The probe captures both the report and the CLI exit code, and it never
@@ -2077,11 +2077,20 @@ class TestGuardContractFailureVerdicts(unittest.TestCase):
             "    raise SystemExit(0)\n"
             "report = dsh_compat.check_dsh_preset_compat(root=sys.argv[3])\n"
             "out['verdict'] = report['verdict']\n"
-            "out['reason'] = report['reason'][:200]\n"
+            "out['reason'] = report['reason']\n"
             "out['issues'] = len(report['issues'])\n"
+            "out['rows_checked'] = report['rows_checked']\n"
+            "out['install'] = report['install']\n"
             "out['exit'] = dsh_compat.main(['--json', '--root', sys.argv[3]])\n"
             "print(json.dumps(out))\n")
         env = os.environ.copy()
+        if without_host:
+            env["PATH"] = ""
+            env.pop("DSH_INSTALL_DIR", None)
+            env.pop("DSH_HARNESS_NODE_MODULES", None)
+            isolated_home = root / "empty-home"
+            isolated_home.mkdir(exist_ok=True)
+            env["DSH_HOME"] = str(isolated_home)
         env["PYTHONPATH"] = os.pathsep.join([
             str(root / "skills" / "software-project-governance" / "infra"),
             str(root / "adapters" / "dsh"),
@@ -2132,19 +2141,74 @@ class TestGuardContractFailureVerdicts(unittest.TestCase):
     # ── F-03: a contract defect must not share the "no dsh" status ─────────
     def test_missing_apis_exports_is_a_fail_not_an_environment_gap(self):
         # `host.apis[...].exports` is not in the accessor's REQUIRED_PATHS, so a
-        # contract that carries it malformed passes every earlier check and only
-        # fails when the probe script is rendered. That failure is a contract
-        # defect: FAIL, never the NOT_RUN that "no dsh installed" produces.
+        # contract that carries it malformed must be rejected before discovery
+        # can return "no dsh installed". This is a local product defect.
         mutated = json.loads(json.dumps(self.original))
         mutated["host"]["apis"]["js-yaml"].pop("exports")
         root = self._guard_repo(
             contract_bytes=json.dumps(mutated, ensure_ascii=False,
                                       indent=2).encode("utf-8"))
-        outcome = self._run_guard(root)
+        outcome = self._run_guard(root, without_host=True)
         self.assertTrue(outcome["import_ok"], outcome)
         self.assertEqual(outcome["verdict"], "FAIL", outcome)
-        self.assertIn("host.apis", outcome["reason"])
+        self.assertIn("host.apis[js-yaml].exports", outcome["reason"])
+        self.assertIn("ContractMalformed", outcome["reason"])
+        self.assertGreaterEqual(outcome["issues"], 1, outcome)
         self.assertNotIn("NOT_RUN", outcome["verdict"])
+
+    def test_malformed_api_shapes_fail_without_host_or_compositions(self):
+        package = "@deepseek-ai/cordis-plugin-loader"
+        cases = [
+            ("host.apis", None, "host.apis"),
+            ("host.apis", [], "host.apis"),
+            ("host.apis", {}, "host.apis"),
+            ("host.apis", "packages", "host.apis"),
+            ("entry", None, f"host.apis[{package}]"),
+            ("entry", [], f"host.apis[{package}]"),
+            ("entry", "loader", f"host.apis[{package}]"),
+            ("exports", None, f"host.apis[{package}].exports"),
+            ("exports", [], f"host.apis[{package}].exports"),
+            ("exports", "evaluate", f"host.apis[{package}].exports"),
+            ("exports", [None], f"host.apis[{package}].exports[0]"),
+            ("exports", [23], f"host.apis[{package}].exports[0]"),
+            ("exports", [""], f"host.apis[{package}].exports[0]"),
+            ("exports", ["  "], f"host.apis[{package}].exports[0]"),
+            ("exports", ["otherSymbol"], "host.apis"),
+        ]
+        for target, value, field in cases:
+            with self.subTest(target=target, value=value):
+                mutated = json.loads(json.dumps(self.original))
+                if target == "host.apis":
+                    mutated["host"]["apis"] = value
+                elif target == "entry":
+                    mutated["host"]["apis"][package] = value
+                else:
+                    mutated["host"]["apis"][package]["exports"] = value
+                root = self._guard_repo(contract_bytes=json.dumps(mutated).encode("utf-8"))
+                try:
+                    # No discovered composition is another optional-tooling
+                    # early return; local contract defects must precede it too.
+                    shutil.rmtree(root / "agent-presets")
+                    outcome = self._run_guard(root, without_host=True)
+                    self.assertTrue(outcome["import_ok"], outcome)
+                    self.assertEqual(outcome["verdict"], "FAIL", outcome)
+                    self.assertIn("ContractMalformed", outcome["reason"])
+                    self.assertIn(field, outcome["reason"])
+                    self.assertGreaterEqual(outcome["issues"], 1, outcome)
+                    self.assertEqual(outcome["rows_checked"], 0, outcome)
+                    self.assertEqual(outcome["install"], {}, outcome)
+                finally:
+                    shutil.rmtree(root)
+
+    def test_healthy_contract_without_host_is_not_run(self):
+        root = self._guard_repo()
+        outcome = self._run_guard(root, without_host=True)
+        self.assertTrue(outcome["import_ok"], outcome)
+        self.assertEqual(outcome["verdict"], "NOT_RUN", outcome)
+        self.assertIn("installed dsh not available", outcome["reason"])
+        self.assertEqual(outcome["issues"], 0, outcome)
+        self.assertEqual(outcome["rows_checked"], 0, outcome)
+        self.assertEqual(outcome["exit"], 0, outcome)
 
     def test_a_healthy_contract_still_classifies_normally(self):
         # Control: the copy's pristine contract must not turn every run red.

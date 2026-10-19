@@ -477,13 +477,28 @@ def oracle_api_symbols() -> dict:
     import dsh_contract  # noqa: PLC0415 — sibling accessor, imported on first need
 
     apis = dsh_contract.get("host.apis")
+    if not isinstance(apis, dict) or not apis:
+        raise dsh_contract.ContractMalformed(
+            "ContractMalformed: `host.apis` must be a non-empty object")
     symbols = {}
     for package, entry in apis.items():
-        exports = entry.get("exports") if isinstance(entry, dict) else None
+        field = f"host.apis[{package}]"
+        if not isinstance(package, str) or not package.strip():
+            raise dsh_contract.ContractMalformed(
+                "ContractMalformed: `host.apis` package names must be non-empty strings")
+        if not isinstance(entry, dict):
+            raise dsh_contract.ContractMalformed(
+                f"ContractMalformed: `{field}` must be an object")
+        exports = entry.get("exports")
         if not isinstance(exports, list) or not exports:
             raise dsh_contract.ContractMalformed(
-                f"ContractMalformed: `host.apis[{package}].exports` must be a "
+                f"ContractMalformed: `{field}.exports` must be a "
                 f"non-empty list (declared: {entry!r})")
+        for index, symbol in enumerate(exports):
+            if not isinstance(symbol, str) or not symbol.strip():
+                raise dsh_contract.ContractMalformed(
+                    f"ContractMalformed: `{field}.exports[{index}]` must be a "
+                    f"non-empty string (declared: {symbol!r})")
         symbols[package] = tuple(exports)
     return symbols
 
@@ -1322,13 +1337,15 @@ def _render_probe_script() -> str:
     names behind a second copy. An unresolved placeholder raises — a probe
     naming a package or a symbol we did not declare must not run.
     """
+    import dsh_contract  # noqa: PLC0415 — classify local render defects consistently
+
     apis = oracle_api_symbols()
 
     def package_exporting(*symbols: str) -> tuple:
         for package, exports in apis.items():
             if all(symbol in exports for symbol in symbols):
                 return package, exports
-        raise ValueError(
+        raise dsh_contract.ContractMalformed(
             "the contract's host.apis declares no package exporting "
             + "/".join(symbols) + " (declared: "
             + ", ".join(f"{name} -> {list(entry)}" for name, entry in sorted(apis.items()))
@@ -1338,8 +1355,8 @@ def _render_probe_script() -> str:
         for symbol in candidates:
             if symbol in exports:
                 return symbol
-        raise ValueError(
-            f"the contract declares no symbol {candidates[0]} for {package} "
+        raise dsh_contract.ContractMalformed(
+            f"the contract's host.apis[{package}].exports declares no symbol {candidates[0]} "
             f"(declared: {list(exports)})")
 
     yaml_package, _ = package_exporting("load")
@@ -1353,7 +1370,7 @@ def _render_probe_script() -> str:
     # them non-boolean is a contract defect, not something to coerce.
     builtin_group_name = _fact("_builtin_group_name")
     if not isinstance(builtin_group_name, str) or not builtin_group_name:
-        raise ValueError(
+        raise dsh_contract.ContractMalformed(
             "the contract's host.row_contract.builtin_group_name must be a "
             f"non-empty string (declared: {builtin_group_name!r})")
     group_flags = {
@@ -1362,7 +1379,7 @@ def _render_probe_script() -> str:
     }
     for placeholder, value in group_flags.items():
         if not isinstance(value, bool):
-            raise ValueError(
+            raise dsh_contract.ContractMalformed(
                 f"the contract's host.row_contract declaration for {placeholder} "
                 f"must be a boolean (declared: {value!r})")
 
@@ -1391,7 +1408,7 @@ def _render_probe_script() -> str:
         PROBE_SCRIPT)
     leftover = sorted(set(re.findall(r"__[A-Z0-9_]+__", rendered)))
     if leftover:
-        raise ValueError(
+        raise dsh_contract.ContractMalformed(
             f"probe script placeholders not resolved: {leftover}")
     return rendered
 
@@ -1884,6 +1901,11 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
     # discovery is inside the same try: it reads `host.home.composition_globs`,
     # which is a declared fact like any other.
     try:
+        # This renders only local contract facts; it neither imports host
+        # packages nor starts Node. A malformed probe contract remains a
+        # product FAIL even when compositions, the install or Node are absent.
+        # Use the probe's own renderer so the preflight cannot drift from it.
+        _render_probe_script()
         paths = ([Path(item) for item in compositions] if compositions is not None
                  else discover_compositions(root))
         paths = [path if path.is_absolute() else root / path for path in paths]

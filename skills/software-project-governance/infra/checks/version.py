@@ -365,16 +365,18 @@ STATIC_PIN_EXEMPTIONS = {
         # above (adapter branch/loop/matrix/projection fixtures) shifted all
         # four rows below without touching the tokens (rot-guard caught the
         # stale ledger); re-anchored to the actual token lines, same discipline.
-        (21224, "0.93.0", _REASON_FUTURE_TARGET),
-        (21256, "0.93.0", _REASON_FUTURE_TARGET),
+        # FIX-453 phase2: fixture isolation tests shift these four anchors;
+        # frozen payload lines/reasons are byte-equivalent (diagnostic hashes).
+        (21304, "0.93.0", _REASON_FUTURE_TARGET),
+        (21336, "0.93.0", _REASON_FUTURE_TARGET),
         # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
         # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
         # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
         # 目标版本 column — scenario payload written while 0.93.1 was active,
         # surfacing exactly once at this bump; the word-set judgement
         # consumes the row text, never the version cell.
-        (20726, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
-        (20729, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        (20803, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        (20806, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.95.0 bump-time rows (the FIX-361 designed double signal): the
     # FEAT-076 Q6 date-window fallback fail-closed fixture (roadmap row

@@ -20,6 +20,7 @@ from release.ledger import derive_effective_state, event_integrity, validate_rel
 from release.projection import build_projection_plan, check_projections, write_projections
 from release.schema_validation import validate_schema
 from release.quality import probe_quality_tools
+from test_projection_legacy_snapshots import isolated_projection_root
 
 
 def git(root, *args):
@@ -722,7 +723,11 @@ class ProjectionTests(unittest.TestCase):
             self.assertEqual((root/"target.bin").read_bytes(),b"source\n")
 
     def test_real_projection_plan_check_then_write_is_raw_noop(self):
-        root=INFRA.parents[2]
+        # Exercise the real registry on disposable, explicitly synthetic mirrors.
+        # Never write/recover the developer's ignored e2e installation.
+        fixture=isolated_projection_root(INFRA.parents[2])
+        root=fixture.__enter__()
+        self.addCleanup(fixture.__exit__,None,None,None)
         version,plan=build_projection_plan(root)
         snapshots={write.relative_path:((root/write.relative_path).read_bytes(),
                                         (root/write.relative_path).stat().st_mtime_ns)

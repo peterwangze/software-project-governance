@@ -55,12 +55,19 @@ from unittest.mock import patch
 
 
 @contextmanager
-def _sandbox_td(prefix="dsh-adapter-fixture-"):
+def _sandbox_td(prefix="dsh-adapter-fixture-", *, path_reserve=0):
     """Sandbox-safe fixture dir (FIX-411; the FIX-404 ``TemporaryDirectory``
     family): mkdtemp dirs (0o700) deny the adapter-fixture writes/cleanup
     under the UAC-filtered DSH sandbox token — a plain default-mode mkdir
     works; cleanup carries ``rmtree(ignore_errors=True)`` protection."""
-    root = Path(tempfile.gettempdir()) / (prefix + uuid.uuid4().hex[:12])
+    base = Path(tempfile.gettempdir())
+    name = prefix + uuid.uuid4().hex[:12]
+    # Keep deep, fixed host layouts below the portable Windows path ceiling.
+    # The fallback is test-owned and stays inside the checkout, never HOME.
+    if len(str(base / name)) + path_reserve > 240:
+        base = _REPO_ROOT / ".codex-sandbox"
+        base.mkdir(exist_ok=True)
+    root = base / name
     root.mkdir()
     try:
         yield str(root)
@@ -756,6 +763,7 @@ class DshAdapterTests(unittest.TestCase):
         subprocess.run(
             ["git", "init"], cwd=root, check=True, capture_output=True, text=True
         )
+        (root / ".git" / "hooks").mkdir(parents=True, exist_ok=True)
         gov = root / ".governance"
         gov.mkdir(parents=True)
         (gov / "plan-tracker.md").write_text(
@@ -833,11 +841,11 @@ class DshAdapterTests(unittest.TestCase):
         "bash unavailable (hook self-upgrade checks are bash-hosted)",
     )
     def test_hook_discovers_dsh_copy_mode_snapshot(self):
-        with _sandbox_td() as td:
-            root = Path(td) / "target"
+        with _sandbox_td("d-", path_reserve=100) as td:
+            root = Path(td) / "t"
             self._init_target_repo(root)
 
-            dsh_home = Path(td) / "dsh-home"
+            dsh_home = Path(td) / "d"
             source_home = (
                 dsh_home / ".agent-presets" / "governance" / "skills" / "software-project-governance"
             )
@@ -854,6 +862,24 @@ class DshAdapterTests(unittest.TestCase):
                 installed_hook.read_text(encoding="utf-8"),
                 source_hook.read_text(encoding="utf-8"),
             )
+
+    def test_hook_copy_mode_survives_long_temp_parent(self):
+        """The real self-upgrade must run even with an oversized TEMP parent."""
+        with _sandbox_td("p-", path_reserve=110) as td:
+            parent = Path(td) / ("long-" + "x" * 95)
+            parent.mkdir()
+            with patch.object(tempfile, "gettempdir", return_value=str(parent)):
+                self.test_hook_discovers_dsh_copy_mode_snapshot()
+            self.assertEqual(list(parent.iterdir()), [])
+
+    def test_hook_link_mode_with_empty_git_template(self):
+        """No Git template hook samples may be required by the fixture."""
+        with _sandbox_td("g-") as td:
+            empty = Path(td) / "empty"
+            empty.mkdir()
+            with patch.dict(os.environ, {"GIT_TEMPLATE_DIR": str(empty)}):
+                self.test_hook_discovers_dsh_link_mode_marker()
+            self.assertEqual(list(empty.iterdir()), [])
 
     def test_hooks_carry_dsh_discovery_candidates(self):
         for hook_name in ("pre-commit", "commit-msg", "post-commit"):

@@ -452,9 +452,18 @@ class BootstrapContractTests(unittest.TestCase):
     def test_skill_documents_fail_safe_states(self):
         text = (_INFRA_DIR.parent / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("check-governance --summary-only", text)
-        self.assertIn("Governance: unavailable", text)
-        self.assertIn("Governance: timed out", text)
-        self.assertIn("parse degraded", text)
+        # FIX-450 moved the full contract behind an explicit MUST-read link.
+        # Follow that reachable document; a detached file cannot satisfy this.
+        relative = "references/behavior-contract-details.md"
+        self.assertIn(f"]({relative})", text)
+        self.assertIn("§bootstrap-health", text)
+        details = (_INFRA_DIR.parent / relative).read_text(encoding="utf-8")
+        section = details.split('id="bootstrap-health"', 1)[-1]
+        self.assertNotEqual(section, details, "bootstrap-health anchor missing")
+        section = section.split("\n## ", 1)[0]
+        for state in ("Governance: unavailable", "Governance: timed out",
+                      "parse degraded"):
+            self.assertIn(state, section)
 
     def test_behavior_protocol_documents_fail_safe_states(self):
         proto = (_INFRA_DIR.parent / "references" / "behavior-protocol.md"

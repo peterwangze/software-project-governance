@@ -39,6 +39,7 @@ if str(_INFRA_DIR) not in sys.path:
 import verify_workflow as vw
 import cleanup as cleanup_mod
 import archive as archive_mod
+from test_projection_legacy_snapshots import isolated_projection_root
 
 
 # ── FEAT-038 (AUDIT-154 A-7) governance-document resolution helpers ─────────
@@ -66,13 +67,34 @@ def governance_doc(label, fixture=False):
     """Return the text of a `/governance` document by repo-relative label."""
     root = vw.ROOT
     if fixture:
-        root = root / "project" / "e2e-test-project"
+        # Rehearse the real projection registry from tracked canonical assets.
+        # The ignored personal e2e installation is never a unit-test input.
+        return governance_docs((label,), fixture=True)[label]
     return (root / label).read_text(encoding="utf-8")
 
 
 def governance_docs(rel_paths, fixture=False):
     """Map repo-relative document labels to their text."""
+    if fixture:
+        with isolated_projection_root(vw.ROOT) as root:
+            return {rel: (root / "project/e2e-test-project" / rel).read_text(
+                encoding="utf-8") for rel in rel_paths}
     return {rel: governance_doc(rel, fixture=fixture) for rel in rel_paths}
+
+
+def _clean_sd_face_patches():
+    """Read real canonical files when a wiring test isolates sibling gates.
+
+    Keep the SD scanner real. Installed hooks and ignored mirror installations
+    belong to deployment acceptance, not to release-aggregator unit fixtures.
+    """
+    return [
+        patch("checks.sd_integrity.projection_face_paths", return_value={
+            "paths": [_INFRA_DIR / "verify_workflow.py"]}),
+        patch("checks.sd_integrity.hooks_face_paths", return_value=[
+            _INFRA_DIR / "hooks" / name for name in
+            ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit")]),
+    ]
 
 
 # ── FIX-404: sandbox-safe fixture temp dir ─────────────────────────────────
@@ -243,8 +265,8 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
     @staticmethod
     def _drifted_host(base, *, populated):
         """A host root whose .governance sources are absent (divergence
-        shape) or populated from the real governance files (agreement
-        shape).  Absent sources reproduce what the identity sub-phase sees
+        shape) or populated with synthetic files (presence agreement
+        shape). Absent sources reproduce what the identity sub-phase sees
         when HOST_PROJECT_ROOT resolves off the governed root."""
         host = base / ("host-populated" if populated else "host-drifted")
         host.mkdir()
@@ -253,7 +275,9 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
                          *FIX300DualCaliberAgreementTests.AUTHORITY_ANCHOR_SOURCE_NAMES):
                 target = host / name
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(_INFRA_DIR.parents[2] / name, target)
+                target.write_text(
+                    "# SYNTHETIC identity-presence fixture; no historical authority claim\n",
+                    encoding="utf-8")
         return host
 
     @staticmethod
@@ -262,15 +286,18 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
         with redirect_stdout(output):
             return vw._run_identity_attestation_fixture_only()
 
-    def _run_standalone_cli(self, host):
+    def _run_standalone_cli(self, host, *, scan_mode="product_release"):
         args = SimpleNamespace(
             product_root=None, claim_project_root=str(host),
-            scan_mode="product_release", fixture_identity=True,
+            scan_mode=scan_mode, fixture_identity=True,
         )
         output = io.StringIO()
         with patch.object(vw, "HOST_PROJECT_ROOT", host), \
                 redirect_stdout(output):
-            vw.cmd_check_loop_runtime_claims(args)
+            try:
+                vw.cmd_check_loop_runtime_claims(args)
+            except SystemExit as exc:
+                self.fail(f"standalone exit={exc.code}: {output.getvalue()}")
         return json.loads(output.getvalue())
 
     def test_identity_host_source_drift_reproduces_divergence_shape(self):
@@ -335,18 +362,44 @@ class FIX300DualCaliberAgreementTests(unittest.TestCase):
 
     def test_fixture_identity_mode_agrees_with_engine_on_present_sources(self):
         """Differential agreement (green shape): with every host source
-        populated from the real governance files, both calibers report
-        identity PASS and the standalone aggregate verdict is PASS."""
+        populated with synthetic regular files, both calibers report identity
+        PASS. installed_host does not certify historical source-record hashes;
+        that separate product_release face is covered by the synthetic test
+        below and the existing missing/forged-source rejection tests."""
         with _governance_temp_dir() as td:
             host = self._drifted_host(Path(td), populated=True)
             with patch.object(vw, "HOST_PROJECT_ROOT", host):
                 engine = self._engine_identity()
                 self.assertEqual("PASS", engine["verdict"])
-                payload = self._run_standalone_cli(host)
+                payload = self._run_standalone_cli(host, scan_mode="installed_host")
         self.assertEqual("PASS", payload["verdict"])
         self.assertEqual("semantic+identity_fixture", payload["verdict_scope"])
         self.assertEqual("PASS", payload["identity_verdict"])
         self.assertEqual([], payload["identity_issues"])
+
+    def test_synthetic_product_release_sources_agree_with_engine(self):
+        """Real scanner + attestor on a self-contained, explicitly test policy."""
+        from test_loop_runtime_claims import LoopRuntimeClaimTests
+        fixture = LoopRuntimeClaimTests()
+        self.addCleanup(fixture.doCleanups)
+        stack, product, plugin, host, _policy, _authority = fixture._roots()
+        self.addCleanup(stack.cleanup)
+        packaged = product / "skills/software-project-governance"
+        packaged.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(plugin, packaged)
+        subprocess.run(["git", "init", "-q"], cwd=product, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=product, check=True,
+                       capture_output=True)
+        with patch.object(vw, "PLUGIN_ROOT", product), \
+                patch.object(vw, "ROOT", product), \
+                patch.object(vw, "HOST_PROJECT_ROOT", host):
+            engine = self._engine_identity()
+            self.assertEqual(engine["verdict"], "PASS", engine)
+            payload = self._run_standalone_cli(host)
+        self.assertEqual(payload["identity_verdict"], engine["verdict"])
+        self.assertEqual(payload["identity_issues"], engine["issues"])
+        self.assertEqual(payload["verdict"], "PASS")
 
 
 class FIX403IdentityFixtureCleanupContractTests(unittest.TestCase):
@@ -4047,7 +4100,8 @@ class GovernancePackStatusTests(unittest.TestCase):
         ]), encoding="utf-8")
 
     def test_governance_pack_status_accepts_current_files(self):
-        self.assertEqual(vw.check_governance_pack_status(vw.ROOT), [])
+        with isolated_projection_root(vw.ROOT) as root:
+            self.assertEqual(vw.check_governance_pack_status(root), [])
 
     def test_governance_pack_status_rejects_missing_status_pack_field(self):
         with tempfile.TemporaryDirectory() as td:
@@ -6598,6 +6652,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                 "pending_archive_tasks": 0,
             }),
             patch.object(vw, "check_release_docs_coverage", return_value=[]),
+            *_clean_sd_face_patches(),
         ]
 
     def _apply_release_patches(self, patches):
@@ -8084,6 +8139,7 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
                 "total_expected": 0, "pending_archive_tasks": 0,
             }),
             patch.object(vw, "check_release_docs_coverage", return_value=[]),
+            *_clean_sd_face_patches(),
         ]
 
     @staticmethod
@@ -8580,6 +8636,7 @@ class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
             patch.object(vw, "scan_loop_runtime_claims", return_value=None),
             patch.object(vw, "_loop_runtime_claim_gate_detail",
                          return_value=claim_gate),
+            *_clean_sd_face_patches(),
         ]
 
     @staticmethod
@@ -8633,6 +8690,24 @@ class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
         self.assertIn("Result: FAILED - 2 issue(s)", text)
         self.assertNotIn("Result: PASSED", text)
         self.assertIn("[FAIL] loop runtime claim gate", text)
+
+    def test_unreadable_sd_face_still_blocks_the_clean_cli_fixture(self):
+        """Sibling fixtures must not mask a real SD scanner rejection."""
+        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+            for item in self._patches(self._clean_claim_gate()):
+                stack.enter_context(item)
+            missing = Path(td) / "absent-projection.txt"
+            stack.enter_context(patch(
+                "checks.sd_integrity.projection_face_paths",
+                return_value={"paths": [missing]}))
+            result = vw.check_release_readiness()
+            text, exit_code = self._run_cli(self._args())
+        self.assertEqual(exit_code, 1)
+        self.assertIn("[FAIL] sd integrity", text)
+        self.assertIn("Result: FAILED - 1 issue(s)", text)
+        self.assertIn(str(missing), result["details"]["sd_integrity"]["unreadable"])
+        self.assertTrue(any("absent-projection.txt" in issue
+                            for issue in result["issues"]))
 
 
 class ProjectionSyncTests(unittest.TestCase):
@@ -10017,10 +10092,10 @@ class GovernanceStatusContractTests(unittest.TestCase):
         assertions follow the owning document (the router is asserted to carry
         the routing pointer instead)."""
         status_text = (vw.ROOT / "commands" / "governance-status.md").read_text(encoding="utf-8")
-        fixture_status = (
-            vw.ROOT / "project" / "e2e-test-project" / "commands" / "governance-status.md"
-        ).read_text(encoding="utf-8")
         scenario_f = "commands/governance/scenario-f.md"
+        projected = governance_docs(
+            ("commands/governance-status.md", scenario_f), fixture=True)
+        fixture_status = projected["commands/governance-status.md"]
 
         required = [
             "Delivery Trust Snapshot",
@@ -10064,7 +10139,7 @@ class GovernanceStatusContractTests(unittest.TestCase):
         for label, text in {
             "commands/governance-status.md": status_text,
             f"commands/governance/scenario-f.md (source)": governance_doc(scenario_f),
-            f"commands/governance/scenario-f.md (fixture)": governance_doc(scenario_f, fixture=True),
+            f"commands/governance/scenario-f.md (fixture)": projected[scenario_f],
             "project/e2e-test-project/commands/governance-status.md": fixture_status,
         }.items():
             with self.subTest(label=label):
@@ -16912,10 +16987,12 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
         """FEAT-038: the fixture mirror must carry the router layer AND the
         on-demand entry-resolution document — the bootstrap markers moved with
         the FIX-238 protocol."""
-        fixture_commands = vw.ROOT / "project/e2e-test-project/commands"
-        governance = governance_doc("commands/governance/bootstrap.md", fixture=True)
-        router = governance_doc(GOVERNANCE_ROUTER_DOC, fixture=True)
-        init = (fixture_commands / "governance-init.md").read_text(encoding="utf-8")
+        projected = governance_docs(("commands/governance/bootstrap.md",
+                                    GOVERNANCE_ROUTER_DOC,
+                                    "commands/governance-init.md"), fixture=True)
+        governance = projected["commands/governance/bootstrap.md"]
+        router = projected[GOVERNANCE_ROUTER_DOC]
+        init = projected["commands/governance-init.md"]
         self.assertIn("bootstrap.sh", governance)
         self.assertIn("bootstrap.cmd", governance)
         self.assertIn("@bootstrap-version", governance)
@@ -21178,10 +21255,13 @@ class SdIntegrityGateTests(unittest.TestCase):
 
     def test_projection_face_resolves_from_the_live_plan(self):
         from checks import sd_integrity as sdi
-        face = sdi.projection_face_paths(vw.PLUGIN_ROOT)
-        self.assertTrue(face.get("paths"), "live plan must yield targets")
-        for path in face["paths"]:
-            self.assertTrue(Path(path).is_absolute(), path)
+        with isolated_projection_root(vw.PLUGIN_ROOT) as root:
+            face = sdi.projection_face_paths(root)
+            self.assertNotIn("error", face, face)
+            self.assertTrue(face.get("paths"), "live plan must yield targets")
+            for path in face["paths"]:
+                self.assertTrue(Path(path).is_absolute(), path)
+                self.assertTrue(Path(path).is_file(), path)
 
     def test_release_readiness_carries_sd_integrity_face(self):
         """The release gate sub-check: an unreadable projection/hook face
@@ -23872,10 +23952,11 @@ class FEAT038GovernanceOnDemandSplitTests(unittest.TestCase):
 
     # ── fixture mirror ─────────────────────────────────────────────────
     def test_fixture_mirrors_router_and_scenario_documents(self):
+        projected = governance_docs(GOVERNANCE_ALL_DOCS, fixture=True)
         for rel in GOVERNANCE_ALL_DOCS:
             with self.subTest(document=rel):
                 self.assertEqual(
-                    governance_doc(rel), governance_doc(rel, fixture=True),
+                    governance_doc(rel), projected[rel],
                     f"fixture drift: {rel}")
 
 

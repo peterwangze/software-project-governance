@@ -1598,6 +1598,26 @@ class M0FixtureManifestTests(unittest.TestCase):
             self.assertEqual(record["access"], "read-only", task_id)
             self.assertTrue(record["consumes"], task_id)
 
+    def test_skill_pin_covers_the_complete_behavior_contract_section(self):
+        """Moving or trimming the safety section must break the source pin."""
+        source = next(item for item in self.manifest["pin_revision"]["sources"]
+                      if item["path"].endswith("/SKILL.md"))
+        lines = (_REPO_ROOT / source["path"]).read_text(
+            encoding="utf-8").splitlines()
+        start, end = source["line_span"]
+        section = lines[start - 1:end]
+        self.assertTrue(section[0].startswith("### 关键行为契约"))
+        self.assertEqual(
+            [int(match.group(1)) for line in section
+             if (match := re.match(r"^(\d+)\. \*\*", line))],
+            list(range(1, 12)))
+        self.assertIn("细则不可读即停止", "\n".join(section))
+        following = next(line for line in lines[end:] if line.strip())
+        self.assertTrue(following.startswith("### "), following)
+        last = self.manifest["pin_revision"]["rebaseline"]["last"]
+        self.assertEqual(source["source_revision"], last["source_revision"])
+        self.assertTrue(last["prior"], "rebaseline must preserve old source pins")
+
 
 if __name__ == "__main__":
     unittest.main()

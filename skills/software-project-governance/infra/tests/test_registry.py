@@ -1044,8 +1044,8 @@ class RegistrationIntegrityTests(unittest.TestCase):
 class StartupImportTests(unittest.TestCase):
     """Acceptance ② — registry load and per-command load add no startup mass."""
 
-    def test_engine_baseline_is_the_frozen_196_module_caliber(self):
-        """F-4: the recorded r6 count is reproduced by an *executable* caliber.
+    def test_engine_baseline_is_an_executable_portable_budget(self):
+        """F-4: enforce the frozen R6 ceiling with an executable caliber.
 
         ``core/architecture-baseline.json`` labels its r6 block with the
         shorthand ``python -I -B -c 'import verify_workflow' (isolated)``,
@@ -1054,18 +1054,20 @@ class StartupImportTests(unittest.TestCase):
         The executable caliber is the one both producers require
         (``perf_protocol.probe_sys_modules(infra_dir)`` /
         ``archguard_ratchet.measure_cold_import(infra_dir)``): the infra dir on
-        ``sys.path`` first. That form runs here and must land exactly on the
-        recorded count. The label string itself is baseline-owned — correcting
+        ``sys.path`` first. OS/interpreter standard-library imports vary, so
+        the recorded count is a ceiling, not an exact portable population.
+        The label string itself is baseline-owned — correcting
         it is registered on the archguard/baseline side, not edited here.
         """
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
         budget = baseline["r6_startup_budget"]
         self.assertEqual(budget["import_count"], FROZEN_ENGINE_IMPORT_COUNT)
         self.assertIn("import verify_workflow", budget["probe"])
-        self.assertEqual(_engine_startup_face()["count"],
-                         budget["import_count"],
-                         "the executable caliber (infra dir injected) does not "
-                         "reproduce the recorded r6 count")
+        face = _engine_startup_face()
+        self.assertEqual(face["count"], len(set(face["modules"])))
+        self.assertIn("verify_workflow", face["modules"])
+        self.assertLessEqual(face["count"], budget["import_count"],
+                             "cold startup exceeded the frozen R6 budget")
 
     def test_importing_the_registry_pulls_no_engine_and_no_domain(self):
         probe = _probe(

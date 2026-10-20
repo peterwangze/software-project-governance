@@ -117,6 +117,16 @@ __all__ = [
     "run_cli",
 ]
 
+def _protocol_line(report: dict) -> str:
+    """One line naming the delivery face the report validated (FEAT-102)."""
+    protocol = report.get("protocol") or "unknown"
+    if protocol == "native":
+        return ("native declarations — the preset is derived at boot; the "
+                "composition template is validated for legacy hosts only")
+    if protocol == "legacy":
+        return "legacy user-root directory — no agent-presets registry package installed"
+    return "unknown — delivery face could not be determined"
+
 # ── verdict + diagnostic vocabulary ─────────────────────────────────────────
 VERDICT_PASS = "PASS"
 VERDICT_FAIL = "FAIL"
@@ -2166,6 +2176,7 @@ def emit_check_section(stream=None) -> int:
     print(f"│    installed CLI {cli.get('version') or '?'} "
           f"(informational — a row's schema comes from the oracle packages "
           f"above, not from the CLI version)", file=stream)
+    print(f"│    delivery protocol: {_protocol_line(report)}", file=stream)
     for other in install.get("other_planes") or []:
         print(f"│    other plane {other['plane']}: {other['node_modules']} "
               f"{other['oracle_versions']}", file=stream)
@@ -2228,6 +2239,7 @@ def run_cli(fail_on_issues: bool = False, stream=None) -> int:
           f"({cli.get('path') or '?'}) — informational only: a row's schema "
           f"comes from the oracle packages above, not from the CLI version",
           file=stream)
+    print(f"    delivery protocol: {_protocol_line(report)}", file=stream)
     print(f"  Compositions: {len(report['compositions'])}; "
           f"enabled rows: {report['rows_enabled']}; "
           f"schema-checked rows: {report['rows_checked']}; "

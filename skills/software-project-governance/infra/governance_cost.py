@@ -52,6 +52,7 @@ import argparse
 import datetime
 import io
 import json
+import math
 import os
 import sys
 import time
@@ -232,6 +233,8 @@ def _extract_usage(line, from_pos=0):
         parts = (usage.get("inputTokens") or 0,
                  usage.get("outputTokens") or 0,
                  usage.get("cacheReadTokens") or 0)
+        if any(type(part) is not int or part < 0 for part in parts):
+            return None, -1  # malformed instrumentation: full parse + coverage
         if isinstance(total, int) and total != sum(parts):
             return _extract_usage(line, j + 1)  # lookalike — keep scanning
     return usage, j + 1
@@ -239,6 +242,12 @@ def _extract_usage(line, from_pos=0):
 
 def _fast_assistant_event(line):
     """Fast path for assistant/message: {time, turn, usage} or None."""
+    # FEAT-098: these optional fields feed the call ledger. The narrow fast
+    # projection would discard them; full parsing preserves their provenance.
+    if any(marker in line for marker in (
+            b'"costAccounting"', b'"requestId"', b'"model"',
+            b'"cacheWriteTokens"')):
+        return None
     time_ms = _int_after(line, _TIME_MARKER)
     if time_ms is None:
         return None
@@ -375,6 +384,325 @@ def _new_turn():
     }
 
 
+# FEAT-098: additive, provider-neutral accounting. Legacy turn counters stay
+# byte-compatible; missing instrumentation is null here, never fabricated zero.
+CALL_ACCOUNTING_SCHEMA = "governance-call-accounting/1"
+_TOKEN_FIELDS = ("input_uncached", "cache_read", "cache_write", "output",
+                 "request_total")
+_CALL_USAGE_FIELDS = (
+    ("input_uncached", "inputTokens"), ("cache_read", "cacheReadTokens"),
+    ("cache_write", "cacheWriteTokens"), ("output", "outputTokens"),
+    ("request_total", "totalTokens"))
+_INPUT_BREAKDOWN_FIELDS = ("role_prefix_tokens", "task_increment_tokens")
+_WORK_KINDS = ("successful_output", "repeated_exploration", "rework", "waiting",
+               "unknown")
+
+
+def _count(value):
+    return value if type(value) is int and value >= 0 else None
+
+
+def _label(value):
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _call_tokens(usage, metadata):
+    """Normalize disjoint usage buckets; inclusive input subtracts caches."""
+    tokens = {key: _count(usage.get(raw)) for key, raw in _CALL_USAGE_FIELDS}
+    issues = []
+    semantics = metadata.get("input_semantics")
+    if semantics is None and "cacheWriteTokens" not in usage:
+        # Existing DSH dialect: input + cache-read + output are separate
+        # (EVD-1071). Missing write instrumentation remains unknown.
+        semantics = "dsh-exclusive"
+    if semantics == "inclusive":
+        parts = [tokens[k] for k in ("input_uncached", "cache_read", "cache_write")]
+        tokens["input_uncached"] = (
+            parts[0] - parts[1] - parts[2] if all(v is not None for v in parts)
+            and parts[0] >= parts[1] + parts[2] else None)
+        if tokens["input_uncached"] is None:
+            issues.append("inclusive_input_cannot_be_partitioned")
+    elif semantics not in ("exclusive", "dsh-exclusive"):
+        tokens["input_uncached"] = None
+        issues.append("input_semantics_unknown")
+    components = [tokens[k] for k in _TOKEN_FIELDS[:-1]]
+    if (tokens["request_total"] is not None
+            and tokens["request_total"] < sum(v for v in components if v is not None)):
+        return dict.fromkeys(_TOKEN_FIELDS), semantics, ["usage_total_mismatch"]
+    if all(v is not None for v in components):
+        total = sum(components)
+        if tokens["request_total"] is not None and tokens["request_total"] != total:
+            issues.append("usage_total_mismatch")
+            # Contradictory usage is not a billable basis.
+            tokens = dict.fromkeys(_TOKEN_FIELDS)
+        else:
+            tokens["request_total"] = total
+    return tokens, semantics, issues
+
+
+def _price_float(numerator, denominator):
+    """Round an exact nonnegative amount only at the output boundary."""
+    try:
+        amount = numerator / denominator
+    except OverflowError:
+        return None
+    # A positive price lost to underflow must not become a measured free call.
+    return amount if math.isfinite(amount) and (amount or numerator == 0) else None
+
+
+def _sum_price_ratios(ratios):
+    """Sum exact ratios before one float conversion, independent of row order."""
+    numerator, denominator = 0, 1
+    for part, divisor in ratios:
+        common = math.lcm(denominator, divisor)
+        numerator = numerator * (common // denominator) + part * (common // divisor)
+        denominator = common
+    return _price_float(numerator, denominator)
+
+
+def _priced_call(tokens, metadata):
+    """Price only explicit, sourced rates against complete disjoint buckets."""
+    rates = metadata.get("rates_per_million")
+    if not isinstance(rates, dict):
+        return None, "rates_missing"
+    currency, source = _label(rates.get("currency")), _label(rates.get("source_ref"))
+    if not currency or not source:
+        return None, "rate_provenance_missing"
+    amounts, ratios = {}, []
+    for key in _TOKEN_FIELDS[:-1]:
+        rate = rates.get(key)
+        if (type(rate) not in (int, float) or rate < 0
+                or (type(rate) is float and not math.isfinite(rate))
+                or tokens[key] is None):
+            return None, "rates_or_usage_incomplete"
+        # Legal equal int/float rates have the same exact ratio. Keep integer
+        # products exact: a finite final price must survive intermediate range.
+        numerator, denominator = rate.as_integer_ratio()
+        ratio = tokens[key] * numerator, denominator * 1_000_000
+        amounts[key] = _price_float(*ratio)
+        if amounts[key] is None:
+            return None, "price_out_of_range"
+        ratios.append(ratio)
+    total = _sum_price_ratios(ratios)
+    if total is None:
+        return None, "price_out_of_range"
+    return {"amount": total, "currency": currency,
+            "components": amounts, "rate_source_ref": source}, None
+
+
+def _input_breakdown(metadata, tokens):
+    """Validate the lower bound of any observed nonnegative prompt parts."""
+    parts = [_count(metadata.get(key)) for key in _INPUT_BREAKDOWN_FIELDS]
+    prompt = (tokens["request_total"] - tokens["output"]
+              if tokens["request_total"] is not None and tokens["output"] is not None
+              else None)
+    if prompt is not None and sum(v for v in parts if v is not None) > prompt:
+        return None, None, "input_breakdown_exceeds_prompt"
+    return parts[0], parts[1], None
+
+
+def _call_record(data, timestamp, turn, ordinal, measured_ms):
+    message = data.get("message") if isinstance(data.get("message"), dict) else {}
+    # All identity consumers use the same normalized top-level/nested fallback.
+    call_id = _label(data.get("requestId")) or _label(message.get("requestId"))
+    raw_usage = data.get("usage") or message.get("usage") or {}
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+    raw_metadata = data.get("costAccounting")
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    tokens, semantics, issues = _call_tokens(usage, metadata)
+    source_ref = _label(metadata.get("source_ref"))
+    kind = metadata.get("work_kind", "unknown")
+    if kind not in _WORK_KINDS or not source_ref:
+        kind = "unknown"
+        issues.append("work_attribution_unknown")
+    rework = metadata.get("rework")
+    if not isinstance(rework, dict):
+        rework = {}
+    rework = {key: _label(rework.get(key)) for key in (
+        "upstream_call_id", "cause", "evidence_ref")}
+    if kind == "rework" and not all(rework.values()):
+        issues.append("rework_attribution_incomplete")
+        kind = "unknown"
+    if kind == "rework" and rework["upstream_call_id"] == call_id:
+        issues.append("rework_self_reference")
+        kind = "unknown"
+    prefix, increment, breakdown_issue = _input_breakdown(metadata, tokens)
+    if breakdown_issue:
+        issues.append(breakdown_issue)
+    duration = _count(metadata.get("duration_ms"))
+    duration_source = "costAccounting.duration_ms" if duration is not None else None
+    if duration is None and measured_ms is not None and measured_ms >= 0:
+        duration, duration_source = measured_ms, "step_start_to_first_assistant"
+    cost, price_issue = _priced_call(tokens, metadata)
+    if price_issue:
+        issues.append(price_issue)
+    return {
+        "record_id": f"assistant-event-{ordinal}",
+        "call_id": call_id,
+        "turn": turn, "time_ms": timestamp,
+        "model": _label(data.get("model")) or _label(message.get("model")),
+        "role": _label(metadata.get("role")), "task_id": _label(metadata.get("task_id")),
+        "work_kind": kind, "source_ref": source_ref, "rework": rework,
+        "tokens": tokens, "input_semantics": semantics,
+        "role_prefix_tokens": prefix, "task_increment_tokens": increment,
+        "duration_ms": duration, "duration_source": duration_source,
+        "cost": cost, "issues": issues,
+        "raw_usage": usage, "raw_attribution": metadata,
+    }
+
+
+def _observation_key(value):
+    """Keep booleans distinct; retain numeric equality for legal int/float rates."""
+    if isinstance(value, dict):
+        return frozenset((key, _observation_key(item)) for key, item in value.items())
+    if isinstance(value, list):
+        return tuple(_observation_key(item) for item in value)
+    return (bool, value) if type(value) is bool else value
+
+
+def _call_observation_key(call):
+    """Raw equality cannot erase different qualification of integer-only fields.
+
+    Reuse the actual count validator and field definitions, rather than a
+    second set of type rules. Rates keep their permitted numeric equality;
+    booleans are distinct everywhere. Only explicit duration qualification
+    enters this signature: a genuinely missing derived window still merges
+    with one unique observed window in the duration projection below.
+    """
+    return _observation_key({
+        "raw": {key: call[key] for key in ("raw_usage", "raw_attribution", "model")},
+        "usage_counts": {raw: _count(call["raw_usage"].get(raw))
+                         for _, raw in _CALL_USAGE_FIELDS},
+        "metadata_counts": {key: _count(call["raw_attribution"].get(key))
+                            for key in (*_INPUT_BREAKDOWN_FIELDS, "duration_ms")},
+    })
+
+
+def _trusted_call_observations(calls):
+    """Select one candidate per ID; conflicts invalidate all measured facts.
+
+    Original rows remain intact in sessions[].calls. The summary projection
+    retains the observed identity but cannot choose a duration, attribution,
+    tokens or price from conflicting observations. Count duplicate signatures
+    independently of their encounter order, including inside a conflict set.
+    """
+    selected, by_id, signatures, durations, duplicates, conflicts = [], {}, {}, {}, 0, set()
+    for call in calls:
+        call_id = call["call_id"]
+        signature = _call_observation_key(call)
+        if call_id and call["duration_ms"] is not None:
+            durations.setdefault(call_id, set()).add((
+                call["duration_ms"], call["duration_source"]))
+            if len(durations[call_id]) > 1:
+                conflicts.add(call_id)
+        if call_id and call_id in by_id:
+            if signature in signatures[call_id]:
+                duplicates += 1
+            else:
+                conflicts.add(call_id)
+                signatures[call_id].add(signature)
+            continue
+        selected.append(call)
+        if call_id:
+            by_id[call_id] = call
+            signatures[call_id] = {signature}
+    trusted = []
+    for call in selected:
+        if call["call_id"] in conflicts:
+            # Identity is observed; all accounting/attribution is untrusted.
+            call = dict(call, **dict.fromkeys((
+                "model", "role", "task_id", "source_ref", "role_prefix_tokens",
+                "task_increment_tokens", "duration_ms", "duration_source", "cost")),
+                work_kind="unknown", tokens=dict.fromkeys(_TOKEN_FIELDS),
+                rework=dict.fromkeys(call["rework"]))
+        elif call["call_id"] in durations and call["duration_ms"] is None:
+            # A missing replay measurement does not contradict the single
+            # observed window. Retain that measurement and its actual source,
+            # regardless of which replay row happened to be encountered first.
+            duration, source = next(iter(durations[call["call_id"]]))
+            call = dict(call, duration_ms=duration, duration_source=source)
+        trusted.append(call)
+    return trusted, duplicates, conflicts
+
+
+def summarize_calls(calls):
+    """Auditable partial sums; duplicate request IDs never double count."""
+    selected, duplicates, conflicts = _trusted_call_observations(calls)
+    by_id = {c["call_id"] for c in selected if c["call_id"]}
+    count = len(selected)
+    totals = _call_totals(selected)
+    coverage = {key: {"known_calls": sum(c.get(key) is not None for c in selected),
+                      "total_calls": count} for key in (
+        "call_id", "model", "role", "task_id", "source_ref", "role_prefix_tokens",
+        "task_increment_tokens", "duration_ms")}
+    buckets = {}
+    for kind in _WORK_KINDS:
+        rows = [c for c in selected if c["work_kind"] == kind]
+        buckets[kind] = dict(_call_totals(rows), calls=len(rows),
+            known_duration_ms=sum(c["duration_ms"] for c in rows if c["duration_ms"] is not None),
+            duration_unknown_calls=sum(c["duration_ms"] is None for c in rows))
+    return {
+        "schema": CALL_ACCOUNTING_SCHEMA, "records": len(calls), "calls": count,
+        "duplicate_records": duplicates, "conflicting_call_ids": sorted(conflicts),
+        "identity_coverage_note": "Missing call IDs are event-level candidates; deduplication is unavailable.",
+        **totals, "coverage": coverage, "by_work_kind": buckets,
+        "rework_links": [{"record_id": c["record_id"], **c["rework"],
+            "link_status": "in_trace" if c["rework"]["upstream_call_id"] in by_id
+            else "not_in_trace"} for c in selected if c["work_kind"] == "rework"],
+        "calibration": "Prefix/increment overlap the input buckets; never add them to usage. "
+                       "Call durations are summed work windows, not session wall time; "
+                       "residual time is not classified as waiting or rework.",
+    }
+
+
+def _call_totals(selected):
+    count = len(selected)
+    tokens = {}
+    for key in _TOKEN_FIELDS:
+        known = [c["tokens"][key] for c in selected if c["tokens"][key] is not None]
+        tokens[key] = {"known_sum": sum(known), "known_calls": len(known),
+                       "unknown_calls": count - len(known),
+                       "complete_total": sum(known) if len(known) == count else None}
+    breakdown = {}
+    for key in _INPUT_BREAKDOWN_FIELDS:
+        known = [c[key] for c in selected if c[key] is not None]
+        breakdown[key] = {"known_sum": sum(known), "known_calls": len(known),
+                          "unknown_calls": count - len(known),
+                          "complete_total": sum(known) if len(known) == count else None}
+    costs = {}
+    priced = 0
+    for call in selected:
+        cost = call["cost"]
+        if cost is not None:
+            costs.setdefault(cost["currency"], []).append(cost["amount"].as_integer_ratio())
+            priced += 1
+    # Individual calls can be priced while their currency subtotal exceeds the
+    # float output range. Retain that currency with null, not Infinity or zero;
+    # unknown_calls still counts only the calls without a measured price.
+    costs = {currency: _sum_price_ratios(ratios) for currency, ratios in costs.items()}
+    return {
+        "tokens": tokens,
+        "input_breakdown": breakdown,
+        "cost": {"known_subtotals_by_currency": costs, "unknown_calls": count - priced,
+                 "complete_total": next(iter(costs.values()))
+                 if priced == count and len(costs) == 1 else None,
+                 "currency": next(iter(costs)) if len(costs) == 1 else None},
+    }
+
+
+def _summarize_session_calls(sessions):
+    # Namespace IDs only in the cross-session projection; source rows retain
+    # the provider IDs verbatim, and no unrelated sessions are deduplicated.
+    calls = [dict(call, call_id=f"{session['file']}::{call['call_id']}"
+                  if call["call_id"] else None,
+                  record_id=f"{session['file']}::{call['record_id']}",
+                  rework=dict(call["rework"], upstream_call_id=(
+                      f"{session['file']}::{call['rework']['upstream_call_id']}"
+                      if call["rework"]["upstream_call_id"] else None)))
+             for session in sessions for call in session["calls"]]
+    return summarize_calls(calls)
+
+
 def parse_session(events):
     """Walk one session's events; returns the raw per-turn record dict."""
     cwd = ""
@@ -384,6 +712,7 @@ def parse_session(events):
     pending_calls = {}
     open_steps = []
     orphans = 0
+    calls = []
 
     for ev in events:
         if not isinstance(ev, dict):
@@ -440,12 +769,21 @@ def parse_session(events):
                     if owner is not None:
                         owner["llm_ms"] += fa - step["start"]
         elif etype == "assistant/message":
+            measured_ms = None
+            owner_turn = turn_field if turn_field is not None else current_turn
+            if (open_steps and open_steps[-1]["first_assistant"] is None
+                    and open_steps[-1]["turn"] == owner_turn
+                    and ts is not None and open_steps[-1]["start"] is not None):
+                measured_ms = ts - open_steps[-1]["start"]
+            calls.append(_call_record(data, ts, owner_turn, len(calls) + 1, measured_ms))
             if rec is not None:
                 usage = data.get("usage") or (data.get("message") or {}).get(
                     "usage") or {}
-                rec["in_tok"] += usage.get("inputTokens") or 0
-                rec["cache_tok"] += usage.get("cacheReadTokens") or 0
-                rec["out_tok"] += usage.get("outputTokens") or 0
+                if not isinstance(usage, dict):
+                    usage = {}
+                rec["in_tok"] += _count(usage.get("inputTokens")) or 0
+                rec["cache_tok"] += _count(usage.get("cacheReadTokens")) or 0
+                rec["out_tok"] += _count(usage.get("outputTokens")) or 0
             if open_steps and open_steps[-1]["first_assistant"] is None:
                 owner_turn = turn_field if turn_field is not None else current_turn
                 if open_steps[-1]["turn"] == owner_turn:
@@ -487,6 +825,7 @@ def parse_session(events):
         "title": title,
         "turns": turns,
         "orphans": orphans,
+        "calls": calls,
     }
 
 
@@ -699,6 +1038,8 @@ def scan_sessions(sessions_root, workspace=None):
             "title": parsed["title"],
             "totals": _summarize(turn_records),
             "turns": turn_records,
+            "calls": parsed["calls"],
+            "call_accounting": summarize_calls(parsed["calls"]),
             "_raw_tool_calls": session_raw_calls,
         })
 
@@ -727,6 +1068,8 @@ def scan_sessions(sessions_root, workspace=None):
         "calibration": CALIBRATION,
         "totals": totals,
         "sessions": sessions,
+        # Request IDs are session-scoped: do not deduplicate across sessions.
+        "call_accounting": _summarize_session_calls(sessions),
     }
     return report
 
@@ -734,6 +1077,13 @@ def scan_sessions(sessions_root, workspace=None):
 #: Measurement-caliber disclosures (AUDIT-154 report §4 — machine-readable
 #: so every report carries its own semantics).
 CALIBRATION = {
+    "call_accounting": (
+        "FEAT-098 additive call ledger: explicit costAccounting metadata only; "
+        "DSH legacy input excludes cache-read. With cache writes, declare "
+        "input_semantics=exclusive|inclusive; inclusive input subtracts both caches. "
+        "Missing usage/rates/role/attribution are null with coverage, never zero. "
+        "Legacy totals.tokens preserve their historical raw-sum caliber. "
+        "No model price, work kind, prefix length or waiting cause is inferred."),
     "tokens": (
         "inputTokens/cacheReadTokens/outputTokens are cumulative request "
         "volumes (audit §4.1), not context residency."),
@@ -944,7 +1294,15 @@ def _fmt_tok(n):
     if n is None:
         return "-"
     if n >= 1_000_000:
-        return f"{n / 1_000_000:.2f}M"
+        try:
+            return f"{n / 1_000_000:.2f}M"
+        except OverflowError:
+            # Accepted integer counts can exceed float range. Preserve the
+            # same two-decimal, half-even display without float conversion.
+            hundredths, remainder = divmod(n, 10_000)
+            if remainder > 5000 or (remainder == 5000 and hundredths % 2):
+                hundredths += 1
+            return f"{hundredths // 100}.{hundredths % 100:02d}M"
     if n >= 1000:
         return f"{n / 1000:.1f}K"
     return str(n)
@@ -1001,6 +1359,19 @@ def format_text(report):
            _fmt_ms(work["max"]), work["endpoint_first_work_tool"],
            work["endpoint_turn_end"]))
     tools = totals.get("tools") or {}
+    accounting = report.get("call_accounting")
+    if accounting is not None:
+        lines.append(
+            "call accounting (FEAT-098): %d records / %d call candidates; "
+            "cost=%s currency=%s unknown-cost-calls=%d; missing call IDs=%d"
+            % (accounting["records"], accounting["calls"],
+               accounting["cost"]["complete_total"]
+               if accounting["cost"]["complete_total"] is not None else "unknown",
+               accounting["cost"]["currency"] or "unknown",
+               accounting["cost"]["unknown_calls"],
+               accounting["calls"] - accounting["coverage"]["call_id"]["known_calls"]))
+        lines.append("  work-kind calls: " + ", ".join(
+            f"{kind}={bucket['calls']}" for kind, bucket in accounting["by_work_kind"].items()))
     if tools:
         lines.append("top tools by total duration:")
         ranked = sorted(tools.items(), key=lambda kv: -kv[1]["total_ms"])

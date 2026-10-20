@@ -1057,5 +1057,627 @@ class Feat040TtfaAcceptanceTests(unittest.TestCase):
         self.assertNotIn("ttfa_acceptance", json.loads(out))
 
 
+def feat098_baseline_events():
+    """Replayable SYNTHETIC calibration trace, never a production sample."""
+    events = [_ev("session", 1000, cwd="synthetic/feat098"),
+              _ev("turn/start", 1000, turn=1)]
+    specifications = (
+        ("c1", "Developer", "successful_output", "inclusive", 1000, 700, 100, 50),
+        ("c2", "Analyst", "repeated_exploration", "exclusive", 100, 900, 0, 20),
+        ("c3", "Developer", "rework", "exclusive", 80, 20, 0, 10),
+        ("c4", "Coordinator", "waiting", "exclusive", 0, 0, 0, 0),
+    )
+    for index, (call_id, role, kind, semantics, inp, read, write, out) in enumerate(
+            specifications):
+        metadata = {"role": role, "task_id": "FEAT-098", "work_kind": kind,
+                    "input_semantics": semantics, "duration_ms": 100 * (index + 1),
+                    "role_prefix_tokens": 0, "task_increment_tokens": 0,
+                    "source_ref": f"synthetic:feat098/{call_id}"}
+        if kind == "rework":
+            metadata["rework"] = {"upstream_call_id": "c1", "cause": "recovery defect",
+                                  "evidence_ref": "synthetic:feat098/recovery-failure"}
+        if index == 0:
+            metadata.update(role_prefix_tokens=500, task_increment_tokens=300)
+        events.append(_ev("assistant/message", 1100 + index * 500, turn=1,
+            requestId=call_id, model="synthetic-model", costAccounting=metadata,
+            usage={"inputTokens": inp, "cacheReadTokens": read, "cacheWriteTokens": write,
+                   "outputTokens": out, "totalTokens": inp + out + (
+                       read + write if semantics == "exclusive" else 0)}))
+    # Legacy missing instrumentation deliberately exercises unknown coverage.
+    events.append(_assistant_msg(3200, in_tok=7, cache_tok=0, out_tok=3, turn=1))
+    events.append(_ev("turn/end", 3500, turn=1))
+    return events
+
+
+class Feat098CallAccountingTests(unittest.TestCase):
+    def _parse(self, events=None):
+        return gc.parse_session(events if events is not None else feat098_baseline_events())
+
+    def _boundary_event(self, call_id="c1", duration=100):
+        return _ev("assistant/message", 1000, turn=1, requestId=call_id,
+            model="synthetic-model", usage={"inputTokens": 100,
+                "cacheReadTokens": 0, "cacheWriteTokens": 0,
+                "outputTokens": 0, "totalTokens": 100},
+            costAccounting={"input_semantics": "exclusive",
+                "work_kind": "successful_output", "role": "Developer",
+                "task_id": "FEAT-098", "source_ref": "synthetic:rework-r1",
+                "duration_ms": duration})
+
+    def test_partial_input_breakdown_rejects_each_known_lower_bound_over_prompt(self):
+        for key in ("role_prefix_tokens", "task_increment_tokens"):
+            for other in (None, 0, 1):
+                with self.subTest(key=key, other=other):
+                    event = self._boundary_event()
+                    meta = event["data"]["costAccounting"]
+                    meta[key] = 101
+                    if other is not None:
+                        meta["task_increment_tokens" if key == "role_prefix_tokens"
+                             else "role_prefix_tokens"] = other
+                    call = self._parse([event])["calls"][0]
+                    self.assertIn("input_breakdown_exceeds_prompt", call["issues"])
+                    summary = gc.summarize_calls([call])
+                    for part in ("role_prefix_tokens", "task_increment_tokens"):
+                        self.assertIsNone(call[part])
+                        self.assertEqual(summary["coverage"][part]["known_calls"], 0)
+                        self.assertIsNone(summary["input_breakdown"][part]["complete_total"])
+                    self.assertEqual(call["tokens"]["request_total"], 100)
+
+    def test_partial_input_breakdown_preserves_legal_values_and_explicit_zero(self):
+        for key in ("role_prefix_tokens", "task_increment_tokens"):
+            for value in (0, 99, 100):
+                with self.subTest(key=key, value=value):
+                    event = self._boundary_event()
+                    event["data"]["costAccounting"][key] = value
+                    call = self._parse([event])["calls"][0]
+                    other = ("task_increment_tokens" if key == "role_prefix_tokens"
+                             else "role_prefix_tokens")
+                    self.assertEqual(call[key], value)
+                    self.assertIsNone(call[other])
+                    self.assertNotIn("input_breakdown_exceeds_prompt", call["issues"])
+                    summary = gc.summarize_calls([call])
+                    self.assertEqual(summary["input_breakdown"][key]["complete_total"], value)
+                    self.assertIsNone(summary["input_breakdown"][other]["complete_total"])
+
+    def test_normalized_top_and_nested_call_ids_reject_rework_self_reference(self):
+        for top, nested in ((None, "self"), (" self ", None),
+                            (" ", " self "), (" self ", "other")):
+            with self.subTest(top=top, nested=nested):
+                event = self._boundary_event(top)
+                event["data"]["message"] = {"requestId": nested}
+                meta = event["data"]["costAccounting"]
+                meta.update(work_kind="rework", rework={"upstream_call_id": " self ",
+                    "cause": "explicit failure", "evidence_ref": "synthetic:failure"})
+                call = self._parse([event])["calls"][0]
+                self.assertEqual(call["call_id"], "self")
+                self.assertEqual(call["work_kind"], "unknown")
+                self.assertIn("rework_self_reference", call["issues"])
+                self.assertEqual(gc.summarize_calls([call])["rework_links"], [])
+
+    def test_normalized_identity_is_shared_by_deduplication_and_upstream_links(self):
+        original = self._boundary_event(" c1 ")
+        nested = self._boundary_event(None)
+        nested["data"]["message"] = {"requestId": " c1 "}
+        downstream = self._boundary_event(" c2 ")
+        downstream["data"]["costAccounting"].update(work_kind="rework",
+            rework={"upstream_call_id": " c1 ", "cause": "failure",
+                    "evidence_ref": "synthetic:failure"})
+        summary = gc.summarize_calls(self._parse([original, nested, downstream])["calls"])
+        self.assertEqual(summary["calls"], 2)
+        self.assertEqual(summary["duplicate_records"], 1)
+        self.assertEqual(summary["rework_links"][0]["upstream_call_id"], "c1")
+        self.assertEqual(summary["rework_links"][0]["link_status"], "in_trace")
+
+    def test_conflicting_duration_invalidates_all_summary_measurement_and_attribution(self):
+        calls = self._parse([self._boundary_event(duration=100),
+                             self._boundary_event(duration=900)])["calls"]
+        raw = json.loads(json.dumps(calls))
+        summary = gc.summarize_calls(calls)
+        self.assertEqual(summary, gc.summarize_calls(list(reversed(calls))))
+        self.assertEqual(calls, raw, "conflict projection must retain raw rows unchanged")
+        self.assertEqual(summary["conflicting_call_ids"], ["c1"])
+        self.assertEqual(summary["coverage"]["call_id"]["known_calls"], 1)
+        for key in ("model", "role", "task_id", "source_ref", "role_prefix_tokens",
+                    "task_increment_tokens", "duration_ms"):
+            self.assertEqual(summary["coverage"][key]["known_calls"], 0, key)
+        self.assertEqual(summary["by_work_kind"]["successful_output"]["calls"], 0)
+        unknown = summary["by_work_kind"]["unknown"]
+        self.assertEqual(unknown["calls"], 1)
+        self.assertEqual(unknown["known_duration_ms"], 0)
+        self.assertEqual(unknown["duration_unknown_calls"], 1)
+        self.assertEqual(summary["cost"]["unknown_calls"], 1)
+        self.assertIsNone(summary["tokens"]["request_total"]["complete_total"])
+
+    def test_conflicting_work_attribution_never_uses_first_row_or_rework_link(self):
+        first = self._boundary_event()
+        second = self._boundary_event()
+        second["data"]["costAccounting"].update(work_kind="rework",
+            role="Reviewer", source_ref="synthetic:other-source",
+            rework={"upstream_call_id": "prior", "cause": "failure",
+                    "evidence_ref": "synthetic:failure"})
+        calls = self._parse([first, second])["calls"]
+        summary = gc.summarize_calls(calls)
+        self.assertEqual(summary, gc.summarize_calls(calls[::-1]))
+        self.assertEqual(summary["rework_links"], [])
+        self.assertEqual(summary["by_work_kind"]["rework"]["calls"], 0)
+        self.assertEqual(summary["by_work_kind"]["unknown"]["calls"], 1)
+
+    def test_duplicate_counts_in_conflict_groups_are_order_independent(self):
+        a, b = self._boundary_event(), self._boundary_event(duration=900)
+        reports = [gc.summarize_calls(self._parse(events)["calls"])
+                   for events in ([a, a, b], [a, b, a], [b, a, a])]
+        self.assertEqual(reports[0], reports[1])
+        self.assertEqual(reports[0], reports[2])
+        self.assertEqual(reports[0]["duplicate_records"], 1)
+
+    def test_equivalent_numeric_rate_observations_preserve_old_deduplication(self):
+        a = self._boundary_event()
+        a["data"]["costAccounting"]["rates_per_million"] = {
+            "currency": "TEST", "source_ref": "synthetic:rates",
+            "input_uncached": 1, "cache_read": 0, "cache_write": 0, "output": 0}
+        b = json.loads(json.dumps(a))
+        b["data"]["costAccounting"]["rates_per_million"]["input_uncached"] = 1.0
+        summary = gc.summarize_calls(self._parse([a, b])["calls"])
+        self.assertEqual(summary["conflicting_call_ids"], [])
+        self.assertEqual(summary["duplicate_records"], 1)
+        self.assertEqual(summary["cost"]["complete_total"], .0001)
+
+    def test_conflicting_step_measurements_are_not_hidden_by_identical_raw_usage(self):
+        event = self._boundary_event()
+        del event["data"]["costAccounting"]["duration_ms"]
+        calls = [gc._call_record(event["data"], 1000, 1, 1, 100),
+                 gc._call_record(event["data"], 2000, 1, 2, 900)]
+        summary = gc.summarize_calls(calls)
+        self.assertEqual(summary, gc.summarize_calls(calls[::-1]))
+        self.assertEqual(summary["conflicting_call_ids"], ["c1"])
+        self.assertEqual(summary["coverage"]["duration_ms"]["known_calls"], 0)
+        self.assertEqual(summary["by_work_kind"]["unknown"]["duration_unknown_calls"], 1)
+
+    def test_one_observed_step_window_survives_missing_replay_measurement(self):
+        event = self._boundary_event()
+        del event["data"]["costAccounting"]["duration_ms"]
+        for duration in (0, 100):
+            with self.subTest(duration=duration):
+                calls = [gc._call_record(event["data"], 1000, 1, 1, duration),
+                         gc._call_record(event["data"], 2000, 1, 2, None)]
+                summary = gc.summarize_calls(calls)
+                self.assertEqual(summary, gc.summarize_calls(calls[::-1]))
+                self.assertEqual(summary["conflicting_call_ids"], [])
+                self.assertEqual(summary["duplicate_records"], 1)
+                self.assertEqual(summary["coverage"]["duration_ms"]["known_calls"], 1)
+                self.assertEqual(summary["by_work_kind"]["successful_output"]
+                                 ["known_duration_ms"], duration)
+
+    def test_conflicting_sourced_prices_never_enter_known_subtotals(self):
+        a = self._boundary_event()
+        a["data"]["costAccounting"]["rates_per_million"] = {
+            "currency": "TEST", "source_ref": "synthetic:rates",
+            "input_uncached": 1, "cache_read": 0, "cache_write": 0, "output": 0}
+        b = json.loads(json.dumps(a))
+        b["data"]["costAccounting"]["rates_per_million"]["input_uncached"] = 2
+        calls = self._parse([a, b])["calls"]
+        self.assertTrue(all(c["cost"] is not None for c in calls))
+        summary = gc.summarize_calls(calls)
+        self.assertEqual(summary, gc.summarize_calls(calls[::-1]))
+        self.assertEqual(summary["cost"]["known_subtotals_by_currency"], {})
+        self.assertEqual(summary["cost"]["unknown_calls"], 1)
+        self.assertIsNone(summary["cost"]["complete_total"])
+
+    def test_conflict_does_not_invalidate_other_call_or_explicit_zero_duration(self):
+        calls = self._parse([self._boundary_event(duration=100),
+            self._boundary_event(duration=900), self._boundary_event("c2", duration=0)])["calls"]
+        summary = gc.summarize_calls(calls)
+        self.assertEqual(summary["calls"], 2)
+        self.assertEqual(summary["tokens"]["request_total"]["known_sum"], 100)
+        self.assertEqual(summary["tokens"]["request_total"]["known_calls"], 1)
+        self.assertEqual(summary["coverage"]["duration_ms"]["known_calls"], 1)
+        self.assertEqual(summary["by_work_kind"]["successful_output"]["calls"], 1)
+        self.assertEqual(summary["by_work_kind"]["successful_output"]["known_duration_ms"], 0)
+        self.assertEqual(summary["by_work_kind"]["unknown"]["duration_unknown_calls"], 1)
+
+    def _typed_pair(self, section, field, invalid, valid):
+        good = self._boundary_event()
+        if section == "usage":
+            good["data"]["usage"][field] = valid
+            if field == "totalTokens":
+                good["data"]["usage"]["inputTokens"] = valid
+            else:
+                good["data"]["usage"]["totalTokens"] = sum(
+                    good["data"]["usage"][raw]
+                    for key, raw in gc._CALL_USAGE_FIELDS if key != "request_total")
+        elif section == "rates":
+            good["data"]["costAccounting"]["rates_per_million"] = dict(
+                dict.fromkeys(gc._TOKEN_FIELDS[:-1], 0),
+                currency="TEST", source_ref="synthetic:typed-rates")
+            good["data"]["costAccounting"]["rates_per_million"][field] = valid
+        else:
+            good["data"]["costAccounting"][field] = valid
+        bad = json.loads(json.dumps(good))
+        target = (bad["data"]["usage"] if section == "usage" else
+                  bad["data"]["costAccounting"]["rates_per_million"]
+                  if section == "rates" else bad["data"]["costAccounting"])
+        target[field] = invalid
+        return bad, good
+
+    def _assert_typed_conflict(self, events):
+        calls = self._parse(events)["calls"]
+        preserved = json.loads(json.dumps(calls))
+        forward = gc.summarize_calls(calls)
+        self.assertEqual(forward, gc.summarize_calls(calls[::-1]))
+        self.assertEqual(calls, preserved)
+        self.assertEqual(forward["conflicting_call_ids"], ["c1"])
+        self.assertEqual(forward["duplicate_records"], 0)
+        self.assertEqual(forward["calls"], 1)
+        self.assertIsNone(forward["cost"]["complete_total"])
+        self.assertEqual(forward["cost"]["unknown_calls"], 1)
+        self.assertEqual(forward["coverage"]["duration_ms"]["known_calls"], 0)
+        self.assertEqual(forward["by_work_kind"]["unknown"]["calls"], 1)
+        return forward
+
+    def test_boolean_numeric_signature_conflicts_cover_all_accounting_fields(self):
+        sections = {
+            "usage": [raw for _, raw in gc._CALL_USAGE_FIELDS],
+            "metadata": [*gc._INPUT_BREAKDOWN_FIELDS, "duration_ms"],
+            "rates": gc._TOKEN_FIELDS[:-1],
+        }
+        for section, fields in sections.items():
+            for field in fields:
+                for invalid, valid in ((True, 1), (False, 0)):
+                    with self.subTest(section=section, field=field, invalid=invalid):
+                        self._assert_typed_conflict(
+                            self._typed_pair(section, field, invalid, valid))
+
+    def test_integer_only_count_qualification_distinguishes_equal_float_values(self):
+        for section, fields in (
+                ("usage", [raw for _, raw in gc._CALL_USAGE_FIELDS]),
+                ("metadata", [*gc._INPUT_BREAKDOWN_FIELDS, "duration_ms"])):
+            for field in fields:
+                for value in (0, 1):
+                    with self.subTest(section=section, field=field, value=value):
+                        self._assert_typed_conflict(
+                            self._typed_pair(section, field, float(value), value))
+
+    def test_legal_numeric_rate_equivalence_keeps_sourced_zero_and_price(self):
+        for field in gc._TOKEN_FIELDS[:-1]:
+            for value in (0, 1):
+                with self.subTest(field=field, value=value):
+                    a, b = self._typed_pair("rates", field, float(value), value)
+                    calls = self._parse([a, b])["calls"]
+                    summary = gc.summarize_calls(calls)
+                    self.assertEqual(summary, gc.summarize_calls(calls[::-1]))
+                    self.assertEqual(summary["conflicting_call_ids"], [])
+                    self.assertEqual(summary["duplicate_records"], 1)
+                    self.assertEqual(summary["cost"]["unknown_calls"], 0)
+                    self.assertEqual(summary["cost"]["complete_total"], calls[0]["cost"]["amount"])
+
+    def test_invalid_typed_pair_cannot_make_mixed_legal_zero_a_complete_bill(self):
+        bad, good = self._typed_pair("rates", "input_uncached", False, 0)
+        independent = json.loads(json.dumps(good))
+        independent["data"]["requestId"] = "independent-zero"
+        summaries = [gc.summarize_calls(self._parse(events)["calls"])
+                     for events in ([bad, good, independent],
+                                    [good, independent, bad], [independent, good, bad])]
+        self.assertEqual(summaries[0], summaries[1])
+        self.assertEqual(summaries[0], summaries[2])
+        self.assertEqual(summaries[0]["cost"]["known_subtotals_by_currency"], {"TEST": 0})
+        self.assertEqual(summaries[0]["cost"]["unknown_calls"], 1)
+        self.assertIsNone(summaries[0]["cost"]["complete_total"])
+        self.assertEqual(summaries[0]["by_work_kind"]["successful_output"]["calls"], 1)
+        self.assertEqual(summaries[0]["by_work_kind"]["unknown"]["calls"], 1)
+
+    def _priced_event(self, field="input_uncached", count=100, rate=1, call_id="c1"):
+        event = self._boundary_event(call_id)
+        usage = event["data"]["usage"]
+        usage.update(dict.fromkeys(usage, 0))
+        usage[dict(gc._CALL_USAGE_FIELDS)[field]] = count
+        usage["totalTokens"] = count
+        event["data"]["costAccounting"]["rates_per_million"] = dict(
+            dict.fromkeys(gc._TOKEN_FIELDS[:-1], 0),
+            currency="TEST", source_ref="synthetic:range-rates")
+        event["data"]["costAccounting"]["rates_per_million"][field] = rate
+        return event
+
+    def test_equal_extreme_rates_price_every_bucket_and_mixed_duplicates_identically(self):
+        for field in gc._TOKEN_FIELDS[:-1]:
+            with self.subTest(field=field):
+                events = [self._priced_event(field, rate=rate)
+                          for rate in (int(1e307), 1e307, int(1e307))]
+                calls = self._parse(events)["calls"]
+                self.assertEqual(calls[0]["cost"], calls[1]["cost"])
+                self.assertEqual(calls[0]["cost"]["components"][field], 1e303)
+                zero = self._parse([self._priced_event(rate=0, call_id="zero")])["calls"]
+                forward = gc.summarize_calls(calls + zero)
+                self.assertEqual(forward, gc.summarize_calls((calls + zero)[::-1]))
+                self.assertEqual(forward["duplicate_records"], 2)
+                self.assertEqual(forward["conflicting_call_ids"], [])
+                self.assertEqual(forward["cost"]["complete_total"], 1e303)
+                self.assertEqual(forward["cost"]["unknown_calls"], 0)
+
+    def test_huge_integer_counts_and_rates_preserve_representable_prices_and_real_zero(self):
+        cases = ((2 ** 2000, 2.0 ** -1000, (2 ** 1000) / 1_000_000),
+                 (1, 10 ** 310, 1e304), (2 ** 4000, 0.0, 0.0),
+                 (0, 10 ** 400, 0.0), (1_000_000, 5e-324, 5e-324))
+        for field in gc._TOKEN_FIELDS[:-1]:
+            for count, rate, expected in cases:
+                with self.subTest(field=field, count_bits=count.bit_length(), rate=rate):
+                    call = self._parse([self._priced_event(field, count, rate)])["calls"][0]
+                    self.assertIsNotNone(call["cost"], call["issues"])
+                    self.assertIs(type(call["cost"]["amount"]), float)
+                    self.assertEqual(call["cost"]["amount"], expected)
+                    self.assertEqual(call["cost"]["components"][field], expected)
+
+    def test_final_unrepresentable_bucket_prices_are_unknown_for_both_numeric_types(self):
+        for field in gc._TOKEN_FIELDS[:-1]:
+            for rate, count in ((sys.float_info.max, 10_000_000), (10 ** 400, 1)):
+                with self.subTest(field=field, rate=rate):
+                    events = [self._priced_event(field, count, value)
+                              for value in (rate, int(rate))]
+                    calls = self._parse(events)["calls"]
+                    for call in calls:
+                        self.assertIsNone(call["cost"])
+                        self.assertIn("price_out_of_range", call["issues"])
+                    summary = gc.summarize_calls(calls)
+                    self.assertEqual(summary, gc.summarize_calls(calls[::-1]))
+                    self.assertEqual(summary["duplicate_records"], 1)
+                    self.assertEqual(summary["conflicting_call_ids"], [])
+                    self.assertEqual(summary["cost"]["unknown_calls"], 1)
+                    self.assertIsNone(summary["cost"]["complete_total"])
+
+    def test_nonzero_price_underflow_is_unknown_and_not_reported_as_free(self):
+        for field in gc._TOKEN_FIELDS[:-1]:
+            with self.subTest(field=field):
+                call = self._parse([self._priced_event(field, 1, 5e-324)])["calls"][0]
+                self.assertIsNone(call["cost"])
+                self.assertIn("price_out_of_range", call["issues"])
+
+    def test_call_component_sum_checks_final_range_and_rounds_once(self):
+        event = self._priced_event(count=1_000_000, rate=1e16)
+        usage = event["data"]["usage"]
+        usage.update(cacheReadTokens=1_000_000, cacheWriteTokens=1_000_000,
+                     totalTokens=3_000_000)
+        rates = event["data"]["costAccounting"]["rates_per_million"]
+        rates.update(cache_read=1, cache_write=1)
+        call = self._parse([event])["calls"][0]
+        self.assertEqual(call["cost"]["amount"], 10000000000000002.0)
+        rates.update(input_uncached=1e308, cache_read=1e308)
+        call = self._parse([event])["calls"][0]
+        self.assertIsNone(call["cost"])
+        self.assertIn("price_out_of_range", call["issues"])
+
+    def test_summary_prices_round_once_independent_of_call_and_session_order(self):
+        calls = self._parse([self._priced_event(count=1_000_000, rate=rate, call_id=str(i))
+                             for i, rate in enumerate((1e16, 1, 1))])["calls"]
+        for rows in (calls, calls[::-1], calls[1:] + calls[:1]):
+            summary = gc.summarize_calls(rows)
+            self.assertEqual(summary["cost"]["complete_total"], 10000000000000002.0)
+            self.assertEqual(summary["by_work_kind"]["successful_output"]["cost"],
+                             summary["cost"])
+        sessions = [{"file": str(i), "calls": [call]} for i, call in enumerate(calls)]
+        self.assertEqual(gc._summarize_session_calls(sessions),
+                         gc._summarize_session_calls(sessions[::-1]))
+
+    def test_unrepresentable_currency_subtotal_is_null_without_losing_other_currency(self):
+        events = [self._priced_event(count=1_000_000, rate=1e308, call_id=str(i))
+                  for i in range(2)]
+        independent = self._priced_event(rate=0, call_id="other-currency")
+        independent["data"]["costAccounting"]["rates_per_million"]["currency"] = "OTHER"
+        calls = self._parse(events + [independent])["calls"]
+        for rows in (calls, calls[::-1]):
+            summary = gc.summarize_calls(rows)
+            self.assertEqual(summary["cost"]["known_subtotals_by_currency"],
+                             {"TEST": None, "OTHER": 0.0})
+            self.assertEqual(summary["cost"]["unknown_calls"], 0)
+            self.assertIsNone(summary["cost"]["complete_total"])
+            self.assertIsNone(summary["cost"]["currency"])
+            json.dumps(summary, allow_nan=False)
+        single = gc.summarize_calls(calls[:2])["cost"]
+        self.assertEqual(single["known_subtotals_by_currency"], {"TEST": None})
+        self.assertEqual(single["currency"], "TEST")
+        self.assertIsNone(single["complete_total"])
+
+    def test_huge_count_and_known_zero_price_survive_json_and_text_cli(self):
+        _require_zstandard(self)
+        event = self._priced_event(count=2 ** 4000, rate=0)
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_session(tmp, SESSION_REL, [event])
+            code, out, _ = _run_cmd(["--sessions-root", tmp, "--format", "json"])
+            self.assertEqual(code, 0)
+            report = json.loads(out)
+            self.assertEqual(report["call_accounting"]["cost"]["complete_total"], 0.0)
+            json.dumps(report, allow_nan=False)
+            code, text, _ = _run_cmd(["--sessions-root", tmp, "--format", "text"])
+            self.assertEqual(code, 0)
+            self.assertIn("cost=0.0 currency=TEST unknown-cost-calls=0", text)
+            self.assertIn("in=" + gc._fmt_tok(2 ** 4000), text)
+        # Existing display rounding remains unchanged at ordinary magnitudes.
+        for value, expected in ((999, "999"), (1234, "1.2K"), (1234567, "1.23M")):
+            self.assertEqual(gc._fmt_tok(value), expected)
+
+    def test_typed_conflicts_survive_compact_and_spaced_json_scanners(self):
+        for section, field, invalid, valid in (
+                ("usage", "inputTokens", 1.0, 1),
+                ("metadata", "role_prefix_tokens", True, 1),
+                ("rates", "input_uncached", False, 0)):
+            events = self._typed_pair(section, field, invalid, valid)
+            for separators in ((",", ":"), (", ", ": ")):
+                with self.subTest(section=section, separators=separators):
+                    raw = "\n".join(json.dumps(e, separators=separators) for e in events).encode()
+                    parsed, corrupt = gc._events_from_bytes(raw)
+                    self.assertEqual(corrupt, 0)
+                    self.assertEqual(self._parse(parsed)["calls"], self._parse(events)["calls"])
+                    self._assert_typed_conflict(parsed)
+
+    def test_inclusive_input_and_prefix_do_not_double_count_cache(self):
+        call = self._parse()["calls"][0]
+        self.assertEqual(call["tokens"], {"input_uncached": 200, "cache_read": 700,
+                         "cache_write": 100, "output": 50, "request_total": 1050})
+        self.assertEqual(call["role_prefix_tokens"], 500)
+        self.assertEqual(call["task_increment_tokens"], 300)
+        summary = gc.summarize_calls(self._parse()["calls"])
+        self.assertEqual(summary["tokens"]["request_total"]["known_sum"], 2180)
+        self.assertEqual(summary["tokens"]["cache_write"]["unknown_calls"], 1)
+        self.assertIsNone(summary["tokens"]["request_total"]["complete_total"])
+
+    def test_work_kinds_and_rework_links_have_explicit_sources(self):
+        summary = gc.summarize_calls(self._parse()["calls"])
+        self.assertEqual({k: b["calls"] for k, b in summary["by_work_kind"].items()},
+                         dict.fromkeys(gc._WORK_KINDS, 1))
+        self.assertEqual(summary["rework_links"][0]["upstream_call_id"], "c1")
+        self.assertEqual(summary["rework_links"][0]["link_status"], "in_trace")
+        self.assertEqual(summary["by_work_kind"]["rework"]["tokens"]["input_uncached"]
+                         ["complete_total"], 80)
+        self.assertEqual(summary["by_work_kind"]["waiting"]["known_duration_ms"], 400)
+
+    def test_legacy_missing_values_are_null_with_coverage(self):
+        last = self._parse()["calls"][-1]
+        for key in ("role", "task_id", "call_id", "cost", "role_prefix_tokens",
+                    "task_increment_tokens", "duration_ms"):
+            self.assertIsNone(last[key], key)
+        self.assertEqual(last["work_kind"], "unknown")
+        summary = gc.summarize_calls(self._parse()["calls"])
+        self.assertIsNone(summary["cost"]["complete_total"])
+        self.assertEqual(summary["cost"]["unknown_calls"], 5)
+        self.assertEqual(summary["coverage"]["role"], {"known_calls": 4, "total_calls": 5})
+
+    def test_fast_full_paths_match_complete_ledger_and_unneeded_envelopes(self):
+        events = feat098_baseline_events()
+        events.insert(2, _ev("request/header", 1001, large="not needed"))
+        for separators in ((",", ":"), (", ", ": ")):
+            raw = "\n".join(json.dumps(ev, separators=separators) for ev in events).encode()
+            fast, bad = gc._events_from_bytes(raw)
+            full, full_bad = gc._parse_jsonl_lines(raw.decode())
+            self.assertEqual(bad, full_bad)
+            self.assertEqual(self._parse(fast)["calls"], self._parse(full)["calls"])
+        self.assertIsNone(gc._fast_assistant_event(json.dumps(
+            events[3], separators=(",", ":")).encode()))
+
+    def test_price_requires_explicit_complete_sourced_rates_and_distinguishes_zero(self):
+        event = feat098_baseline_events()[2]
+        rates = {"currency": "TEST", "source_ref": "synthetic:test-rates",
+                 "input_uncached": 2, "cache_read": 1, "cache_write": 3, "output": 4}
+        event["data"]["costAccounting"]["rates_per_million"] = rates
+        call = self._parse([event])["calls"][0]
+        self.assertAlmostEqual(call["cost"]["amount"], .0016)
+        for key in gc._TOKEN_FIELDS[:-1]:
+            rates[key] = 0
+        self.assertEqual(self._parse([event])["calls"][0]["cost"]["amount"], 0)
+        del rates["source_ref"]
+        self.assertIsNone(self._parse([event])["calls"][0]["cost"])
+
+    def test_invalid_rates_and_usage_cannot_be_priced(self):
+        event = feat098_baseline_events()[2]
+        meta = event["data"]["costAccounting"]
+        for value in (None, -1, True, float("nan"), float("inf"), "2"):
+            meta["rates_per_million"] = {"currency": "TEST", "source_ref": "synthetic:rates",
+                "input_uncached": value, "cache_read": 1, "cache_write": 1, "output": 1}
+            self.assertIsNone(self._parse([event])["calls"][0]["cost"])
+        event["data"]["usage"]["totalTokens"] = 1
+        call = self._parse([event])["calls"][0]
+        self.assertIn("usage_total_mismatch", call["issues"])
+        self.assertTrue(all(v is None for v in call["tokens"].values()))
+
+    def test_cache_write_requires_declared_input_semantics(self):
+        event = feat098_baseline_events()[2]
+        del event["data"]["costAccounting"]["input_semantics"]
+        call = self._parse([event])["calls"][0]
+        self.assertIsNone(call["tokens"]["input_uncached"])
+        self.assertIn("input_semantics_unknown", call["issues"])
+
+    def test_inclusive_cache_overflow_and_invalid_input_partition_are_unknown(self):
+        event = feat098_baseline_events()[2]
+        event["data"]["usage"]["inputTokens"] = 10
+        self.assertIsNone(self._parse([event])["calls"][0]["tokens"]["input_uncached"])
+        event = feat098_baseline_events()[2]
+        event["data"]["costAccounting"]["role_prefix_tokens"] = 2000
+        call = self._parse([event])["calls"][0]
+        self.assertIsNone(call["role_prefix_tokens"])
+        self.assertIn("input_breakdown_exceeds_prompt", call["issues"])
+
+    def test_rework_requires_upstream_cause_and_evidence_not_fix_name(self):
+        event = feat098_baseline_events()[4]
+        metadata = event["data"]["costAccounting"]
+        metadata["task_id"] = "FIX-999"
+        del metadata["rework"]["cause"]
+        self.assertEqual(self._parse([event])["calls"][0]["work_kind"], "unknown")
+        metadata["rework"]["cause"] = "restored"
+        metadata["rework"]["upstream_call_id"] = "c3"
+        self.assertEqual(self._parse([event])["calls"][0]["work_kind"], "unknown")
+        metadata["rework"]["upstream_call_id"] = "external-prior-call"
+        summary = gc.summarize_calls(self._parse([event])["calls"])
+        self.assertEqual(summary["rework_links"][0]["link_status"], "not_in_trace")
+
+    def test_duplicate_call_id_deduplicates_and_conflict_has_no_trusted_total(self):
+        event = feat098_baseline_events()[2]
+        calls = self._parse([event, event])["calls"]
+        summary = gc.summarize_calls(calls)
+        self.assertEqual(summary["duplicate_records"], 1)
+        self.assertEqual(summary["tokens"]["request_total"]["complete_total"], 1050)
+        altered = json.loads(json.dumps(event))
+        altered["data"]["usage"]["outputTokens"] = 99
+        summary = gc.summarize_calls(self._parse([event, altered])["calls"])
+        self.assertEqual(summary["conflicting_call_ids"], ["c1"])
+        self.assertIsNone(summary["tokens"]["request_total"]["complete_total"])
+        self.assertIsNone(summary["input_breakdown"]["role_prefix_tokens"]["complete_total"])
+
+    def test_call_duration_from_step_is_only_first_window_and_not_residual_wait(self):
+        events = _minimal_session([
+            _ev("step/start", 1100, turn=1),
+            _assistant_msg(1200, turn=1), _assistant_msg(1300, turn=1),
+            _ev("step/end", 1500, turn=1), _ev("turn/end", 3000, turn=1)])
+        parsed = self._parse(events)
+        self.assertEqual(parsed["calls"][0]["duration_ms"], 100)
+        self.assertIsNone(parsed["calls"][1]["duration_ms"])
+        self.assertEqual(gc.summarize_calls(parsed["calls"])["by_work_kind"]["waiting"]["calls"], 0)
+
+    def test_cli_scan_preserves_legacy_fields_and_session_scoped_ids(self):
+        _require_zstandard(self)
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel in ("s1", "s2"):
+                _write_session(tmp, rel + "/session.v3.jsonl.zstd", feat098_baseline_events())
+            report = gc.scan_sessions(tmp)
+            self.assertEqual(report["call_accounting"]["calls"], 10)
+            self.assertEqual(report["call_accounting"]["duplicate_records"], 0)
+            self.assertTrue(all(link["link_status"] == "in_trace"
+                                for link in report["call_accounting"]["rework_links"]))
+            self.assertEqual(report["totals"]["tokens"], {"in": 2374, "cache_read": 3240, "out": 166})
+            self.assertIn("cost=unknown", gc.format_text(report))
+            self.assertEqual(report["schema"], "governance-cost-report/1")
+
+    def test_malformed_usage_is_unknown_and_fast_full_accounting_still_agrees(self):
+        for malformed in (None, True, -1, "bad"):
+            event = _assistant_msg(1200, turn=1)
+            event["data"]["usage"]["inputTokens"] = malformed
+            raw = json.dumps(event, separators=(",", ":")).encode()
+            fast, _ = gc._events_from_bytes(raw)
+            self.assertEqual(self._parse(fast)["calls"], self._parse([event])["calls"])
+            self.assertIsNone(self._parse(fast)["calls"][0]["tokens"]["input_uncached"])
+
+    def test_skill_contract_keeps_experience_success_separate_from_static_counts(self):
+        skill = (_INFRA_DIR.parent / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("product_success_contract.success_metrics", skill)
+        self.assertIn("最薄 E2E 体验路径", skill)
+        self.assertIn("静态可达性、测试数量或文件生成不能单独作为体验成功", skill)
+        self.assertIn("acceptance_contract.scenario/command/expected_output/demo_evidence", skill)
+
+    def test_persisted_baseline_is_exact_replay_and_marked_synthetic(self):
+        baseline = json.loads((_INFRA_DIR.parents[2] /
+            "docs/diagnostics/feat-098-cost-baseline.json").read_text(encoding="utf-8"))
+        self.assertEqual(baseline["measurement_kind"], "synthetic_replay_not_production")
+        self.assertEqual(baseline["trace"], feat098_baseline_events())
+        parsed = self._parse(baseline["trace"])
+        self.assertEqual(baseline["calls"], parsed["calls"])
+        self.assertEqual(baseline["call_accounting"], gc.summarize_calls(parsed["calls"]))
+
+    def test_cli_outputs_call_ledger_and_unknown_price(self):
+        _require_zstandard(self)
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_session(tmp, SESSION_REL, feat098_baseline_events())
+            code, out, _ = _run_cmd(["--sessions-root", tmp, "--format", "json"])
+        self.assertEqual(code, 0)
+        report = json.loads(out)
+        self.assertEqual(report["call_accounting"]["calls"], 5)
+        self.assertIsNone(report["call_accounting"]["cost"]["complete_total"])
+        self.assertEqual(report["sessions"][0]["calls"][0]["call_id"], "c1")
+
+
 if __name__ == "__main__":
     unittest.main()

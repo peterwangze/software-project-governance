@@ -1,0 +1,817 @@
+{
+  "schema": "feat-098-cost-baseline/1",
+  "measurement_kind": "synthetic_replay_not_production",
+  "task_id": "FEAT-098",
+  "source": "skills/software-project-governance/infra/tests/test_governance_cost.py::feat098_baseline_events",
+  "units": {
+    "tokens": "cumulative request volume",
+    "duration": "milliseconds",
+    "money": "unknown; no rates supplied"
+  },
+  "trace": [
+    {
+      "type": "session",
+      "time": 1000,
+      "data": {
+        "cwd": "synthetic/feat098"
+      }
+    },
+    {
+      "type": "turn/start",
+      "time": 1000,
+      "data": {
+        "turn": 1
+      }
+    },
+    {
+      "type": "assistant/message",
+      "time": 1100,
+      "data": {
+        "turn": 1,
+        "requestId": "c1",
+        "model": "synthetic-model",
+        "costAccounting": {
+          "role": "Developer",
+          "task_id": "FEAT-098",
+          "work_kind": "successful_output",
+          "input_semantics": "inclusive",
+          "duration_ms": 100,
+          "role_prefix_tokens": 500,
+          "task_increment_tokens": 300,
+          "source_ref": "synthetic:feat098/c1"
+        },
+        "usage": {
+          "inputTokens": 1000,
+          "cacheReadTokens": 700,
+          "cacheWriteTokens": 100,
+          "outputTokens": 50,
+          "totalTokens": 1050
+        }
+      }
+    },
+    {
+      "type": "assistant/message",
+      "time": 1600,
+      "data": {
+        "turn": 1,
+        "requestId": "c2",
+        "model": "synthetic-model",
+        "costAccounting": {
+          "role": "Analyst",
+          "task_id": "FEAT-098",
+          "work_kind": "repeated_exploration",
+          "input_semantics": "exclusive",
+          "duration_ms": 200,
+          "role_prefix_tokens": 0,
+          "task_increment_tokens": 0,
+          "source_ref": "synthetic:feat098/c2"
+        },
+        "usage": {
+          "inputTokens": 100,
+          "cacheReadTokens": 900,
+          "cacheWriteTokens": 0,
+          "outputTokens": 20,
+          "totalTokens": 1020
+        }
+      }
+    },
+    {
+      "type": "assistant/message",
+      "time": 2100,
+      "data": {
+        "turn": 1,
+        "requestId": "c3",
+        "model": "synthetic-model",
+        "costAccounting": {
+          "role": "Developer",
+          "task_id": "FEAT-098",
+          "work_kind": "rework",
+          "input_semantics": "exclusive",
+          "duration_ms": 300,
+          "role_prefix_tokens": 0,
+          "task_increment_tokens": 0,
+          "source_ref": "synthetic:feat098/c3",
+          "rework": {
+            "upstream_call_id": "c1",
+            "cause": "recovery defect",
+            "evidence_ref": "synthetic:feat098/recovery-failure"
+          }
+        },
+        "usage": {
+          "inputTokens": 80,
+          "cacheReadTokens": 20,
+          "cacheWriteTokens": 0,
+          "outputTokens": 10,
+          "totalTokens": 110
+        }
+      }
+    },
+    {
+      "type": "assistant/message",
+      "time": 2600,
+      "data": {
+        "turn": 1,
+        "requestId": "c4",
+        "model": "synthetic-model",
+        "costAccounting": {
+          "role": "Coordinator",
+          "task_id": "FEAT-098",
+          "work_kind": "waiting",
+          "input_semantics": "exclusive",
+          "duration_ms": 400,
+          "role_prefix_tokens": 0,
+          "task_increment_tokens": 0,
+          "source_ref": "synthetic:feat098/c4"
+        },
+        "usage": {
+          "inputTokens": 0,
+          "cacheReadTokens": 0,
+          "cacheWriteTokens": 0,
+          "outputTokens": 0,
+          "totalTokens": 0
+        }
+      }
+    },
+    {
+      "type": "assistant/message",
+      "time": 3200,
+      "data": {
+        "turn": 1,
+        "usage": {
+          "inputTokens": 7,
+          "cacheReadTokens": 0,
+          "outputTokens": 3
+        },
+        "message": {
+          "content": [
+            {
+              "type": "text",
+              "text": "ok"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "turn/end",
+      "time": 3500,
+      "data": {
+        "turn": 1
+      }
+    }
+  ],
+  "calls": [
+    {
+      "record_id": "assistant-event-1",
+      "call_id": "c1",
+      "turn": 1,
+      "time_ms": 1100,
+      "model": "synthetic-model",
+      "role": "Developer",
+      "task_id": "FEAT-098",
+      "work_kind": "successful_output",
+      "source_ref": "synthetic:feat098/c1",
+      "rework": {
+        "upstream_call_id": null,
+        "cause": null,
+        "evidence_ref": null
+      },
+      "tokens": {
+        "input_uncached": 200,
+        "cache_read": 700,
+        "cache_write": 100,
+        "output": 50,
+        "request_total": 1050
+      },
+      "input_semantics": "inclusive",
+      "role_prefix_tokens": 500,
+      "task_increment_tokens": 300,
+      "duration_ms": 100,
+      "duration_source": "costAccounting.duration_ms",
+      "cost": null,
+      "issues": [
+        "rates_missing"
+      ],
+      "raw_usage": {
+        "inputTokens": 1000,
+        "cacheReadTokens": 700,
+        "cacheWriteTokens": 100,
+        "outputTokens": 50,
+        "totalTokens": 1050
+      },
+      "raw_attribution": {
+        "role": "Developer",
+        "task_id": "FEAT-098",
+        "work_kind": "successful_output",
+        "input_semantics": "inclusive",
+        "duration_ms": 100,
+        "role_prefix_tokens": 500,
+        "task_increment_tokens": 300,
+        "source_ref": "synthetic:feat098/c1"
+      }
+    },
+    {
+      "record_id": "assistant-event-2",
+      "call_id": "c2",
+      "turn": 1,
+      "time_ms": 1600,
+      "model": "synthetic-model",
+      "role": "Analyst",
+      "task_id": "FEAT-098",
+      "work_kind": "repeated_exploration",
+      "source_ref": "synthetic:feat098/c2",
+      "rework": {
+        "upstream_call_id": null,
+        "cause": null,
+        "evidence_ref": null
+      },
+      "tokens": {
+        "input_uncached": 100,
+        "cache_read": 900,
+        "cache_write": 0,
+        "output": 20,
+        "request_total": 1020
+      },
+      "input_semantics": "exclusive",
+      "role_prefix_tokens": 0,
+      "task_increment_tokens": 0,
+      "duration_ms": 200,
+      "duration_source": "costAccounting.duration_ms",
+      "cost": null,
+      "issues": [
+        "rates_missing"
+      ],
+      "raw_usage": {
+        "inputTokens": 100,
+        "cacheReadTokens": 900,
+        "cacheWriteTokens": 0,
+        "outputTokens": 20,
+        "totalTokens": 1020
+      },
+      "raw_attribution": {
+        "role": "Analyst",
+        "task_id": "FEAT-098",
+        "work_kind": "repeated_exploration",
+        "input_semantics": "exclusive",
+        "duration_ms": 200,
+        "role_prefix_tokens": 0,
+        "task_increment_tokens": 0,
+        "source_ref": "synthetic:feat098/c2"
+      }
+    },
+    {
+      "record_id": "assistant-event-3",
+      "call_id": "c3",
+      "turn": 1,
+      "time_ms": 2100,
+      "model": "synthetic-model",
+      "role": "Developer",
+      "task_id": "FEAT-098",
+      "work_kind": "rework",
+      "source_ref": "synthetic:feat098/c3",
+      "rework": {
+        "upstream_call_id": "c1",
+        "cause": "recovery defect",
+        "evidence_ref": "synthetic:feat098/recovery-failure"
+      },
+      "tokens": {
+        "input_uncached": 80,
+        "cache_read": 20,
+        "cache_write": 0,
+        "output": 10,
+        "request_total": 110
+      },
+      "input_semantics": "exclusive",
+      "role_prefix_tokens": 0,
+      "task_increment_tokens": 0,
+      "duration_ms": 300,
+      "duration_source": "costAccounting.duration_ms",
+      "cost": null,
+      "issues": [
+        "rates_missing"
+      ],
+      "raw_usage": {
+        "inputTokens": 80,
+        "cacheReadTokens": 20,
+        "cacheWriteTokens": 0,
+        "outputTokens": 10,
+        "totalTokens": 110
+      },
+      "raw_attribution": {
+        "role": "Developer",
+        "task_id": "FEAT-098",
+        "work_kind": "rework",
+        "input_semantics": "exclusive",
+        "duration_ms": 300,
+        "role_prefix_tokens": 0,
+        "task_increment_tokens": 0,
+        "source_ref": "synthetic:feat098/c3",
+        "rework": {
+          "upstream_call_id": "c1",
+          "cause": "recovery defect",
+          "evidence_ref": "synthetic:feat098/recovery-failure"
+        }
+      }
+    },
+    {
+      "record_id": "assistant-event-4",
+      "call_id": "c4",
+      "turn": 1,
+      "time_ms": 2600,
+      "model": "synthetic-model",
+      "role": "Coordinator",
+      "task_id": "FEAT-098",
+      "work_kind": "waiting",
+      "source_ref": "synthetic:feat098/c4",
+      "rework": {
+        "upstream_call_id": null,
+        "cause": null,
+        "evidence_ref": null
+      },
+      "tokens": {
+        "input_uncached": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0,
+        "request_total": 0
+      },
+      "input_semantics": "exclusive",
+      "role_prefix_tokens": 0,
+      "task_increment_tokens": 0,
+      "duration_ms": 400,
+      "duration_source": "costAccounting.duration_ms",
+      "cost": null,
+      "issues": [
+        "rates_missing"
+      ],
+      "raw_usage": {
+        "inputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "outputTokens": 0,
+        "totalTokens": 0
+      },
+      "raw_attribution": {
+        "role": "Coordinator",
+        "task_id": "FEAT-098",
+        "work_kind": "waiting",
+        "input_semantics": "exclusive",
+        "duration_ms": 400,
+        "role_prefix_tokens": 0,
+        "task_increment_tokens": 0,
+        "source_ref": "synthetic:feat098/c4"
+      }
+    },
+    {
+      "record_id": "assistant-event-5",
+      "call_id": null,
+      "turn": 1,
+      "time_ms": 3200,
+      "model": null,
+      "role": null,
+      "task_id": null,
+      "work_kind": "unknown",
+      "source_ref": null,
+      "rework": {
+        "upstream_call_id": null,
+        "cause": null,
+        "evidence_ref": null
+      },
+      "tokens": {
+        "input_uncached": 7,
+        "cache_read": 0,
+        "cache_write": null,
+        "output": 3,
+        "request_total": null
+      },
+      "input_semantics": "dsh-exclusive",
+      "role_prefix_tokens": null,
+      "task_increment_tokens": null,
+      "duration_ms": null,
+      "duration_source": null,
+      "cost": null,
+      "issues": [
+        "work_attribution_unknown",
+        "rates_missing"
+      ],
+      "raw_usage": {
+        "inputTokens": 7,
+        "cacheReadTokens": 0,
+        "outputTokens": 3
+      },
+      "raw_attribution": {}
+    }
+  ],
+  "call_accounting": {
+    "schema": "governance-call-accounting/1",
+    "records": 5,
+    "calls": 5,
+    "duplicate_records": 0,
+    "conflicting_call_ids": [],
+    "identity_coverage_note": "Missing call IDs are event-level candidates; deduplication is unavailable.",
+    "tokens": {
+      "input_uncached": {
+        "known_sum": 387,
+        "known_calls": 5,
+        "unknown_calls": 0,
+        "complete_total": 387
+      },
+      "cache_read": {
+        "known_sum": 1620,
+        "known_calls": 5,
+        "unknown_calls": 0,
+        "complete_total": 1620
+      },
+      "cache_write": {
+        "known_sum": 100,
+        "known_calls": 4,
+        "unknown_calls": 1,
+        "complete_total": null
+      },
+      "output": {
+        "known_sum": 83,
+        "known_calls": 5,
+        "unknown_calls": 0,
+        "complete_total": 83
+      },
+      "request_total": {
+        "known_sum": 2180,
+        "known_calls": 4,
+        "unknown_calls": 1,
+        "complete_total": null
+      }
+    },
+    "input_breakdown": {
+      "role_prefix_tokens": {
+        "known_sum": 500,
+        "known_calls": 4,
+        "unknown_calls": 1,
+        "complete_total": null
+      },
+      "task_increment_tokens": {
+        "known_sum": 300,
+        "known_calls": 4,
+        "unknown_calls": 1,
+        "complete_total": null
+      }
+    },
+    "cost": {
+      "known_subtotals_by_currency": {},
+      "unknown_calls": 5,
+      "complete_total": null,
+      "currency": null
+    },
+    "coverage": {
+      "call_id": {
+        "known_calls": 4,
+        "total_calls": 5
+      },
+      "model": {
+        "known_calls": 4,
+        "total_calls": 5
+      },
+      "role": {
+        "known_calls": 4,
+        "total_calls": 5
+      },
+      "task_id": {
+        "known_calls": 4,
+        "total_calls": 5
+      },
+      "source_ref": {
+        "known_calls": 4,
+        "total_calls": 5
+      },
+      "role_prefix_tokens": {
+        "known_calls": 4,
+        "total_calls": 5
+      },
+      "task_increment_tokens": {
+        "known_calls": 4,
+        "total_calls": 5
+      },
+      "duration_ms": {
+        "known_calls": 4,
+        "total_calls": 5
+      }
+    },
+    "by_work_kind": {
+      "successful_output": {
+        "tokens": {
+          "input_uncached": {
+            "known_sum": 200,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 200
+          },
+          "cache_read": {
+            "known_sum": 700,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 700
+          },
+          "cache_write": {
+            "known_sum": 100,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 100
+          },
+          "output": {
+            "known_sum": 50,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 50
+          },
+          "request_total": {
+            "known_sum": 1050,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 1050
+          }
+        },
+        "input_breakdown": {
+          "role_prefix_tokens": {
+            "known_sum": 500,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 500
+          },
+          "task_increment_tokens": {
+            "known_sum": 300,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 300
+          }
+        },
+        "cost": {
+          "known_subtotals_by_currency": {},
+          "unknown_calls": 1,
+          "complete_total": null,
+          "currency": null
+        },
+        "calls": 1,
+        "known_duration_ms": 100,
+        "duration_unknown_calls": 0
+      },
+      "repeated_exploration": {
+        "tokens": {
+          "input_uncached": {
+            "known_sum": 100,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 100
+          },
+          "cache_read": {
+            "known_sum": 900,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 900
+          },
+          "cache_write": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "output": {
+            "known_sum": 20,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 20
+          },
+          "request_total": {
+            "known_sum": 1020,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 1020
+          }
+        },
+        "input_breakdown": {
+          "role_prefix_tokens": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "task_increment_tokens": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          }
+        },
+        "cost": {
+          "known_subtotals_by_currency": {},
+          "unknown_calls": 1,
+          "complete_total": null,
+          "currency": null
+        },
+        "calls": 1,
+        "known_duration_ms": 200,
+        "duration_unknown_calls": 0
+      },
+      "rework": {
+        "tokens": {
+          "input_uncached": {
+            "known_sum": 80,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 80
+          },
+          "cache_read": {
+            "known_sum": 20,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 20
+          },
+          "cache_write": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "output": {
+            "known_sum": 10,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 10
+          },
+          "request_total": {
+            "known_sum": 110,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 110
+          }
+        },
+        "input_breakdown": {
+          "role_prefix_tokens": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "task_increment_tokens": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          }
+        },
+        "cost": {
+          "known_subtotals_by_currency": {},
+          "unknown_calls": 1,
+          "complete_total": null,
+          "currency": null
+        },
+        "calls": 1,
+        "known_duration_ms": 300,
+        "duration_unknown_calls": 0
+      },
+      "waiting": {
+        "tokens": {
+          "input_uncached": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "cache_read": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "cache_write": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "output": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "request_total": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          }
+        },
+        "input_breakdown": {
+          "role_prefix_tokens": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "task_increment_tokens": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          }
+        },
+        "cost": {
+          "known_subtotals_by_currency": {},
+          "unknown_calls": 1,
+          "complete_total": null,
+          "currency": null
+        },
+        "calls": 1,
+        "known_duration_ms": 400,
+        "duration_unknown_calls": 0
+      },
+      "unknown": {
+        "tokens": {
+          "input_uncached": {
+            "known_sum": 7,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 7
+          },
+          "cache_read": {
+            "known_sum": 0,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 0
+          },
+          "cache_write": {
+            "known_sum": 0,
+            "known_calls": 0,
+            "unknown_calls": 1,
+            "complete_total": null
+          },
+          "output": {
+            "known_sum": 3,
+            "known_calls": 1,
+            "unknown_calls": 0,
+            "complete_total": 3
+          },
+          "request_total": {
+            "known_sum": 0,
+            "known_calls": 0,
+            "unknown_calls": 1,
+            "complete_total": null
+          }
+        },
+        "input_breakdown": {
+          "role_prefix_tokens": {
+            "known_sum": 0,
+            "known_calls": 0,
+            "unknown_calls": 1,
+            "complete_total": null
+          },
+          "task_increment_tokens": {
+            "known_sum": 0,
+            "known_calls": 0,
+            "unknown_calls": 1,
+            "complete_total": null
+          }
+        },
+        "cost": {
+          "known_subtotals_by_currency": {},
+          "unknown_calls": 1,
+          "complete_total": null,
+          "currency": null
+        },
+        "calls": 1,
+        "known_duration_ms": 0,
+        "duration_unknown_calls": 1
+      }
+    },
+    "rework_links": [
+      {
+        "record_id": "assistant-event-3",
+        "upstream_call_id": "c1",
+        "cause": "recovery defect",
+        "evidence_ref": "synthetic:feat098/recovery-failure",
+        "link_status": "in_trace"
+      }
+    ],
+    "calibration": "Prefix/increment overlap the input buckets; never add them to usage. Call durations are summed work windows, not session wall time; residual time is not classified as waiting or rework."
+  },
+  "historical_report_reference": {
+    "source": "docs/requirements/analysis-rpg-longhaul-capability-session-f3f46901-0.97.0.md#2-代价核算",
+    "provenance": "previous_report_rounded_summary_only_not_recomputed",
+    "population": "53 sessions; all-session usage vs subagent-only FIX-family share",
+    "displayed_tokens_reported": 1227100000,
+    "cache_read_tokens_reported": 1197400000,
+    "uncached_input_tokens_reported": 23100000,
+    "output_tokens_reported": 6600000,
+    "uncached_input_plus_output_reported_approx": 29700000,
+    "wall_span_hours_reported": 37.9,
+    "subagent_fix_family_displayed_tokens_reported": 278800000,
+    "subagent_fix_family_share_pct_reported": 25.2,
+    "money": null,
+    "raw_call_coverage": null,
+    "limitations": [
+      "No raw RPG trace in this baseline; call-level reconstruction unavailable.",
+      "Displayed tokens include cache reads; 29.7M is input-plus-output volume, not a monetary bill.",
+      "FIX-family share is a historical task-family proxy, not causal per-call rework attribution.",
+      "Do not compare the synthetic replay against this population as an optimization gain."
+    ]
+  }
+}

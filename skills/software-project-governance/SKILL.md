@@ -421,6 +421,10 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 
 `check-governance` Check 18c 会阻断缺包、空包、范围过宽、缺少 `事实依据` / `结构化事实` / review 完成定义的执行包。Coordinator 不得把缺少短包的产品代码任务标记为闭环。
 
+**体验脊柱与成本基线（FEAT-098）**：可交互产品的 `product_success_contract.success_metrics` MUST 包含最薄 E2E 体验路径：从启动、用户可见输出、关键操作到结果持久化/恢复，逐步列出输入、可见预期、运行命令与证据；先跑通再扩展内容。RPG 的「启动→文字可见→移动→对话→旗标→战斗→存档恢复」仅为实例，CLI/API 等按用户任务裁剪。静态可达性、测试数量或文件生成不能单独作为体验成功；未运行/任一步失败标 pending/failed，禁止借用其他指标宣称完成。Coordinator 将路径写入 `acceptance_contract.scenario/command/expected_output/demo_evidence`，实际运行后回填 `last_run`。
+
+成本比较 MUST 使用同口径调用账本：角色前缀/任务增量为输入内部分解，不与缓存读写、未缓存输入、输出重复相加；记录调用 ID、来源、耗时、成功产出/重复探索/返工/等待，返工关联上游调用、原因与证据。缺 usage、角色、计价率或归因标 unknown/null 并报告覆盖率；残余时间不得猜为等待，FIX 名称不得猜为返工。`governance-cost-report` 保留旧指标，新增 `call_accounting`；`costAccounting` 可选字段与可重放基线见 `docs/diagnostics/feat-098-cost-baseline.md`。
+
 ## Coordinator 参考知识（按需读取）
 
 ### 核心层

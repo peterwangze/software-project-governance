@@ -560,8 +560,8 @@
         }
       },
       {
-        "row_id": "workflow-worker-thread",
-        "package": "@deepseek-ai/dsh-workflow-worker-thread",
+        "row_id": "workflow-ptc",
+        "package": "@deepseek-ai/dsh-workflow-ptc",
         "disabled_expr": null,
         "platform_conditional": false,
         "enabled_on": "any",
@@ -790,6 +790,24 @@
       "version_marker": ".dsh-bundle-version",
       "skill_root_marker": "skill-root.txt",
       "write_policy": "staging+rename, no-lock, best-effort"
+    },
+    "native": {
+      "_note": "FEAT-102 原生派生面：从当前宿主已组合的 base 预设声明派生本包预设，只改两个内容差量（persona.prefix 追加、skill-filesystem.customSkillDirs 追加），其余行原样继承——宿主升级新增/替换/禁用工具行时本包不再失效。能力检测，绝不按版本号判等。",
+      "protocol": "native-declaration-v1",
+      "base_row_name": "@deepseek-ai/dsh-agent-preset",
+      "persona_row_name": "@deepseek-ai/dsh-persona",
+      "skill_row_name": "@deepseek-ai/dsh-skill-filesystem",
+      "registry_row_name": "@deepseek-ai/dsh-agent-preset-registry",
+      "skill_roots": [
+        "skills",
+        "adapters/dsh/skill-shims"
+      ],
+      "base_preset_id_default": "standard",
+      "persona_source": "agent-presets/governance/persona.md.template",
+      "persona_repo_token": "__GOVERNANCE_REPO_ROOT__",
+      "registration": "public agentPresets.register during this row's activation; the registry record exists synchronously after the call; this row disposes only its own registration and never writes $DSH_HOME",
+      "legacy_policy": "the automatic HOME renderer runs only when the host has no agentPresets service AND the row config opts in (legacyAutoRender: true); otherwise the row is warn-only and writes nothing",
+      "support_policy": "capability-detected: agentPresets.register + loader.entries + a unique enabled base declaration; never version-equality gated"
     },
     "render": {
       "tokens": {

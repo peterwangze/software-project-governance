@@ -2700,6 +2700,11 @@ import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 const libPath = process.argv[2]
 const src = readFileSync(libPath, 'utf8').replace(/^export /gm, '')
+  // The row imports its native bridge with a RELATIVE specifier. A
+  // data: URL module has no hierarchical base, so rewrite that one
+  // specifier to its absolute file URL before evaluating the source.
+  .replace(/from '\\.\\/dsh-native\\/bridge\\.js'/g,
+    "from '" + new URL('./dsh-native/bridge.js', pathToFileURL(libPath)).href + "'")
 const shim = 'import.meta.url = ' + JSON.stringify(pathToFileURL(libPath).href) + ';\\n'
   + src + '\\nexport { resolveDshHome, CONTRACT_BINDING };\\n'
 const mod = await import('data:text/javascript;base64,'

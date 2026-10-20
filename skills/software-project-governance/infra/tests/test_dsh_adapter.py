@@ -214,12 +214,21 @@ _LIB_CATCH_PROBE = (
 )
 
 
+def _copy_lib_tree(pkg: Path) -> None:
+    """Copy the row's WHOLE `lib/` tree into a fixture package.
+
+    The entry module imports `lib/dsh-native/` (the native derivation bridge),
+    so a fixture that copies only `lib/index.js` would fail to import for a
+    reason the test is not about. Fixtures must carry the shipped tree.
+    """
+    shutil.copytree(_REPO_ROOT / "lib", pkg / "lib")
+
+
 def _catching_package_copy(root: Path) -> Path:
     """Package copy whose payload metadata is a directory (readable listing,
     unreadable file) — puts the row's catch block on the reachable path."""
     pkg = root / "pkg"
-    (pkg / "lib").mkdir(parents=True)
-    shutil.copyfile(_REPO_ROOT / "lib" / "index.js", pkg / "lib" / "index.js")
+    _copy_lib_tree(pkg)
     (pkg / "adapters" / "dsh").mkdir(parents=True)
     shutil.copyfile(
         _REPO_ROOT / "adapters" / "dsh" / "host-contract.json",
@@ -339,8 +348,7 @@ def _complete_package_copy(root: Path) -> Path:
     rename after it (unlike `_catching_package_copy`, which breaks `preset.yml`
     on purpose)."""
     pkg = root / "pkg"
-    (pkg / "lib").mkdir(parents=True)
-    shutil.copyfile(_REPO_ROOT / "lib" / "index.js", pkg / "lib" / "index.js")
+    _copy_lib_tree(pkg)
     (pkg / "adapters" / "dsh").mkdir(parents=True)
     shutil.copyfile(
         _REPO_ROOT / "adapters" / "dsh" / "host-contract.json",
@@ -1875,15 +1883,17 @@ class DshAdapterTests(unittest.TestCase):
     def test_package_preset_payload_has_no_duplicated_core(self):
         # FIX-310 / DEC-187: this repository is one shared core (skills/,
         # commands/, agents/) consumed by six adapters. The preset payload must
-        # stay a two-file payload — the composition template + its metadata —
-        # because a copied core inside one adapter's preset is a second source
-        # of the same files (and a 2x package). Guard the shape, not the prose.
+        # stay a content-only payload — the legacy composition template, its
+        # display metadata and the single governance persona body the native
+        # derivation appends (FEAT-102) — because a copied core inside one
+        # adapter's preset is a second source of the same files (and a 2x
+        # package). Guard the shape, not the prose.
         entries = sorted(item.name for item in _PACKAGE_PRESET.iterdir())
         self.assertEqual(
             entries,
-            ["agent.cordis.yml.template", "preset.yml"],
-            f"preset payload must carry exactly the composition template and "
-            f"its metadata, found {entries}",
+            ["agent.cordis.yml.template", "persona.md.template", "preset.yml"],
+            f"preset payload must carry exactly the composition template, the "
+            f"persona body and their metadata, found {entries}",
         )
         for leaked in ("skills", "commands", "agents", "skill-shims"):
             self.assertFalse(
@@ -2060,12 +2070,8 @@ class DshAdapterTests(unittest.TestCase):
             # still missing only the payload. Without that contract the failure
             # under test would be "contract unreadable", a different guard.
             fake_pkg = Path(td) / "pkg"
-            (fake_pkg / "lib").mkdir(parents=True)
+            _copy_lib_tree(fake_pkg)
             (fake_pkg / "adapters" / "dsh").mkdir(parents=True)
-            (fake_pkg / "lib" / "index.js").write_text(
-                (_REPO_ROOT / "lib" / "index.js").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
             shutil.copyfile(
                 _REPO_ROOT / "adapters" / "dsh" / "host-contract.json",
                 fake_pkg / "adapters" / "dsh" / "host-contract.json",

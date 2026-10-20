@@ -6,17 +6,18 @@ DeepSeek Harness is a Tier 1 loading target in 0.73.0. The loading model is a **
 
 ## 加载模型
 
-dsh 没有 plugin marketplace，也没有 slash-command 扩展面；它的扩展单位是 **agent preset**：`${DSH_HOME}/.agent-presets/<id>/` 下的一组静态文件（`agent.cordis.yml` + `preset.yml`）。本适配器因此采用：
+dsh 的扩展单位是 **agent preset**。本适配器有两条交付路径，按**宿主能力**选择，绝不按版本号比较（FEAT-102）：
 
-1. **预设投影（preset projection）**：包内预设负载 `agent-presets/governance/` 只有两个文件——组合模板 `agent.cordis.yml.template`（唯一组合事实源）与 `preset.yml`。两条交付路径渲染同一模板、写同一位置：bundle 宿主行 `lib/index.js` 的 `ensurePreset()`（`dsh plugin add` 后重启即自动完成，零手工步骤）与手工/离线路径 `launch.py --install`。渲染把 `__GOVERNANCE_*__` token 替换为**包内绝对路径**，因此用户根副本里的 `<plugin_root>` 就是包根，与 persona / 命令投影 / 项目 `AGENTS.md` 的既有措辞一致——**不复制** `skills/`、`commands/`、`agents/`（那是单一事实源违规与 2× 包体）。预设只做三件事：
-   - persona 携带 Coordinator 身份与 DSH 版 governance bootstrap（每次会话第一动作、SELF-CHECK、模式确认、Agent Team 映射、hook 检查、升级路径）；
-   - 通过 `skill-filesystem.customSkillDirs` 把仓库的 `skills/`（工作流本体）与 `adapters/dsh/skill-shims/`（`commands/` 的薄投影）注册为本预设的 skill 根——原生 `skill` 工具直接暴露整个工作流目录（25 个子 skill + 9 个命令投影 skill）；
-   - 保留 `standard` 预设的完整编码工具集（shell/fs/jobs/skill/goal/plan/compaction/subagent/subagent_fork/workflow/ralph/ask-user/todo/web），角色 agent 由 `subagent` 工具 spawn 并继承同一组合。
-2. **项目投影（project projection）**：`launch.py --bootstrap-project <dir>` 写入项目根 `AGENTS.md`（thin pointer）。dsh 会自动把工作区的 `AGENTS.md` 注入会话，因此治理在任意预设下都能激活；文件只做指针与 SELF-CHECK，不重复 workflow 规则。
+1. **原生派生（native，默认；宿主声明 `@deepseek-ai/dsh-agent-preset-registry` 时）**：`lib/index.js` 在自己激活时读取公开的 loader 组合树，定位宿主当前已组合的 `standard` 预设声明，只做两个内容差量——把治理 persona 正文追加到基础 persona 的 prefix、把本包两个 skill 根追加到 `skill-filesystem.customSkillDirs`——其余每一行（工具、group、isolate、`!!js`、顺序、禁用位）原样继承，再通过公开的 `agentPresets.register` 登记为 `governance`。**升级解耦**：宿主新增/改名/禁用工具时派生结果自动跟随，本包不持有工具行副本、不写 `$DSH_HOME`；卸载只撤回自己的登记。能力缺失或形态不支持时明确拒收（warn-only），**不回退**写目录。
+2. **静态目录投影（legacy；宿主未声明 registry row 时）**：渲染 `agent-presets/governance/agent.cordis.yml.template` 到 `${DSH_HOME}/.agent-presets/governance/`（bundle 宿主行 `ensurePreset()` 或 `launch.py --install`）。这份组合是**一次性快照**，不可能跨宿主代际保持正确——这正是原生路径移除的耦合；它只服务于仍是目录模型的旧宿主。
+
+共享约定：`agent-presets/governance/` 的负载是组合模板、`preset.yml` 元数据与 `persona.md.template`（治理 persona 正文的单一事实源；原生路径直接读它，legacy 组合里的同文段由 `test_dsh_native_bridge.py` 保持同步）。skill 内容始终只有一份（仓库 `skills/` + `adapters/dsh/skill-shims/`），不复制进预设，也没有第二份工具清单需要维护。
+
+**项目投影（project projection）**：`launch.py --bootstrap-project <dir>` 写入项目根 `AGENTS.md`（thin pointer）。dsh 会自动把工作区的 `AGENTS.md` 注入会话，因此治理在任意预设下都能激活；文件只做指针与 SELF-CHECK，不重复 workflow 规则。
 
 命令入口映射：dsh 的 `/name` 用户手势直接加载同名 skill。`commands/*.md` 是跨平台共享资产（其内容被其它平台的斜杠命令与测试直接消费），因此 DSH 不修改它们，而是用 `adapters/dsh/skill-shims/` 下的同名薄投影把它们暴露为 skill——`/governance`、`/governance-status` 等九条命令在 dsh 中成为一等 skill 入口。
 
-Git hooks 发现：两条交付路径都额外写入预设目录内的 `skill-root.txt`（包根路径标记）。`infra/hooks/` 的 `find_spg_home` 已加入 dsh 候选——`$DSH_HOME/.agent-presets/governance/skills/software-project-governance`（若存在）与 `skill-root.txt` 指向的包检出——因此安装在项目 `.git/hooks/` 里的治理 hook 在 dsh 环境下也能自升级，无需环境变量。
+Git hooks 发现（仅 legacy 目录形态）：旧路径会额外写入预设目录内的 `skill-root.txt`（包根路径标记），`infra/hooks/` 的 `find_spg_home` 据此发现包检出。native 路径不写该文件；hooks 仍可用既有的 `SOFTWARE_PROJECT_GOVERNANCE_HOME` / 仓库本地检出定位。
 
 ## 使用
 
@@ -29,11 +30,13 @@ python adapters/dsh/launch.py --bootstrap-project <项目目录>   # 写入项�
 git -C <仓库> pull    # 升级后刷新用户根预设：pull 完成后重启 dsh（宿主行 ensurePreset() 按包版本幂等重渲染；--sync 仅限隔离 DSH_HOME）
 ```
 
-常用路径不需要 `--install`：`dsh plugin --profile web add "link:<本仓库绝对路径>"` + 重启后，包内宿主行会按包版本号自动把预设渲染进用户根（幂等；版本未变不写）。
+常用路径不需要 `--install`：`dsh plugin --profile web add "link:<本仓库绝对路径>"` + **重启**。在声明了 agent-preset registry 的宿主（0.2+）上，包内宿主行按能力检测走**原生派生**——不写用户根、不依赖包版本号、宿主工具变化自动跟随；只有未声明 registry row 的旧宿主才渲染用户根目录。
 
-然后：启动 dsh 会话并选择「治理协调器」预设（或在被治理项目目录里直接开任意预设会话，由 `AGENTS.md` 激活）。
+然后：启动 dsh 会话并选择「治理协调器」预设（或在被治理项目目录里直接开任意预设会话，由 `AGENTS.md` 激活）。原生宿主上该预设由宿主 registry 在启动时登记，选择器显示 `preset.yml` 的名称，不再依赖 `${DSH_HOME}/.agent-presets/` 目录是否存在。
 
 ### dsh 升级 / 重装后恢复接入
+
+native 路径下预设是**运行时派生**：升级 dsh 后只需确保 bundle 注册仍在（下面的命令）并重启，无需重新渲染任何预设目录。
 
 dsh 升级或 profile 清单重置/重装后，插件的 `dsh.profile.bundles` 注册可能丢失（profile 的 package.json 恢复模板态），bundle 层（`cordis.patch.yml`）不再应用——表现为非治理预设会话中 `/governance` 手势失效；bundle-only 安装时治理预设亦从预设选择器消失（经 `launch.py --install` 写入的用户根 `governance` 预设不受影响，其会话仍保有目录）。恢复方法（bundle 路径）：
 

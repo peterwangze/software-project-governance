@@ -2259,9 +2259,9 @@ class TestGuardContractFailureVerdicts(unittest.TestCase):
             self.skipTest("node unavailable (JS consumer cannot be exercised)")
         with tempfile.TemporaryDirectory() as td:
             pkg = Path(td) / "pkg"
-            (pkg / "lib").mkdir(parents=True)
-            (pkg / "lib" / "index.js").write_text(
-                _read(LIB_INDEX), encoding="utf-8")
+            # The row imports `lib/dsh-native/`; copy the shipped tree so this
+            # case fails on the contract, not on a missing module.
+            shutil.copytree(_REPO_ROOT / "lib", pkg / "lib")
             (pkg / "package.json").write_text(
                 '{"name":"fake","version":"9.9.9","type":"module",'
                 '"main":"lib/index.js"}\n', encoding="utf-8")

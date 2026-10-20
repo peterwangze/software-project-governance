@@ -503,7 +503,11 @@ def oracle_api_symbols() -> dict:
     return symbols
 
 _SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
-                        ".pytest_cache", ".mypy_cache"})
+                        ".pytest_cache", ".mypy_cache",
+                        # Task/CI sandboxes hold throwaway repo copies (their own
+                        # agent-presets/ trees are not shipped compositions);
+                        # scanning them finds rows nobody deploys.
+                        ".codex-sandbox", "sandboxes"})
 
 #: Wall-clock budget for one probe run (it imports ~30 plugin packages).
 DEFAULT_PROBE_TIMEOUT = 180

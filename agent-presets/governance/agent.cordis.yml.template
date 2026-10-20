@@ -218,8 +218,15 @@
         enableRunInBackground: false
         maxDepth: provider-managed
 
-    - id: workflow-worker-thread
-      name: '@deepseek-ai/dsh-workflow-worker-thread'
+    # Workflow engine row name follows the host line this payload ships
+    # against (`dsh-workflow-ptc` on the 0.2 shelf). This legacy composition is
+    # NOT a cross-generation shim: keeping one static copy valid for every host
+    # generation is the coupling the native derivation
+    # (`lib/dsh-native/`, FEAT-102) removes. A host that reads this directory
+    # therefore has to match the shelf declared in
+    # `adapters/dsh/host-contract.json`; otherwise the native path applies.
+    - id: workflow-ptc
+      name: '@deepseek-ai/dsh-workflow-ptc'
       config:
         provider: spawn
 

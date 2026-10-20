@@ -380,6 +380,10 @@ _DECLARED_BINDING = {
     "BUILTIN_GROUP_NAME": "host.row_contract.builtin_group_name",
     "GROUP_DISABLED_SHORT_CIRCUIT": "host.row_contract.group_self_disabled_shortcircuit",
     "GROUP_ANCESTOR_INHERITED": "host.row_contract.ancestor_disabled_inherited",
+    # FEAT-102: the host package whose presence is the native delivery
+    # capability. Declared in the contract (`own.native.registry_row_name`)
+    # because the name is a host fact, not ours.
+    "REGISTRY_PACKAGE": "own.native.registry_row_name",
 }
 
 #: Sequence-shaped bindings: the contract field is a JSON array.
@@ -411,6 +415,7 @@ _FACT_ALIASES = {
     "_builtin_group_name": "BUILTIN_GROUP_NAME",
     "_group_disabled_short_circuit": "GROUP_DISABLED_SHORT_CIRCUIT",
     "_group_ancestor_inherited": "GROUP_ANCESTOR_INHERITED",
+    "_registry_package": "REGISTRY_PACKAGE",
 }
 
 
@@ -1246,6 +1251,11 @@ def locate_dsh_install(env: Optional[dict] = None,
         # A host package lives with the CLI package; the profile plane is a
         # partial mirror. None means "no distinct CLI context was found".
         "fallback_anchor": None,
+        # FEAT-102 delivery capability: the host package that owns natively
+        # declared presets. Presence decides which delivery face a host uses —
+        # never a version comparison.
+        "registry_package": None,
+        "protocol": None,
         "oracle_packages": {},
         "other_planes": [],
     }
@@ -1326,6 +1336,12 @@ def locate_dsh_install(env: Optional[dict] = None,
         candidate = Path(cli["path"]) / "package.json"
         if candidate.is_file():
             result["fallback_anchor"] = str(candidate)
+    registry = _package_version(chosen, _fact("_registry_package"))
+    if registry is None and cli and cli.get("path"):
+        registry = _package_version(Path(cli["path"]) / "node_modules",
+                                    _fact("_registry_package"))
+    result["registry_package"] = registry
+    result["protocol"] = "native" if registry else "legacy"
     result["oracle_packages"] = _oracle_versions(anchor)
     for label, plane in candidates:
         if plane == chosen:
@@ -1918,6 +1934,10 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         "issues": [],
         "details": [],
         "install": {},
+        # FEAT-102: which delivery face this host uses (`native` declarations vs
+        # the legacy user-root directory). Reported, never inferred from a
+        # version string.
+        "protocol": "unknown",
         "isolation": {"temp_home": None, "home_writes": None, "mechanism": ""},
         "compositions": [],
         "rows_enabled": 0,
@@ -2080,6 +2100,18 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
             item, root, report, report["coverage"]))
 
     report["issues"] = failures
+    protocol = install_probe.get("protocol") or "unknown"
+    report["protocol"] = protocol
+    registry = install_probe.get("registry_package") or {}
+    if protocol == "native":
+        report["details"].append(
+            f"delivery protocol: native declarations ({_fact('_registry_package')}@"
+            f"{registry.get('version') or '?'} installed) — the preset is derived at boot; "
+            "the shipped composition template is validated for legacy hosts only")
+    else:
+        report["details"].append(
+            "delivery protocol: legacy user-root directory (no agent-presets registry "
+            "package in the installed plane)")
     fallback = report["install"].get("fallback_anchor")
     if fallback and report["rows_resolved_via_cli_fallback"]:
         report["details"].append(

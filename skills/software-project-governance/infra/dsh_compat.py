@@ -597,18 +597,40 @@ try {
 } catch (error) {
   fail(`createRequire(${request.resolutionAnchor}) failed: ${error && error.message}`)
 }
-const contextRoots = []
-for (let dir = dirname(request.resolutionAnchor); ; dir = dirname(dir)) {
-  if (basename(dir) !== 'node_modules') contextRoots.push(join(dir, 'node_modules'))
-  if (dirname(dir) === dir) break
+function contextRootsOf(anchor) {
+  const roots = []
+  for (let dir = dirname(anchor); ; dir = dirname(dir)) {
+    if (basename(dir) !== 'node_modules') roots.push(join(dir, 'node_modules'))
+    if (dirname(dir) === dir) break
+  }
+  return roots
 }
-function resolveBare(spec) {
-  const resolved = req.resolve(spec)
+const contextRoots = contextRootsOf(request.resolutionAnchor)
+// FEAT-102: dsh 0.2 resolves a composition row through TWO authorities. Host
+// packages (the @deepseek-ai plugin set) live with the CLI package; packages a
+// profile installs live in the profile plane. A single-plane probe reports a
+// perfectly mountable row as MODULE_UNRESOLVED when the host package is only in
+// the CLI tree (observed: `dsh-workflow-ptc` in a stale profile mirror). The
+// fallback anchor is the CLI package's own manifest, and it is only consulted
+// for a specifier the primary plane cannot reach; every resolution still has to
+// land inside the node_modules links of the context that produced it.
+let fallbackReq = null
+let fallbackRoots = []
+if (typeof request.fallbackAnchor === 'string' && request.fallbackAnchor !== '') {
+  try {
+    fallbackReq = createRequire(request.fallbackAnchor)
+    fallbackRoots = contextRootsOf(request.fallbackAnchor)
+  } catch (error) {
+    fallbackReq = null
+  }
+}
+function resolveWithin(require, roots, spec) {
+  const resolved = require.resolve(spec)
   const parts = spec.split('/')
   const name = parts[0].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
   // Node also searches NODE_PATH/global folders. Those are unrelated planes;
   // accept only a package reached through this context's node_modules links.
-  const local = contextRoots.some((root) => {
+  const local = roots.some((root) => {
     const candidate = join(root, name)
     if (!existsSync(candidate)) return false
     const rel = relative(realpathSync(candidate), resolved)
@@ -616,6 +638,26 @@ function resolveBare(spec) {
   })
   if (!local) throw new Error(`${spec} resolved outside the selected context: ${resolved}`)
   return resolved
+}
+let lastResolvedPlane = 'primary'
+out.fallback = { anchor: fallbackReq === null ? null : request.fallbackAnchor, used: 0 }
+function resolveBare(spec) {
+  try {
+    lastResolvedPlane = 'primary'
+    return resolveWithin(req, contextRoots, spec)
+  } catch (primaryError) {
+    if (fallbackReq !== null) {
+      try {
+        const resolved = resolveWithin(fallbackReq, fallbackRoots, spec)
+        lastResolvedPlane = 'fallback'
+        out.fallback.used += 1
+        return resolved
+      } catch (fallbackError) {
+        throw primaryError
+      }
+    }
+    throw primaryError
+  }
 }
 const fileUrl = (spec) => pathToFileURL(resolveBare(spec)).href
 out.resolutionAnchor = request.resolutionAnchor
@@ -909,10 +951,14 @@ async function walk(rows, at, ctx, entry, inheritedBy) {
       target = new URL(name, ctx.baseUrl).href
     } else {
       try {
-        target = pathToFileURL(resolveBare(name)).href
+        const resolvedRow = resolveBare(name)
+        target = pathToFileURL(resolvedRow).href
+        if (lastResolvedPlane === 'fallback') entry.fallback_rows = (entry.fallback_rows || 0) + 1
       } catch (error) {
         entry.rows.push({ row: id, name, kind: 'MODULE_UNRESOLVED', message:
-          `cannot resolve from the installed harness (${request.nodeModules}): ${message(error)}` })
+          `cannot resolve from the installed harness (${request.nodeModules}` +
+          (request.fallbackAnchor ? ` nor the CLI anchor ${request.fallbackAnchor}` : '') +
+          `): ${message(error)}` })
         continue
       }
     }
@@ -1196,6 +1242,10 @@ def locate_dsh_install(env: Optional[dict] = None,
         "cli_package": None,
         "resolution_context": None,
         "resolution_anchor": None,
+        # FEAT-102: the second plane dsh 0.2 resolves composition rows from.
+        # A host package lives with the CLI package; the profile plane is a
+        # partial mirror. None means "no distinct CLI context was found".
+        "fallback_anchor": None,
         "oracle_packages": {},
         "other_planes": [],
     }
@@ -1272,6 +1322,10 @@ def locate_dsh_install(env: Optional[dict] = None,
                                  note=("informational only — the installed CLI "
                                        "package version does not decide a row's "
                                        "schema; the oracle packages below do"))
+    if chosen_context != "cli" and cli and cli.get("path"):
+        candidate = Path(cli["path"]) / "package.json"
+        if candidate.is_file():
+            result["fallback_anchor"] = str(candidate)
     result["oracle_packages"] = _oracle_versions(anchor)
     for label, plane in candidates:
         if plane == chosen:
@@ -1326,6 +1380,7 @@ def _probe_request(install: dict, compositions: Sequence[Path],
         "resolutionAnchor": install.get("resolution_anchor") or str(
             _resolution_anchor(Path(install["node_modules"]),
                                context=install.get("resolution_context") or "profile")),
+        "fallbackAnchor": install.get("fallback_anchor") or "",
         "oraclePackages": list(_fact("_oracle_packages")),
         "output": str(output),
         "files": [{"path": str(path)} for path in compositions],
@@ -1655,6 +1710,11 @@ def _composition_entry(payload: dict, root: Path) -> dict:
         # apart from `inherited_disabled`, because "never starts" and "could not
         # be determined" are different facts (G03-b).
         "inherited_unverified": int(payload.get("inherited_unverified") or 0),
+        # FEAT-102: rows whose module was reachable only through the CLI
+        # package's own context (the second resolution plane dsh 0.2 uses for
+        # host packages). Kept visible so a PASS never hides which authority
+        # supplied the schema.
+        "fallback_rows": int(payload.get("fallback_rows") or 0),
         "rows": list(payload.get("rows") or []),
     }
 
@@ -1679,6 +1739,7 @@ def _aggregate_composition(item: dict, root: Path, report: dict,
     report["rows_checked"] += entry["checked"]
     report["rows_inherited_disabled"] += entry["inherited_disabled"]
     report["rows_inherited_unverified"] += entry["inherited_unverified"]
+    report["rows_resolved_via_cli_fallback"] += entry["fallback_rows"]
     coverage["rows_enabled"] += entry["enabled"]
     coverage["rows_verified"] += entry["checked"]
     if entry["status"] == "UNREADABLE":
@@ -1868,6 +1929,9 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         # unverified channel (`coverage.rows_unverified`) instead of the
         # "known not to start" one.
         "rows_inherited_unverified": 0,
+        # FEAT-102: rows validated through the CLI plane fallback (host
+        # packages the profile mirror does not carry).
+        "rows_resolved_via_cli_fallback": 0,
         # G01-b: the trust surface, made visible. `rows_verified` is the same
         # fact as `rows_checked` (kept for the two readers that already spell
         # it that way); the unverified half is what the verdicts below turn on.
@@ -2016,6 +2080,11 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
             item, root, report, report["coverage"]))
 
     report["issues"] = failures
+    fallback = report["install"].get("fallback_anchor")
+    if fallback and report["rows_resolved_via_cli_fallback"]:
+        report["details"].append(
+            f"{report['rows_resolved_via_cli_fallback']} row(s) resolved through the CLI "
+            f"package's own context ({fallback}) — the profile plane does not carry them")
     plane = install_probe.get("source") or "unknown plane"
     oracle_label = ", ".join(
         f"{name}@{entry.get('version') or '?'}"

@@ -50,7 +50,16 @@ PATCH_FILE = _REPO_ROOT / "cordis.patch.yml"
 #     the honest subject for a "row without schema" fixture;
 #   * `@deepseek-ai/dsh-tool-todo` — schema-bearing row (D-44), used as the
 #     child of a group when the fixture needs one.
-NO_SCHEMA_MODULE = "@deepseek-ai/dsh-tool-ask-user"
+#: FX-NO-SCHEMA-* must prove the guard's "module exports no Config" branch.
+#: A HOST package is the wrong vehicle: 0.2.1 added a `Config` to
+#: `dsh-tool-ask-user`, so the premise silently flipped to "schema accepts the
+#: bogus key" and the fixture stopped testing what it names. A local module
+#: beside the composition keeps the premise host-version independent.
+NO_SCHEMA_MODULE = "./fixture-no-schema-plugin.mjs"
+#: Emitted next to FX-NO-SCHEMA-*; exports `apply` and no `Config`.
+NO_SCHEMA_FIXTURE_SOURCE = "export function apply() {}\n"
+#: Fixtures that carry the companion module above.
+NO_SCHEMA_FIXTURES = ("FX-NO-SCHEMA-01", "FX-NO-SCHEMA-02")
 SCHEMA_MODULE = "@deepseek-ai/dsh-tool-todo"
 PERSONA_MODULE = "@deepseek-ai/dsh-persona"
 SKILL_FS_MODULE = "@deepseek-ai/dsh-skill-filesystem"
@@ -533,6 +542,9 @@ def emit_fixture(fixture_id, out_dir):
     destination.mkdir(parents=True, exist_ok=True)
     target = destination / filename
     target.write_bytes(fixture_bytes(fixture_id))
+    if fixture_id in NO_SCHEMA_FIXTURES:
+        (destination / NO_SCHEMA_MODULE[2:]).write_text(
+            NO_SCHEMA_FIXTURE_SOURCE, encoding="utf-8", newline="\n")
     return target
 
 

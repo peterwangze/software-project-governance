@@ -730,7 +730,7 @@ Proposed ADR 增量：R3-B1 已证明当前所有权协议不满足取消门；�
 
 ### 16.4 仍未完成（不并入本次交付）
 
-1. 诊断面适配：`check_dsh_preset_compat` 把 shipped legacy 模板对齐 0.2 shelf（`workflow-ptc`）后，在用户真实 profile 平面（仍是 0.1.x 包集、缺 `dsh-workflow-ptc`）上判 FAIL；同一失败在干净 HEAD worktree 复现。正确方向是按宿主实际解析平面校验 **native 派生行**，并把 legacy 模板标为 legacy 面（FIX-454 后续）。
+1. 诊断面适配（2026-10-20 已完成第一切片）：`check_dsh_preset_compat` 现在是**双平面**解析——profile 平面解析失败的行回退到 CLI 包自身 context（`dsh` 0.2 对宿主包真实使用的第二平面），报告披露 `rows_resolved_via_cli_fallback` 与实际锚点；真实环境由 FAIL 转 PASS（19/23 行校验、1 行经 CLI 回退、4 行 NO_SCHEMA 披露）。同时把 `FX-NO-SCHEMA-*` 从「宿主某包无 Config」的版本敏感前提改为**自带零 schema 模块**，消除宿主升级导致的断言翻转。剩余：native 派生行本身尚未纳入探针（当前仅校验 legacy 模板），`launch.py --install` 仍是 legacy 语义。
 2. `launch.py --install` / `--smoke` 仍是 legacy 语义；0.2 宿主上应明确标注或改走 native 说明。
 3. 取消协议（§15 U）与 publication fence：未实现、未验证，不声称已解决。
 4. 多 profile / 桌面 / headless：本轮只验收 current-web；其余 NOT_RUN。

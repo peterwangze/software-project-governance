@@ -2417,14 +2417,26 @@ class TestFixtureEmitter(unittest.TestCase):
         self.assertFalse([item for item in tracked
                           if Path(item).name.startswith("FX-")], tracked)
 
-    def test_no_schema_fixture_uses_a_measured_zero_schema_row(self):
+    def test_no_schema_fixture_uses_a_zero_schema_module_of_its_own(self):
         # AUDIT-153 D-44 measured `@deepseek-ai/dsh-tool-ask-user` as a row
-        # whose module exports no `Config`; the fixture must not invent one.
+        # whose module exported no `Config`. dsh 0.2.1 gave that package a
+        # `Config`, so anchoring the fixture to a host package made it test the
+        # opposite premise (a schema that accepts the bogus key) without saying
+        # so. The fixture now ships a local module that provably exports no
+        # `Config`; the premise is a property of this repository, not of the
+        # installed host version.
         with tempfile.TemporaryDirectory() as tmp:
-            text = dsh_fixtures.emit_fixture(
-                "FX-NO-SCHEMA-01", Path(tmp)).read_text(encoding="utf-8")
-        self.assertIn("@deepseek-ai/dsh-tool-ask-user", text)
+            path = dsh_fixtures.emit_fixture("FX-NO-SCHEMA-01", Path(tmp))
+            text = path.read_text(encoding="utf-8")
+            companion = dsh_fixtures.NO_SCHEMA_FIXTURE_SOURCE
+            module = path.parent / dsh_fixtures.NO_SCHEMA_MODULE[2:]
+            emitted = module.read_text(encoding="utf-8")
+        self.assertIn(dsh_fixtures.NO_SCHEMA_MODULE, text)
+        self.assertNotIn("@deepseek-ai/", text)
         self.assertIn("totallyBogusKeyThatMustBeRejected", text)
+        self.assertEqual(emitted, companion)
+        self.assertNotIn("Config", emitted)
+        self.assertIn("export function apply", emitted)
 
 
 class TestFixturePayloads(unittest.TestCase):

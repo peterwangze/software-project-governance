@@ -522,7 +522,22 @@ _SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv",
                         # Task/CI sandboxes hold throwaway repo copies (their own
                         # agent-presets/ trees are not shipped compositions);
                         # scanning them finds rows nobody deploys.
-                        ".codex-sandbox", "sandboxes"})
+                        ".codex-sandbox"})
+
+#: Repo-internal sandbox paths, matched as a path *pair* rather than by the
+#: generic directory name (CODE R0 F9). A plain `"sandboxes"` entry in
+#: ``_SKIP_DIRS`` silently hid every product directory that happened to carry
+#: that common name; the repository's own task sandboxes are the only tree this
+#: guard owns, so it is spelled as the path it actually is.
+_SKIP_PATH_PAIRS = frozenset({(".governance", "sandboxes")})
+
+
+def _is_skipped_relative(parts: Sequence[str]) -> bool:
+    """Is this repo-relative path inside a tree the composition walk ignores?"""
+    if any(part in _SKIP_DIRS for part in parts):
+        return True
+    return any((parts[index], parts[index + 1]) in _SKIP_PATH_PAIRS
+               for index in range(len(parts) - 1))
 
 #: Wall-clock budget for one probe run (it imports ~30 plugin packages).
 DEFAULT_PROBE_TIMEOUT = 180
@@ -1242,8 +1257,20 @@ def locate_dsh_install(env: Optional[dict] = None,
     be worse than ``NOT_RUN``.
 
     Returns ``{"status", "reason", "source", "plane", "node_modules",
-    "dsh_package", "dsh_version", "cli_package", "resolution_context", "resolution_anchor", "oracle_packages",
-    "other_planes"}``.
+    "dsh_package", "dsh_version", "cli_package", "resolution_context",
+    "resolution_anchor", "oracle_packages", "other_planes"}`` plus the
+    FEAT-102 second-plane facts:
+
+    * ``fallback_anchor`` — the CLI package's own ``package.json`` used as the
+      second resolution plane, or ``None`` when no such context exists;
+    * ``fallback_anchor_source`` — which source produced that anchor (the
+      selected profile plane, another profile plane, or the ``dsh`` install
+      anchor on PATH) so a report never hides which authority was borrowed;
+    * ``registry_package`` — the host package that owns natively declared
+      presets, or ``None``;
+    * ``protocol`` — ``native`` (registry package found), ``legacy`` (a CLI
+      plane was resolved but carries no registry package), or ``unknown``
+      (neither plane was resolvable; never silently reported as legacy).
     """
     env = os.environ if env is None else env
     result = {
@@ -1330,13 +1357,31 @@ def locate_dsh_install(env: Optional[dict] = None,
     package_json = chosen.joinpath(*install_anchor)
     result["dsh_package"] = str(package_json.parent) if package_json.is_file() else None
     cli = _package_version(chosen, cli_package_name)
+    cli_source = chosen_plane if cli is not None else None
     if cli is None:
         # A profile plane mirrors the INSTALLATION's dependencies; the CLI
         # package itself may legitimately live only in the install tree.
         for label, plane in _profile_planes(env):
             cli = _package_version(plane, cli_package_name)
             if cli is not None:
+                cli_source = label
                 break
+    if cli is None and chosen_context != "cli":
+        # CODE R0 F3: the selected profile plane can carry every host ROW
+        # package while still missing the CLI manifest (the pnpm mirror shape).
+        # Giving up here left `fallback_anchor` unset, so a perfectly mountable
+        # host row resolved in the CLI plane was reported MODULE_UNRESOLVED and
+        # the host was labelled `legacy`. Degrade to the executable's own
+        # install anchor instead — disclosed via `fallback_anchor_source`, and
+        # every resolution through it still passes `resolveWithin()` against
+        # THAT context's node_modules links (the containment rule is unchanged).
+        executable = which("dsh")
+        if executable:
+            found = _walk_up_for_node_modules(Path(executable).resolve().parent)
+            if found is not None:
+                cli = _package_version(found, cli_package_name)
+                if cli is not None:
+                    cli_source = f"install anchor (`dsh` on PATH: {executable})"
     result["dsh_version"] = cli["version"] if cli else None
     result["cli_package"] = dict(cli or {"version": None, "path": None},
                                  note=("informational only — the installed CLI "
@@ -1346,12 +1391,21 @@ def locate_dsh_install(env: Optional[dict] = None,
         candidate = Path(cli["path"]) / "package.json"
         if candidate.is_file():
             result["fallback_anchor"] = str(candidate)
+            result["fallback_anchor_source"] = cli_source
     registry = _package_version(chosen, _fact("_registry_package"))
     if registry is None and cli and cli.get("path"):
         registry = _package_version(Path(cli["path"]) / "node_modules",
                                     _fact("_registry_package"))
     result["registry_package"] = registry
-    result["protocol"] = "native" if registry else "legacy"
+    if registry is not None:
+        result["protocol"] = "native"
+    elif cli is not None:
+        # The CLI plane was found and carries no registry row: a genuinely
+        # legacy host. With neither plane readable the face is `unknown` — never
+        # a silent "legacy" (CODE R0 F7).
+        result["protocol"] = "legacy"
+    else:
+        result["protocol"] = "unknown"
     result["oracle_packages"] = _oracle_versions(anchor)
     for label, plane in candidates:
         if plane == chosen:
@@ -1383,7 +1437,7 @@ def discover_compositions(root: os.PathLike) -> list:
             if not path.is_file():
                 continue
             relative = path.relative_to(root)
-            if any(part in _SKIP_DIRS for part in relative.parts):
+            if _is_skipped_relative(relative.parts):
                 continue
             found.append(path)
     return sorted(set(found), key=lambda item: item.relative_to(root).as_posix())
@@ -2118,15 +2172,27 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
             f"delivery protocol: native declarations ({_fact('_registry_package')}@"
             f"{registry.get('version') or '?'} installed) — the preset is derived at boot; "
             "the shipped composition template is validated for legacy hosts only")
-    else:
+    elif protocol == "legacy":
         report["details"].append(
             "delivery protocol: legacy user-root directory (no agent-presets registry "
             "package in the installed plane)")
-    fallback = report["install"].get("fallback_anchor")
-    if fallback and report["rows_resolved_via_cli_fallback"]:
+    else:
+        # CODE R0 F7: `unknown` must not borrow the legacy wording — the two
+        # verdicts point at different remediations.
         report["details"].append(
-            f"{report['rows_resolved_via_cli_fallback']} row(s) resolved through the CLI "
-            f"package's own context ({fallback}) — the profile plane does not carry them")
+            "delivery protocol: unknown — could not determine whether this host "
+            "reads a user-root directory or natively declared presets")
+    fallback = report["install"].get("fallback_anchor")
+    if fallback:
+        anchor_source = report["install"].get("fallback_anchor_source")
+        label = f"{fallback}" + (f"; anchor source: {anchor_source}" if anchor_source else "")
+        if report["rows_resolved_via_cli_fallback"]:
+            report["details"].append(
+                f"{report['rows_resolved_via_cli_fallback']} row(s) resolved through the CLI "
+                f"package's own context ({label}) — the profile plane does not carry them")
+        elif protocol == "native":
+            report["details"].append(
+                f"CLI-plane fallback available ({label}) — no row needed it in this run")
     plane = install_probe.get("source") or "unknown plane"
     oracle_label = ", ".join(
         f"{name}@{entry.get('version') or '?'}"

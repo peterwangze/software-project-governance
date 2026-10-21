@@ -1,9 +1,9 @@
-# FEAT-102：DSH adapter 版本依赖解耦设计（待独立审查）
+# FEAT-102：DSH adapter 版本依赖解耦设计（R7 修订，待 R7 复审）
 
-- 日期：2026-10-16；初始时序修订：2026-10-17；G 提案：2026-10-18；R3-B1 所有权修订：2026-10-19（Asia/Shanghai）；需求源：user-named。
-- 状态：R0/R1/R2 分别仅准入 S-A/S-A2/S-A3；S-A 时序 FAIL、L FAIL、G permit 后取消 FAIL，R3=NEEDS_CHANGE/1。2026-10-19 修订 §15 待同一 Design Reviewer R4；产品接线 BLOCKED，运行支持/新探针/宿主补丁/发布/重装均未授权。§5.1 与 §14 的旧候选计划保留作历史，不再是当前可执行许可。
-- 事实输入：research、Design R0～R3、feasibility/admission/guarded 三份诊断及原型/raw；2026-10-19 官方 npm 精确发布物只读核查。此次仅修改本设计，不重跑宿主场景。
-- 范围：本版先恢复当前 DSH 0.2.0-rc.2 的治理预设，并减少宿主升级/插件同版迁移导致的失效。保留 CI 修复与 0.99 收尾主线。
+- 日期：2026-10-16；初始时序修订：2026-10-17；G 提案：2026-10-18；R3-B1 所有权修订：2026-10-19；**R7 设计面修订：2026-10-21**（回应 DESIGN R6 的 D-R6-1～D-R6-7，依据 `docs/reviews/review-FEAT-102-DESIGN-R6.md` 与 DEC-366）；需求源：user-named。
+- 状态（2026-10-21）：R0/R1/R2 分别仅准入 S-A/S-A2/S-A3；S-A 时序 FAIL、L FAIL、G permit 后取消 FAIL。R3/R4=NEEDS_CHANGE；DESIGN 链 R4 超 fuse 后按 M7.4 4.6 以 `REVIEW-FEAT-102-R5=BLOCKED` 终结旧 engagement（DEC-365）并重挂 R6。**R6=NEEDS_CHANGE/2**（carried `R3-B1` + 新增 legacy 自动写入 blocker）；用户已就三项行为边界作出裁定（DEC-366①②③），本 R7 修订即为该裁定的设计落地。§15 的 U 协议是**历史提案**，未实现；`R3-B1` 仍未闭合。产品接线/运行支持/发布/重装仍未授权；`§5.1`/`§14`/`§15` 保留为历史与未关闭边界。
+- 事实输入：research、Design R0～R6、feasibility/admission/guarded 三份诊断及原型/raw、CODE R0 独立审查（`REVIEW-FEAT-102-R6`）与本机安装态 0.2.1-rc.2 只读源码核对。本次仅修改本设计文档，不重跑宿主场景、不改产品代码。
+- 范围：本版以**实际安装态 DSH 0.2.1-rc.2** 为支持基线锚点（0.2.0-rc.2 作为历史记录保留不改写，见 DEC-366 附录说明），恢复 governance 预设并减少宿主升级/插件同版迁移导致的失效。保留 CI 修复与 0.99 收尾主线。
 - 用户边界：插件由用户主动卸载；适配、验收并发布后才重装。发布前一切安装/启动验收使用隔离 DSH_HOME；不修改真实 profile。
 
 ## 1. 目标与验收
@@ -46,17 +46,24 @@
 
 B 不使用 `import('@deepseek-ai/dsh-app-boot')`，也不 import 新 registry 的私有 class 来替代宿主实例。产品入口顶层仍只 import Node builtins/自有代码；repo 被 link: 安装而没有 host node_modules 是必须覆盖的正常形态。若为实现中必要的 schema 枚举导入宿主包，唯一接受路径是所选声明的公开 `entry.parent.tree.import(specifier)`，它沿该树自己的 resolution base 解析；不能使用插件 realpath 的普通 import、硬编码 N、process.argv 扫 profile 或全局缓存猜测。该方法在 closed-runtime 是否仍保真必须实测；失败返回 UNSUPPORTED，不兜底混用另一安装。
 
-### 3.1 模块职责与依赖
+### 3.1 模块职责与依赖（2026-10-21 按实际落地更新为六模块）
 
-| 模块 | 职责（单一） | 输入/输出 |
-|---|---|---|
-| lib/index.js（入口） | 接入自身 row 生命周期，选择能力协议并委托；失败 warn-only，不做 host 修改 | ctx/config → 自有启动/清理句柄 |
-| lib/dsh-preset-source.js（新） | 从公开 Loader 实际树定位一个有效 native base 声明 | ctx.loader、basePresetId → BaseSnapshot 或结构化错误 |
-| lib/dsh-preset-overlay.js（新） | 对有效 child rows 做纯数据派生，只拥有 persona.prefix 和两个 roots | BaseSnapshot、OwnPolicy → DerivedDefinition |
-| lib/dsh-preset-lifecycle.js（新） | 串行 reconcile、readiness、fingerprint、register disposer、卸载竞态 | source/overlay/registry → RuntimeOutcome |
-| 既有 adapters/dsh/launch.py、infra/dsh_compat.py/doctor | 离线物料/隔离验收/诊断相同协议，区分 native 与 legacy | 安装/平面/策略 → 四态证据 |
+| 模块 | 职责（单一） | 输入/输出 | 状态 |
+|---|---|---|---|
+| `lib/index.js`（入口） | 接入自身 row 生命周期；选择 native 或 warn-only（**不再自动写 legacy 目录**，DEC-366②）并委托；失败 warn-only，不做 host 修改 | ctx/config → 自有启动/清理句柄 | 设计已定；实现待 CODE R1（不改自动 legacy 写入） |
+| `lib/dsh-native/spec.js` | 读取自有 `host-contract.json` 的 native 块，产出声明式 spec（presetId、row 名、skill 根、token 名） | 契约文档 → spec / `null` | 已实现 |
+| `lib/dsh-native/source.js` | 从公开 Loader 实际树的声明定位唯一启用 base 声明，并判定宿主能力四态 | ctx.loader、basePresetId → located/absent/disabled/unreadable/ambiguous | 设计已定；实现待 CODE R1（四态语义见 §16.1） |
+| `lib/dsh-native/overlay.js` | 对声明做纯数据派生，只追加 persona.prefix 与两个 skill 根；原 row/group/顺序/disabled 原样保留 | declaration config、OwnPolicy → DerivedDefinition | 已实现 |
+| `lib/dsh-native/lifecycle.js` | 调 `agentPresets.register`，保存 disposer；卸载时标记 disposed、迟到 disposer 立即撤回（不取消 registry record） | definition → 登记句柄 | 已实现（R3-B1 窗口见 §16.2） |
+| `lib/dsh-native/persona.js` | 读取治理正文与预设元数据，路径 posix 化 | 包根、spec → 正文/元数据 | 已实现 |
+| `lib/dsh-native/bridge.js` | 编排：契约→能力四态→定位 base→派生→登记；结构化错误码、绝不抛穿宿主 boot | ctx、config、契约读取器 → RuntimeOutcome(简化) | 设计已定；实现待 CODE R1 |
 
-依赖 DAG：entry → lifecycle → source + overlay；source → 公共 loader；lifecycle → registry；overlay → 自有 policy/contract。infra 消费自有协议和测试 fixture，不反向被产品入口 import；无环。
+> 状态列口径：标「已实现」= HEAD `98d99c2` 已存在的实现；标「设计已定；实现待 CODE R1」= 返工工作树中有未提交、未经审查的改动，语义同 §16.4.5/6（未审、不算已落地）。
+| 既有 `adapters/dsh/launch.py`、`infra/dsh_compat.py`、`infra/dsh_doctor.py` | 离线物料/隔离验收/诊断；区分 native 与 legacy 交付面 | 安装/平面/策略 → 四态证据 | 已实现（legacy 语义待 CODE 链同步，见 §16.4） |
+
+依赖 DAG：`index` → `bridge` → `source` + `overlay` + `persona` + `lifecycle`；`source` → 公共 loader；`lifecycle` → 公共 `agentPresets`；`overlay` → 自有 policy/contract。`infra` 消费自有协议与测试 fixture，不反向被产品入口 import；无环。
+
+**接口合同 disposition（D-R6-4）**：§4.1 `BaseSnapshot`（含 `resolutionBase`/`fingerprint`）与 §4.3 `RuntimeOutcome` 的完整结构**未按原样实现**——实际实现是 `spec/source/overlay/lifecycle/persona/bridge` 六模块的结构化返回值（错误码见 §16.1 四态与 bridge 的 `code`）。原 §4.1/§4.3 保留为**历史合同**，不再作为实现必须满足的接口；`fingerprint`/`skeleton reconcile` 等项属于**延期**（未实现，且当前不承诺），`BASE_BROKEN` 审计按 DEC-366③ 降级为 known boundary（见 §4.1 修订块与 §16.2）。
 
 当前固定 host.rows 数组移入明确的 legacy 分面，不再要求 native 派生行数与旧 30 行一致。自有 host-contract 仍单一事实源，但必须区分 own-policy、protocol-capabilities、legacy-facts、measured-evidence；不能把宿主当前所有工具行变成新的永久自有清单。
 
@@ -66,7 +73,7 @@ B 不使用 `import('@deepseek-ai/dsh-app-boot')`，也不 import 新 registry �
 
 - presetId='governance'（保留已有 session identity）。
 - basePresetId='standard'（首版明确默认，可由本包 row 的 config.basePresetId 选择同 profile 中另一有效 native 声明）。
-- governancePersona 来自唯一的 `agent-presets/governance/persona.md.template`（从现模板提取治理正文，不包含宿主身份行）；native 将其追加到 base.prefix，保留宿主身份及用户前缀。包版本与包根每次由当前模块/本包 package.json 派生。
+- governancePersona 的 **canonical 正文 = `agent-presets/governance/persona.md.template`**（从现模板提取治理正文，不包含宿主身份行）；legacy composition 模板保留其渲染副本，由测试做内容同步（见 §8 S-B 与 D-R6-5）。native 将其追加到 base.prefix，保留宿主身份及用户前缀。包版本与包根每次由当前模块/本包 package.json 派生。
 - skillRoots=[当前包 skills 的绝对路径, 当前包 adapters/dsh/skill-shims 的绝对路径]。
 - personaPackage、skillFilesystemPackage 两个匹配名由契约集中维护。
 - 不声明宿主 toolName/provider/maxDepth/plan 文本/compaction 阈值等配置。
@@ -77,15 +84,25 @@ basePresetId 不得等于 presetId；不跟随“用户 default=governance”造
 
 ### 4.1 BaseSnapshot
 
+> **2026-10-21 修订（DEC-366③；回应 R6 P2-1 / D-R6-3）——本节由「硬门」正式降级为 declaration-based 派生。**
+>
+> - 实现读取的是宿主组合树的**声明**（`entry.options.config`），**不**读 `entry.fiber.config`（validated/accepted 值），也**不在登记前**执行 `registry.resolve(basePresetId)` 的 broken 审计。
+> - 因此 `BaseSnapshot` 的 `resolutionBase`/`fingerprint` 与骨架 reconcile 语义**不再要求**，对应结构未实现（见 §3.1 disposition）。
+> - **accepted-vs-raw 分叉、base raw 陈旧/broken 未审计**是**已接受的已知边界**（DEC-366③）：0.2.1-rc.2 的 preset 声明是静态 YAML + profile overlay，本轮未观测到分叉；若宿主出现「更新失败保留旧 fiber」的分叉，派生可能基于 raw 而非 accepted。
+> - 该边界 MUST 由负例测试看护（raw/accepted 不一致、base raw 陈旧或 broken 时的行为与诊断），测试面归 CODE 链（见 §16.2/§16.4）。
+> - 若要恢复硬门，必须重新引入 accepted 审计与 `BASE_BROKEN` 拒收并独立复审；不得只改本段文本。
+
 `{protocol:'native-declaration-v1', basePresetId:string, rowAddress:string, resolutionBase:string, config:{id,name?,description?,order?,plugins:Entry[]}, fingerprint:string}`
 
-读取算法：
+（上式为**历史合同**；当前实现只消费其中 `basePresetId`/`rowAddress`/`config` 的声明面，其余字段不承诺。）
+
+读取算法（历史合同，第 3、5 条已被 2026-10-21 修订降级）：
 
 1. 仅在已证明宿主有效树完成准入后调用公开 loader.entries()，不固定 preset-standard 的 Loader 地址。原 S-A 的 root settle 后读取可用于离线对照；初始产品路径需通过 §5.1 的 S-A2，不能在自身 activation 内调用 root await。
-2. 候选仅为本 host Loader 树中 name='@deepseek-ai/dsh-agent-preset' 的有效声明；按 validated `entry.fiber.config.id` 匹配 basePresetId。优先匹配 id，不硬编码 declaration row id。
-3. 不能仅读 raw entry.options.config：更新校验失败时 raw 和已接受的 config 可能不同。fiber.config 是公开已校验值；拿不到便 INVALID_BASE，不读 _config/_runner/private definitions。
+2. 〔2026-10-21 标注：当前实现按**声明**（`entry.options.config.id`）匹配，不读 `fiber.config`；见本节修订块〕候选仅为本 host Loader 树中 name='@deepseek-ai/dsh-agent-preset' 的有效声明；按 validated `entry.fiber.config.id` 匹配 basePresetId。优先匹配 id，不硬编码 declaration row id。
+3. 〔**2026-10-21 已降级为 known boundary（DEC-366③）**，见本节修订块；实现按声明面派生，不读 fiber.config〕不能仅读 raw entry.options.config：更新校验失败时 raw 和已接受的 config 可能不同。fiber.config 是公开已校验值；拿不到便 INVALID_BASE，不读 _config/_runner/private definitions。
 4. 使用 entry.disabled 的宿主语义排除被禁用及继承禁用的声明；表达式抛错不当作 disabled/pass。
-5. 要求恰好一项，plugins 是非空数组、有效 entry list。base 的公开 Fiber 已完成启动与 registry.resolve(basePresetId) 无 broken 是两个不同证据，不能互代；后者只能在不自包含的 root settled 审计点执行，不得嵌入自身 activation。初始候选如何在完成该审计前避免发布无效 base 的派生预设，仍是 S-A2 硬门；无法证明则候选失败，不能删去 BASE_BROKEN 拒收要求。
+5. 〔**2026-10-21 已降级为 known boundary（DEC-366③）**：`registry.resolve` broken 审计不在登记前执行，`BASE_BROKEN` 拒收不再是 native 路径当前要求；该边界由负例测试看护〕要求恰好一项，plugins 是非空数组、有效 entry list。base 的公开 Fiber 已完成启动与 registry.resolve(basePresetId) 无 broken 是两个不同证据，不能互代；后者只能在不自包含的 root settled 审计点执行，不得嵌入自身 activation。初始候选如何在完成该审计前避免发布无效 base 的派生预设，仍是 S-A2 硬门；无法证明则候选失败，不能删去 BASE_BROKEN 拒收要求〔**此句为历史表述**：2026-10-21 已按 DEC-366③ 降级为 known boundary，见本节修订块〕。
 6. structuredClone 取快照，保留 !!js 对象和嵌套 groups；禁止 JSON.stringify/parse 充当克隆器。fingerprint 只用于比较，可以对规范化数据做 JSON 编码+SHA-256，不能当作加载器。
 7. 原始快照不修改、不写回 Loader；不调用 loader.update/create/remove/write；源读取只通过公共声明/ctx 接口。
 
@@ -96,7 +113,7 @@ basePresetId 不得等于 presetId；不跟随“用户 default=governance”造
 输出 `{id:'governance',name:'治理协调器',description,plugins:Entry[]}`：
 
 - 找 **恰好一个启用的** personaPackage row 和一个启用的 skillFilesystemPackage row。缺失、重复、未知嵌套或不可安全判定条件均拒绝，不猜哪一个。
-- 仅将唯一治理正文追加到 persona.config.prefix，保留原 prefix（宿主身份与用户覆盖）、suffix/complete/includeRuntimeContext 以及当前所有其他字段。若完整提示策略与治理上下文冲突，应按 POLICY_CONFLICT 明确拒绝，不静默重写用户策略。base.prefix 为不可安全合并的动态表达式时同样拒收。
+- 仅将治理正文（canonical = `agent-presets/governance/persona.md.template`；legacy 模板保留测试同步的渲染副本，见 §8 S-B）追加到 persona.config.prefix，保留原 prefix（宿主身份与用户覆盖）、suffix/complete/includeRuntimeContext 以及当前所有其他字段。若完整提示策略与治理上下文冲突，应按 POLICY_CONFLICT 明确拒绝，不静默重写用户策略。base.prefix 为不可安全合并的动态表达式时同样拒收。
 - 对 skill row.config.customSkillDirs 追加两个绝对根并去重；保留现有 roots、providerName、includeDefaultRoots、watch 等全部字段。
 - 如果 config/customSkillDirs 是依赖运行上下文的 !!js，而无法不提前求值地追加，首版 UNSUPPORTED_EXPRESSION；不可提前执行表达式、丢用户 roots 或覆写为静态空值。
 - 其他每一行、disabled、provider、group、isolate、inject、顺序和未知字段原样保留。宿主新加/删除的工具自然传播。
@@ -106,9 +123,13 @@ persona/skill 条件判断首版支持已确定的普通启用配置。复杂自
 
 ### 4.3 RuntimeOutcome
 
-`{protocol, phase:'starting'|'ready'|'unsupported'|'failed'|'disposed', basePresetId, fingerprint?, packageRoot, hostVersion?, sourceAddress?, reasonCode?, message, validation:{schema,activation,composition}}`
+> **2026-10-21 disposition（D-R6-4）——本节为历史合同**：实现未提供该 `phase/validation` 结构，也不存在 `REGISTRATION_BROKEN`/`INIT_TIMEOUT`/`DISPOSED_DURING_START` 的实现。当前以 `bridge.js` 的简化结果表达：`{mode:'native'|'legacy'|'refused', code, message?, presetId?, baseAddress?, rows?}`，实际 code 集合为
+> `CONTRACT_WITHOUT_NATIVE_BLOCK`、`HOST_TREE_UNAVAILABLE`、`HOST_TREE_UNREADABLE`、`HOST_NO_LOADER_TREE`、`HOST_NO_SERVICE_INJECTION`、`HOST_NO_AGENT_PRESETS`、`HOST_WITHOUT_REGISTRY`、`REGISTRY_ROW_DISABLED`、`BASE_IS_SELF`、`BASE_NOT_FOUND`、`BASE_DUPLICATE`、`BASE_CONFIG_INVALID`、`BASE_NOT_CLONEABLE`、`PERSONA_UNREADABLE`、`PERSONA_ROW_DISABLED`、`PERSONA_CONFIG_INVALID`、`PERSONA_PREFIX_UNSUPPORTED`、`SKILL_ROW_DISABLED`、`SKILL_CONFIG_INVALID`、`SKILL_DIRS_UNSUPPORTED`、`REGISTER_REFUSED`、`REGISTERED`、`DEFERRED`、`INJECT_FAILED`、`NATIVE_BRIDGE_THREW`、`BASE_DISABLED`、`BASE_DISABLED_UNEVALUABLE`、`PERSONA_ROW_MISSING`、`PERSONA_ROW_DUPLICATE`、`SKILL_ROW_MISSING`、`SKILL_ROW_DUPLICATE`、`NATIVE_PATH_UNAVAILABLE`（**非穷举，以 CODE R1 复核为准**）。
+> 其中 `HOST_TREE_*`/`REGISTRY_ROW_DISABLED`/`BASE_*` 属"不写目录"的拒收面；`HOST_WITHOUT_REGISTRY` 在 DEC-366② 之后同样是 warn-only 且不写目录（见 §16.1）。`fingerprint`/`INIT_TIMEOUT` 等为**延期/不承诺**项。
 
-错误码至少：HOST_PROTOCOL_UNKNOWN、BASE_NOT_FOUND、BASE_DUPLICATE、BASE_DISABLED、BASE_BROKEN、BASE_CONFIG_INVALID、OWN_ID_COLLISION、OWN_POLICY_CONFLICT、UNSUPPORTED_EXPRESSION、REGISTRATION_BROKEN、INIT_TIMEOUT、DISPOSED_DURING_START。判断能力不按 host exact version equality；版本只作证据和支持范围诊断。
+〔**历史合同（2026-10-21 已被上方 disposition 取代）；保留原文仅作追溯**〕`{protocol, phase:'starting'|'ready'|'unsupported'|'failed'|'disposed', basePresetId, fingerprint?, packageRoot, hostVersion?, sourceAddress?, reasonCode?, message, validation:{schema,activation,composition}}`
+
+〔**历史合同**：以此上"实际 code 集合"为准，本段仅作追溯〕错误码至少：HOST_PROTOCOL_UNKNOWN、BASE_NOT_FOUND、BASE_DUPLICATE、BASE_DISABLED、BASE_BROKEN、BASE_CONFIG_INVALID、OWN_ID_COLLISION、OWN_POLICY_CONFLICT、UNSUPPORTED_EXPRESSION、REGISTRATION_BROKEN、INIT_TIMEOUT、DISPOSED_DURING_START。判断能力不按 host exact version equality；版本只作证据和支持范围诊断。
 
 ## 5. 生命周期、刷新与卸载
 
@@ -185,15 +206,15 @@ Design R1 仅可批准下列隔离试验；S-B～S-F 继续冻结。沿用真实
 
 | 检测结果 | 行为 | 允许声明 |
 |---|---|---|
-| registry.register + loader.entries/await + native accepted declaration 都满足 | native-declaration-v1；当前目标 0.2.0-rc.2 | 隔离全链通过后声明当前版本 runtime 支持 |
-| 已知旧 dsh-agent-presets 目录协议/公开 roots、read、copy/remove 面；无 register | UNSUPPORTED_NO_AUTOWRITER（Design R0 裁定） | legacy renderer/fixtures 仅作离线历史材料，普通 apply/install/repair/update 自动入口均隔离；不声明旧版运行支持 |
+| registry.register + loader.entries/await + native accepted declaration 都满足 | native-declaration-v1；**当前支持基线锚点 = 实际安装态 0.2.1-rc.2**（0.2.0-rc.2 为历史记录，不再作为目标锚点，见 DEC-366 附记） | 隔离全链通过且 R7 复审通过后声明当前版本 runtime 支持；支持声明限定为「native 核心切片 + 已知 pending-record 窗口」（DEC-366①） |
+| 已知旧 dsh-agent-presets 目录协议/公开 roots、read、copy/remove 面；无 register | **UNSUPPORTED_NO_AUTOWRITER（Design R0 裁定，DEC-366② 恢复并覆盖本轮新交付）**：默认只 warn、**不自动渲染、不写目录**；写目录仅保留给用户显式执行 `launch.py --install` | 不声明旧版运行支持；legacy 模板/fixtures 仅作离线材料与显式安装路径 |
 | native 缺关键能力/未知 shape/仅有旧目录残留 | 不写任何目录、不自动 legacy fallback | UNSUPPORTED / NOT_RUN，不得 PASS |
 | 当前有新 native 又留旧目录 | native 优先；残留作 legacy-residue | 不导入旧目录，不自动清理 |
 | 未安装本包 | UNINSTALLED，提供发布后重装路径 | 不自动 repair |
 
 不能以 null compat_range、旧 factsheet 路径或插件版本 marker 判支持。版本支持表可记录实测，adapter 选路按能力。若新增 dsh peers，范围须由 Reviewer 按本矩阵和实际测试裁定，不能精确钉死 rc.2、也不能用 "*" 承诺所有未来 API；peer meta optional 不代表上游 compatibility evaluator 会跳过。不引入固定版本运行时 dsh 依赖副本。
 
-legacy renderer 仍有旧自动 rmSync(target) 的安全债；Design R0 已裁定新交付的自动运行入口明确 UNSUPPORTED，绝不调用旧 writer，不再待定。历史静态材料可保留；恢复 legacy 自动运行需另作安全设计、隔离验证及独立审查，不得借回归测试执行真实 HOME 删除。
+**legacy 自动写入（2026-10-21 修订，DEC-366②）**：legacy renderer 仍带旧自动 `rmSync(target)` 的安全债；Design R0 已裁定新交付的自动运行入口明确 UNSUPPORTED，**本修订恢复该裁定的全量适用**——普通 `apply()` 在无 registry 宿主上只 warn（`UNSUPPORTED_NO_AUTOWRITER` 语义）、不渲染、不删除、不替换任何用户目录；`launch.py --install` 是**用户显式**的写入入口，其行为与风险由该命令自述承担。0.2.x registry 不扫描目录、0.1.x 目录模型需要的是 `workflow-worker-thread` 而 legacy 模板只含 `workflow-ptc`——因此自动旧路径写入的组合**没有已声明支持的目标宿主**，这正是禁止自动写入的设计依据。恢复自动写入需另作安全设计（ownership/备份/opt-in/误删防护）、隔离验证、独立审查与用户决策，不得借回归测试执行真实 HOME 删除。
 
 ## 7. 兼容探针与 doctor 的同步设计
 
@@ -225,7 +246,9 @@ Coordinator 隔离基线记录：`R/.governance/dsh-02-baseline-compat.log`，�
 ## 8. 实施切片与文件清单
 
 1. **S-A 公共最小边界隔离探针**：已完成有限 fixture 的有效声明/register/compose/dispose，时序硬门 FAIL；完整 link 安装未验收。R1 仅批准 S-A2，现候选 L 已 FAIL 并退出。当前只提请 R2 审查 §14 的 G 合同变更/S-A3；没有下一切片批准前不运行；所有先行门及独立复审通过前不能开始 S-B～F。
-2. **S-B 产品接线**：lib/index.js + 三个自有模块；cordis.patch.yml 仍只 insert 本包 row，可添加本包 config.basePresetId；提取唯一治理正文到 `agent-presets/governance/persona.md.template`，旧 composition 以专用 token 引用它，native builder 消费同一正文；共享 renderer 统一包根/版本/token/newline；禁止旧模板和新模块各留一份bootstrap。同步 `skills/software-project-governance/core/version-projections.json` 原 composition 版本投影到该唯一正文、自有 host-contract 的 payload/render token声明与 validator；legacy/native tests 对同一正文作一致性检查。package exports/files 按需纳入新文件，不添加 vendor runtime复制。
+2. **S-B 产品接线（2026-10-21 按已接受设计修订，D-R6-5）**：`lib/index.js` + `lib/dsh-native/` 六模块；cordis.patch.yml 仍只 insert 本包 row，可配 `config.basePresetId`。**persona 正文的已接受设计 = 两份副本 + 测试同步**：`agent-presets/governance/persona.md.template` 是 native 消费的正文；legacy composition 模板内保留其**渲染副本**（`lib/index.js` 注释已声明，`test_dsh_native_bridge.py` 做 whitespace-normalized 一致性检查）。原文"禁止旧模板和新模块各留一份 bootstrap"的要求**由本修订替换**——两份副本是已接受设计，补偿手段是测试同步 + 版本投影，而非单一事实源。
+   - **版本投影必达**：`skills/software-project-governance/core/version-projections.json` MUST 同时投影 `agent.cordis.yml.template` 与 `persona.md.template`；否则版本 bump 只会更新 legacy 模板，native persona 停旧版本。**2026-10-21 状态**：工作树已出现未提交的 `dsh-persona-body-version` → `persona.md.template` 投影条目（并发返工所写，**未经审查**），**不算已落地**——落地与正确性以 CODE R1 在稳定字节上的复核为准；本设计只声明"必须投影"这一合同。
+   - legacy/native 测试对同一正文作内容一致性检查；package exports/files 按需纳入新文件，不添加 vendor runtime 复制。
 3. **S-C 协议/探针**：adapters/dsh/host-contract.json、infra/dsh_contract.py、dsh_compat.py；native/legacy 分面；CLI resolutionAnchor 模型；capture 新事实表（只能由既有 record-evidence 正道，在隔离环境）。
 4. **S-D 工具链**：adapters/dsh/launch.py、dsh_doctor.py、checks/dsh_boundary.py、相关 test_dsh_*；native install/smoke 改为声明登记/隔离 profile，而非把旧目录当已安装。legacy 自动运行按 R0 明确拒收，离线历史 fixtures 保留。
 5. **S-E 文档/交付**：adapter README/manifest、顶层 README 的 DSH 安装能力段、发布 checklist/rollback；goal/subagent/ask-user 只核对当前 schema，未发现硬编码旧参数不额外重构核心 goal_bridge。
@@ -296,15 +319,16 @@ tests 至少放入既有 test_dsh_adapter.py、test_dsh_compat.py、test_dsh_con
 ## 12. Proposed ADR（由 Coordinator 机录）
 
 **标题**：以公开有效预设声明派生替代DSH静态全量模板及目录交付  
-**日期**：2026-10-16；时序修订 2026-10-17；候选 L 失败回灌及 G 提案 2026-10-18  
+**日期**：2026-10-16；时序修订 2026-10-17；候选 L 失败回灌及 G 提案 2026-10-18；原生派生决策 2026-10-20（DEC-364）；R7 设计面修订 2026-10-21（DEC-366①②③）  
 **背景**：DSH当前0.2退休目录扫描；项目旧adapter仅写目录且复制整套标准工具行、只按自身版本刷新，形成宿主升级与路径变动失效。用户先要求适配和解耦，且主动卸载并要求发布后再装。  
-**推荐决策**：保留公共 Loader/registry 边界及 persona/roots 内容策略；G 当前形态取消门失败，不再作为可接线实现。§15 建议独立审查 U 的 caller-owned 取消终态/读取唤醒/发布 fence 上游协议需求，Coordinator 就隔离补丁范围取得用户明确授权；该协议待实现，当前没有 runtime 适配完成的决策。  
+**推荐决策（2026-10-21 更新）**：采纳**原生派生**（DEC-364）作为运行时路径——本包 row 经公开 `agentPresets` 服务登记一个从宿主声明派生的 `governance` 预设，只追加 persona.prefix 与两个 skill 根，不复制整套工具行、不写 `$DSH_HOME`；无 registry 宿主恢复 R0 的 `UNSUPPORTED_NO_AUTOWRITER`（warn-only、不自动写目录，写目录仅留给显式 `launch.py --install`，DEC-366②）。§5.1/§14 的 M/L/G 候选均已失败退出，§15 的 U 协议是**未实现的历史提案**，不作为已完成能力。  
+**未闭合边界（不得写成已解决）**：`R3-B1`——`registry.register` 仍 `await record.ready` 后才交 disposer，本包 cleanup 不取消该 pending record；native 切片只消除了"own cleanup 自等待"，**不提供取消**。用户已于 2026-10-21 明确接受该窗口（DEC-366①），支持声明因此限定为「native 核心切片 + 已知 pending-record 窗口」，不得写"取消已解决"；取消协议的真正闭环由已授权的 FEAT-103（DEC-363 隔离补丁验证）承接。raw/accepted 与 base-broken 审计按 DEC-366③ 降级为 known boundary（见 §4.1/§16.2）。  
 **备选方案与排除**：A静态声明继续维护工具副本；C公共组合reader可行但增加模块解析和运行态一致性面；D全局注入违反预设隔离。  
-**影响范围**：lib入口及三个自有模块、host-contract与infra探针/doctor/launch/boundary、adapter文档/manifest和测试；不得改宿主源码，不触碰暂停FIX-445字节。  
+**影响范围**：lib入口及 `lib/dsh-native/` 六模块、host-contract与infra探针/doctor/launch/boundary、adapter文档/manifest和测试；不得改宿主源码，不触碰暂停FIX-445字节。  
 **后果/风险**：S-A 暴露 boot 后登记不可见；S-A2 的 Loader await intercept 候选 L 实测首 lookup 失败，已退出。新 G 提案需要 guard+gated wrapper 的显式基础设施差量，在保持两个业务内容差量之外改变树结构；其 seed/accepted 审核、公开解析、无环及真实卸载全部待 S-A3 证伪，不能把源码构件等同方案可用。C/F 保留，H 当前缺少所需公开 setup/加法挂载契约；旧自动运行按 R0 明确 UNSUPPORTED_NO_AUTOWRITER。  
 **可逆性**：可逆产品接线；保留旧目录用户数据，回滚只移除本包原生row或revert本任务提交。  
-**后续动作**：同一 Design Reviewer R4 审查 §15 的 caller-owned 取消协议需求；Coordinator 就隔离上游补丁范围取得明确授权后才实施。缺接口时继续独立 CI/工具链，适配目标不标完成；上游与本项目集成门均通过后再解锁产品/0.99发布和发布后重装。  
-**审查结论**：R0/R1/R2 仅分别准入三次隔离切片；G 取消门 FAIL，R3 NEEDS_CHANGE/1，R4 PENDING。产品接线 BLOCKED、runtime NOT_RUN，新探针/宿主改动/风险接受均未授权。  
+**后续动作**：DESIGN R7 复审本修订；CODE 链按 R6 §9.2（I-R6-1～I-R6-7）与 R7 合同回归，含 legacy 默认不写、四态语义、raw/accepted 负例、persona 版本投影落地。缺接口时继续独立 CI/工具链；适配目标不标完成；上游与本项目集成门均通过后再解锁产品/0.99 发布和发布后重装。  
+**审查结论（2026-10-21）**：R0/R1/R2 仅分别准入三次隔离切片；S-A/S-A2/G 均 FAIL；R3=NEEDS_CHANGE/1、R4=NEEDS_CHANGE、R5=BLOCKED（V3 fuse 升级终结，DEC-365）、**R6=NEEDS_CHANGE/2**（carried R3-B1 + legacy 自动写入 blocker）；R7 为设计面修订、待复审。产品接线仍 BLOCKED、runtime 支持限定为隔离实测的 native 核心切片；发布/重装未授权。  
 
 ## 13. 2026-10-17 时序修订的外部只读命令审计
 
@@ -705,34 +729,78 @@ Proposed ADR 增量：R3-B1 已证明当前所有权协议不满足取消门；�
 
 ## 16. 2026-10-20：原生派生落地（S-B 首个可用切片）与隔离真机验收
 
-**结论先行**：`lib/dsh-native/` 已实现并在隔离 `DSH_HOME` 的真实 dsh **0.2.1-rc.2** 上验收通过；运行时不再依赖 §5.1 的登记时序候选（M/L）、§14 的 G 或 §15 的 U 协议，因为本实现既不创建 guard/wrapper，也不在自身 activation 内等待 base/root/mount。
+**结论先行（2026-10-21 限定）**：`lib/dsh-native/` 已实现，**native 核心切片**在隔离 `DSH_HOME` 的真实 dsh **0.2.1-rc.2** 上通过验收，并由 DESIGN R6 与 CODE R0 两轮独立审查分别复现/复核（R6 §5.3、CODE R0 §3.1）；运行时不再依赖 §5.1 的登记时序候选（M/L）、§14 的 G 或 §15 的 U 协议。**限定**：这是"核心切片"证据，不是全链通过——`R3-B1` 窗口未闭合（DEC-366① 接受）、raw/accepted 边界已接受（DEC-366③）、legacy 自动写入按 DEC-366② 移除（实现面待 CODE R1）、T01-T20 矩阵大部分 NOT_RUN（R6 §7）。
 
 ### 16.1 实际机制（取代 §14/§15 作为运行时路径）
 
-1. `apply()` 先用契约声明判断宿主能力：组合树里是否有启用的 `@deepseek-ai/dsh-agent-preset-registry` row（`lib/dsh-native/source.js`）。有 → native；没有 → legacy 目录渲染；有但被禁用 → 明确拒收、不写目录。
+1. `apply()` 先用契约声明判断宿主能力，得到**四态**（`lib/dsh-native/source.js` + `bridge.js`，2026-10-21 按 D-R6-2/D-R6-7 修订）：
+   - **absent**：组合树里没有 `@deepseek-ai/dsh-agent-preset-registry` row → **warn-only（`UNSUPPORTED_NO_AUTOWRITER` 语义）、不渲染、不写任何目录**；legacy 目录只能由用户显式 `launch.py --install` 写入（DEC-366②）。
+   - **disabled**：声明了该 row 但被禁用/继承禁用（含 `!!js` 求值结果） → 明确拒收（`REGISTRY_ROW_DISABLED`），不写目录。
+   - **unreadable**：loader 树不可读、`entries()` 抛错、loader 服务缺失且无法 inject → 拒收（`HOST_TREE_UNAVAILABLE` / `HOST_TREE_UNREADABLE` / `HOST_NO_LOADER_TREE`），不写目录，**绝不折叠为 legacy**。
+   - **ambiguous**：base 声明缺失/重复/不可安全克隆/配置非法 → 拒收（`BASE_NOT_FOUND` / `BASE_DUPLICATE` / `BASE_NOT_CLONEABLE` / `BASE_CONFIG_INVALID`），不写目录。
+   四态中只有 native 分支会产生登记；其余三态与 absent 一样是 warn-only，**没有任何自动 legacy 写入**。
 2. native 通过 `ctx.inject(['agentPresets'], …)` 等公开服务（profile row 的 `apply()` 先于服务提供，这是服务依赖而非 sleep/排序猜测）；回调里读 `ctx.get('loader').entries()` 的 **declaration**（`options.config`）定位唯一启用的 `standard` 声明。
-3. `lib/dsh-native/overlay.js` 纯函数派生：`structuredClone` 整份 plugins，只追加 persona.prefix（正文来自 `agent-presets/governance/persona.md.template`）与 `skill-filesystem.customSkillDirs` 的两个包内绝对根；其余行/group/isolate/`!!js`/顺序原样保留。
-4. `agentPresets.register(definition)` 建立登记；row cleanup 只标记 disposed 并在 disposer 到达后撤回，**不等待** in-flight activation。
+3. `lib/dsh-native/overlay.js` 纯函数派生：`structuredClone` 整份 plugins，只追加 persona.prefix（正文来自 `agent-presets/governance/persona.md.template`）与 `skill-filesystem.customSkillDirs` 的两个包内绝对根；其余行/group/isolate/`!!js`/顺序原样保留。若 base 里同名 persona/skill row 有 disabled 与 enabled 并存，按"恰好一个启用 row"判定并明确拒收（不猜）。
+4. `agentPresets.register(definition)` 建立登记；row cleanup 只标记 disposed 并在 disposer 到达后撤回，**不等待** in-flight activation。**注意**：这不等于取消——registry 的 pending record 仍会等到 mount 完成（`R3-B1` 窗口，见 §16.2；用户已于 DEC-366① 接受该窗口）。
 
 ### 16.2 与原硬门的关系（诚实边界）
 
-- **R3-B1 取消语义未消除**：registry 仍要等 activation 才交出 disposer。本实现让自身卸载不等待它，因此不形成等待环；但"卸载瞬间已进入 registry 的 pending record 会等到 mount 完成"这一窗口仍在。它不再阻塞运行时交付，作为**已知边界**登记，不声明 U 协议已实现。
-- **raw vs accepted**：读取的是组合树 declaration（`options.config`）。若宿主后续出现"更新失败保留旧 fiber"的分叉，派生可能基于 raw 而非 accepted；0.2.1 的 preset 声明是静态 YAML + profile overlay，本轮未观测到分叉。不为此引入宿主包 import 或 schema 复核（那会重新引入版本耦合）。
+- **R3-B1 取消语义未消除（仍未闭合，不是"已解决"）**：registry 仍要等 activation 才交出 disposer（安装态 0.2.1-rc.2 `register` 同步建 record、`await record.ready` 后才 return disposer，`unregister` 同样 await）。本实现让自身卸载不等待它，因此不形成等待环；但"卸载瞬间已进入 registry 的 pending record 会等到 mount 完成"这一窗口仍在——native 切片**不提供取消**。该窗口已由用户 2026-10-21 明确接受（**DEC-366①**），因此支持声明只能是「native 核心切片 + 已知 pending-record 窗口」，**不得写"取消已解决"**，FEAT-102 不因此标完成；真正闭环由已授权的 FEAT-103（DEC-363 隔离补丁验证）承接。§15 的 U 协议保留为历史提案，不得表述为已实现。
+- **raw/accepted 与 base-broken（已接受的已知边界，DEC-366③）**：读取的是组合树**声明**（`options.config`），不读 `entry.fiber.config`，也不在登记前做 `registry.resolve(basePresetId)` 的 broken 审计。若宿主后续出现"更新失败保留旧 fiber"的分叉，派生可能基于 raw 而非 accepted；base raw 陈旧/broken 时本路径不会在 register 前拒收，而是可能登记出一个最终 broken/pending 的派生预设。0.2.1 的 preset 声明是静态 YAML + profile overlay，本轮未观测到分叉。该边界 MUST 由**负例测试**看护（raw/accepted 不一致、base raw 陈旧或 broken、`BASE_CONFIG_INVALID`/`BASE_NOT_CLONEABLE` 拒收），测试面归 CODE 链（I-R6-6）；要恢复硬门须重新引入 accepted 审计并另审。
 - **热刷新未实现**：不监听 `app-boot/config-reload`；宿主升级/包路径变化要求重启（宿主既有语义）。相同 preset id 重复注册会同步拒收并 warn，不覆盖。
-- **诊断面未同步**：`dsh_compat`/`doctor` 仍以 legacy 组合为主要校验对象；`launch.py --install` 仍是 legacy 渲染。0.1.x 的静态组合支持明确退役——legacy 模板只对齐当前 shelf。
+- **诊断面未同步**：`dsh_compat`/`doctor` 仍以 legacy 组合为主要校验对象；`launch.py --install` 仍是 legacy 语义的显式写入入口。0.1.x 的静态组合支持明确退役——legacy 模板只对齐当前 shelf（`workflow-ptc`），而 0.2.x registry 不扫描目录、0.1.x 目录模型需要的是 `workflow-worker-thread`；因此**自动写入的组合没有已声明支持的目标宿主**，这正是 DEC-366② 禁止自动写入的依据。
 
-### 16.3 验收证据（2026-10-20，Windows，隔离 DSH_HOME）
+### 16.3 验收证据（2026-10-20 采集；2026-10-21 补充测试状态与限定）
 
 - 环境：真实 `dsh plugin --profile web add link:<repo>` 的隔离 profile；dsh 0.2.1-rc.2；`${DSH_HOME}` 重定向到仓库 `.governance/sandboxes/dsh021-baseline`，真实 `~/.dsh` 未读写。
 - 观测：roster 含 `governance`（名称「治理协调器」，`broken=null`）；`resolve('governance')` 无 broken；`sessionController.create({agentPreset:'governance'})` 后 `composedPreset=governance`；治理会话 skill 目录含 `software-project-governance` 与 9 个命令 shim；`standard` 会话不含治理 skill（无泄漏）；`standard` 未被修改；`${DSH_HOME}/.agent-presets` **不存在**（native 不写目录）。
-- 回归：`test_dsh_adapter` 77 pass、`test_dsh_boundary` 136 pass、`test_dsh_doctor` 92 pass、新增 `test_dsh_native_bridge` 7 pass；`test_dsh_contract` / `test_dsh_compat` 的少量失败与本改动无关（同一失败在 HEAD 干净 worktree 复现，见 §16.4）。
-- 反例：重复 base → 不登记并 warn；registry row 被禁用 → 拒收；无 registry row → 走 legacy；`apply()` 在 native 宿主上不写任何文件。
+- 回归（**权威实测**）：**585 passed / 0 failed / 0 skipped（119 subtests，670.36s，UTC 2026-10-20 13:00:27.929Z→13:11:38.991Z，exit 0）**，证据 **EVD-2120**（返工第一轮稳定完成）。R6 早期独立复跑在 HEAD `98d99c2` 上为六组 **570 passed**（native 7 / adapter 77 / boundary 136 / doctor 92 / contract 122 / compat 136），作为时点记录保留。2026-10-21 另有一次返工进行中的试跑得到 `580 passed / 5 failed`——属 **conftest 未收口、测试期间工作树仍被并发修改的非一致快照，不作为结果**。
+- 反例：重复 base → 不登记并 warn；registry row 被禁用 → 拒收不写；**无 registry row → warn-only、不写目录**（DEC-366②；写目录仅限用户显式 `launch.py --install`）；树不可读 → 拒收不写；`apply()` 在 native 宿主上不写任何文件。
 
 ### 16.4 仍未完成（不并入本次交付）
 
-1. 诊断面适配（2026-10-20 已完成第一切片）：`check_dsh_preset_compat` 现在是**双平面**解析——profile 平面解析失败的行回退到 CLI 包自身 context（`dsh` 0.2 对宿主包真实使用的第二平面），报告披露 `rows_resolved_via_cli_fallback` 与实际锚点；真实环境由 FAIL 转 PASS（19/23 行校验、1 行经 CLI 回退、4 行 NO_SCHEMA 披露）。同时把 `FX-NO-SCHEMA-*` 从「宿主某包无 Config」的版本敏感前提改为**自带零 schema 模块**，消除宿主升级导致的断言翻转。报告另新增 `protocol: native|legacy` 与一行交付面说明（依据 `own.native.registry_row_name` 包是否安装，不按版本号），使「验证的是哪条交付路径」可见。剩余：native 派生行本身尚未纳入探针（当前仅校验 legacy 模板），`launch.py --install` 仍是 legacy 语义。
+1. 诊断面适配（2026-10-20 已完成第一切片）：`check_dsh_preset_compat` 现在是**双平面**解析——profile 平面解析失败的行回退到 CLI 包自身 context（`dsh` 0.2 对宿主包真实使用的第二平面），报告披露 `rows_resolved_via_cli_fallback` 与实际锚点；真实环境由 FAIL 转 PASS（19/23 行校验、4 行 NO_SCHEMA 披露；**CLI 回退计数以下方事实限定为准**）。〔**2026-10-21 事实限定**：`19/23`、`NO_SCHEMA=4`、`protocol=native` 已被 CODE R0 独立复现；**`1 行经 CLI 回退` 在 EVD-2112 所述隔离 `dsh021-baseline` 上实测为 0**（`fallback_anchor=null`），仅在"profile 平面带 CLI manifest、缺 `workflow-ptc`"的合成平面复现，CODE R0 已将该条改判 **NOT_RUN** 并机录 EVD-2119——不得当作真实 profile 已复现。〕同时把 `FX-NO-SCHEMA-*` 从「宿主某包无 Config」的版本敏感前提改为**自带零 schema 模块**，消除宿主升级导致的断言翻转。报告另新增 `protocol: native|legacy` 与一行交付面说明（依据 `own.native.registry_row_name` 包是否安装，不按版本号），使「验证的是哪条交付路径」可见。剩余：native 派生行本身尚未纳入探针（当前仅校验 legacy 模板），`launch.py --install` 仍是 legacy 语义。
 2. `launch.py --install` / `--smoke` 仍是 legacy 语义；0.2 宿主上应明确标注或改走 native 说明。
-3. 取消协议（§15 U）与 publication fence：未实现、未验证，不声称已解决。
+3. 取消协议（§15 U）与 publication fence：未实现、未验证，**不声称已解决**。`R3-B1` 的 pending-record 窗口已由用户 2026-10-21 接受为已知边界（DEC-366①），支持声明因此限定为「native 核心切片 + 已知窗口」；真正闭环由 FEAT-103（DEC-363）承接。
 4. 多 profile / 桌面 / headless：本轮只验收 current-web；其余 NOT_RUN。
+5. legacy 自动写入移除（DEC-366②）：代码/契约/两份 README/测试需统一到"默认 warn-only、不自动写目录，写目录仅限显式 `launch.py --install`"。截至 2026-10-21 工作树已有未提交返工，**未经审查、不算已落地**；由 CODE R1 关闭。
+6. persona 版本投影（D-R6-5）：工作树已有未提交的 `dsh-persona-body-version` → `persona.md.template` 投影条目（并发返工所写，未经审查）；**不算已落地**，以 CODE R1 复核为准。
+7. 首 lookup / base broken / duplicate-disabled row 等负例（R6 §7 的 T10/T11/T13 与 I-R6-6）：NOT_RUN，未在本轮或 R6 的证据面内，不得读成通过。
 
-**状态更新**：FEAT-102 的运行时适配切片从 `BLOCKED` 变为 **native 路径已实现并隔离验收**；§5.1/§14/§15 的失败轨迹与提案原文保持不变，作为历史与未关闭边界保留。
+**状态更新（2026-10-21 修订后）**：FEAT-102 的运行时适配切片从 `BLOCKED` 变为 **native 核心切片已实现并隔离验收**（R6/CODE R0 独立复现核心观测）；§5.1/§14/§15 的失败轨迹与提案原文保持不变，作为历史与未关闭边界保留。本修订不改变 `R3-B1` 的未闭合状态，也不解除发布/重装授权。
+
+## 17. 2026-10-21 R7 设计面修订记录（回应 DESIGN R6，依据 DEC-366）
+
+- 修订对象：本文件；修订前 SHA-256 = `23E3B02DBF45E8A00ABD48E89162B6C43D537BEF219B93BF6B7733F7EBCD2B50`（738 行 / 99,818 bytes）。
+- 依据：`docs/reviews/review-FEAT-102-DESIGN-R6.md`（REVIEW-FEAT-102-R7，NEEDS_CHANGE/2）§9.1 D-R6-1～D-R6-7；DEC-366①②③（用户 2026-10-21 三项行为裁定）；DEC-365（V3 fuse 升级终结）。
+- 修订纪律：不改写被 R6 审过的历史事实（R3/G/S-A3 失败轨迹、§15 提案原文），只新增/更新结论与一致性；不新增未验证能力声明；不把 NOT_RUN 或合成平面结果写成 PASS；不删失败轨迹。
+
+| 项 | R6 finding | 修订位置 | 修订内容 | 依据 |
+|---|---|---|---|---|
+| D-R6-1 | P1-1（carried R3-B1） | 文首状态行、§12 ADR（推荐决策/未闭合边界/审查结论）、§16.2 R3-B1 bullet、§16.4.3 | 明确“R3-B1 **仍未闭合**、native 不提供取消、支持声明限定为「native 核心切片 + 已知 pending-record 窗口」、不得写取消已解决”；窗口由用户接受并机录；闭环交由 FEAT-103；§15 保留为历史提案 | R6 P1-1；DEC-366① |
+| D-R6-2 | P1-2（legacy 自动写入） | §6 表与段、§16.1 第 1 条、§16.2 诊断面 bullet、§16.3 反例、§16.4.5 | 无 registry 宿主改为**默认 warn-only、不自动渲染/不写目录**（`UNSUPPORTED_NO_AUTOWRITER` 恢复），写目录仅保留给用户显式 `launch.py --install`；四态统一“不写” | R6 P1-2；DEC-366② |
+| D-R6-3 | P2-1（raw/accepted + BASE_BROKEN） | §4.1 修订块 + 第 3/5 条、§16.2 新 bullet、§16.4.7 | 由硬门降级为 **declaration-based 派生**；accepted/raw 分叉与 base-broken 审计列为**已接受 known boundary**；要求负例测试看护；恢复硬门须重审 | R6 P2-1；DEC-366③ |
+| D-R6-4 | P2-3（模块/接口合同） | §3.1 模块表与 disposition、§4.3 disposition | 更新为实际六模块 `lib/dsh-native/{spec,source,overlay,lifecycle,bridge,persona}.js`；`BaseSnapshot`/`fingerprint`/`RuntimeOutcome` 标为历史合同/未实现/延期，并列出实现实际 code 集合 | R6 P2-3 |
+| D-R6-5 | P2-2（persona 双副本/投影） | §8 S-B 第 2 条 | 采用选项 B：两份副本 + 测试同步 + **版本投影必达**；如实披露投影条目在 2026-10-21 仅为**未提交、未审查**的并发返工（`dsh-persona-body-version`），落地以 CODE R1 为准 | R6 P2-2 |
+| D-R6-6 | P2-4/P2-5（测试状态/版本锚点/状态行/ADR） | §16.3 回归条、文首范围行、§6 表首行、§12 审查结论 | 测试状态改为权威实测 **585 passed / 0 failed / 0 skipped（EVD-2120）**；`580 passed/5 failed` 标为返工进行中、conftest 未收口的**非一致快照，不作结果**；支持锚点改 **0.2.1-rc.2**（0.2.0-rc.2 保留为历史）；状态行/ADR 更新到 R6/R7 | R6 P2-4/P2-5；DEC-366 附记；REVIEW-FEAT-102-R8（N-R7-1） |
+| D-R6-7 | P2-6（fallback 四态） | §16.1 第 1 条 | 写清 absent/disabled/unreadable/ambiguous 四态语义与 code 集合；后三态与 absent 一样 **warn-only、不落 legacy** | R6 P2-6；DEC-366② |
+
+- **未纳入本次修订**：§9.2 的实现面 I-R6-1～I-R6-7（交 CODE R1）；契约 `legacy_policy`、两份 README、`version-projections.json` 的字节（不在本人可改面，由 Developer/CODE 链同步）。
+- **待复审**：本修订提交 DESIGN R7 独立复审；R7 通过前不得据此声明设计完成。
+
+### 17.1 2026-10-21 复审后最小修正（依据 REVIEW-FEAT-102-R8 的 N-R7-1～5）
+
+- 复审结论：**APPROVED_WITH_NOTES / unresolved_blockers=0**；本小节记录两项"必须修正文本"+三项建议的最小落点。
+- 修正前 SHA-256（本小节落盘前）：`488140EC358B04F123E20C192D6F271A5742886BDC5E26D79609C5C50FC1CD70`。
+
+| 项 | 复审要求 | 修订位置 | 修订内容 |
+|---|---|---|---|
+| N-R7-1 | 补权威实测；`580/5` 标非一致快照；移除两句旧表述 | §16.3 回归条、§17 D-R6-6 行 | 补 **585 passed / 0 failed / 0 skipped（119 subtests，670.36s，UTC 2026-10-20 13:00:27.929Z→13:11:38.991Z，exit 0，EVD-2120）**；`580 passed / 5 failed` 明确为返工进行中、conftest 未收口的**非一致快照、不作结果**；并移除两处旧表述（失败归属 CODE R1 关闭 / 不声称全绿） |
+| N-R7-2 | §3.1 三行过报「已实现」 | §3.1（`lib/index.js` / `source.js` / `bridge.js` 行 + 表下口径） | 三行状态改「设计已定；实现待 CODE R1」；表下加统一口径：未提交、未审查 ≠ 已落地（与 §16.4.5/6 一致） |
+| N-R7-3 | §4.1 末尾与降级矛盾 | §4.1 第 5 条 | 「不能删去 BASE_BROKEN 拒收要求」标注为**历史表述**（DEC-366③ 已降级为 known boundary） |
+| N-R7-4 | §4.3 旧错误码段 | §4.3 的 code 集合、`RuntimeOutcome` 字面、「错误码至少」段 | code 集合补齐 `BASE_DISABLED`/`BASE_DISABLED_UNEVALUABLE`/`PERSONA_ROW_MISSING`/`PERSONA_ROW_DUPLICATE`/`SKILL_ROW_MISSING`/`SKILL_ROW_DUPLICATE`/`NATIVE_PATH_UNAVAILABLE` 并注「非穷举，以 CODE R1 复核为准」；后两段标**历史合同** |
+| N-R7-5 | §16.4.1 开头与后文冲突 | §16.4.1 首句 | 删「1 行经 CLI 回退」，改为「CLI 回退计数以下方事实限定为准」，与「实测 0 / 合成平面 / NOT_RUN」一致 |
+
+- 修正边界：仅本文件；未触碰代码/测试/契约/README/投影/审查报告；未 commit。
+- 后续：交同一 Reviewer 做聚焦增量复核（只看这 5 处）。
+

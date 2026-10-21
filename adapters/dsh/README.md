@@ -8,8 +8,9 @@ DeepSeek Harness is a Tier 1 loading target in 0.73.0. The loading model is a **
 
 dsh 的扩展单位是 **agent preset**。本适配器有两条交付路径，按**宿主能力**选择，绝不按版本号比较（FEAT-102）：
 
-1. **原生派生（native，默认；宿主声明 `@deepseek-ai/dsh-agent-preset-registry` 时）**：`lib/index.js` 在自己激活时读取公开的 loader 组合树，定位宿主当前已组合的 `standard` 预设声明，只做两个内容差量——把治理 persona 正文追加到基础 persona 的 prefix、把本包两个 skill 根追加到 `skill-filesystem.customSkillDirs`——其余每一行（工具、group、isolate、`!!js`、顺序、禁用位）原样继承，再通过公开的 `agentPresets.register` 登记为 `governance`。**升级解耦**：宿主新增/改名/禁用工具时派生结果自动跟随，本包不持有工具行副本、不写 `$DSH_HOME`；卸载只撤回自己的登记。能力缺失或形态不支持时明确拒收（warn-only），**不回退**写目录。
-2. **静态目录投影（legacy；宿主未声明 registry row 时）**：渲染 `agent-presets/governance/agent.cordis.yml.template` 到 `${DSH_HOME}/.agent-presets/governance/`（bundle 宿主行 `ensurePreset()` 或 `launch.py --install`）。这份组合是**一次性快照**，不可能跨宿主代际保持正确——这正是原生路径移除的耦合；它只服务于仍是目录模型的旧宿主。
+1. **原生派生（native，唯一默认；宿主声明 `@deepseek-ai/dsh-agent-preset-registry` 时）**：`lib/index.js` 在自己激活时读取公开的 loader 组合树，定位宿主当前已组合的 `standard` 预设声明，只做两个内容差量——把治理 persona 正文追加到基础 persona 的 prefix、把本包两个 skill 根追加到 `skill-filesystem.customSkillDirs`——其余每一行（工具、group、isolate、`!!js`、顺序、禁用位）原样继承，再通过公开的 `agentPresets.register` 登记为 `governance`。**升级解耦**：宿主新增/改名/禁用工具时派生结果自动跟随，本包不持有工具行副本、不写 `$DSH_HOME`；卸载只撤回自己的登记。
+2. **宿主行的四种不可用态（DEC-366 ②）——一律只 warn、绝不写目录、不自动渲染**：① **absent**（组合树里没有 registry row；目录模型旧宿主需要**显式** `launch.py --install`，且 `DSH_HOME` 必须重定向到隔离目录）；② **disabled**（声明了该 row 但被禁用）；③ **unreadable**（loader 组合树无法枚举）；④ **ambiguous**（没有唯一可合并的 base 声明：缺失 / 重复 / 形态不可安全合并）。四种态各产生一条 warn 和结构化 code，row 在任何情况下都不调用 `ensurePreset()`。
+3. **静态目录投影（legacy；仅显式安装面）**：`launch.py --install` 渲染 `agent-presets/governance/agent.cordis.yml.template` 到 `${DSH_HOME}/.agent-presets/governance/`。这份组合是**一次性快照**，不可能跨宿主代际保持正确——这正是原生路径移除的耦合；它只服务于仍是目录模型的旧宿主，且必须由操作者显式触发。
 
 共享约定：`agent-presets/governance/` 的负载是组合模板、`preset.yml` 元数据与 `persona.md.template`（治理 persona 正文的单一事实源；原生路径直接读它，legacy 组合里的同文段由 `test_dsh_native_bridge.py` 保持同步）。skill 内容始终只有一份（仓库 `skills/` + `adapters/dsh/skill-shims/`），不复制进预设，也没有第二份工具清单需要维护。
 
@@ -27,10 +28,10 @@ python adapters/dsh/launch.py --install       # 手工/离线路径：渲染 ${D
 python adapters/dsh/launch.py --install --dry-run   # 只打印将要写入的路径与 token 渲染映射，不落盘
 python adapters/dsh/launch.py --smoke         # 隔离 DSH_HOME 下的预设加载冒烟闸门（0 PASS / 1 FAIL / 2 REFUSED）
 python adapters/dsh/launch.py --bootstrap-project <项目目录>   # 写入项目级 AGENTS.md
-git -C <仓库> pull    # 升级后刷新用户根预设：pull 完成后重启 dsh（宿主行 ensurePreset() 按包版本幂等重渲染；--sync 仅限隔离 DSH_HOME）
+git -C <仓库> pull    # 升级后：native 宿主重启即生效；用户根目录模型安装需**显式** launch.py --install（隔离 DSH_HOME；宿主行不自动渲染）
 ```
 
-常用路径不需要 `--install`：`dsh plugin --profile web add "link:<本仓库绝对路径>"` + **重启**。在声明了 agent-preset registry 的宿主（0.2+）上，包内宿主行按能力检测走**原生派生**——不写用户根、不依赖包版本号、宿主工具变化自动跟随；只有未声明 registry row 的旧宿主才渲染用户根目录。
+常用路径不需要 `--install`：`dsh plugin --profile web add "link:<本仓库绝对路径>"` + **重启**。在声明了 agent-preset registry 的宿主（0.2+）上，包内宿主行按能力检测走**原生派生**——不写用户根、不依赖包版本号、宿主工具变化自动跟随；未声明 registry row 的旧宿主（连同 disabled/unreadable/ambiguous 四种不可用态）一律只 warn、**不渲染用户根目录**（DEC-366 ②），目录模型需要显式 `launch.py --install`。
 
 然后：启动 dsh 会话并选择「治理协调器」预设（或在被治理项目目录里直接开任意预设会话，由 `AGENTS.md` 激活）。原生宿主上该预设由宿主 registry 在启动时登记，选择器显示 `preset.yml` 的名称，不再依赖 `${DSH_HOME}/.agent-presets/` 目录是否存在。
 
@@ -44,7 +45,7 @@ dsh 升级或 profile 清单重置/重装后，插件的 `dsh.profile.bundles` �
 dsh plugin --profile web add "link:<本仓库绝对路径>"
 ```
 
-然后重启 dsh——bundle 层是 boot-time 应用，非 HMR，不重启不生效。注意用户根预设（`${DSH_HOME}/.agent-presets/governance`）的刷新正道同样是重启 dsh——bundle 宿主行 `ensurePreset()` 按包版本幂等重渲染（`link:` 安装下 `git pull` 已更新 Junction 目标，重启即生效）；`launch.py --sync` 不适用真实用户根（write_side_refusal 设计性拒绝，exit 2），仅限显式重定向 `DSH_HOME` 的隔离环境（冒烟/测试/离线渲染），且不恢复 bundle 注册。验证：重启后 profile 的 package.json 中 `dsh.profile.bundles` 应含 `@peterwangze/software-project-governance-plugin`；预设选择器应出现「治理协调器」（用户根 ⇒ 自定义预设，可删除、可打开目录）。
+然后重启 dsh——bundle 层是 boot-time 应用，非 HMR，不重启不生效。注意用户根预设（`${DSH_HOME}/.agent-presets/governance`）**不再由宿主行渲染**：bundle 宿主行只做 native 登记或 warn（DEC-366 ②），目录模型下刷新/重装一律走**显式** `launch.py --install`（`link:` 安装下 `git pull` 已更新 Junction 目标，显式重装后重启即生效）；`launch.py --sync` 不适用真实用户根（write_side_refusal 设计性拒绝，exit 2），仅限显式重定向 `DSH_HOME` 的隔离环境（冒烟/测试/离线渲染），且不恢复 bundle 注册。验证：重启后 profile 的 package.json 中 `dsh.profile.bundles` 应含 `@peterwangze/software-project-governance-plugin`；预设选择器应出现「治理协调器」（用户根 ⇒ 自定义预设，可删除、可打开目录）。
 
 ## 验证
 

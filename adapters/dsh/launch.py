@@ -14,10 +14,11 @@ Single source (FIX-310 / DEC-187, 2026-09-12): the package's preset payload is
 template ``agent.cordis.yml.template`` (the ONE composition source) and
 ``preset.yml``. Nothing is duplicated: ``skills/``, ``commands/`` and
 ``agents/`` stay the repository's shared core, referenced ABSOLUTELY from the
-rendered file. ``lib/index.js`` ``ensurePreset()`` renders the identical
-composition automatically on bundle boot; this launcher is the manual /
-offline path (the reference bundle ships ``install.ps1`` / ``install.sh`` for
-the same purpose). Both renderers share the same declared token contract, so
+rendered file. ``lib/index.js`` registers the same preset natively through the
+host's public agent-presets registry and never renders a directory (DEC-366 2:
+only warn when native delivery is unavailable); this launcher is the explicit /
+offline renderer (the reference bundle ships ``install.ps1`` / ``install.sh``
+for the same purpose). Both renderers share the same declared token contract, so
 they cannot disagree; ``adapters/dsh/agent.cordis.yml.template`` used to carry
 that template and now lives inside the preset payload it renders.
 
@@ -27,10 +28,10 @@ Modes:
                        by rendering ``agent-presets/governance/agent.cordis.yml.template``
                        (staging directory + rename, so a crash mid-render never
                        leaves a half-written preset). Isolated environments
-                       only: the write side refuses the real home (exit 2),
-                       and the post-`git pull` refresh of the real user
-                       preset is a dsh restart, which re-renders it by
-                       package version.
+                       only: the write side refuses the real home (exit 2).
+                       The inserted host row never re-renders the real user
+                       preset (it warns and writes nothing), so refreshing a
+                       directory-model install is this explicit command.
   --uninstall          Remove the governance preset — deletes exactly
                        ${DSH_HOME}/.agent-presets/governance/ and nothing else
                        (sibling presets and every other file under DSH_HOME

@@ -806,7 +806,7 @@
       "persona_source": "agent-presets/governance/persona.md.template",
       "persona_repo_token": "__GOVERNANCE_REPO_ROOT__",
       "registration": "public agentPresets.register during this row's activation; the registry record exists synchronously after the call; this row disposes only its own registration and never writes $DSH_HOME",
-      "legacy_policy": "the automatic HOME renderer runs only when the host has no agentPresets service AND the row config opts in (legacyAutoRender: true); otherwise the row is warn-only and writes nothing",
+      "legacy_policy": "capability-detected at row activation (DEC-366 2), never a config opt-in, and the row never renders a directory: native registration is its only delivery face. Four unavailable states are distinguished; each logs exactly one warning and writes nothing — absent (the composed tree declares no registry row: a directory-model host needs an explicit `launch.py --install` under a redirected DSH_HOME), disabled (the registry row is composed but disabled), unreadable (the loader entry tree could not be enumerated), ambiguous (no unique mergeable base declaration: missing, duplicate, or an unsafe shape). Automatic HOME rendering is retired from the row; `launch.py --install` remains the explicit renderer",
       "support_policy": "capability-detected: agentPresets.register + loader.entries + a unique enabled base declaration; never version-equality gated"
     },
     "render": {
@@ -915,7 +915,7 @@
         ],
         "target": "strong",
         "guard": [
-          "test_dsh_adapter.py::test_lib_ensure_preset_warns_and_never_throws_without_payload"
+          "test_dsh_adapter.py::test_lib_apply_warns_and_never_throws_without_payload"
         ],
         "negative_fixtures": [
           "FX-JS-03"
@@ -1195,13 +1195,13 @@
         "target": "medium",
         "guard": [
           "test_dsh_adapter.py::test_js_and_python_renderers_agree",
-          "test_dsh_adapter.py::test_lib_ensure_preset_renders_the_user_root_idempotently"
+          "test_dsh_doctor.py::test_s2_reports_the_projected_coverage_in_its_credible_face"
         ],
         "negative_fixtures": [],
         "requires": [
           "node"
         ],
-        "gap_note": "node-gated 测试的 skip 必须按同一政策披露（本字段即载体 + doctor S6 的 unverified_due_to_env[]，V8）。",
+        "gap_note": "node-gated 测试的 skip 必须按同一政策披露（本字段即载体 + doctor S6 的 unverified_due_to_env[]，V8）。S6 契约来源由 test_dsh_doctor.py::test_the_environment_gated_faces_come_from_the_contract 钉住（R1 P3）。",
         "necessity": "necessary"
       },
       {

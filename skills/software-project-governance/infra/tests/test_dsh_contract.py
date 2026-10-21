@@ -1714,6 +1714,36 @@ class TestConsumerContractReads(unittest.TestCase):
     def _lib_uri(self, root):
         return (root / "lib" / "index.js").resolve().as_uri()
 
+    def _assert_row_warns_and_writes_nothing(self, root, roots, *,
+                                             code="HOST_NO_LOADER_TREE",
+                                             extra_env=None):
+        """DEC-366 ②: the inserted row never renders; it warns with a code.
+
+        ``roots`` is every directory the row could conceivably have rendered
+        into for this case (the declared home plus any mutated alternative). No
+        `.agent-presets`/derived preset root may appear under ANY of them.
+        """
+        env = os.environ.copy()
+        env["DSH_HOME"] = str(roots[0])
+        env.update(extra_env or {})
+        out = self._node(
+            root,
+            "import { apply } from "
+            f"{json.dumps(self._lib_uri(root))};"
+            "const warns = [];"
+            "apply({ logger: { warn: (m) => warns.push(String(m)),"
+            " info: () => {} } });"
+            "process.stdout.write(JSON.stringify(warns));", env=env)
+        warns = json.loads(out)
+        self.assertTrue(warns, "a non-native outcome must be reported, not silent")
+        self.assertTrue(any(code in warning for warning in warns), warns)
+        for candidate in roots:
+            candidate = Path(candidate)
+            self.assertFalse(
+                (candidate / ".agent-presets").exists(),
+                f"the row rendered a preset directory under {candidate}")
+        return warns
+
     def _pyprobe(self, root, script, env=None):
         """Run a Python snippet against the COPY's `launch.py`/accessor.
 
@@ -1824,50 +1854,27 @@ class TestConsumerContractReads(unittest.TestCase):
             "print(len(launch.render_composition()))\n"))
         self.assertGreater(int(out.strip()), 0, out)
 
-    def test_mutation_own_preset_id_moves_the_js_sync_destination(self):
+    def test_mutation_own_preset_id_never_renders_a_legacy_preset(self):
+        # DEC-366 ②: the row has no sync destination any more, so a mutated
+        # preset id must not resurrect one. This test used to assert the other
+        # direction (a destination appeared under the mutated id); the pinned
+        # fact is now "no write, one warning naming the structured cause".
         def mutate(contract):
             contract["own"]["preset"]["id"] = "governance-mutated"
         root = self._mutated_repo(mutate)
         with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["DSH_HOME"] = td
-            out = self._node(
-                root,
-                "import { apply } from "
-                f"{json.dumps(self._lib_uri(root))};"
-                "const warns = [];"
-                "apply({ logger: { warn: (m) => warns.push(String(m)),"
-                " info: () => {} } });"
-                "process.stdout.write(JSON.stringify(warns));", env=env)
-            self.assertEqual(json.loads(out), [])
-            self.assertTrue(
-                (Path(td) / ".agent-presets" / "governance-mutated"
-                 / "agent.cordis.yml").is_file(),
-                "the mutated preset id did not reach ensurePreset()")
-            self.assertFalse(
-                (Path(td) / ".agent-presets" / "governance").exists(),
-                "the un-mutated preset id was still used")
+            self._assert_row_warns_and_writes_nothing(root, [td])
         self._assert_copy_restored(root)
 
-    def test_mutation_own_preset_version_marker_names_the_js_marker_file(self):
+    def test_mutation_own_preset_version_marker_never_names_a_marker_file(self):
+        # DEC-366 ②: the version marker is another legacy-renderer input; with
+        # the renderer out of the row path, mutating it must change nothing.
         def mutate(contract):
             contract["own"]["preset"]["version_marker"] = ".mutated-version"
         root = self._mutated_repo(mutate)
         with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["DSH_HOME"] = td
-            self._node(
-                root,
-                "import { apply } from "
-                f"{json.dumps(self._lib_uri(root))};"
-                "const warns = [];"
-                "apply({ logger: { warn: (m) => warns.push(String(m)),"
-                " info: () => {} } });"
-                "process.stdout.write(JSON.stringify(warns));", env=env)
-            preset = Path(td) / ".agent-presets" / "governance"
-            self.assertTrue((preset / ".mutated-version").is_file(),
-                            sorted(item.name for item in preset.iterdir()))
-            self.assertFalse((preset / ".dsh-bundle-version").exists())
+            self._assert_row_warns_and_writes_nothing(root, [td])
+            self.assertFalse((Path(td) / ".mutated-version").exists())
         self._assert_copy_restored(root)
 
     def test_mutation_own_skill_root_marker_names_the_launcher_marker_file(self):
@@ -1889,62 +1896,34 @@ class TestConsumerContractReads(unittest.TestCase):
         self.assertNotIn("skill-root.txt", payload["names"], payload)
         self._assert_copy_restored(root)
 
-    def test_mutation_host_env_home_var_is_read_by_the_js_row(self):
-        # F-10: `host.env.home_var` has a binding in all three consumers; the JS
-        # row is the one whose observable output changes when the *variable name*
-        # changes (the home it resolves is named by that declaration).
+    def test_mutation_host_env_home_var_never_selects_a_render_home(self):
+        # F-10's old shape proved the row READ the declared home variable by
+        # letting it render there. DEC-366 ② removes the render, so the binding
+        # is now proved negatively: with BOTH the declared and the original
+        # variables pointed at distinct directories, neither may gain a preset.
         def mutate(contract):
             contract["host"]["env"]["home_var"] = "DSH_HOME_MUTATED"
         root = self._mutated_repo(mutate)
         with tempfile.TemporaryDirectory() as td:
-            # The declared (mutated) variable is set; the original one is also
-            # set to a DIFFERENT directory, so reading the wrong name is visible.
             other = Path(td) / "wrong-home"
             target = Path(td) / "right-home"
-            env = os.environ.copy()
-            env["DSH_HOME"] = str(other)
-            env["DSH_HOME_MUTATED"] = str(target)
-            out = self._node(
-                root,
-                "import { apply } from "
-                f"{json.dumps(self._lib_uri(root))};"
-                "const warns = [];"
-                "apply({ logger: { warn: (m) => warns.push(String(m)),"
-                " info: () => {} } });"
-                "process.stdout.write(JSON.stringify(warns));", env=env)
-            self.assertEqual(json.loads(out), [])
-            self.assertTrue(
-                (target / ".agent-presets" / "governance"
-                 / "agent.cordis.yml").is_file(),
-                "the mutated home variable was not the one read")
+            self._assert_row_warns_and_writes_nothing(
+                root, [other, target],
+                extra_env={"DSH_HOME_MUTATED": str(target)})
             self.assertFalse(other.exists(),
-                             "the row read the un-mutated home variable")
+                             "the row wrote through the un-mutated home variable")
         self._assert_copy_restored(root)
 
-    def test_mutation_host_home_user_preset_dir_is_read_by_the_js_row(self):
-        # F-10: `host.home.user_preset_dir` names the preset root segment; a
-        # consumer that kept `.agent-presets` hard-coded would ignore it.
+    def test_mutation_host_home_user_preset_dir_never_selects_a_render_root(self):
+        # `host.home.user_preset_dir` named the preset root segment. The row no
+        # longer renders, so neither the mutated nor the default root may appear.
         def mutate(contract):
             contract["host"]["home"]["user_preset_dir"] = ".mutated-presets"
         root = self._mutated_repo(mutate)
         with tempfile.TemporaryDirectory() as td:
-            env = os.environ.copy()
-            env["DSH_HOME"] = td
-            out = self._node(
-                root,
-                "import { apply } from "
-                f"{json.dumps(self._lib_uri(root))};"
-                "const warns = [];"
-                "apply({ logger: { warn: (m) => warns.push(String(m)),"
-                " info: () => {} } });"
-                "process.stdout.write(JSON.stringify(warns));", env=env)
-            self.assertEqual(json.loads(out), [])
-            self.assertTrue(
-                (Path(td) / ".mutated-presets" / "governance"
-                 / "agent.cordis.yml").is_file(),
-                "the mutated user preset dir was not used")
-            self.assertFalse((Path(td) / ".agent-presets").exists(),
-                             "the un-mutated preset dir was still used")
+            self._assert_row_warns_and_writes_nothing(root, [td])
+            self.assertFalse((Path(td) / ".mutated-presets").exists(),
+                             "the row wrote through the mutated preset root")
         self._assert_copy_restored(root)
 
     def test_mutation_host_rows_flips_the_template_agreement_judgment(self):
@@ -2320,6 +2299,12 @@ class TestGuardContractFailureVerdicts(unittest.TestCase):
             self.assertIn("contract unreadable", payload["warns"][0])
             self.assertIn("--sync", payload["warns"][0])
             self.assertNotIn("TypeError", payload["warns"][0])
+            # 4. R1 P3: no contract means no render either. The row warns and
+            # writes NOTHING — pinned here because the reviewer's probe was the
+            # only evidence before (DEC-366 ②).
+            self.assertFalse(
+                (Path(td) / "home" / ".agent-presets").exists(),
+                "a contract-less row must not render a preset directory")
         self.assertEqual(_sha256(self.contract_path.read_bytes()),
                          self.original_sha,
                          "the shipped contract changed during this case")

@@ -997,6 +997,11 @@ class DshAdapterTests(unittest.TestCase):
         for relative, marker in (
             ("agent-presets/governance/agent.cordis.yml.template",
              f"治理工作流（v{version}）"),
+            # DEC-366 ④ (D-R6-5): the native persona body is a rendered surface
+            # too — the row reads it directly, so its version string must track
+            # the SKILL frontmatter instead of drifting by hand.
+            ("agent-presets/governance/persona.md.template",
+             f"治理工作流（v{version}）"),
             ("adapters/dsh/AGENTS.md.template", f"@bootstrap-version: {version}"),
         ):
             self.assertIn(relative, planned, relative)
@@ -2000,16 +2005,14 @@ class DshAdapterTests(unittest.TestCase):
             self.assertEqual(payload["text"].count("\r"), 1,
                              "lone CR must survive the JS path")
 
-    def test_lib_ensure_preset_renders_the_user_root_idempotently(self):
-        # Acceptance path of the DEC-187 design: the inserted host row alone
-        # must deliver a mountable preset into the USER preset root (which is
-        # what makes it a custom, deletable preset in the settings page), and
-        # a second boot must not rewrite it. The row is exercised against a
-        # redirected DSH_HOME only — the real ~/.dsh is never touched.
+    def test_lib_apply_never_renders_the_preset_directory(self):
+        # DEC-366 ② (D-R6-2 option A): native registration is the inserted
+        # row's only delivery face. The old acceptance here — the row alone
+        # rendering a mountable preset into the user root — is retired: on a
+        # non-native context the row must warn and write nothing, on every boot.
         node = shutil.which("node")
         if not node:
             self.skipTest("node unavailable (host row cannot be exercised)")
-        launch = _load_launch_module()
         lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
         script = (
             f"import {{ apply }} from {json.dumps(lib_uri)};"
@@ -2021,7 +2024,6 @@ class DshAdapterTests(unittest.TestCase):
         with _sandbox_td() as td:
             env = os.environ.copy()
             env["DSH_HOME"] = td
-            preset = Path(td) / ".agent-presets" / "governance"
 
             def run():
                 return subprocess.run(
@@ -2030,39 +2032,33 @@ class DshAdapterTests(unittest.TestCase):
                     errors="replace", env=env,
                 )
 
-            first = run()
-            self.assertEqual(first.returncode, 0, first.stderr)
-            self.assertEqual(json.loads(first.stdout), [])
-            for name in ("agent.cordis.yml", "preset.yml",
-                         ".dsh-bundle-version", "skill-root.txt"):
-                self.assertTrue((preset / name).is_file(), name)
-            composition = (preset / "agent.cordis.yml").read_text(encoding="utf-8")
-            # The synced composition is the same text --install writes, with
-            # absolute package roots and no token/baseUrl residue.
-            self.assertEqual(composition, launch.render_composition())
+            for attempt in ("first", "second"):
+                result = run()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                warns = json.loads(result.stdout)
+                self.assertTrue(
+                    warns, f"{attempt} boot: the row must warn, never stay silent")
+                self.assertTrue(
+                    any("HOST_NO_LOADER_TREE" in warning for warning in warns),
+                    warns)
+                self.assertFalse(
+                    (Path(td) / ".agent-presets").exists(),
+                    f"{attempt} boot: the row rendered a preset directory")
             self.assertEqual(
-                sorted(item.name for item in preset.iterdir()),
-                [".dsh-bundle-version", "agent.cordis.yml", "preset.yml",
-                 "skill-root.txt"],
-            )
-            before = (preset / "agent.cordis.yml").stat().st_mtime_ns
-
-            second = run()
-            self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertEqual(json.loads(second.stdout), [])
-            self.assertEqual(
-                (preset / "agent.cordis.yml").stat().st_mtime_ns, before,
-                "a version-matching boot must not rewrite the preset",
+                sorted(item.name for item in Path(td).iterdir()), [],
+                "a non-native row must leave its DSH_HOME empty",
             )
 
-    def test_lib_ensure_preset_warns_and_never_throws_without_payload(self):
-        # Failure policy (module header): a broken payload must NOT throw out
-        # of apply() — a throwing row breaks the whole dsh boot, which is far
-        # worse than a missing preset. The row warns and returns.
+    def test_lib_apply_warns_and_never_throws_without_payload(self):
+        # Failure policy (module header): nothing may throw out of apply() — a
+        # throwing row breaks the whole dsh boot. Under DEC-366 ② the row's
+        # outcome no longer depends on the payload at all (it never renders):
+        # it warns with the structured code and writes nothing. The payload
+        # guard itself now belongs to the EXPLICIT face (`ensurePreset`), and
+        # this test keeps covering it by driving that export directly.
         node = shutil.which("node")
         if not node:
             self.skipTest("node unavailable (host row cannot be exercised)")
-        lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
         with _sandbox_td() as td:
             # A package copy whose preset payload is absent. V2 (FEAT-030): the
             # payload's location comes from the host contract — the row holds no
@@ -2082,28 +2078,95 @@ class DshAdapterTests(unittest.TestCase):
                 encoding="utf-8",
             )
             dsh_home = Path(td) / "home"
-            script = (
-                f"import {{ apply }} from {json.dumps((fake_pkg / 'lib' / 'index.js').as_uri())};"
-                "const warns = [];"
-                "const ctx = { logger: { warn: (m) => warns.push(String(m)), info: () => {} } };"
-                "apply(ctx);"
-                "process.stdout.write(JSON.stringify(warns));"
-            )
+            lib_uri = json.dumps((fake_pkg / "lib" / "index.js").as_uri())
             env = os.environ.copy()
             env["DSH_HOME"] = str(dsh_home)
-            result = subprocess.run(
-                [node, "--input-type=module", "-e", script],
-                capture_output=True, text=True, encoding="utf-8",
-                errors="replace", env=env,
+
+            def run(script):
+                result = subprocess.run(
+                    [node, "--input-type=module", "-e", script],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", env=env,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads(result.stdout)
+
+            # Phase 1 — the ROW: warns, never throws, writes nothing.
+            row_warns = run(
+                f"import {{ apply }} from {lib_uri};"
+                "const warns = [];"
+                "const noThrow = (fn) => { try { fn() } catch (e) { warns.push('THREW ' + String(e)) } };"
+                "noThrow(() => apply({ logger: { warn: (m) => warns.push(String(m)),"
+                " info: () => {} } }));"
+                "process.stdout.write(JSON.stringify(warns));"
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            warns = json.loads(result.stdout)
+            self.assertFalse(
+                any(warning.startswith("THREW") for warning in row_warns), row_warns)
             self.assertTrue(
-                any("payload incomplete" in warning for warning in warns), warns)
+                any("HOST_NO_LOADER_TREE" in warning for warning in row_warns),
+                row_warns)
+            self.assertFalse(
+                (dsh_home / ".agent-presets").exists(),
+                "the row must leave no preset behind",
+            )
+
+            # Phase 2 — the EXPLICIT face keeps the payload guard.
+            explicit = run(
+                f"import {{ ensurePreset }} from {lib_uri};"
+                "const warns = []; let threw = false;"
+                "try { ensurePreset({ logger: { warn: (m) => warns.push(String(m)),"
+                " info: () => {} } }); }"
+                "catch (e) { threw = true; warns.push('THREW ' + String(e)) }"
+                "process.stdout.write(JSON.stringify({ warns, threw }));"
+            )
+            self.assertFalse(explicit["threw"], explicit["warns"])
+            self.assertTrue(
+                any("payload incomplete" in warning
+                    for warning in explicit["warns"]), explicit["warns"])
             self.assertFalse(
                 (dsh_home / ".agent-presets" / "governance").exists(),
-                "a failed render must leave no preset behind",
+                "a failed explicit render must leave no preset behind",
             )
+
+    def test_lib_ensure_preset_is_idempotent_per_package_version(self):
+        # CODE R1 P2-1: the explicit renderer's idempotence was probe-verified
+        # but had no permanent net. A second call at the same package version
+        # must report synced=false and leave the directory untouched.
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable (explicit renderer cannot be exercised)")
+        lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
+        script = (
+            f"import {{ ensurePreset }} from {json.dumps(lib_uri)};"
+            "const outcome = ensurePreset({ logger: { warn: () => {}, info: () => {} } });"
+            "process.stdout.write(JSON.stringify(outcome));"
+        )
+        with _sandbox_td() as td:
+            env = os.environ.copy()
+            env["DSH_HOME"] = td
+
+            def run():
+                result = subprocess.run(
+                    [node, "--input-type=module", "-e", script],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", env=env,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return json.loads(result.stdout)
+
+            first = run()
+            preset = Path(td) / ".agent-presets" / "governance"
+            self.assertTrue(first["synced"], first)
+            for name in ("agent.cordis.yml", "preset.yml",
+                         ".dsh-bundle-version", "skill-root.txt"):
+                self.assertTrue((preset / name).is_file(), name)
+            before = preset.stat().st_mtime_ns
+
+            second = run()
+            self.assertFalse(second["synced"], second)
+            self.assertEqual(
+                preset.stat().st_mtime_ns, before,
+                "a version-matching explicit sync must not rewrite the preset")
 
     def test_lib_cleanup_never_deletes_a_directory_it_did_not_create(self):
         # FIX-313 (design §6.1 V10 / AUDIT-153). RED before the fix: the catch

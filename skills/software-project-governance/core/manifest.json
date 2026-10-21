@@ -19,6 +19,7 @@
       "hook-post-commit",
       "hook-prepare-commit-msg",
       "dsh-persona-version",
+      "dsh-persona-body-version",
       "dsh-agents-bootstrap-version",
       "canonical-bootstrap-version",
       "fixture-command-governance-init",

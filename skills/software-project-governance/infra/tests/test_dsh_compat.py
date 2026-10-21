@@ -3534,5 +3534,310 @@ class StagingCleanupTests(unittest.TestCase):
                          f"{leftovers}")
 
 
+# ── FEAT-102 second plane: anchor discovery, probe path, reporting ─────────
+class SecondPlaneDiscoveryTests(unittest.TestCase):
+    """CODE R0 F3/F7: the CLI anchor survives a profile mirror without the CLI.
+
+    The observed failure shape: a selected profile plane carries every host ROW
+    package (so the oracle resolves) but not the CLI manifest. The guard must
+    still find the second plane through the executable's install tree, disclose
+    which anchor it picked, and name the delivery face that follows from it —
+    instead of reporting a mountable row as MODULE_UNRESOLVED and the host as
+    `legacy`.
+    """
+
+    def _registry_package(self, plane):
+        package = Path(plane) / "@deepseek-ai" / "dsh-agent-preset-registry"
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "package.json").write_text(
+            json.dumps({"name": "@deepseek-ai/dsh-agent-preset-registry",
+                        "version": "0.2.1-rc.2"}), encoding="utf-8")
+        return package
+
+    def _profile_plane(self, root, *, registry=False):
+        plane = _fake_plane(Path(root) / "profiles" / "web" / "node_modules")
+        if registry:
+            self._registry_package(plane)
+        return plane
+
+    def _install_tree(self, root, *, registry=False, with_cli=True):
+        cli_nm = Path(root) / "install" / "node_modules"
+        if with_cli:
+            _fake_install(cli_nm)
+        if registry:
+            self._registry_package(cli_nm)
+        bin_dir = cli_nm / ".bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        shim = bin_dir / "dsh.CMD"
+        shim.write_text("@echo off\n", encoding="utf-8")
+        return cli_nm, shim
+
+    def test_profile_plane_without_a_cli_manifest_degrades_to_the_path_install(self):
+        with _scratch("spg-second-plane-") as td:
+            root = Path(td)
+            plane = self._profile_plane(root, registry=True)
+            _, shim = self._install_tree(root)
+            probe = dsh_compat.locate_dsh_install(
+                env={"DSH_HOME": str(root)},
+                which=_which_map({"dsh": str(shim)}))
+            # The scratch tree is removed on exit, so the existence check has to
+            # happen while it is still alive.
+            anchor_is_file = probe["fallback_anchor"] is not None and \
+                Path(probe["fallback_anchor"]).is_file()
+        self.assertEqual(probe["status"], "OK", probe)
+        # The authority is still the selected profile plane ...
+        self.assertEqual(probe["resolution_context"], "profile")
+        self.assertEqual(Path(probe["node_modules"]), plane)
+        # ... but the CLI manifest was not mirrored into it, so the second-plane
+        # anchor comes from the executable's install tree and says so.
+        self.assertTrue(anchor_is_file, probe)
+        self.assertIn("install anchor", probe["fallback_anchor_source"])
+        self.assertEqual(probe["dsh_version"], "0.0.0-test")
+        self.assertEqual(probe["protocol"], "native")
+
+    def test_a_plane_with_no_cli_anywhere_reports_unknown_not_legacy(self):
+        with _scratch("spg-second-plane-") as td:
+            root = Path(td)
+            self._profile_plane(root)
+            probe = dsh_compat.locate_dsh_install(
+                env={"DSH_HOME": str(root)}, which=_which_map({}))
+        self.assertEqual(probe["status"], "OK", probe)
+        self.assertIsNone(probe["fallback_anchor"])
+        self.assertEqual(probe["protocol"], "unknown",
+                         "an undetermined delivery face must never read as legacy")
+
+    def test_a_cli_plane_without_a_registry_package_is_legacy(self):
+        with _scratch("spg-second-plane-") as td:
+            root = Path(td)
+            self._profile_plane(root)
+            _, shim = self._install_tree(root)
+            probe = dsh_compat.locate_dsh_install(
+                env={"DSH_HOME": str(root)},
+                which=_which_map({"dsh": str(shim)}))
+        self.assertEqual(probe["status"], "OK", probe)
+        self.assertIsNotNone(probe["fallback_anchor"])
+        self.assertEqual(probe["protocol"], "legacy")
+
+
+class DualPlaneProbeTests(unittest.TestCase):
+    """CODE R0 F2: the CLI second plane is exercised by the REAL probe script.
+
+    A stub host keeps the test portable: the four packages the contract names as
+    the oracle, plus (where the case needs it) one package that only the CLI
+    plane carries. The probe is the shipped script, not a copy of it — so the
+    fallback counter, the anchor disclosure and the containment rule are the
+    code under test.
+    """
+
+    _STUBS = {
+        "js-yaml": "export function load(text) { return JSON.parse(text) }",
+        "@deepseek-ai/cordis-plugin-include": "export const entryListSchema = {}",
+        "@deepseek-ai/cordis-plugin-loader": (
+            "export function evaluate() { return undefined }\n"
+            "export function isJsExpr() { return false }"),
+        "@deepseek-ai/cordis": "export function resolveConfig() { return {} }",
+    }
+
+    _CLI_PACKAGE = "export const version = '0.0.0-stub'"
+    _ROW_ONLY_IN_CLI = "export const marker = true"
+
+    def _plane(self, base, extra=None):
+        node_modules = Path(base) / "node_modules"
+        for name, source in {**self._STUBS, **(extra or {})}.items():
+            package = node_modules.joinpath(*name.split("/"))
+            package.mkdir(parents=True, exist_ok=True)
+            (package / "package.json").write_text(json.dumps({
+                "name": name, "version": "0.0.0-stub", "type": "module",
+                "main": "index.mjs"}), encoding="utf-8")
+            (package / "index.mjs").write_text(source + "\n", encoding="utf-8")
+        return node_modules
+
+    def _install(self, primary_root, fallback_anchor=None):
+        anchor = Path(primary_root) / "anchor.js"
+        anchor.write_text("// createRequire anchor\n", encoding="utf-8")
+        install = {"status": "OK", "reason": "", "source": "$TEST",
+                   "node_modules": str(Path(primary_root) / "node_modules"),
+                   "resolution_anchor": str(anchor),
+                   "resolution_context": "profile"}
+        if fallback_anchor is not None:
+            install["fallback_anchor"] = str(fallback_anchor)
+        return install
+
+    def _run(self, root, install, composition):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node unavailable (the probe cannot be exercised)")
+        probe = dsh_compat._run_probe(node, install, [composition], Path(root), 120)
+        self.assertEqual(probe["status"], "OK", probe.get("reason"))
+        report = probe["report"]
+        self.assertTrue(report.get("ok"), report.get("error"))
+        return report
+
+    def _composition(self, root, rows):
+        path = Path(root) / "agent.cordis.yml"
+        path.write_text(json.dumps(rows), encoding="utf-8")
+        return path
+
+    def _kinds(self, report):
+        return [row["kind"] for row in report["files"][0]["rows"]]
+
+    def test_a_row_only_the_cli_plane_carries_is_resolved_there(self):
+        with _scratch("spg-dual-plane-") as td:
+            root = Path(td)
+            primary = self._plane(root / "profile")
+            cli = self._plane(root / "cli", {
+                "@deepseek-ai/dsh": self._CLI_PACKAGE,
+                "@deepseek-ai/only-in-cli": self._ROW_ONLY_IN_CLI,
+            })
+            anchor = cli / "@deepseek-ai" / "dsh" / "package.json"
+            composition = self._composition(root, [
+                {"id": "cli-row", "name": "@deepseek-ai/only-in-cli"}])
+            report = self._run(root, self._install(root / "profile", anchor), composition)
+        self.assertEqual(report["fallback"]["used"], 1)
+        self.assertEqual(report["fallback"]["anchor"], str(anchor))
+        self.assertEqual(report["files"][0]["fallback_rows"], 1)
+        kinds = self._kinds(report)
+        self.assertIn("NO_SCHEMA", kinds, kinds)
+
+    def test_node_path_cannot_supply_the_fallback_plane_either(self):
+        """The containment rule applies to the SECOND plane, not just the first."""
+        with _scratch("spg-dual-plane-") as td:
+            root = Path(td)
+            primary = self._plane(root / "profile")
+            cli = self._plane(root / "cli", {"@deepseek-ai/dsh": self._CLI_PACKAGE})
+            outside = self._plane(root / "outside", {
+                "@deepseek-ai/only-in-cli": self._ROW_ONLY_IN_CLI})
+            anchor = cli / "@deepseek-ai" / "dsh" / "package.json"
+            composition = self._composition(root, [
+                {"id": "escaped-row", "name": "@deepseek-ai/only-in-cli"}])
+            install = self._install(root / "profile", anchor)
+            with mock.patch.dict(os.environ, {"NODE_PATH": str(outside)}, clear=False):
+                report = self._run(root, install, composition)
+        # Require would find it through NODE_PATH, but it does not live in the
+        # CLI anchor's own node_modules links — so it must stay unresolved.
+        self.assertEqual(report["fallback"]["used"], 0)
+        self.assertEqual(report["files"][0].get("fallback_rows", 0), 0)
+        kinds = self._kinds(report)
+        self.assertIn("MODULE_UNRESOLVED", kinds, kinds)
+
+    def test_without_a_cli_anchor_the_row_stays_unresolved(self):
+        with _scratch("spg-dual-plane-") as td:
+            root = Path(td)
+            self._plane(root / "profile")
+            composition = self._composition(root, [
+                {"id": "cli-row", "name": "@deepseek-ai/only-in-cli"}])
+            report = self._run(root, self._install(root / "profile"), composition)
+        self.assertIsNone(report["fallback"]["anchor"])
+        self.assertEqual(report["fallback"]["used"], 0)
+        self.assertIn("MODULE_UNRESOLVED", self._kinds(report))
+
+
+class DualPlaneReportingTests(unittest.TestCase):
+    """CODE R0 F2/F7: report fields, aggregation, and the shared protocol text."""
+
+    _INSTALL = {"status": "OK", "reason": "", "source": "$TEST",
+                "node_modules": "C:/fake/node_modules", "dsh_version": "0.0.0-test"}
+
+    def _report(self, *, protocol, registry=None, fallback_anchor=None,
+                fallback_source=None, fallback_rows=0):
+        install = dict(self._INSTALL, protocol=protocol,
+                       registry_package=registry or {"version": None, "path": None})
+        if fallback_anchor is not None:
+            install["fallback_anchor"] = fallback_anchor
+        if fallback_source is not None:
+            install["fallback_anchor_source"] = fallback_source
+
+        def runner(node, install_, paths, root, timeout):
+            path = Path(paths[0])
+            files = [_file_entry(path, [_row("persona", "@deepseek-ai/dsh-persona", "PASS")])]
+            files[0]["fallback_rows"] = fallback_rows
+            return _probe_report(files)
+
+        return dsh_compat.check_dsh_preset_compat(
+            root=_REPO_ROOT,
+            compositions=[Path("C:/fake/agent.cordis.yml")],
+            env={},
+            which=_which_map({"node": "C:/fake/node.exe"}),
+            install=install,
+            probe_runner=runner)
+
+    def test_the_protocol_line_has_three_distinct_states(self):
+        native = dsh_compat._protocol_line({"protocol": "native"})
+        legacy = dsh_compat._protocol_line({"protocol": "legacy"})
+        unknown = dsh_compat._protocol_line({"protocol": "unknown"})
+        self.assertIn("native", native)
+        self.assertIn("legacy", legacy)
+        self.assertIn("unknown", unknown)
+        self.assertEqual(len({native, legacy, unknown}), 3)
+        # An absent field is `unknown`, never a silent legacy claim.
+        self.assertEqual(dsh_compat._protocol_line({}), unknown)
+
+    def test_protocol_registry_and_fallback_fields_are_reported(self):
+        report = self._report(
+            protocol="native",
+            registry={"version": "0.2.1-rc.2", "path": "C:/cli"},
+            fallback_anchor="C:/cli/@deepseek-ai/dsh/package.json",
+            fallback_source="install anchor (`dsh` on PATH: C:/bin/dsh.CMD)",
+            fallback_rows=2)
+        self.assertEqual(report["protocol"], "native")
+        self.assertEqual(report["install"]["protocol"], "native")
+        self.assertEqual(report["install"]["registry_package"]["version"], "0.2.1-rc.2")
+        self.assertEqual(report["rows_resolved_via_cli_fallback"], 2)
+        self.assertEqual(report["install"]["fallback_anchor"],
+                         "C:/cli/@deepseek-ai/dsh/package.json")
+        details = "\n".join(report["details"])
+        self.assertIn("native declarations", details)
+        self.assertIn("2 row(s) resolved through the CLI", details)
+        self.assertIn("anchor source:", details)
+
+    def test_unknown_protocol_does_not_borrow_the_legacy_wording(self):
+        report = self._report(protocol="unknown")
+        details = "\n".join(report["details"]).lower()
+        self.assertIn("unknown", details)
+        self.assertNotIn("legacy user-root directory", details)
+
+    def test_the_legacy_protocol_still_says_legacy(self):
+        report = self._report(protocol="legacy")
+        self.assertIn("legacy user-root directory", "\n".join(report["details"]))
+
+    def test_both_renderers_print_the_same_protocol_line(self):
+        for protocol in ("native", "legacy", "unknown"):
+            report = self._report(protocol=protocol)
+            expected = dsh_compat._protocol_line(report)
+            stream = io.StringIO()
+            with mock.patch.object(dsh_compat, "check_dsh_preset_compat",
+                                   return_value=report):
+                dsh_compat.emit_check_section(stream)
+            self.assertIn(f"delivery protocol: {expected}", stream.getvalue())
+
+    def test_the_cli_renderer_prints_the_same_protocol_line(self):
+        """R1 P3: the standalone CLI is the second renderer — pin it too."""
+        for protocol in ("native", "legacy", "unknown"):
+            report = self._report(protocol=protocol)
+            expected = dsh_compat._protocol_line(report)
+            stream = io.StringIO()
+            with mock.patch.object(dsh_compat, "check_dsh_preset_compat",
+                                   return_value=report):
+                dsh_compat.run_cli(stream=stream)
+            self.assertIn(f"delivery protocol: {expected}", stream.getvalue())
+
+
+class CompositionSkipTests(unittest.TestCase):
+    """CODE R0 F9: only the repo's own sandbox pair is skipped, not the name."""
+
+    def test_only_the_repo_sandbox_pair_is_skipped(self):
+        with _scratch("spg-skip-dirs-") as td:
+            root = Path(td)
+            repo_sandbox = root / ".governance" / "sandboxes" / "run"
+            repo_sandbox.mkdir(parents=True)
+            (repo_sandbox / "agent.cordis.yml").write_text("[]", encoding="utf-8")
+            product = root / "product" / "sandboxes" / "run"
+            product.mkdir(parents=True)
+            (product / "agent.cordis.yml").write_text("[]", encoding="utf-8")
+            found = [path.relative_to(root).as_posix()
+                     for path in dsh_compat.discover_compositions(root)]
+        self.assertEqual(found, ["product/sandboxes/run/agent.cordis.yml"])
+
+
 if __name__ == "__main__":
     unittest.main()

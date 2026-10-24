@@ -97,6 +97,12 @@ from governance_store import (cmd_decision_append, cmd_evidence_append,
                               cmd_locks_release)
 import baseline_metadata
 from baseline_metadata import cmd_baseline_evaluate, cmd_baseline_register
+# FIX-462 (0.99.x emergency window): pin_ledger — the machine writer for the
+# STATIC_PIN_EXEMPTIONS ledger (DEC-220): stdlib-only, self-contained, the
+# engine wires dispatch only (same pattern as the family above); it also
+# serves write-guard face 6 (hand-edit alarm over the exemption ledger).
+import pin_ledger
+from pin_ledger import cmd_pins
 # FEAT-093 (0.98.0): the authority ledger — task identity contract +
 # append-only event log + rebuildable plan-tracker projection (engine wires
 # dispatch only; stdlib-only at import time, peer-leaf calibers imported
@@ -25225,6 +25231,12 @@ def check_governance_write_shapes(*, persist_state=False, session_id=None,
          the violation state machine (infra/write_guard_state.py — six
          rules, consumption-right ledger, ops-recoverable consume
          transaction).
+      6. pin-exemption ledger (FIX-462 / DEC-220) — structural FAIL on an
+         unreadable/malformed ``STATIC_PIN_EXEMPTIONS`` and WARN-class
+         hand-edit alarm for entries outside the delivery amnesty that
+         carry no ``pins`` provenance comment
+         (:func:`pin_ledger.exemption_face_issues`); probe callers are
+         read-only over the plugin-tree ledger.
 
     ``session_id`` (FEAT-064 R3 wiring): explicit session identity for the
     violation state machine's same-session escalation rule — overrides the
@@ -25371,6 +25383,38 @@ def check_governance_write_shapes(*, persist_state=False, session_id=None,
                 "status": "FAIL" if issues else "PASS",
                 "issues": issues,
             }
+
+    # Face 6 — pin-exemption ledger attribution (FIX-462 / DEC-220):
+    # structural FAIL on an unreadable/malformed STATIC_PIN_EXEMPTIONS;
+    # WARN-class issues for entries that neither sit in the delivery
+    # amnesty snapshot nor carry a `pins` provenance comment (the
+    # hand-edit alarm — same all-WARN default posture as face 5). The
+    # ledger lives in the PLUGIN tree: a missing checks/version.py means
+    # an installed pack (dev face absent) → SKIPPED, never a FAIL. Probe
+    # callers are read-only and never consume reconciliation state.
+    try:
+        pin_issues, pin_status = pin_ledger.exemption_face_issues(ROOT)
+    except Exception as _pin_exc:  # noqa: BLE001 — guard faces never raise
+        pin_issues, pin_status = [{
+            "type": "pin_ledger_face_error", "line": None,
+            "detail": "face probe raised: {0}".format(_pin_exc),
+        }], "FAIL"
+    result["pin_ledger"] = {
+        "status": pin_status,
+        "issues": [
+            {
+                "type": issue.get("type", "pin_ledger_issue"),
+                "file": pin_ledger.LEDGER_REL,
+                "line": issue.get("line"),
+                "task_id": "",
+                "detail": issue.get("detail", ""),
+                "expected": "STATIC_PIN_EXEMPTIONS 条目 (int line, str token, "
+                            "reason)；新行经 pins register/re-anchor 机写"
+                            "（provenance 注释）或属 FIX-462 交付 amnesty",
+            }
+            for issue in pin_issues
+        ],
+    }
 
     # Face 5 — row-family reconciliation (FEAT-057; FEAT-064 posture-aware).
     # FEAT-060: on the CLI path the offending rows are ALSO recorded into
@@ -25775,6 +25819,9 @@ def cmd_governance_write_guard(args):
         ("row_families",
          "受管行族对账（EVD/DEC/REVIEW/任务状态列/ops 台账——机器凭证披露，"
          "分族姿态 FEAT-057/FEAT-064）"),
+        ("pin_ledger",
+         "pin 豁免台账（FIX-462：STATIC_PIN_EXEMPTIONS 结构 FAIL + 手改无 "
+         "provenance WARN vs 交付 amnesty）"),
     )
     print()
     print("=== Governance Write Guard (G3 扩展 — FEAT-011, Coordinator 直写路径) ===")
@@ -27953,6 +28000,18 @@ def main(argv=None):
     )
     governance_store.add_decision_append_arguments(dea_p)
 
+    # FIX-462: pins ledger machine writer (register / re-anchor over
+    # checks/version.py STATIC_PIN_EXEMPTIONS) — args and handlers live in
+    # pin_ledger.py, engine wires dispatch only (ArchGuard R4 print budget
+    # untouched; exit 0 ok / 2 refusal / 3 retryable).
+    pins_p = subparsers.add_parser(
+        "pins",
+        help="Machine writer for the STATIC_PIN_EXEMPTIONS ledger (FIX-462): "
+             "pins register / pins re-anchor — AST-anchored validated edits "
+             "with provenance comments; effect-idempotent, --dry-run preview",
+    )
+    pin_ledger.add_arguments(pins_p)
+
     # baseline_metadata commands (FEAT-055 / 0.86.0 batch 2.0 — FEAT-047):
     # baseline-register / baseline-evaluate; args and handlers live in
     # baseline_metadata.py — the engine only wires dispatch, ArchGuard R4
@@ -28162,6 +28221,8 @@ def main(argv=None):
         "locks-release": cmd_locks_release,
         "evidence-append": cmd_evidence_append,
         "decision-append": cmd_decision_append,
+        # FIX-462: pins ledger machine writer dispatch (pin_ledger module).
+        "pins": cmd_pins,
         "baseline-register": cmd_baseline_register,
         "baseline-evaluate": cmd_baseline_evaluate,
         # FEAT-093 (0.98.0): authority-ledger dispatch (identity contract +

@@ -697,7 +697,17 @@ class BaselineArtifactTests(unittest.TestCase):
         # FIX-453 clean-checkout repair: FEAT-101 removed 56 engine lines
         # with chrys support. Normal regen shrinks 28270 -> 28214; R2
         # triage-domain line anchors also move by -1, with unchanged counts.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28214)
+        # FIX-462 rider re-anchor (0.99.x emergency window, 2026-10-24,
+        # DEC-320/324 precedent isomorphic): 28214 -> 28275, +61/-0 net, all
+        # attributed to the pins ledger machine writer dispatch wiring
+        # (module import block +7, subparser block +14, commands-dict row
+        # +3, write-guard face 6 block +30 incl. docstring face item; the
+        # writer + guard-face logic live in pin_ledger.py). R4 print census
+        # byte-stable at 1376 (the pins JSON receipt print lives in the
+        # module, not the engine); R5 cli keys 107 -> 108 in the same regen
+        # (contract-matrix rider in the same change); R6 209 -> 210 (cold
+        # -import face +1 module: pin_ledger, stdlib-only).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28275)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

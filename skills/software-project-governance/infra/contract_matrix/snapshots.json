@@ -168,8 +168,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 104,
-      "key_count": 107,
+      "handler_count": 105,
+      "key_count": 108,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -265,6 +265,7 @@
         "loop-telemetry",
         "next-candidates",
         "opencode-provider-preflight",
+        "pins",
         "quality-tools",
         "release-ledger",
         "release-projection",
@@ -293,7 +294,8 @@
         "evidence-log 机器行族 TRIAGE/RECO（DEC-168 行族列数 + ID 格式）",
         "agent-locks.json schema（Check 26）",
         "execution-packets.json 结构（Check 18c 字段表）",
-        "受管行族对账（EVD/DEC/REVIEW/任务状态列/ops 台账——机器凭证披露，分族姿态 FEAT-057/FEAT-064）"
+        "受管行族对账（EVD/DEC/REVIEW/任务状态列/ops 台账——机器凭证披露，分族姿态 FEAT-057/FEAT-064）",
+        "pin 豁免台账（FIX-462：STATIC_PIN_EXEMPTIONS 结构 FAIL + 手改无 provenance WARN vs 交付 amnesty）"
       ],
       "face_line_regex": "^  \\[(FAIL|PASS|SKIPPED)\\] .+\\ —\\ \\d+\\ issue\\(s\\)$",
       "fixture_strategy": "deterministic temp-dir fixtures: empty host (all SKIPPED → PASS/exit 0) + malformed plan-tracker row (FAIL/exit 1) + well-formed plan-tracker (PASS face/exit 0)",
@@ -359,6 +361,14 @@
             }
           },
           "execution_packets": {
+            "$dict": {
+              "issues": {
+                "$seq": "list"
+              },
+              "status": "str"
+            }
+          },
+          "pin_ledger": {
             "$dict": {
               "issues": {
                 "$seq": "list"
@@ -441,14 +451,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "2aae6ff1f1cf49e3566e25c5d55b7fe1afdb762f",
+    "git_head": "1d9216e3747d0a472befb99834da5ee12161bbb5",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-10-16T16:04:25+00:00"
+    "timestamp_utc": "2026-10-24T09:26:50+00:00"
   },
   "python_family_pins": [
     {

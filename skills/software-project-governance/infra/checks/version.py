@@ -169,6 +169,16 @@ def check_version_consistency(root: Path, host_root: Optional[Path] = None) -> L
 # row to its line's content: an entry whose line no longer carries the token
 # (drift or removal) is reported as a stale-exemption warning, so the ledger
 # cannot rot into a blanket allow.
+#
+# FIX-462 (DEC-220): the sanctioned write path for this ledger is the
+# machine writer — `verify_workflow.py pins register` / `pins re-anchor`
+# (infra/pin_ledger.py; AST-anchored surgery, fail-closed validation,
+# atomic write, shadow-scan post-check, provenance comment per write).
+# Hand edits are alarmed by governance-write-guard face 6: rows outside
+# the FIX-462 delivery-amnesty snapshot that carry no `pins ... op-...`
+# provenance comment surface as WARN. The historical re-anchor chains
+# above (FIX-416/418/421/442/453/459/460) predate the writer and stay as
+# the amnesty record; future re-anchors go through the command.
 STATIC_PIN_SCAN_DIR = "skills/software-project-governance/infra/tests"
 
 _SEMVER_TOKEN_RE = re.compile(r"(?<![\d.])(\d+\.\d+\.\d+)(?![\d.])")

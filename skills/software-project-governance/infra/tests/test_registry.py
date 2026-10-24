@@ -146,7 +146,13 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # same change. Segments stay at 73.
 # FIX-453: FEAT-095's enforcement-check is already in the engine/snapshot;
 # restore its missing registry row and freeze the real 107-key surface.
-FROZEN_CLI_KEYS = 107
+# FIX-462 (0.99.x emergency window, DEC-220/286/287): 107 -> 108 CLI keys —
+# the `pins` ledger machine writer (`pins register` / `pins re-anchor` over
+# checks/version.py STATIC_PIN_EXEMPTIONS; handler in pin_ledger.py, engine
+# wires dispatch only — governance_cost pattern). Snapshot + architecture
+# baseline re-anchored in the same change (DEC-320/324 sanctioned regen
+# rider, +N mainfile lines disclosed). Segments stay at 73.
+FROZEN_CLI_KEYS = 108
 FROZEN_SEGMENTS = 73
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
@@ -192,7 +198,12 @@ FROZEN_SEGMENTS = 73
 # pattern; measured 208 live). Baseline regenerated in the same change.
 # FIX-453: FEAT-095 imports the stdlib-only enforcement peer at engine
 # startup; the already-committed cold-import baseline is 209, not 208.
-FROZEN_ENGINE_IMPORT_COUNT = 209
+# FIX-462: 209 -> 210 — the engine imports the self-contained
+# ``pin_ledger`` module (stdlib-only at import time: ast / importlib.util /
+# json / os / re / tempfile / uuid / pathlib — all already in the cold
+# face, so the face grows by exactly this one module; measured 210 live).
+# Baseline regenerated in the same change.
+FROZEN_ENGINE_IMPORT_COUNT = 210
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {
@@ -466,6 +477,11 @@ class CommandRegistryTests(unittest.TestCase):
             # FEAT-055 (0.86.0 batch 2.0): the lock-maintenance writers of
             # the governance_store family; FIX-370 added the release leg.
             "locks-amend", "locks-extend", "locks-release",
+            # FIX-462 (0.99.x emergency window): the pins ledger machine
+            # writer (register / re-anchor over checks/version.py
+            # STATIC_PIN_EXEMPTIONS; handler in pin_ledger.py, the engine
+            # wires dispatch only — governance_cost pattern).
+            "pins",
             # FEAT-055 (0.86.0 batch 2.0): the task-row state-flip writer
             # (B-1 termination surface; handler in task_row_update.py).
             "task-row-update",

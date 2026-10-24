@@ -234,6 +234,11 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     # projection; engine wires dispatch only (governance_cost pattern),
     # stdlib-only at import time.
     "authority_ledger",
+    # FIX-462 (0.99.x emergency window): the pins ledger machine writer —
+    # register / re-anchor over checks/version.py STATIC_PIN_EXEMPTIONS
+    # (DEC-220); engine wires dispatch only (governance_cost pattern),
+    # stdlib-only at import time.
+    "pin_ledger",
 )
 """Closed declaration of loadable modules (§9.1 controlled loader whitelist).
 
@@ -439,6 +444,10 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("next-candidates", "verify_workflow.cmd_next_candidates"),
     ("opencode-provider-preflight",
      "verify_workflow.cmd_opencode_provider_preflight"),
+    # FIX-462 (0.99.x emergency window): the pins ledger machine writer
+    # (register / re-anchor over checks/version.py STATIC_PIN_EXEMPTIONS,
+    # DEC-220) — batch-module shape, engine wires dispatch only.
+    ("pins", "pin_ledger.cmd_pins"),
     ("quality-tools", "verify_workflow.cmd_quality_tools"),
     ("release-ledger", "verify_workflow.cmd_release_ledger"),
     ("release-projection", "verify_workflow.cmd_release_projection"),

@@ -356,5 +356,161 @@ class RealTreeContractTests(unittest.TestCase):
                 self.assertTrue(line.startswith("[WARN]"), line)
 
 
+class PinsLedgerWriterTests(unittest.TestCase):
+    """FIX-462 — the pins register/re-anchor machine writer (pin_ledger).
+
+    Mini-root harness: a REAL copy of checks/version.py (its own 55-entry
+    ledger included) under a synthetic root whose SKILL.md frontmatter pins
+    a synthetic active version (1.23.0 — never the repo's), so a fixture
+    file carrying that token reproduces a live scan hit without touching
+    the real tree. Precedent caliber: evidence-append / agent-locks-acquire
+    (op-id receipt, effect-based idempotency, fail-closed atomicity).
+    """
+
+    _ACTIVE = "1.23.0"
+    _TARGET_REL = "skills/software-project-governance/infra/tests/fixture_writer_target.py"
+    _TARGET_BODY = '# fixture for the FIX-462 writer tests\n_TARGET_VERSION = "1.23.0"\n'
+
+    def _mini_root(self):
+        root = Path(tempfile.gettempdir()) / (
+            "fix462-" + uuid.uuid4().hex[:12])
+        root.mkdir()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        plugin = root / "skills" / "software-project-governance"
+        (plugin / "infra" / "checks").mkdir(parents=True)
+        (plugin / "infra" / "tests").mkdir(parents=True)
+        shutil.copyfile(_INFRA_DIR / "checks" / "version.py",
+                        plugin / "infra" / "checks" / "version.py")
+        (plugin / "SKILL.md").write_text(
+            "---\nname: software-project-governance\nversion: 1.23.0\n---\n\n"
+            "# synthetic mini-root\n", encoding="utf-8")
+        return root
+
+    def _write_target(self, root, head=""):
+        path = root / self._TARGET_REL
+        path.write_text(head + self._TARGET_BODY, encoding="utf-8")
+        return path
+
+    def test_register_writes_row_with_provenance_and_receipt(self):
+        import pin_ledger
+        root = self._mini_root()
+        self._write_target(root)
+        receipt, code = pin_ledger.register_exemption(
+            root, self._TARGET_REL, 2, self._ACTIVE,
+            "synthetic writer-test pin — scenario fixture row")
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["effect"], "written")
+        self.assertRegex(receipt["operation_id"], r"^op-[0-9a-f]{32}$")
+        self.assertTrue(all(receipt["post_checks"].values()))
+        ledger_text = (root / pin_ledger.LEDGER_REL).read_text(encoding="utf-8")
+        lines = ledger_text.splitlines()
+        tuple_idx = next(i for i, l in enumerate(lines)
+                         if "(2, \"{0}\",".format(self._ACTIVE) in l)
+        self.assertRegex(lines[tuple_idx - 1], r"#\s*pins register op-[0-9a-f]{32}")
+        issues, status = pin_ledger.exemption_face_issues(root)
+        self.assertEqual((status, issues), ("PASS", []))
+
+    def test_register_refusal_is_atomic_zero_write(self):
+        import pin_ledger
+        root = self._mini_root()
+        self._write_target(root)
+        ledger_path = root / pin_ledger.LEDGER_REL
+        before = ledger_path.read_bytes()
+        receipt, code = pin_ledger.register_exemption(
+            root, self._TARGET_REL, 2, "9.9.9",
+            "token not on the line — must refuse")
+        self.assertEqual(code, 2)
+        self.assertEqual(receipt["code"], "refused")
+        self.assertEqual(ledger_path.read_bytes(), before,
+                         "refused write mutated the ledger (atomicity broken)")
+
+    def test_register_is_effect_idempotent(self):
+        import pin_ledger
+        root = self._mini_root()
+        self._write_target(root)
+        ledger_path = root / pin_ledger.LEDGER_REL
+        _receipt, code = pin_ledger.register_exemption(
+            root, self._TARGET_REL, 2, self._ACTIVE, "idempotency probe row")
+        self.assertEqual(code, 0)
+        snapshot = ledger_path.read_bytes()
+        receipt, code = pin_ledger.register_exemption(
+            root, self._TARGET_REL, 2, self._ACTIVE, "idempotency probe row")
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["effect"], "idempotent_noop")
+        self.assertEqual(ledger_path.read_bytes(), snapshot)
+
+    def test_reanchor_repairs_drift_and_is_idempotent_after(self):
+        import pin_ledger
+        root = self._mini_root()
+        self._write_target(root)
+        _receipt, code = pin_ledger.register_exemption(
+            root, self._TARGET_REL, 2, self._ACTIVE, "drift-probe row")
+        self.assertEqual(code, 0)
+        # Drift: two header lines land above the token (2 -> 4).
+        self._write_target(root, head="# drifted header 1\n# drifted header 2\n")
+        findings = pin_ledger._scan_hits(root)
+        self.assertTrue(any("stale exemption" in f and ":2 " in f
+                            for f in findings))
+        receipt, code = pin_ledger.reanchor_exemption(
+            root, self._TARGET_REL, 2, 4)
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["effect"], "written")
+        self.assertTrue(all(receipt["post_checks"].values()))
+        lines = (root / pin_ledger.LEDGER_REL).read_text(encoding="utf-8").splitlines()
+        tuple_idx = next(i for i, l in enumerate(lines)
+                         if "(4, \"{0}\",".format(self._ACTIVE) in l)
+        self.assertRegex(lines[tuple_idx - 1], r"#\s*pins re-anchor op-[0-9a-f]{32}")
+        # Post-repair scan: no stale row, no unexempted hit for the entry.
+        findings = pin_ledger._scan_hits(root)
+        self.assertFalse(any(self._TARGET_REL in f for f in findings))
+        # Re-running the same re-anchor is an effect-level no-op.
+        receipt, code = pin_ledger.reanchor_exemption(
+            root, self._TARGET_REL, 2, 4)
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["effect"], "idempotent_noop")
+
+    def test_hand_edit_without_provenance_warns_on_guard_face(self):
+        import pin_ledger
+        root = self._mini_root()
+        self._write_target(root)
+        _receipt, code = pin_ledger.register_exemption(
+            root, self._TARGET_REL, 2, self._ACTIVE, "face-probe row")
+        self.assertEqual(code, 0)
+        # Hand edit simulation: strip the machine provenance comment line.
+        ledger_path = root / pin_ledger.LEDGER_REL
+        lines = ledger_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        idx = next(i for i, l in enumerate(lines)
+                   if "(2, \"{0}\",".format(self._ACTIVE) in l)
+        del lines[idx - 1]
+        ledger_path.write_text("".join(lines), encoding="utf-8")
+        issues, status = pin_ledger.exemption_face_issues(root)
+        self.assertEqual(status, "PASS")  # WARN-class, never a FAIL
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["type"], "pin_ledger_unattributed")
+        self.assertIn(self._TARGET_REL, issues[0]["detail"])
+
+
+class PinsLedgerRealTreeContractTests(unittest.TestCase):
+    """FIX-462 — the delivery amnesty snapshot covers every live row."""
+
+    def test_real_tree_face_is_clean_amnesty_complete(self):
+        import pin_ledger
+        issues, status = pin_ledger.exemption_face_issues(_REPO_ROOT)
+        self.assertEqual(status, "PASS")
+        self.assertEqual(issues, [],
+                         "delivery amnesty snapshot incomplete: every live "
+                         "row must be either amnesty-covered or "
+                         "provenance-attributed")
+
+    def test_amnesty_snapshot_matches_live_ledger_exactly(self):
+        import pin_ledger
+        live = {(rel, ln, tok)
+                for rel, entries in version_checks.STATIC_PIN_EXEMPTIONS.items()
+                for ln, tok, _reason in entries}
+        self.assertEqual(pin_ledger.DELIVERY_AMNESTY_ENTRIES, frozenset(live),
+                         "the frozen amnesty drifted from the live ledger — "
+                         "rows were added/removed without the writer")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -139,7 +139,15 @@ from contract_matrix import generator as cmg  # noqa: E402
 # with live governance state under the same regen discipline.
 # FIX-453: restore the FEAT-095 enforcement-check registration omitted from
 # the registry's former 106-key mirror; engine and snapshot already had 107.
-FROZEN_CLI_KEY_COUNT = 107
+# FIX-462 (0.99.x emergency window, DEC-220/286/287): 107→108 keys — the
+# `pins` ledger machine writer (`pins register`/`pins re-anchor` over
+# checks/version.py STATIC_PIN_EXEMPTIONS; handler in pin_ledger.py, engine
+# wires dispatch only — governance_cost pattern). Snapshot + architecture
+# baseline re-anchored in the same change (DEC-320/324 sanctioned regen
+# rider, disclosed). Segments unchanged at 73 (no check-governance segment
+# rides the pins surface); the write-guard face count grows by one
+# (pin_ledger face 6 — hand-edit alarm), re-frozen by the same regen.
+FROZEN_CLI_KEY_COUNT = 108
 FROZEN_CHECK_SEGMENT_COUNT = 73
 
 

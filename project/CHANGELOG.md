@@ -2,6 +2,35 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.99.0] - 2026-10-24（candidate——GO 终审与 tag 时点以 release-ledger 权威回填〔FIX-349 口径〕；窗口 `7f161a6（v0.98.0 tag 终点）..HEAD`，载荷 21 commits）
+
+### 0.99.0 - **次版本线：可信隔离验证与平台收敛（Minor Line: Trusted Isolated Verification & Platform Convergence）**：载荷五票 FEAT（098/100/101/102/103）+ FIX-449~456 八票 + 发布链 REL-103
+
+0.99.0 为 0.98.0 的次版本线（**「可信隔离验证与平台收敛」批**——DEC-362/363/364/367/368 授权链）：**DSH 0.2.1-rc.2 升级适配主线**（FEAT-102 原生派生五 commit 链——不再复制工具行/不写 $DSH_HOME，从公开组合树 declaration 派生；FEAT-103 隔离补丁验证——owned registration 终态撤销+publication fence，11 轮独立审查全 AWN/0，设计终稿 R8+16 份审查报告入库〔承载=b 仅验证结论，DEC-368①〕；FIX-454 依赖解析权威/FIX-456 本地契约前置拒收）+ **平台面收敛**（FEAT-100 pi adapter extension 双桥进入+DEC-359 能力升级；FEAT-101 chrys live 面全清）+ **CI 防护网自包含**（FIX-449~453）+ **FIX-448 D1 安全子集**（DEC-368④：热表 120 行/207,338B 物理分段迁移——M1 协调层 R0 NC→修复→R1 AWN/0，M2 真实迁移 transaction evdt-20261024T000345Z-b600b5b7 finalized，hot 2157KB→1950KB=预测逐位，integrity PASS；容量门 650KB 诚实 BLOCKED 维持）。**随版披露**：FIX-444/445 顺延 0.100（DEC-368②）；FIX-447/455/457 保持现状；FEAT-099 未规划；M5 反模式×2=FIX-295 候选；FEAT-103 NOT_RUN 5 条随发布链披露。
+
+### Added
+
+- **FEAT-103 隔离补丁验证链（commit cad2f47——11 轮独立审查全 AWN/0：CODE R4/R5/R9/R10/R12/R14 + DESIGN R3/R7/R8/R11/R13/R15）**：DSH SDK 调用方注册终态撤销与会话发布校验——隔离副本（registry/controller/subagent/agent-loop/类型五面）+ 六族回归套件全绿 + 四枚 pre-fix 对照铁证（prefix-control/ctrl-prefix/reg-prefix 安装态原版）+ 设计终稿 R8（606 行）；安装态 SDK 全程零写入；T09+ closed 变体合同缺口发现并微批修复（+9/−0 同构短路）；承载=b 仅验证结论（DEC-368①）。
+- **FEAT-100 pi 平台 adapter（commits cc40646/b7be5a5/41de8ed——R0/R2 通过后收口）**：extension 双桥（ask_user/subagent）+ settings 路径接线 + E2E 入矩阵 + DEC-359 能力升级（Check 28b/loop-claims 根修）。
+- **FIX-456 无宿主坏契约前置拒收（commit c82cc9f）**：坏契约静态 FAIL 优先环境探测，健康缺宿主 NOT_RUN 保留。
+- **FIX-448 D1 证据热表安全子集迁移（EVD-2141/2142）**：`infra/evidence_migration.py`（Eligibility canonical 单源+RawRowPlan 原字节切片+EVDTransfer I4 阶段机含 cold 盘面回读验证〔R0 P1-1 修复〕+`FIX448_EVD_M2_EXECUTE` 硬门禁）+ fixture 16 用例 + 真实迁移落地（120 实例 finalized，archive-integrity PASS 含 index 重建与预存 risk 归档闭环）；完整备份+恢复材料（acl-recovery-20261024-m2pre + migration-staging/）。
+
+### Changed
+
+- **FEAT-102 DSH 预设原生派生（commits e6e2ca5/f08e0a2/22b6820/98d99c2/2ed8bb4——DESIGN R0~R6+CODE 链审查闭合）**：`lib/dsh-native/`（spec/source/overlay/lifecycle/bridge）从公开组合树 declaration 派生 governance 预设，经公开 agentPresets.register 登记；native 宿主绝不回退写目录；R3-B1 取消窗口登记为已知边界（DEC-366①，闭环承接=FEAT-103）；legacy 目录自动写入恢复 UNSUPPORTED_NO_AUTOWRITER（DEC-366②）；raw/accepted 降级 declaration-based（DEC-366③）；支持基线锚定 0.2.1-rc.2（EVD-2112）。
+- **FEAT-098 cost numeric 精确等价（commit dcf5009——R3 机录闭环）**：统一 cost 数值等价（精确整数比例）。
+- **FEAT-101 chrys 平台适配移除（commits 7db915b/a001057）**：live 面全清+标题勘误。
+- **FIX-449~453 CI 防护网自包含**：fixture 版本从工作流权威派生（FIX-449）/skill 安全契约入注入预算（FIX-450）/hooks CRLF→EOL 容忍双路径根治 projection 门（FIX-451，DEC-360/361）/zstandard CI 测试依赖安装（FIX-452）/CI 合同与投影 fixture 自包含三 commit 链（FIX-453）。
+- **FIX-454 DSH 依赖解析权威保持（commit f091060）**：nested 与 flat/profile 解析同源保真，显式 override 安全语义保持。
+- **REL-102 M-8 0.98.0 终账回填（commit f392a0b）**：CHANGELOG taggerdate 权威/窗口终值 15 commits/fault-injection 承载 8/8；归档 release_forced v0.1.0~0.97.0 完整性 PASS。
+
+### 发布边界（GO 终审披露面）
+
+- FIX-444/445：DEC-368② 顺延 0.100（DEC-342 暂停维持——18d-RB2/Check 30 [V1] FAIL 面随版披露）。
+- FIX-448：容量门 <650,000B 仍 BLOCKED（D1 已交付——hot 1,950,022B；解锁=D3 闭环窗重算或 D2 读契约切换独立票）；P3-1/P3-3/P3-5 发布后补批。
+- skill 报告面注入预算：随 0.99 新增契约段需 M-2 重测（resident 硬门 ≤6200 不变）。
+- FEAT-103 NOT_RUN 5 条（真实 host publish 链/物理 storage 注入/startActivation 全链/T10 census 全量/0.1.x）与 FIX-447/455/457/FEAT-099/M5×2 现状披露（设计 R8 §16+DEC-368③）。
+
 ## [0.98.0] - 2026-10-16（taggerdate 09:11:06 +0800 权威〔FIX-349〕——tag v0.98.0〔160a7f0〕→7f161a6〔transition：M-5a candidate a0cb78e→M-5b manifest-only〕；ledger NATIVE_RELEASED 本地 PASS + github-https 推送〔origin SSH 通道环境受限——先例披露面〕）
 <!-- 发布日期已按 M-7 taggerdate 权威回填（FIX-349 口径）。 -->
 

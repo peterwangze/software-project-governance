@@ -16146,9 +16146,9 @@ def check_decision_premise(governance_dir=None):
 
     Returns ``{"declarations": {dec_id: premise}, "collapsed": [dec_id],
     "detail": {dec_id: {...}}}``. Registered as the R5 segment-2b loader
-    (quickscan SegmentSpec "2b"); read-only over decision-log.md +
-    premise-events.jsonl, never raises on missing inputs (idle face when
-    no premises are declared).
+    (the segment registry's SegmentSpec table); read-only over
+    decision-log.md + premise-events.jsonl, never raises on missing
+    inputs (idle face when no premises are declared).
     """
     gov = Path(governance_dir) if governance_dir else GOVERNANCE_DIR
     decision_log = gov / "decision-log.md"

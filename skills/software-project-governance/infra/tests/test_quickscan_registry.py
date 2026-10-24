@@ -817,8 +817,11 @@ class CensusIntegrityTests(unittest.TestCase):
         self.assertEqual(set(observed), set(snapshot))
         self.assertNotEqual(tuple(observed), tuple(snapshot))
         mismatch = next(i for i, pair in enumerate(zip(observed, snapshot)) if pair[0] != pair[1])
-        self.assertEqual(mismatch, 55)
-        self.assertEqual((observed[55], snapshot[55]), ("29", "28u"))
+        # FIX-463: segment 2b joins BOTH orders at the same early position
+        # (engine source: after Check 2; registry table: after "2"), so the
+        # first divergence shifts 55 -> 56 with the same ("29", "28u") pair.
+        self.assertEqual(mismatch, 56)
+        self.assertEqual((observed[56], snapshot[56]), ("29", "28u"))
         doc = qr.discover_engine_segment_ids.__doc__ or ""
         self.assertIn("source order", doc)
         self.assertIn("positional", doc)

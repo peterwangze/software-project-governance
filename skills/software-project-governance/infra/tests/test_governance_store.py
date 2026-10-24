@@ -1995,11 +1995,17 @@ class PremiseTrackerEventTests(StoreTestCase):
         """The acceptance case: DEC-368② premise {bypass_count, 2} must be
         judged collapsed from the LIVE tree's documented bypass events —
         read-only (synthetic declaration; the real decision-log stays
-        untouched; the re-review right stays with the user)."""
+        untouched; the re-review right stays with the user). CI note: the
+        live evidence-log is LOCAL runtime data (gitignored) — the CI
+        checkout does not carry it, so the live floor assert runs only
+        where the tree exists (the row-shape semantics stay machine-judged
+        everywhere via PremiseAutoSourceTests)."""
         import premise_tracker as pt
         repo_root = _INFRA_DIR.parents[2]
-        evidence_text = (repo_root / ".governance" / "evidence-log.md"
-                         ).read_text(encoding="utf-8")
+        evidence_path = repo_root / ".governance" / "evidence-log.md"
+        if not evidence_path.is_file():
+            self.skipTest("live governance data absent (CI checkout)")
+        evidence_text = evidence_path.read_text(encoding="utf-8")
         result = pt.count_hook_bypasses(evidence_text)
         # Documented EVENT FLOOR: e254584 + M-7 + M-5b = 3 (EVD-2145 /
         # EVD-2148③; the +1 cross-reference row is the disclosed ambiguity).
@@ -2046,12 +2052,18 @@ class PremiseAutoSourceTests(unittest.TestCase):
         self.assertEqual(pt.count_pin_recurrences("no rows here")["count"], 0)
 
     def test_live_tree_bypass_floor(self):
+        # Live governance data is LOCAL runtime data (gitignored): the CI
+        # checkout does not carry it — the floor assert runs only where
+        # the tree exists; the row-shape semantics stay machine-judged
+        # everywhere via test_bypass_row_shapes_and_exclusions.
         import premise_tracker as pt
         repo_root = _INFRA_DIR.parents[2]
-        evidence_text = (repo_root / ".governance" / "evidence-log.md"
-                         ).read_text(encoding="utf-8")
+        evidence_path = repo_root / ".governance" / "evidence-log.md"
+        if not evidence_path.is_file():
+            self.skipTest("live governance data absent (CI checkout)")
         self.assertGreaterEqual(
-            pt.count_hook_bypasses(evidence_text)["count"], 3)
+            pt.count_hook_bypasses(
+                evidence_path.read_text(encoding="utf-8"))["count"], 3)
 
 
 class HostRootRebindCanaryTests(unittest.TestCase):

@@ -35,6 +35,11 @@ _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
 if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
+# The bare-name import below (test_projection_legacy_snapshots) lives in this
+# tests/ directory; when the suite is invoked from the repo root (check-release
+# unit gate) tests/ is not on sys.path, so insert it the same way as _INFRA_DIR.
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
 import verify_workflow as vw
 import cleanup as cleanup_mod

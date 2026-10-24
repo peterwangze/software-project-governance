@@ -24142,29 +24142,44 @@ class FEAT074EvidenceEntityClassificationTests(unittest.TestCase):
         # Six-condition 3: the row's owning cycle is the MAX resolved ref
         # version (最晚引用封闭才算封闭) — an in-range ref cannot smuggle a
         # row whose latest reference belongs to a later, unclosed cycle.
+        # FIX-459: the out-of-window later cycle is DERIVED as the next
+        # minor after the active version (the FIX-352/353 shape) — the
+        # pre-459 literal 0.99.0 was a then-future synthetic that tripped
+        # the pin scan the day it shipped; archive comparisons are numeric
+        # version tuples, so the derived 0.100.0 stays beyond the 0.90.0
+        # fixture window at every future bump.
+        from resolve_entry import read_active_version
+        _major, _minor = (int(p) for p in
+                          (read_active_version() or "0.0.0").split(".")[:2])
+        later = f"{_major}.{_minor + 1}.0"
         records = self._classify(
             [self._evd("EVD-1", "FIX-900, FIX-901")],
-            {"FIX-900": "0.80.0", "FIX-901": "0.99.0"})
+            {"FIX-900": "0.80.0", "FIX-901": later})
         self.assertFalse(records[0]["migrate"])
         self.assertEqual(records[0]["reason"], "ref_version_out_of_range")
-        self.assertIn("0.99.0", records[0]["detail"])
+        self.assertIn(later, records[0]["detail"])
         # Same refs with the later cycle inside the window migrate with the
         # owning (max) version recorded.
         records = self._classify(
             [self._evd("EVD-1", "FIX-900, FIX-901")],
-            {"FIX-900": "0.80.0", "FIX-901": "0.99.0"},
-            start="0.1.0", end="0.99.0")
+            {"FIX-900": "0.80.0", "FIX-901": later},
+            start="0.1.0", end=later)
         self.assertTrue(records[0]["migrate"])
-        self.assertEqual(records[0]["version"], "0.99.0")
+        self.assertEqual(records[0]["version"], later)
 
     def test_in_flight_feat_ticket_rows_stay_hot(self):
         # Acceptance #1 live pattern: FEAT-073-style rows resolve to the
         # in-development version and stay hot while the window covers only
         # released cycles; FEAT-074-style active rows stay hot via status.
-        # (0.99.0 is a SYNTHETIC in-development version — never a real
-        # release, so the FIX-352/353 active-version pin discipline cannot
-        # be tripped when the real development version advances.)
-        in_flight = "0.99.0"
+        # (FIX-459: the in-development version is DERIVED as the next
+        # minor after the active version — the pre-459 literal assumed it
+        # would never ship and tripped the FIX-352/353 pin scan at the
+        # 0.99.0 bump; derivation restores the original intent at every
+        # future bump.)
+        from resolve_entry import read_active_version
+        _major, _minor = (int(p) for p in
+                          (read_active_version() or "0.0.0").split(".")[:2])
+        in_flight = f"{_major}.{_minor + 1}.0"
         ctx = self._ctx(hot_rows=[("FEAT-074", in_flight, "🔄 进行中")])
         records = self._classify(
             [self._evd("EVD-1", "FEAT-073"), self._evd("EVD-2", "FEAT-074")],

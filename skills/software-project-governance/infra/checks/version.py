@@ -216,6 +216,11 @@ STATIC_PIN_EXEMPTIONS = {
         (326, "0.84.0", _REASON_MIGRATION_PAIR),
         (331, "0.84.0", _REASON_MIGRATION_PAIR),
         (336, "0.84.0", _REASON_MIGRATION_PAIR),
+        # FIX-459 0.99.0 bump-time row (e254584 payload bump): the
+        # plan-newer operand of migration_flag("0.99.0", "0.84.0") —
+        # relative-comparison scenario payload mirroring the 0.84.0 row on
+        # the same line; dormant after this bump.
+        (331, "0.99.0", _REASON_MIGRATION_PAIR),
         # 0.85.0 bump-time row (the FIX-361 designed double signal): this
         # fixture row was written with the then-future target while 0.84.0
         # was active, so it surfaces exactly once — at this bump.
@@ -367,16 +372,21 @@ STATIC_PIN_EXEMPTIONS = {
         # stale ledger); re-anchored to the actual token lines, same discipline.
         # FIX-453 phase2: fixture isolation tests shift these four anchors;
         # frozen payload lines/reasons are byte-equivalent (diagnostic hashes).
-        (21304, "0.93.0", _REASON_FUTURE_TARGET),
-        (21336, "0.93.0", _REASON_FUTURE_TARGET),
+        # FIX-459 re-anchor +5: the REL-103 e254584 payload's test
+        # insertions shifted all four rows without touching the tokens
+        # (rot-guard caught the stale ledger at fb56415; CI never saw it —
+        # the FIX-458 hook-pin integrity FAIL killed the run before the
+        # unit-test step); re-anchored to the actual token lines.
+        (21309, "0.93.0", _REASON_FUTURE_TARGET),
+        (21341, "0.93.0", _REASON_FUTURE_TARGET),
         # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
         # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
         # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
         # 目标版本 column — scenario payload written while 0.93.1 was active,
         # surfacing exactly once at this bump; the word-set judgement
         # consumes the row text, never the version cell.
-        (20803, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
-        (20806, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        (20808, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        (20811, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.95.0 bump-time rows (the FIX-361 designed double signal): the
     # FEAT-076 Q6 date-window fallback fail-closed fixture (roadmap row
@@ -389,6 +399,22 @@ STATIC_PIN_EXEMPTIONS = {
         # FIX-453: unchanged Q6 roadmap fixture/reason; intervening test
         # additions moved the exact token anchor from 5862 to 5870.
         (5870, "0.95.0", _REASON_FIXTURE_ROW_TEXT),
+        # FIX-459 0.99.0 bump-time rows (e254584 payload bump surfaced
+        # three then-future synthetics): the migrate_by_version window
+        # operand is a synthetic future-cycle pair input; the two task-row
+        # version cells are out-of-range scenario payload — the judgement
+        # consumes the migration window, never the active version.
+        (549, "0.99.0", _REASON_MIGRATION_PAIR),
+        (724, "0.99.0", _REASON_FIXTURE_ROW_TEXT),
+        (4005, "0.99.0", _REASON_FIXTURE_ROW_TEXT),
+    ],
+    # FIX-459 0.99.0 bump-time row (e254584 payload bump surfaced the
+    # then-future synthetic): the FIX-903 active-task fixture row carries
+    # 0.99.0 in the 目标版本 column — scenario payload proving in-flight
+    # rows stay hot through evidence migration; never compared to the
+    # active version.
+    "skills/software-project-governance/infra/tests/test_evidence_migration.py": [
+        (61, "0.99.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

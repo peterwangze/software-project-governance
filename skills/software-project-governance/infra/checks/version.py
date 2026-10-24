@@ -413,8 +413,12 @@ STATIC_PIN_EXEMPTIONS = {
     # 0.99.0 in the 目标版本 column — scenario payload proving in-flight
     # rows stay hot through evidence migration; never compared to the
     # active version.
+    # FIX-460 re-anchor +19 (final hand re-anchor; class fix = FIX-462 pins
+    # machine-writer (TRIAGE-FIX-462, DEC-220)): the guarded-import shim +
+    # visible skip marker added at the module head shifted the token line
+    # 61->80; token and reason unchanged, re-anchored to the actual line.
     "skills/software-project-governance/infra/tests/test_evidence_migration.py": [
-        (61, "0.99.0", _REASON_FIXTURE_ROW_TEXT),
+        (80, "0.99.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

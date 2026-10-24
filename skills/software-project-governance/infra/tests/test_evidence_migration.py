@@ -32,9 +32,28 @@ from __future__ import annotations
 import json
 import os
 import sys
+import unittest
 from pathlib import Path
 
-import pytest
+try:  # FIX-460: CI is the stdlib-unittest route (FIX-095) and installs no
+    import pytest  # pytest; keep this module importable so the visible skip
+    HAS_PYTEST = True  # marker below runs instead of a ModuleNotFoundError.
+except ImportError:
+    class _PytestImportShim:
+        """Import-time no-op stand-in: module-level pytest decorators (only
+        @pytest.fixture in this file) evaluate harmlessly when pytest is
+        absent. The 16 pytest-style tests still run ONLY under a real pytest
+        (their conversion to unittest is tracked as FIX-461)."""
+
+        def __getattr__(self, _name):
+            def _passthrough(*args, **kwargs):
+                if len(args) == 1 and callable(args[0]) and not kwargs:
+                    return args[0]          # bare @pytest.x form
+                return lambda fn: fn        # @pytest.x(...) factory form
+            return _passthrough
+
+    pytest = _PytestImportShim()
+    HAS_PYTEST = False
 
 _INFRA = Path(__file__).resolve().parent.parent
 if str(_INFRA) not in sys.path:
@@ -451,5 +470,23 @@ def test_resource_limit_row_over_100kb_stays_hot(tmp_path):
     assert big["byte_length"] <= em.MAX_ROW_BYTES  # fixture rows are small
 
 
+# ---------------------------------------------------------------------------
+# FIX-460: visible CI skip marker (stdlib-unittest collection contract)
+# ---------------------------------------------------------------------------
+
+class PytestSuiteCoverageMarker(unittest.TestCase):
+    """unittest discover collects ZERO of the 16 pytest-style tests above
+    (module functions with fixtures/monkeypatch params); this marker makes
+    that coverage hole VISIBLE in CI output (skipped=1 with reason) instead
+    of a silent zero-collection. Conversion to unittest = FIX-461."""
+
+    @unittest.skipUnless(
+        HAS_PYTEST,
+        "16 pytest-style tests run under pytest locally; stdlib-unittest CI "
+        "cannot collect them - conversion tracked as FIX-461")
+    def test_pytest_suite_covered_elsewhere(self):
+        pass
+
+
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]))
+    raise SystemExit(pytest.main([__file__, "-q"]) if HAS_PYTEST else 2)

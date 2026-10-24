@@ -1321,9 +1321,18 @@ def _recover_append(governance_dir, op_id, command, task_id, fingerprint,
 # ── decision-append (B-2) ────────────────────────────────────────────────────
 
 
-def _build_decision_row(*, dec_id, date_str, decider, content, basis, op_id):
+def _build_decision_row(*, dec_id, date_str, decider, content, basis, op_id,
+                        premise=None):
     marker = (f"（机器写入：governance-store decision-append {op_id}；"
               f"schema v{SCHEMA_VERSION}）")
+    # FIX-463: the premise declaration rides INSIDE the machine marker tail
+    # (append-only discipline holds — the row keeps its 5 verbatim cells;
+    # premise_tracker.parse_decision_premise reads the tail back out).
+    if premise is not None:
+        marker = (f"（机器写入：governance-store decision-append {op_id}；"
+                  f"schema v{SCHEMA_VERSION}；"
+                  f"premise={{observable:{premise['observable']},"
+                  f"threshold:{premise['threshold']}}}）")
     basis_cell = f"{basis} {marker}".strip() if basis else marker
     cells = [dec_id, date_str, decider, content, basis_cell]
     _cells_no_newline("decision cell", cells)
@@ -1353,7 +1362,8 @@ def _decision_row_validator(row_text, op_id):
 def decision_append(*, decider, content, basis="", date=None,
                     governance_dir, repo_root=None, operation_id=None,
                     dry_run=False, now=None, expected_revision=None,
-                    timeout_seconds=10.0):
+                    timeout_seconds=10.0,
+                    premise_observable=None, premise_threshold=None):
     """B-2: append one machine DEC row (ID 连续 / 日期 / 决策者 / 内容).
 
     The live hot-file row shape is 5 cells (DEC-147…DEC-221 convention);
@@ -1391,6 +1401,35 @@ def decision_append(*, decider, content, basis="", date=None,
         else now.date().isoformat()
     if expected_revision is not None:
         _require_int("--expected-revision", expected_revision)
+    # FIX-463: premise declaration — optional, but the two flags travel
+    # together; observable is a closed enum, threshold a positive int (the
+    # invalidator's judgement lives in premise_tracker.premise_status).
+    premise = None
+    if premise_observable is not None or premise_threshold is not None:
+        if premise_observable is None or premise_threshold is None:
+            _refuse({
+                "code": "schema_violation",
+                "detail": "--premise-observable and --premise-threshold "
+                          "must be given together",
+            })
+        if premise_observable not in ("bypass_count", "recurrence_count",
+                                      "red_ci_hours"):
+            _refuse({
+                "code": "schema_violation",
+                "detail": f"--premise-observable must be one of "
+                          f"bypass_count|recurrence_count|red_ci_hours, "
+                          f"got {premise_observable!r}",
+            })
+        if not isinstance(premise_threshold, int) \
+                or isinstance(premise_threshold, bool) \
+                or premise_threshold < 1:
+            _refuse({
+                "code": "schema_violation",
+                "detail": f"--premise-threshold must be a positive integer, "
+                          f"got {premise_threshold!r}",
+            })
+        premise = {"observable": premise_observable,
+                   "threshold": premise_threshold}
     SCHEMA_WINDOW.require_supported("decision_append", SCHEMA_VERSION)
 
     # ── FEAT-061: authority routing (before target resolution — the JSON
@@ -1413,6 +1452,8 @@ def decision_append(*, decider, content, basis="", date=None,
     fingerprint = _fingerprint({
         "command": "decision-append", "decider": decider,
         "content": content, "basis": basis, "date": date_str,
+        "premise_observable": premise_observable,
+        "premise_threshold": premise_threshold,
     })
     marker = f"governance-store decision-append {op_id}"
     if authority["backend"] == "json":
@@ -1422,7 +1463,7 @@ def decision_append(*, decider, content, basis="", date=None,
             repo_root=repo_root, op_id=op_id, fingerprint=fingerprint,
             marker=marker, expected_revision=expected_revision,
             dry_run=dry_run, now=now, timeout_seconds=timeout_seconds,
-            authority=authority)
+            premise=premise, authority=authority)
 
     governance_dir, target, _root = _append_context(
         governance_dir, repo_root, DECISION_FILE_NAME)
@@ -1431,7 +1472,8 @@ def decision_append(*, decider, content, basis="", date=None,
         return _build_decision_row(
             dec_id=_next_row_id(governance_dir, text, DEC_ROW_PREFIX),
             date_str=date_str,
-            decider=decider, content=content, basis=basis, op_id=op_id)
+            decider=decider, content=content, basis=basis, op_id=op_id,
+            premise=premise)
 
     if dry_run:
         return _dry_run_append(
@@ -1495,7 +1537,7 @@ def decision_append(*, decider, content, basis="", date=None,
         dec_id = _next_row_id(governance_dir, text, DEC_ROW_PREFIX)
         row_text = _build_decision_row(
             dec_id=dec_id, date_str=date_str, decider=decider,
-            content=content, basis=basis, op_id=op_id)
+            content=content, basis=basis, op_id=op_id, premise=premise)
         # FIX-439: same pre-write validation order the JSON leg already has
         # (it validates at build time) — a refusal must leave zero bytes
         # persisted on the md leg too, never a written row plus an error.
@@ -1576,7 +1618,7 @@ def _revalidate_authority_in_lock(governance_dir, entry_authority,
 def _decision_append_json(*, decider, content, basis, date_str,
                           governance_dir, repo_root, op_id, fingerprint,
                           marker, expected_revision, dry_run, now,
-                          timeout_seconds, authority):
+                          timeout_seconds, premise=None, authority):
     """FEAT-061 — the JSON-backend leg of the decision write service
     (Layer 2; storage codecs come from the Layer 3 adapter).
 
@@ -1638,7 +1680,7 @@ def _decision_append_json(*, decider, content, basis, date_str,
                                   archive_numbers=archive_numbers)
         row_text = _build_decision_row(
             dec_id=dec_id, date_str=date_str, decider=decider,
-            content=content, basis=basis, op_id=op_id)
+            content=content, basis=basis, op_id=op_id, premise=premise)
         _decision_row_validator(row_text, op_id)
         return {
             "dry_run": True,
@@ -1709,7 +1751,7 @@ def _decision_append_json(*, decider, content, basis, date_str,
                                   archive_numbers=archive_numbers)
         row_text = _build_decision_row(
             dec_id=dec_id, date_str=date_str, decider=decider,
-            content=content, basis=basis, op_id=op_id)
+            content=content, basis=basis, op_id=op_id, premise=premise)
         _decision_row_validator(row_text, op_id)
         cells = _split_row(row_text)
         new_record = {
@@ -2545,6 +2587,16 @@ def add_decision_append_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--content", required=True)
     parser.add_argument("--basis", default="")
     parser.add_argument("--date", default="")
+    # FIX-463: optional premise declaration (the two flags travel together;
+    # the writer validates enum + positive int before any byte is written).
+    parser.add_argument("--premise-observable", default=None,
+                        choices=["bypass_count", "recurrence_count",
+                                 "red_ci_hours"],
+                        help="declare the premise observable (FIX-463); "
+                             "requires --premise-threshold")
+    parser.add_argument("--premise-threshold", type=int, default=None,
+                        help="collapse threshold (positive int) for the "
+                             "declared observable")
     parser.add_argument("--operation-id", default="")
     parser.add_argument("--expected-revision", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -2675,7 +2727,9 @@ def cmd_decision_append(args) -> int:
         operation_id=args.operation_id or None,
         dry_run=args.dry_run,
         expected_revision=args.expected_revision,
-        timeout_seconds=args.timeout))
+        timeout_seconds=args.timeout,
+        premise_observable=getattr(args, "premise_observable", None),
+        premise_threshold=getattr(args, "premise_threshold", None)))
     return _emit(payload)
 
 

@@ -239,6 +239,11 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     # (DEC-220); engine wires dispatch only (governance_cost pattern),
     # stdlib-only at import time.
     "pin_ledger",
+    # FIX-463 (0.99.x emergency window): the decision-premise invalidator —
+    # count / review / status over .governance/premise-events.jsonl
+    # (DEC-368② class); engine wires dispatch only (governance_cost
+    # pattern), stdlib-only at import time.
+    "premise_tracker",
 )
 """Closed declaration of loadable modules (§9.1 controlled loader whitelist).
 
@@ -448,6 +453,10 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     # (register / re-anchor over checks/version.py STATIC_PIN_EXEMPTIONS,
     # DEC-220) — batch-module shape, engine wires dispatch only.
     ("pins", "pin_ledger.cmd_pins"),
+    # FIX-463 (0.99.x emergency window): the decision-premise invalidator
+    # (count / review / status over .governance/premise-events.jsonl,
+    # DEC-368② class) — batch-module shape, engine wires dispatch only.
+    ("premise", "premise_tracker.cmd_premise"),
     ("quality-tools", "verify_workflow.cmd_quality_tools"),
     ("release-ledger", "verify_workflow.cmd_release_ledger"),
     ("release-projection", "verify_workflow.cmd_release_projection"),
@@ -508,6 +517,9 @@ FIX-453 restores the FEAT-095 row: 17 outside / 90 monolith at 107."""
 _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("1", "checks.evidence_domain.check_evidence_completeness"),
     ("2", "checks.risk_domain.check_risk_staleness"),
+    # FIX-463: the Check 2b Decision Premise WARN face (collapsed decision
+    # premises — risk-family, the same staleness semantics as Check 2).
+    ("2b", "verify_workflow.check_decision_premise"),
     ("3", "verify_workflow.check_gate_consistency"),
     ("4", "checks.evidence_domain.check_evidence_quality"),
     ("5", "verify_workflow.check_protocol_compliance"),

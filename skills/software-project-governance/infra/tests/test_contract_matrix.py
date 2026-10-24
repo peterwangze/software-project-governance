@@ -147,8 +147,15 @@ from contract_matrix import generator as cmg  # noqa: E402
 # rider, disclosed). Segments unchanged at 73 (no check-governance segment
 # rides the pins surface); the write-guard face count grows by one
 # (pin_ledger face 6 — hand-edit alarm), re-frozen by the same regen.
-FROZEN_CLI_KEY_COUNT = 108
-FROZEN_CHECK_SEGMENT_COUNT = 73
+# FIX-463 (0.99.x emergency window, DEC-368② class): 108→109 keys — the
+# `premise` decision-premise invalidator (count/review/status over
+# .governance/premise-events.jsonl; handler in premise_tracker.py, engine
+# wires dispatch only — governance_cost pattern). Snapshot + architecture
+# baseline re-anchored in the same change (DEC-320/324 rider, disclosed).
+# Segments 73→74: check-governance's Check 2b Decision Premise WARN face
+# (FIX-463) is extracted as a new segment; R6 cold face 210→211.
+FROZEN_CLI_KEY_COUNT = 109
+FROZEN_CHECK_SEGMENT_COUNT = 74
 
 
 @lru_cache(maxsize=1)

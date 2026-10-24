@@ -722,6 +722,15 @@ class PriorityReport:
             set by :func:`compute_unblocked_tasks`; rendered as a
             DEMAND SOURCE CONFLICT disclosure banner by :func:`format_report`
             (排序按 user-named 保守处理——数据一致性优先于排序判断).
+        collapsed_premises: tuple of dicts — decisions whose declared
+            premise has collapsed (FIX-463; ``{"decision_id", "observable",
+            "threshold", "total", "last_event_refs"}``).  Injected by the
+            CLI orchestration from premise_tracker.premise_status; a
+            collapsed decision LOSES its ranking-suppression authority:
+            :func:`format_report` surfaces it as an active-defect item
+            ("premise collapsed — re-review required") and annotates the
+            task rows that lean on it.  Pure-function contract holds —
+            events/declarations are data IN, never read here.
     """
 
     completed: list = field(default_factory=list)
@@ -736,6 +745,9 @@ class PriorityReport:
     unblock_recommendation: "UnblockRecommendation | None" = None
     empty_reason: "dict | None" = None
     demand_source_conflicts: list = field(default_factory=list)  # [task_id]
+    # FIX-463: decisions whose declared premise collapsed (see class
+    # docstring); injected as data by the CLI orchestration, default empty.
+    collapsed_premises: tuple = ()  # tuple[dict]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -909,6 +921,21 @@ def _triage_records_mtime(governance_dir):
             if mtime > latest:
                 latest = mtime
         return latest
+    except OSError:
+        return None
+
+
+def _premise_events_mtime(governance_dir):
+    """st_mtime of ``premise-events.jsonl``, or None when absent.
+
+    FIX-463 cache-guard input: the report is a function of the premise
+    events (collapsed-premise verdict); a cache written before a
+    count/review event landed must not be reused. Append-only stream — a
+    plain file mtime catches appends, additions and removals alike.
+    """
+    try:
+        path = Path(governance_dir) / "premise-events.jsonl"
+        return path.stat().st_mtime if path.is_file() else None
     except OSError:
         return None
 
@@ -1844,7 +1871,8 @@ def _build_empty_recommendation_fallback(blocked: list, non_executable: list,
     return recommendation, empty_reason
 
 
-def compute_unblocked_tasks(tasks: list, archive_completed_ids=None) -> PriorityReport:
+def compute_unblocked_tasks(tasks: list, archive_completed_ids=None,
+                            collapsed_premises=()) -> PriorityReport:
     """Compute the dependency-based priority report from parsed tasks.
 
     Args:
@@ -1980,6 +2008,7 @@ def compute_unblocked_tasks(tasks: list, archive_completed_ids=None) -> Priority
         unblock_recommendation=unblock_recommendation,
         empty_reason=empty_reason,
         demand_source_conflicts=demand_source_conflicts,
+        collapsed_premises=tuple(collapsed_premises or ()),
     )
 
 
@@ -2065,6 +2094,34 @@ def format_report(report: PriorityReport) -> str:
                       "（行内标注与 triage 记录矛盾——见下方披露横幅）")
     lines.append(dist_line)
     lines.append("")
+
+    # FIX-463: collapsed decision premises — a decision whose declared
+    # premise collapsed loses its ranking-suppression authority and MUST
+    # surface as an active-defect item ("re-review required"); the rows
+    # that lean on it get the 依据失效 annotation so no downstream ranking
+    # may keep citing the decision as grounds (DEC-368② class).
+    if report.collapsed_premises:
+        lines.append("## Collapsed decision premises (FIX-463)")
+        lines.append("")
+        blocked_tasks = [bt.task if hasattr(bt, "task") else bt
+                         for bt in report.blocked]
+        all_tasks = (list(report.unblocked) + list(report.recommended_next)
+                     + list(report.non_executable)
+                     + list(report.completed) + blocked_tasks)
+        for entry in report.collapsed_premises:
+            dec_id = entry.get("decision_id", "?")
+            related = sorted({t.task_id for t in all_tasks
+                              if dec_id in (t.cross_entity_refs or ())})
+            lines.append(
+                f"- `{dec_id}` (src=active-defect): premise collapsed — "
+                f"re-review required ({entry.get('observable', '?')} "
+                f"{entry.get('total', '?')} ≥ threshold "
+                f"{entry.get('threshold', '?')}; evidence: "
+                f"{entry.get('last_event_refs') or 'see premise-events'})")
+            if related:
+                lines.append(f"  related rows (依据失效): "
+                             f"{', '.join(related)}")
+        lines.append("")
 
     if report.cycles:
         lines.append("## ⚠️ CYCLE DETECTED (WARNING)")
@@ -2500,6 +2557,14 @@ def run_cli_analysis(tracker_path, governance_dir, evidence_path,
         # upgrade pattern).
         reuse = (state.get("triage_records_mtime")
                  == _triage_records_mtime(governance_dir))
+    if reuse:
+        # FIX-463: the report is also a function of the premise events —
+        # a cache written before a count/review event landed must not be
+        # reused (stale collapsed-premise verdict). Old caches without the
+        # key fail this check whenever the events file exists — one extra
+        # full run, never a stale report (the same FIX-341 upgrade shape).
+        reuse = (state.get("premise_events_mtime")
+                 == _premise_events_mtime(governance_dir))
 
     report = None
     if reuse:
@@ -2514,10 +2579,34 @@ def run_cli_analysis(tracker_path, governance_dir, evidence_path,
             resolved_tasks, revision_lag_warnings = (
                 _resolve_row_demand_sources(
                     parse_task_dependencies(tracker_text), governance_dir))
+            # FIX-463: collapsed-premise verdict, injected as DATA (the
+            # purity contract holds — files are read here, the analysis
+            # functions stay pure). Lazy import: premise_tracker is not on
+            # the engine's cold face for this module's own consumers.
+            from premise_tracker import (
+                EVENTS_FILE_NAME as _PREMISE_EVENTS,
+                collect_premise_declarations as _collect_premises,
+                load_events as _load_premise_events,
+                premise_status as _premise_status,
+            )
+            _decision_log = Path(governance_dir) / "decision-log.md"
+            collapsed_premises = ()
+            if _decision_log.is_file():
+                _declarations = _collect_premises(
+                    _decision_log.read_text(encoding="utf-8"))
+                if _declarations:
+                    _events = _load_premise_events(governance_dir)
+                    _status = _premise_status(_declarations, _events)
+                    collapsed_premises = tuple(
+                        dict(detail, decision_id=dec_id)
+                        for dec_id in _status["collapsed"]
+                        if (detail := _status["detail"].get(dec_id))
+                        is not None)
             report = compute_unblocked_tasks(
                 resolved_tasks,
                 archive_completed_ids=read_archive_index_completed_ids(
-                    governance_dir))
+                    governance_dir),
+                collapsed_premises=collapsed_premises)
             report_text = format_report(report)
         except Exception as exc:  # parse failure surface — entry stays thin
             print(f"task-priority-analysis: parse error: {exc}", file=sys.stderr)
@@ -2529,6 +2618,7 @@ def run_cli_analysis(tracker_path, governance_dir, evidence_path,
             "date": today, "plan_tracker_mtime": tracker_mtime,
             "archive_index_mtime": _archive_index_mtime(governance_dir),
             "triage_records_mtime": _triage_records_mtime(governance_dir),
+            "premise_events_mtime": _premise_events_mtime(governance_dir),
             "revision_lag_warnings": revision_lag_warnings,
             "report_text": report_text})
 

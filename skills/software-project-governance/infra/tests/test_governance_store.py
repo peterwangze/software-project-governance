@@ -1853,6 +1853,207 @@ class WriterCliHandlerTests(StoreTestCase):
                          Path(".") / gs.GOVERNANCE_DIR_NAME)
 
 
+class PremiseDeclarationTests(StoreTestCase):
+    """FIX-463: decision-append --premise-observable/--premise-threshold."""
+
+    def call_decision(self, **overrides):
+        params = dict(
+            decider="Coordinator", content="决策内容样本，用于守护测试。",
+            basis="依据样本", date="2026-10-24",
+            governance_dir=self.gov, operation_id=None)
+        params.update(overrides)
+        return gs.decision_append(**params)
+
+    def test_premise_tail_written_and_parsed_back(self):
+        import premise_tracker as pt
+        result = self.call_decision(
+            premise_observable="bypass_count", premise_threshold=2,
+            operation_id=gs.new_operation_id())
+        self.assertFalse(result.get("error"), result)
+        row = self.dec_rows()[-1]
+        self.assertIn("premise={observable:bypass_count,threshold:2}", row)
+        premise = pt.parse_decision_premise(row)
+        self.assertEqual(premise, {"observable": "bypass_count",
+                                   "threshold": 2})
+        declarations = pt.collect_premise_declarations(
+            (self.gov / "decision-log.md").read_text(encoding="utf-8"))
+        self.assertIn("DEC-202", declarations)
+
+    def test_premise_flags_must_travel_together(self):
+        payload = self.call_decision(premise_observable="bypass_count",
+                                     operation_id=gs.new_operation_id())
+        self.assertRefused(payload, "schema_violation")
+        payload = self.call_decision(premise_threshold=2,
+                                     operation_id=gs.new_operation_id())
+        self.assertRefused(payload, "schema_violation")
+
+    def test_premise_threshold_must_be_positive_int(self):
+        payload = self.call_decision(premise_observable="bypass_count",
+                                     premise_threshold=0,
+                                     operation_id=gs.new_operation_id())
+        self.assertRefused(payload, "schema_violation")
+        payload = self.call_decision(premise_observable="bypass_count",
+                                     premise_threshold=-1,
+                                     operation_id=gs.new_operation_id())
+        self.assertRefused(payload, "schema_violation")
+
+    def test_premise_unknown_observable_refused(self):
+        payload = self.call_decision(premise_observable="vibes",
+                                     premise_threshold=2,
+                                     operation_id=gs.new_operation_id())
+        self.assertRefused(payload, "schema_violation")
+
+    def test_premise_is_part_of_the_idempotency_key(self):
+        op = gs.new_operation_id()
+        first = self.call_decision(premise_observable="bypass_count",
+                                   premise_threshold=2, operation_id=op)
+        self.assertFalse(first.get("error"), first)
+        second = self.call_decision(premise_observable="bypass_count",
+                                    premise_threshold=2, operation_id=op)
+        self.assertTrue(second.get("replayed"))
+        self.assertEqual(len(self.dec_rows()), 2)
+        # Same op id, DIFFERENT premise -> conflict (fingerprint carries it).
+        payload = self.call_decision(premise_observable="bypass_count",
+                                     premise_threshold=5, operation_id=op)
+        self.assertRefused(payload, "operation_id_conflict")
+
+
+class PremiseTrackerEventTests(StoreTestCase):
+    """FIX-463: premise-events.jsonl writer + aggregation semantics."""
+
+    def _count_event(self, total, refs="synthetic", decision="DEC-368",
+                     observable="bypass_count", source="ref"):
+        import premise_tracker as pt
+        return pt.append_event(self.gov, {
+            "type": "count", "decision_id": decision,
+            "observable": observable, "source": source,
+            "refs": refs, "total": total})
+
+    def test_count_event_written_and_reloaded(self):
+        import premise_tracker as pt
+        receipt, code = self._count_event(3)
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["effect"], "written")
+        events = pt.load_events(self.gov)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["total"], 3)
+        self.assertEqual(events[0]["decision_id"], "DEC-368")
+
+    def test_count_idempotent_noop_zero_bytes(self):
+        import premise_tracker as pt
+        _receipt, code = self._count_event(3)
+        self.assertEqual(code, 0)
+        before = (self.gov / pt.EVENTS_FILE_NAME).read_bytes()
+        receipt, code = self._count_event(3)
+        self.assertEqual(code, 0)
+        self.assertEqual(receipt["effect"], "idempotent_noop")
+        self.assertEqual((self.gov / pt.EVENTS_FILE_NAME).read_bytes(),
+                         before)
+
+    def test_ref_source_requires_refs(self):
+        receipt, code = self._count_event(5, refs="  ")
+        self.assertEqual(code, 2)
+        self.assertEqual(receipt["code"], "refused")
+        self.assertFalse((self.gov / "premise-events.jsonl").exists())
+
+    def test_malformed_stream_fails_closed(self):
+        import premise_tracker as pt
+        (self.gov / pt.EVENTS_FILE_NAME).write_text(
+            "{not json}\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            pt.load_events(self.gov)
+
+    def test_premise_status_three_states(self):
+        import premise_tracker as pt
+        declarations = {"DEC-368": {"observable": "bypass_count",
+                                    "threshold": 2, "line": 1}}
+        # State 1: below threshold -> standing.
+        _r, code = self._count_event(1)
+        self.assertEqual(code, 0)
+        status = pt.premise_status(declarations, pt.load_events(self.gov))
+        self.assertEqual(status["collapsed"], [])
+        # State 2: crossed -> collapsed.
+        _r, code = self._count_event(4)
+        self.assertEqual(code, 0)
+        status = pt.premise_status(declarations, pt.load_events(self.gov))
+        self.assertEqual(status["collapsed"], ["DEC-368"])
+        # State 3: user re-review resets the baseline -> standing again
+        # (history never rewritten; only post-review events count).
+        receipt, code = pt.append_event(self.gov, {
+            "type": "premise_reviewed", "decision_id": "DEC-368",
+            "note": "user re-affirmed"})
+        self.assertEqual(code, 0)
+        status = pt.premise_status(declarations, pt.load_events(self.gov))
+        self.assertEqual(status["collapsed"], [])
+        # A NEW post-review event re-arms the verdict from zero.
+        _r, code = self._count_event(2, refs="post-review")
+        self.assertEqual(code, 0)
+        status = pt.premise_status(declarations, pt.load_events(self.gov))
+        self.assertEqual(status["collapsed"], ["DEC-368"])
+
+    def test_dec368_retro_calibration_readonly_demo(self):
+        """The acceptance case: DEC-368② premise {bypass_count, 2} must be
+        judged collapsed from the LIVE tree's documented bypass events —
+        read-only (synthetic declaration; the real decision-log stays
+        untouched; the re-review right stays with the user)."""
+        import premise_tracker as pt
+        repo_root = _INFRA_DIR.parents[2]
+        evidence_text = (repo_root / ".governance" / "evidence-log.md"
+                         ).read_text(encoding="utf-8")
+        result = pt.count_hook_bypasses(evidence_text)
+        # Documented EVENT FLOOR: e254584 + M-7 + M-5b = 3 (EVD-2145 /
+        # EVD-2148③; the +1 cross-reference row is the disclosed ambiguity).
+        self.assertGreaterEqual(result["count"], 3, result["rows"])
+        synthetic_row = ("| DEC-900 | 2026-10-24 | 用户（验收演示） | "
+                         "合成声明行 | 依据；（机器写入：…；schema v1；"
+                         "premise={observable:bypass_count,threshold:2}） |")
+        declarations = pt.collect_premise_declarations(synthetic_row)
+        self.assertEqual(declarations["DEC-900"]["threshold"], 2)
+        events = [{"type": "count", "decision_id": "DEC-900",
+                   "observable": "bypass_count", "source": "auto",
+                   "refs": "live-tree scan", "total": result["count"],
+                   "sequence": 1}]
+        status = pt.premise_status(declarations, events)
+        self.assertEqual(status["collapsed"], ["DEC-900"])
+
+
+class PremiseAutoSourceTests(unittest.TestCase):
+    """FIX-463: replayable auto-source adapters (pure functions)."""
+
+    def test_bypass_row_shapes_and_exclusions(self):
+        import premise_tracker as pt
+        disclosure = ("| EVD-2145 | REL-103 | 发布门事件披露 | …hook 文档化"
+                      "应急通道 --no-verify 的事实与根因… | x | y |")
+        recurrence = ("| EVD-2148 | REL-103 | 发布终账 | …在 M-7/M-5b 两次"
+                      "拦截，--no-verify 应急通道走先例（hook 否定窗口）… |")
+        negated = "| EVD-928 | FIX-282 | 产品代码 | …commit 不再被迫 --no-verify 例外（hook 修复）… |"
+        non_hook = "| EVD-1 | X | 产品代码 | 用户提到过 --no-verify 这个词 |"
+        anti_event = "| EVD-2 | X | 产品代码 | hook 暂态未 --no-verify 即写入 |"
+        result = pt.count_hook_bypasses(
+            "\n".join([disclosure, recurrence, negated, non_hook,
+                       anti_event]))
+        self.assertEqual(result["count"], 3)  # 1 + 2; prose rows excluded
+        self.assertEqual(len(result["rows"]), 2)
+
+    def test_pin_recurrence_counter(self):
+        import premise_tracker as pt
+        synthetic = ("STATIC_PIN_EXEMPTIONS = {\n"
+                     "    # pins register op-" + "a" * 32 + ": new row\n"
+                     "    # pins re-anchor op-" + "b" * 32 + ": moved\n"
+                     "    (1, \"0.1.0\", \"r\"),\n"
+                     "}\n")
+        self.assertEqual(pt.count_pin_recurrences(synthetic)["count"], 2)
+        self.assertEqual(pt.count_pin_recurrences("no rows here")["count"], 0)
+
+    def test_live_tree_bypass_floor(self):
+        import premise_tracker as pt
+        repo_root = _INFRA_DIR.parents[2]
+        evidence_text = (repo_root / ".governance" / "evidence-log.md"
+                         ).read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            pt.count_hook_bypasses(evidence_text)["count"], 3)
+
+
 class HostRootRebindCanaryTests(unittest.TestCase):
     """FIX-387 防回归 canary — the engine host-root rebind surface must be
     identical to its import-time baseline once this file's tests have run.

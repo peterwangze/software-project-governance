@@ -103,6 +103,13 @@ from baseline_metadata import cmd_baseline_evaluate, cmd_baseline_register
 # serves write-guard face 6 (hand-edit alarm over the exemption ledger).
 import pin_ledger
 from pin_ledger import cmd_pins
+# FIX-463 (0.99.x emergency window): premise_tracker — the decision-premise
+# invalidator (count/review/status over .governance/premise-events.jsonl;
+# DEC-368② class, structural close): stdlib-only, self-contained, the
+# engine wires dispatch only (same pattern); also feeds the check-governance
+# Decision Premise WARN face and the next-candidates collapsed injection.
+import premise_tracker
+from premise_tracker import cmd_premise
 # FEAT-093 (0.98.0): the authority ledger — task identity contract +
 # append-only event log + rebuildable plan-tracker projection (engine wires
 # dispatch only; stdlib-only at import time, peer-leaf calibers imported
@@ -16134,6 +16141,25 @@ def check_m5_compliance_with_record_scope():
     return base
 
 
+def check_decision_premise(governance_dir=None):
+    """FIX-463 — collapsed decision-premise verdict (Check 2b core).
+
+    Returns ``{"declarations": {dec_id: premise}, "collapsed": [dec_id],
+    "detail": {dec_id: {...}}}``. Registered as the R5 segment-2b loader
+    (quickscan SegmentSpec "2b"); read-only over decision-log.md +
+    premise-events.jsonl, never raises on missing inputs (idle face when
+    no premises are declared).
+    """
+    gov = Path(governance_dir) if governance_dir else GOVERNANCE_DIR
+    decision_log = gov / "decision-log.md"
+    declarations = premise_tracker.collect_premise_declarations(
+        decision_log.read_text(encoding="utf-8")
+        if decision_log.is_file() else "")
+    events = premise_tracker.load_events(gov)
+    status = premise_tracker.premise_status(declarations, events)
+    return {"declarations": declarations, **status}
+
+
 def cmd_check_governance(args):
     """Run governance health checks: evidence completeness, risk staleness, gate consistency.
 
@@ -16352,6 +16378,38 @@ def _run_full_engine_checks(args):
         print(f"│  Fresh open risks ({len(fresh)}):")
         for risk_id, date_str, age in fresh:
             print(f"│    - {risk_id} ({date_str}, {age}d ago)")
+    print("└──────────────────────────────────────────────────────┘")
+
+    # ── 2b. Decision premise (FIX-463) ──
+    # Same WARN semantics as risk staleness above: a declared premise whose
+    # observable count has crossed its threshold and has not been
+    # re-reviewed (a review resets the counter baseline) is collapsed —
+    # the decision's ranking-suppression authority is stripped (TPA
+    # surfaces it as active-defect) until the user re-reviews. Read-only.
+    print("\n┌─ Check 2b: Decision Premise (FIX-463) ──────────────┐")
+    try:
+        _premise_verdict = check_decision_premise()
+        _premise_decls = _premise_verdict["declarations"]
+        _collapsed = _premise_verdict["collapsed"]
+        _premise_detail = _premise_verdict["detail"]
+        if _collapsed:
+            all_issues += len(_collapsed)
+            print(f"│  [WARN] {len(_collapsed)} collapsed premise(s):")
+            for _dec_id in _collapsed:
+                _detail = _premise_detail[_dec_id]
+                print(f"│    - {_dec_id}: premise collapsed — re-review "
+                      f"required ({_detail['observable']} "
+                      f"{_detail['total']} ≥ threshold "
+                      f"{_detail['threshold']}); the decision no longer "
+                      f"suppresses ranking (premise review to restore)")
+        elif _premise_decls:
+            print(f"│  [PASS] {len(_premise_decls)} declared premise(s) "
+                  f"standing.")
+        else:
+            print("│  [PASS] No declared premises (FIX-463 face idle).")
+    except (OSError, ValueError) as _premise_exc:
+        all_issues += 1
+        print(f"│  [WARN] premise face unreadable: {_premise_exc}")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 3. Gate consistency ──
@@ -24221,6 +24279,25 @@ def cmd_next_candidates(args):
             top_n=getattr(args, "top_n", 3) or 3,
             candidate_path=snapshot if getattr(args, "write", False) else None,
         )
+    # FIX-463: inject the collapsed-premise verdict (read-only; DEC-368②
+    # class) — a collapsed decision must surface in the next-unit bridge
+    # too, not only in the full TPA report. Additive key: consumers that
+    # do not know it are unaffected.
+    try:
+        _dec_log = HOST_PROJECT_ROOT / ".governance" / "decision-log.md"
+        _decls = premise_tracker.collect_premise_declarations(
+            _dec_log.read_text(encoding="utf-8")
+            if _dec_log.is_file() else "")
+        if _decls:
+            _events = premise_tracker.load_events(
+                HOST_PROJECT_ROOT / ".governance")
+            _status = premise_tracker.premise_status(_decls, _events)
+            if isinstance(report, dict):
+                report["collapsed_premises"] = [
+                    dict(_status["detail"][d], decision_id=d)
+                    for d in _status["collapsed"]]
+    except (OSError, ValueError, TypeError):
+        pass  # the bridge stays additive — never block the candidate read
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
@@ -28012,6 +28089,18 @@ def main(argv=None):
     )
     pin_ledger.add_arguments(pins_p)
 
+    # FIX-463: decision-premise invalidator (count / review / status over
+    # .governance/premise-events.jsonl, DEC-368② class) — args and handlers
+    # live in premise_tracker.py, engine wires dispatch only (ArchGuard R4
+    # print budget untouched; exit 0 ok / 2 refusal / 3 retryable).
+    premise_p = subparsers.add_parser(
+        "premise",
+        help="Decision-premise invalidator (FIX-463): premise count / "
+             "premise review / premise status — replayable event ledger; "
+             "a collapsed premise strips the decision's ranking authority",
+    )
+    premise_tracker.add_arguments(premise_p)
+
     # baseline_metadata commands (FEAT-055 / 0.86.0 batch 2.0 — FEAT-047):
     # baseline-register / baseline-evaluate; args and handlers live in
     # baseline_metadata.py — the engine only wires dispatch, ArchGuard R4
@@ -28223,6 +28312,8 @@ def main(argv=None):
         "decision-append": cmd_decision_append,
         # FIX-462: pins ledger machine writer dispatch (pin_ledger module).
         "pins": cmd_pins,
+        # FIX-463: decision-premise invalidator dispatch (premise_tracker).
+        "premise": cmd_premise,
         "baseline-register": cmd_baseline_register,
         "baseline-evaluate": cmd_baseline_evaluate,
         # FEAT-093 (0.98.0): authority-ledger dispatch (identity contract +

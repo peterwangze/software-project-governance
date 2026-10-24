@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "1d9216e3747d0a472befb99834da5ee12161bbb5",
+    "git_head": "9474310e275543cc0753a8aa57b0207f663a81f1",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 28275,
+    "anchor_loc": 28366,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -459,7 +459,7 @@
       "_print_check_summary": 9,
       "_print_product_gate_skipped": 3,
       "_print_sequential_id_check": 13,
-      "_run_full_engine_checks": 625,
+      "_run_full_engine_checks": 632,
       "check_agent_adapter_contract": 3,
       "check_architecture_fact_source": 2,
       "check_files": 4,
@@ -542,7 +542,7 @@
       "cmd_write_guard_bootstrap": 2,
       "main": 1
     },
-    "total": 1376
+    "total": 1383
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",
@@ -554,8 +554,8 @@
     "snapshot_present_at_regen": true
   },
   "r6_startup_budget": {
-    "import_count": 210,
-    "import_set_sha256": "50fd0b5a5756f928d6f5f4f38dd4004a17f05ce1356b637c0f9dd932561155ca",
+    "import_count": 211,
+    "import_set_sha256": "b4ca0b136ff3dd292f4ef3a75e5856559fef3da4e45f78fc76392bd46ad4a85e",
     "note": "collection + comparison frame only; FEAT-018's tolerance table fills threshold, then the face tightens — advisory until then, never fatal in v1",
     "probe": "python -I -B -c 'import verify_workflow' (isolated)",
     "threshold": null

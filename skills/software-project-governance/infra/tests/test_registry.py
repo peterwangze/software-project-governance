@@ -152,8 +152,15 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # wires dispatch only — governance_cost pattern). Snapshot + architecture
 # baseline re-anchored in the same change (DEC-320/324 sanctioned regen
 # rider, +N mainfile lines disclosed). Segments stay at 73.
-FROZEN_CLI_KEYS = 108
-FROZEN_SEGMENTS = 73
+# FIX-463 (0.99.x emergency window, DEC-368② class): 108 -> 109 CLI keys —
+# the `premise` decision-premise invalidator (count / review / status over
+# .governance/premise-events.jsonl; handler in premise_tracker.py, engine
+# wires dispatch only — governance_cost pattern). Snapshot + architecture
+# baseline re-anchored in the same change (DEC-320/324 rider). Segments
+# 73 -> 74: the check-governance Check 2b Decision Premise WARN face is
+# extracted as a new segment (name carries "Check 2b").
+FROZEN_CLI_KEYS = 109
+FROZEN_SEGMENTS = 74
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
 # the acceptance ② comparison frame for "启动 import 集合不增".
@@ -203,7 +210,12 @@ FROZEN_SEGMENTS = 73
 # json / os / re / tempfile / uuid / pathlib — all already in the cold
 # face, so the face grows by exactly this one module; measured 210 live).
 # Baseline regenerated in the same change.
-FROZEN_ENGINE_IMPORT_COUNT = 210
+# FIX-463: 210 -> 211 — the engine imports the self-contained
+# ``premise_tracker`` module (stdlib-only at import time: argparse / json /
+# re / uuid / datetime / pathlib — all already in the cold face, so the
+# face grows by exactly this one module; measured 211 live). Baseline
+# regenerated in the same change.
+FROZEN_ENGINE_IMPORT_COUNT = 211
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {
@@ -482,6 +494,10 @@ class CommandRegistryTests(unittest.TestCase):
             # STATIC_PIN_EXEMPTIONS; handler in pin_ledger.py, the engine
             # wires dispatch only — governance_cost pattern).
             "pins",
+            # FIX-463 (0.99.x emergency window): the decision-premise
+            # invalidator (count / review / status; handler in
+            # premise_tracker.py, the engine wires dispatch only).
+            "premise",
             # FEAT-055 (0.86.0 batch 2.0): the task-row state-flip writer
             # (B-1 termination surface; handler in task_row_update.py).
             "task-row-update",

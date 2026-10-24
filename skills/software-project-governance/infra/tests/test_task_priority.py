@@ -2701,5 +2701,65 @@ class TestDemandSourceRevisionCliTests(unittest.TestCase):
             self.assertIn("src=user-named", buf2.getvalue())
 
 
+class CollapsedPremiseReportTests(unittest.TestCase):
+    """FIX-463: TPA three-state pinning for collapsed decision premises.
+
+    The suppression-stripping semantics (DEC-368② class): a decision whose
+    declared premise collapsed surfaces as an active-defect item with the
+    "re-review required" wording, and the rows leaning on it carry the
+    依据失效 annotation; standing (or re-reviewed) premises stay silent.
+    """
+
+    _ENTRY = {"decision_id": "DEC-368", "observable": "bypass_count",
+              "threshold": 2, "total": 4,
+              "last_event_refs": "L2972(+1);L2973(+1);L2979(+2)"}
+
+    def _tasks(self):
+        leaning = TaskDep("FIX-444", "P2", "⏸ 暂停", (), ("DEC-368",),
+                          "0.100.0")
+        other = TaskDep("FIX-490", "P1", "⏳ 待执行", (), ("DEC-401",),
+                        "0.100.0")
+        return [leaning, other]
+
+    def test_standing_premise_renders_no_section(self):
+        report = compute_unblocked_tasks(self._tasks(),
+                                         collapsed_premises=())
+        text = format_report(report)
+        self.assertNotIn("Collapsed decision premises", text)
+        self.assertEqual(report.collapsed_premises, ())
+
+    def test_collapsed_premise_surfaces_active_defect_with_related(self):
+        report = compute_unblocked_tasks(
+            self._tasks(), collapsed_premises=(dict(self._ENTRY),))
+        self.assertEqual(len(report.collapsed_premises), 1)
+        text = format_report(report)
+        self.assertIn("Collapsed decision premises (FIX-463)", text)
+        self.assertIn("`DEC-368` (src=active-defect): premise collapsed — "
+                      "re-review required", text)
+        self.assertIn("bypass_count 4 ≥ threshold 2", text)
+        # Only the row leaning on THIS decision is annotated.
+        self.assertIn("related rows (依据失效): FIX-444", text)
+        self.assertNotIn("FIX-490,", text.split("依据失效")[-1]
+                         if "依据失效" in text else "x")
+
+    def test_rereviewed_premise_restores_suppression(self):
+        # State 3 of the pinning: after the user's re-review the
+        # orchestration injects an empty collapsed set again (the
+        # aggregation resets the counter baseline) — the section vanishes.
+        report = compute_unblocked_tasks(
+            self._tasks(), collapsed_premises=(dict(self._ENTRY),))
+        self.assertIn("Collapsed decision premises",
+                      format_report(report))
+        restored = compute_unblocked_tasks(self._tasks(),
+                                           collapsed_premises=())
+        self.assertNotIn("Collapsed decision premises",
+                         format_report(restored))
+
+    def test_default_report_unchanged_without_premise_data(self):
+        report = compute_unblocked_tasks(self._tasks())
+        self.assertEqual(report.collapsed_premises, ())
+        self.assertNotIn("Collapsed decision premises", format_report(report))
+
+
 if __name__ == "__main__":
     unittest.main()

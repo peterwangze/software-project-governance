@@ -156,7 +156,10 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #      (docs/requirements/pi-adapter-design-0.99.0.md §4.1 nine-point
 #      registration plan) + R0 design review APPROVED_WITH_NOTES
 #      (docs/reviews/review-FEAT-100-DESIGN-R0.md). R2/R3/R5/R6 zero drift.)
-FACTS_PRINT_TOTAL = 1376
+#   -> 1383 (0.99.x emergency window, FIX-463 decision-premise rider,
+#   2026-10-24: +7 — the check-governance Check 2b Decision Premise WARN
+#   face's report lines; the rider's only print growth, disclosed).
+FACTS_PRINT_TOTAL = 1383
 
 
 def _committed_baseline():
@@ -699,15 +702,36 @@ class BaselineArtifactTests(unittest.TestCase):
         # triage-domain line anchors also move by -1, with unchanged counts.
         # FIX-462 rider re-anchor (0.99.x emergency window, 2026-10-24,
         # DEC-320/324 precedent isomorphic): 28214 -> 28275, +61/-0 net, all
-        # attributed to the pins ledger machine writer dispatch wiring
-        # (module import block +7, subparser block +14, commands-dict row
-        # +3, write-guard face 6 block +30 incl. docstring face item; the
-        # writer + guard-face logic live in pin_ledger.py). R4 print census
-        # byte-stable at 1376 (the pins JSON receipt print lives in the
-        # module, not the engine); R5 cli keys 107 -> 108 in the same regen
+        # attributed to the pins ledger machine writer dispatch wiring:
+        # module import block +7, subparser block +14, commands-dict row +3,
+        # write-guard face-6 block +30 (incl. docstring face item), the
+        # guard faces-tuple render entry +3, dispersed comment lines +4 —
+        # net +61 pinned by the anchor delta. [N1 correction, REVIEW-FIX-
+        # 462-R0: the first rider's sub-list omitted the +3 render-entry
+        # hunk; restored here, net unchanged.] The writer + guard-face
+        # logic live in pin_ledger.py. R4 print census byte-stable at 1376
+        # (the pins JSON receipt print lives in the module, not the
+        # engine); R5 cli keys 107 -> 108 in the same regen
         # (contract-matrix rider in the same change); R6 209 -> 210 (cold
         # -import face +1 module: pin_ledger, stdlib-only).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28275)
+        # FIX-463 rider re-anchor (0.99.x emergency window, 2026-10-24,
+        # DEC-368② class — DEC-320/324 precedent isomorphic): 28275 ->
+        # 28366, +91/-0 net, all attributed to the decision-premise
+        # invalidator wiring: module import block +6, subparser block +11,
+        # dispatch entry +2, check-governance Check 2b Decision Premise
+        # WARN face +33, the module-level check_decision_premise loader
+        # extraction +15 (R5 segment 2b registration — quickscan
+        # SegmentSpec + _SEGMENT_LOADERS), next-candidates collapsed
+        # injection +20, dispersed comment lines +4 — net +91 pinned by
+        # the anchor delta. R4 print census 1376 -> 1383 (+7: the Check 2b
+        # face's report lines — this rider's only print growth, disclosed);
+        # R5 cli keys 108 -> 109 AND segments 73 -> 74 (the new 2b segment)
+        # in the same regen (contract-matrix rider in the same change);
+        # R6 210 -> 211 (cold-import face +1 module: premise_tracker,
+        # stdlib-only). The count/review/status logic, event stream and
+        # aggregation live in premise_tracker.py; task_priority carries the
+        # report field + render section + cache-guard key.
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28366)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

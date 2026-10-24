@@ -240,6 +240,13 @@ SEGMENTS = (
     SegmentSpec("2", "risk", (
         "host:governance:.governance/risk-log.md",
     ), _RETAIN),
+    # FIX-463: the Check 2b Decision Premise WARN face — risk-family (the
+    # same staleness semantics as Check 2 over decision premises); reads
+    # the decision-log declarations + the premise event stream.
+    SegmentSpec("2b", "risk", (
+        "host:governance:.governance/decision-log.md",
+        "host:governance:.governance/premise-events.jsonl",
+    ), _RETAIN),
     SegmentSpec("3", "gate", (
         "host:governance:.governance/plan-tracker.md",
         "host:governance:.governance/evidence-log.md",

@@ -100,6 +100,810 @@ task_in_plan_tracker() {
     LC_ALL=C grep -Eq "^ *[|] *[*]{0,2}P[0-9]+[*]{0,2} *[|] *[*]{0,2}${task_id}[*]{0,2} *[|]" "$plan_file" 2>/dev/null
 }
 
+# --- Step 12 support: source-verified fabrication scan (FIX-445) ---
+# History: FIX-444 R0..R3 chased marker-class escapes until R3 BLOCKED
+# (3 actual escapes: forged signed records, predicate-then-endorsement,
+# fail-open on sed/grep faults).  DEC-334 authorized this bounded
+# redesign; the approved design chain is docs/design/
+# FIX-445-source-verification-R2.md (merged canonical: C-1 strict JSON
+# routing with five rejections, C-2 identity id+both-utc instants,
+# C-3 whole-field raw==/ext== credentials, C-4 span<->field closed
+# mapping, C-5 per-instance offset deletion, corpus+realpath fault
+# dichotomy, R6 explicit-leg error propagation) + R3 §3 (dual closed
+# tables, full-window consumption, count==1 prefix exemption, clause
+# bounded, >16 overflow reject) + review N1 (ASCII clause terminators)
+# and N2 (first-frame exemption covers inner matches).  Seven real
+# source classes (R0 §3): C1 prose negations, C2 marker+predicate
+# finding names, C3/C4 literal-carried pattern/check spans, C5
+# observed-carried verdict lines, C6 observed-carried attribution
+# spans (typed-span route under full-value credential; no whole-value
+# exemption), C7 hash metadata (never an exemption).
+# Citation spans (closed syntax, <=120 chars) are exempt ONLY when
+# their carrying record field is source-verified against an in-repo
+# artifact record (same id char-exact + both utc instants equal with
+# FULL fraction preservation — .537239Z == .5372390Z, differing 7th
+# digit rejects; whole-value equality raw or closed-display ext on
+# BOTH sides; verdict spans only in observed; check/pattern spans only
+# in literal/output_as_captured; result/affected/unknowns/protection
+# never carry).  Everything else — bare affirmatives, mixed lines,
+# stacked double negations, unknown/unverifiable shapes — BLOCKS.
+# All tool legs are fail-closed: awk/sed/grep/python errors, realpath
+# throws and in-repo read failures BLOCK the line (grep rc>=2 = error,
+# never "clean"); malformed JSON regions render as prose (zero
+# exemptions); resolved-outside-repo corpus paths are dropped unread.
+# Pure-prose lines never invoke python (CH-7).  Locale note: the awk
+# scanners rely on the default UTF-8 locale for char-wise substr (the
+# pre-existing json_region_mask constraint; byte-literal tables only).
+json_region_mask() {
+    awk -v mode="$1" '
+    {
+        depth = 0; instr = 0; esc = 0
+        prose = ""; rec = ""
+        n = length($0)
+        for (i = 1; i <= n; i++) {
+            c = substr($0, i, 1)
+            if (instr) {
+                rec = rec c
+                if (esc) { esc = 0 }
+                else if (c == "\\") { esc = 1 }
+                else if (c == "\"") { instr = 0 }
+            } else if (depth > 0 && c == "\"") {
+                instr = 1; esc = 0
+                rec = rec c
+                prose = prose " "
+            } else {
+                prose = prose c
+                if (c == "{") { depth++ }
+                else if (c == "}" && depth > 0) { depth-- }
+            }
+        }
+        if (mode == "prose") { print prose } else { print rec }
+    }'
+}
+
+_fix445_engine_code() {
+    cat <<'FIX445_PY_ENGINE'
+import sys, os, re, json, glob as _glob
+from datetime import datetime, timezone, timedelta
+try:
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+task_id = sys.argv[1] if len(sys.argv) > 1 else ""
+repo = sys.argv[2] if len(sys.argv) > 2 else "."
+raw = sys.stdin.read()
+
+class ToolFault(Exception):
+    pass
+
+_TSRX = re.compile(r"^(\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:?\d{2})$")
+
+def _ikey(ts):
+    m = _TSRX.match(ts.strip())
+    if not m:
+        raise ValueError("bad rfc3339")
+    base, frac, off = m.groups()
+    dt = datetime.fromisoformat(base)
+    if off in ("Z", "z"):
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        sg = 1 if off[0] == "+" else -1
+        o = off[1:].replace(":", "")
+        dt = dt.replace(tzinfo=timezone(sg * timedelta(hours=int(o[:2]), minutes=int(o[2:]))))
+    return (int(dt.timestamp()), frac or "")
+
+def inst_eq(a, b):
+    try:
+        ka, kb = _ikey(a), _ikey(b)
+    except Exception:
+        return False
+    n = max(len(ka[1]), len(kb[1]))
+    return ka[0] == kb[0] and ka[1].ljust(n, "0") == kb[1].ljust(n, "0")
+
+def _ext(s):
+    return s.replace("｜", "|").replace("〈反引号〉", "`")
+
+def _nodup(pairs):
+    ks = [k for k, _ in pairs]
+    if len(set(ks)) != len(ks):
+        raise ValueError("duplicate key")
+    return dict(pairs)
+
+def _noconst(c):
+    raise ValueError("nonstandard constant " + c)
+
+_DEC = json.JSONDecoder(object_pairs_hook=_nodup, parse_constant=_noconst)
+
+def strict_obj(text):
+    try:
+        obj, end = _DEC.raw_decode(text)
+    except Exception:
+        return None
+    if end != len(text) or not isinstance(obj, dict):
+        return None
+    return obj
+
+def _read_str(t, i):
+    j = i + 1
+    n = len(t)
+    while j < n:
+        if t[j] == "\\":
+            j += 2
+            continue
+        if t[j] == '"':
+            return j + 1
+        j += 1
+    return -1
+
+def top_string_fields(rtext, base):
+    """Escape-aware top-level string-field scanner over the record's raw
+    text.  Returns (key, decoded_value, vs, ve, dmap) tuples where vs/ve
+    are RAW line offsets of the value token and dmap[t] gives the token-
+    local raw index of decoded char t (dmap[len] = end sentinel) — the
+    R5 §2R five-step decoded-to-raw offset map for variable-length
+    escapes (u-escape 6 raw -> 1 decoded, surrogate pair 12 -> 2, simple
+    escapes 2 -> 1).  Malformed structure -> None (region = prose)."""
+    fields = []
+    n = len(rtext) - 1
+    k = 1
+    while k < n:
+        if rtext[k] == '"':
+            ke = _read_str(rtext, k)
+            if ke < 0:
+                return None
+            try:
+                key = json.loads(rtext[k:ke])
+            except Exception:
+                return None
+            m = ke
+            while m < n and rtext[m] in " \t":
+                m += 1
+            if m >= n or rtext[m] != ":":
+                return None
+            m += 1
+            while m < n and rtext[m] in " \t":
+                m += 1
+            if m < n and rtext[m] == '"':
+                ve = _read_str(rtext, m)
+                if ve < 0:
+                    return None
+                inner = rtext[m + 1:ve - 1]
+                dmap = []
+                q = 0
+                iq = len(inner)
+                dc = 0
+                while q < iq:
+                    dmap.append(q)
+                    if inner[q] == "\\":
+                        if q + 5 < iq and inner[q + 1] == "u":
+                            try:
+                                cp = int(inner[q + 2:q + 6], 16)
+                            except ValueError:
+                                return None
+                            if 0xD800 <= cp <= 0xDBFF and \
+                                    inner[q + 6:q + 8] == "\\u":
+                                try:
+                                    lo = int(inner[q + 8:q + 12], 16)
+                                except ValueError:
+                                    return None
+                                if 0xDC00 <= lo <= 0xDFFF:
+                                    # Python json.loads decodes a valid
+                                    # surrogate pair to ONE codepoint:
+                                    # 12 raw chars -> 1 decoded char
+                                    # (UTF-16 unit counting in the R5
+                                    # example is not the map unit here).
+                                    dc += 1
+                                    q += 12
+                                    continue
+                            dc += 1
+                            q += 6
+                            continue
+                        q += 2
+                        dc += 1
+                        continue
+                    dc += 1
+                    q += 1
+                dmap.append(iq)
+                try:
+                    val = json.loads(rtext[m:ve])
+                except Exception:
+                    return None
+                if len(val) != dc:
+                    return None
+                fields.append((key, val, base + m + 1, base + ve - 1, dmap))
+                k = ve
+            else:
+                try:
+                    _, e = json.JSONDecoder().raw_decode(rtext[m:])
+                except Exception:
+                    return None
+                k = m + e
+            while k < n and rtext[k] in " \t":
+                k += 1
+            if k < n and rtext[k] == ",":
+                k += 1
+                continue
+            if k >= n:
+                break
+            return None
+        else:
+            k += 1
+    return fields
+
+TERMRX = re.compile(r"编造|幻觉")
+VERDICT_RX = re.compile(r"(?:PASS|BLOCK)｜[^;]{1,120}")
+CHECK_PLAIN_RX = re.compile(r'check "[^"]{1,120}"')
+T2_TOKEN = "check-quoted"
+T2_JOINER = " / "
+GUARD_TOKENS = ("把", "将", "当作", "当成", "视为", "作为", "当真")
+PAIR_LITERALS = ("编造｜幻觉", "编造|幻觉")
+
+
+def _wl(ch):
+    """T-2' unit whitelist: CJK U+4E00..U+9FFF + ASCII alnum; the symbol
+    set is EMPTY by design (R5 §2R) — everything else terminates a unit
+    and never enters a span."""
+    o = ord(ch)
+    if 0x4E00 <= o <= 0x9FFF:
+        return True
+    return ch.isascii() and ch.isalnum()
+
+
+def _rest_has_unit(value, pos):
+    for ch in value[pos:]:
+        if _wl(ch):
+            return True
+    return False
+
+
+def field_candidates(value):
+    """R5 closed-table candidates on a DECODED field value (bounded —
+    fixes the last-span-overrun root cause).  Returns a list of dicts:
+    {ds, de, kind, ok} where ok=False marks grammar/guard/integral
+    REJECTED candidates (they must stay wholly in the residual).
+    Kinds: verdict (R2 closed syntax, observed-only), check_plain
+    (literal/output-only), pair (T-1 fixed 5-char literals), t2
+    (T-2' check-quoted grammar with whitelist units + Guard G)."""
+    cands = []
+
+    def add(ds, de, kind, ok):
+        cands.append({"ds": ds, "de": de, "kind": kind, "ok": ok})
+
+    for m in VERDICT_RX.finditer(value):
+        if TERMRX.search(m.group(0)):
+            add(m.start(), m.end(), "verdict", True)
+    for m in CHECK_PLAIN_RX.finditer(value):
+        if TERMRX.search(m.group(0)):
+            add(m.start(), m.end(), "check_plain", True)
+    n = len(value)
+    i = 0
+    while True:
+        j = value.find(T2_TOKEN, i)
+        if j < 0:
+            break
+        i = j + 1
+        prev = value[j - 1] if j > 0 else ""
+        if prev not in ("", " ", "(", "（"):
+            continue
+        p = j + len(T2_TOKEN)
+        if p >= n or value[p] != " ":
+            continue
+        p += 1
+        k = p
+        nunits = 0
+        ok = True
+        while True:
+            u0 = k
+            while k < n and _wl(value[k]):
+                k += 1
+            ulen = k - u0
+            if ulen < 1 or ulen > 60:
+                ok = False
+                break
+            nunits += 1
+            if k + 3 <= n and value[k:k + 3] == T2_JOINER and nunits < 4:
+                k += 3
+                continue
+            break
+        if not ok or nunits < 1:
+            continue
+        end = k
+        if end - j > 80:
+            continue  # span overflow: whole candidate stays
+        # integral rejection (R5 :17): a non-whitelisted char where the
+        # grammar ended rejects the WHOLE candidate when unit content
+        # would otherwise continue (no leading-truncate that swallows
+        # the tail).  Structural closers — citation-closing brackets
+        # and clause delimiters — are natural boundaries: later field
+        # content belongs to separate clauses, not to this candidate.
+        if end < n and not _wl(value[end]):
+            ch = value[end]
+            if ch not in (")", "）", ";", "；", "。"):
+                if _rest_has_unit(value, end + 1):
+                    add(j, end, "t2", False)
+                    continue
+        span_text = value[j:end]
+        guarded = any(g in span_text for g in GUARD_TOKENS)
+        add(j, end, "t2", not guarded)
+    for lit in PAIR_LITERALS:
+        start = 0
+        while True:
+            j = value.find(lit, start)
+            if j < 0:
+                break
+            add(j, j + 5, "pair", True)
+            start = j + 1
+    cands.sort(key=lambda c: (c["ds"], -c["de"]))
+    kept = []
+    for c in cands:
+        if kept and c["ds"] >= kept[-1]["ds"] and c["de"] <= kept[-1]["de"]:
+            continue
+        kept.append(c)
+    return kept
+
+def regions(line):
+    out = []
+    depth = 0
+    instr = False
+    esc = False
+    start = None
+    for i, ch in enumerate(line):
+        if instr:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                instr = False
+        else:
+            if ch == '"':
+                instr = True
+                esc = False
+            elif ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                if depth > 0:
+                    depth -= 1
+                if depth == 0 and start is not None:
+                    out.append((start, i + 1))
+                    start = None
+    return out
+
+_REF = re.compile(r"(?:docs/reviews/[A-Za-z0-9._-]+|\.governance/(?:incidents|reports)/[A-Za-z0-9._-]+)")
+_cache = {}
+
+def corpus_records():
+    if "records" in _cache:
+        return _cache["records"]
+    files = []
+    for line in raw.split("\n"):
+        got = []
+        for m in _REF.finditer(line):
+            p = m.group(0)
+            if p not in got:
+                got.append(p)
+            if len(got) >= 8:
+                break
+        for p in got:
+            if p not in files:
+                files.append(p)
+    if task_id:
+        for p in sorted(_glob.glob(os.path.join(repo, ".governance", "incidents", "*" + task_id + "*"))):
+            if p not in files:
+                files.append(p)
+    files = files[:32]
+    try:
+        root = os.path.realpath(repo)
+    except OSError:
+        raise ToolFault("realpath-repo")
+    nroot = os.path.normcase(root)
+    records = []
+    drop = 0
+    perr = 0
+    dirskip = 0
+    for p in files:
+        if os.path.basename(p) == "evidence-log.md":
+            continue
+        if p.startswith("/") or p.startswith("\\") or ".." in p.replace("\\", "/").split("/"):
+            drop += 1
+            continue
+        full = p if os.path.isabs(p) else os.path.join(repo, p.replace("/", os.sep))
+        try:
+            rp = os.path.realpath(full)
+        except OSError:
+            raise ToolFault("realpath")
+        nrp = os.path.normcase(rp)
+        if not (nrp == nroot or nrp.startswith(nroot + os.sep)):
+            drop += 1
+            continue
+        if os.path.isdir(rp):
+            # structural non-record: a directory caught by the task glob
+            # (e.g. phase-evidence dirs) is skipped, not a read fault —
+            # records live in files; real unreadable FILES still fault.
+            dirskip += 1
+            continue
+        try:
+            with open(rp, "r", encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError):
+            # reader faults (unreadable / non-UTF-8 corpus file) are
+            # tool faults, not malformed content — BLOCK-safe.
+            raise ToolFault("read")
+        try:
+            data = json.loads(text, object_pairs_hook=_nodup, parse_constant=_noconst)
+        except Exception:
+            perr += 1
+            continue
+        stack = [data]
+        while stack:
+            o = stack.pop()
+            if isinstance(o, dict):
+                if isinstance(o.get("id"), str):
+                    records.append(o)
+                for v in o.values():
+                    stack.append(v)
+            elif isinstance(o, list):
+                stack.extend(o)
+    _cache["records"] = records
+    _cache["drop"] = drop
+    _cache["perr"] = perr
+    _cache["dirskip"] = dirskip
+    return records
+
+def credential(row_rec, fields, art, field):
+    rid = row_rec.get("id")
+    if not isinstance(rid, str) or rid != art.get("id"):
+        return False
+    for k in ("utc_start", "utc_end"):
+        a = row_rec.get(k)
+        b = art.get(k)
+        if not isinstance(a, str) or not isinstance(b, str):
+            return False
+        if not inst_eq(a, b):
+            return False
+    A = art.get(field)
+    V = None
+    for f in fields:
+        if f[0] == field:
+            V = f[1]
+            break
+    if V is None or not isinstance(A, str):
+        return False
+    return V == A or _ext(V) == _ext(A)
+
+def main():
+    out_lines = []
+    unverified = 0
+    verified = 0
+    for line in raw.split("\n"):
+        regs = regions(line)
+        valid = []
+        for (rs, re_) in regs:
+            obj = strict_obj(line[rs:re_])
+            if obj is None:
+                continue
+            fs = top_string_fields(line[rs:re_], rs)
+            if fs is None:
+                continue
+            valid.append((rs, re_, obj, fs))
+        if not valid:
+            out_lines.append(line)
+            continue
+        recs = corpus_records()
+        dels = []
+        line_verified = 0
+        # R5 five-step per FIELD: candidates live on the DECODED value
+        # (bounded — the last span can never overrun the closing quote),
+        # authorization is per closed route (C-4 map or the C6 typed-
+        # span delta), and deletion maps back to RAW offsets via dmap
+        # with a strict instance-count check.
+        for (rs, re_, obj, fs) in valid:
+            for (kk, vv, vs, ve, dmap) in fs:
+                if not isinstance(vv, str):
+                    continue
+                # step 3 (slice decode equality): the token decode must
+                # equal the region-parse value char-for-char.
+                if obj.get(kk) != vv:
+                    raise ToolFault("slice-mismatch")
+                cands = field_candidates(vv)
+                if not cands:
+                    continue
+                cred_ok = False
+                for art in recs:
+                    if credential(obj, fs, art, kk):
+                        cred_ok = True
+                        break
+                for c in cands:
+                    kind = c["kind"]
+                    if kind == "verdict":
+                        route = kk == "observed"
+                    elif kind == "check_plain":
+                        route = kk in ("literal", "output_as_captured")
+                    elif kind == "pair":
+                        route = kk in ("literal", "output_as_captured") or \
+                            kk == "observed"
+                    else:  # t2
+                        route = kk in ("literal", "output_as_captured") or \
+                            kk == "observed"
+                    if not route or not c["ok"]:
+                        unverified += 1
+                        continue
+                    if not cred_ok:
+                        unverified += 1
+                        continue
+                    rs_raw = vs + dmap[c["ds"]]
+                    re_raw = vs + dmap[c["de"]]
+                    dels.append((rs_raw, re_raw))
+                    verified += 1
+                    line_verified += 1
+        # count check: every verified candidate produced exactly one raw
+        # interval; sorting must yield strictly disjoint deletions.
+        if len(dels) != line_verified:
+            raise ToolFault("count-mismatch")
+        dels.sort()
+        res = []
+        pos = 0
+        for (ss, se) in dels:
+            if ss < pos:
+                raise ToolFault("deletion-overlap")
+            res.append(line[pos:ss])
+            pos = se
+        res.append(line[pos:])
+        out_lines.append("".join(res))
+    residual = "\n".join(out_lines)
+    sys.stdout.write("FIX445_ENGINE_RC 0\n")
+    sys.stdout.write("FIX445_RESIDUAL_7F3A_BEGIN\n")
+    sys.stdout.write(residual)
+    sys.stdout.write("\nFIX445_RESIDUAL_7F3A_END\n")
+    sys.stdout.write("FIX445_DIAG VERIFIED={0} UNVERIFIED={1} PATHDROP={2} PARSEERR={3} DIRSKIP={4}\n".format(
+        verified, unverified, _cache.get("drop", 0), _cache.get("perr", 0),
+        _cache.get("dirskip", 0)))
+
+try:
+    main()
+except ToolFault as e:
+    sys.stdout.write("FIX445_ENGINE_RC 2\n")
+    sys.stdout.write("FIX445_FAULT {0}\n".format(e))
+FIX445_PY_ENGINE
+}
+
+_fix445_verify() {
+    local pybin code out cand
+    pybin=""
+    for cand in python3 python py; do
+        if command -v "$cand" >/dev/null 2>&1 && \
+           "$cand" -c "import sys" >/dev/null 2>&1; then
+            pybin="$cand"
+            break
+        fi
+    done
+    [ -n "$pybin" ] || return 2
+    code=$(_fix445_engine_code)
+    out=$(printf '%s\n' "$1" | "$pybin" -c "$code" "$2" "$REPO_ROOT" 2>/dev/null) || return 2
+    case "$out" in
+        "FIX445_ENGINE_RC 0"*) ;;
+        *) return 2 ;;
+    esac
+    printf '%s\n' "$out" | grep -q '^FIX445_RESIDUAL_7F3A_BEGIN$' || return 2
+    printf '%s\n' "$out" | grep -q '^FIX445_RESIDUAL_7F3A_END$' || return 2
+    printf '%s\n' "$out" | \
+        sed -n '/^FIX445_RESIDUAL_7F3A_BEGIN$/,/^FIX445_RESIDUAL_7F3A_END$/p' | \
+        sed '1d;$d'
+}
+
+# M5 (FIX-445 R3 §3): endorsement frameworks block unless the prefix
+# window is a single-layer negation — full window consumed by the dual
+# closed tables (24 negation + 19 filler tokens, longest-match in the
+# listed order), count==1 and no residue exempts; 0/>=2/residue/>16
+# chars/cross-clause borrowing all reject.  Clause terminators include
+# the ASCII , : . forms (review N1).  rc: 0=unexempted framework found
+# (BLOCK); 1=none; 2=error (BLOCK).
+endorsement_frame_check() {
+    # The char-wise tables require a UTF-8 awk locale (default C locale
+    # is byte mode where multibyte comparisons never match — the M5 scan
+    # would silently find nothing, i.e. FAIL OPEN).  Locale-verify first;
+    # unavailable -> rc 2 (error) so the caller BLOCKS (fail-closed).
+    local loc_probe
+    loc_probe=$(LC_ALL=C.UTF-8 awk 'BEGIN{print length("当真")}' 2>/dev/null)
+    if [ "$loc_probe" != "2" ]; then
+        return 2
+    fi
+    LC_ALL=C.UTF-8 awk '
+    BEGIN {
+        nn = 24
+        split("并非 不允许 禁止 拒绝 杜绝 避免 防止 绝不 决不 从不 从未 毫无 没有 不会 不能 不得 不可 不 未 别 勿 莫 无 非", negtab, " ")
+        nf = 20
+        split("应该 应当 是 应 再 该 此 其 的 了 也 都 就 还 且 而 与 或 会 已知", filltab, " ")
+        bad = 0
+    }
+    function isgap(ch) {
+        return (ch == "。" || ch == "，" || ch == "；" || ch == "“" || ch == "”" || ch == "\"")
+    }
+    function isterm(ch) {
+        return (ch == "。" || ch == "；" || ch == ";" || ch == "，" || ch == "：" || \
+                ch == "," || ch == ":" || ch == "." || ch == "！" || ch == "？" || \
+                ch == "!" || ch == "?")
+    }
+    function try_tail(k, n,   g2, ck, w3, w4) {
+        g2 = 0
+        while (k <= n && g2 <= 12) {
+            ck = substr($0, k, 1)
+            if (isgap(ck)) { return 0 }
+            w4 = substr($0, k, 4)
+            if (w4 == "真实数据" || w4 == "真实结果") { return k + 4 }
+            w3 = substr($0, k, 2)
+            if (w3 == "真实" || w3 == "事实" || w3 == "数据" || w3 == "结果" || w3 == "有效") { return k + 2 }
+            g2++
+            k++
+        }
+        return 0
+    }
+    {
+        line = $0
+        n = length(line)
+        nm = 0
+        delete ms; delete me; delete mo
+        for (i = 1; i <= n; i++) {
+            c = substr(line, i, 1)
+            two = substr(line, i, 2)
+            if (c == "把" || c == "将") {
+                j = i + 1; g = 0; mid = 0
+                while (j <= n && g <= 32) {
+                    cj = substr(line, j, 1)
+                    if (isgap(cj)) { break }
+                    w2 = substr(line, j, 2)
+                    if (w2 == "当作" || w2 == "当成" || w2 == "视为" || w2 == "作为") { mid = j; break }
+                    g++; j++
+                }
+                if (mid > 0) {
+                    te = try_tail(mid + 2, n)
+                    if (te > 0) { nm++; ms[nm] = i; me[nm] = te; mo[nm] = i }
+                }
+            }
+            if (two == "当作" || two == "当成" || two == "视为" || two == "作为") {
+                te = try_tail(i + 2, n)
+                if (te > 0) { nm++; ms[nm] = i; me[nm] = te; mo[nm] = i }
+            }
+            # DEC-371 ③ (FIX-445 B1): 当真 aligns with the other guard
+            # operators — it now requires an object tail (真实/事实/数据/
+            # 结果/有效, same as 当作/视为) OR an imperative tail
+            # (执行/落实/办理/遵照/照办 — "…当真执行" endorsement
+            # shapes).  A following MODAL NEGATION (不能/不可/… — the
+            # "no-separator当真不能默当获准" technical-mention family)
+            # marks the mention as analytic prose and disarms the
+            # trigger; EVERYTHING ELSE — line end, unmatched tails, raw
+            # juxta — keeps the old bare trigger (fail closed).  The
+            # residual grep on 编造|幻觉 stays the last line of defense.
+            if (two == "当真") {
+                te = try_tail(i + 2, n)
+                if (te <= 0) {
+                    w2b = substr(line, i + 2, 2)
+                    if (w2b == "执行" || w2b == "落实" || w2b == "办理" || \
+                        w2b == "遵照" || w2b == "照办") { te = i + 4 }
+                    else if (w2b == "不能" || w2b == "不可" || w2b == "不得" || \
+                             w2b == "不会" || w2b == "没有" || w2b == "无法" || \
+                             w2b == "难以" || w2b == "无需" || w2b == "无须") {
+                        te = 0
+                    }
+                    # DEC-372 (R7.5): closed analytic-verb-tail family —
+                    # 当真对齐/当真语义/当真分支 is implementation-receipt
+                    # prose ("三分支当真对齐"), not an endorsement.  Explicit
+                    # 3-token enumeration, no wildcards; laundering attacks
+                    # still fall through to the residual grep on 编造|幻觉.
+                    else if (w2b == "对齐" || w2b == "语义" || w2b == "分支") {
+                        te = 0
+                    }
+                    else { te = i + 2 }
+                }
+                if (te > 0) { nm++; ms[nm] = i; me[nm] = te; mo[nm] = i }
+            }
+        }
+        ex_s = -1; ex_e = -1
+        for (m = 1; m <= nm; m++) {
+            s = ms[m]; e = me[m]; op = mo[m]
+            if (ex_s <= s && s < ex_e && e <= ex_e) { continue }
+            cs = 1
+            for (b = op - 1; b >= 1; b--) {
+                if (isterm(substr(line, b, 1))) { cs = b + 1; break }
+            }
+            wl = op - cs
+            if (wl > 16) { bad = 1; continue }
+            window = substr(line, cs, wl)
+            gsub(/^[ \t　]+|[ \t　]+$/, "", window)
+            wn = length(window)
+            if (wn > 16) { bad = 1; continue }
+            p = 1; cnt = 0; ok = 1
+            while (p <= wn) {
+                matched = 0
+                for (t = 1; t <= nn; t++) {
+                    tl = length(negtab[t])
+                    if (substr(window, p, tl) == negtab[t]) { p += tl; cnt++; matched = 1; break }
+                }
+                if (matched) { continue }
+                for (t = 1; t <= nf; t++) {
+                    tl = length(filltab[t])
+                    if (substr(window, p, tl) == filltab[t]) { p += tl; matched = 1; break }
+                }
+                if (matched) { continue }
+                # DEC-371 ② (FIX-445 B1): closed ASCII technical-token
+                # class — a latin/digit token run (e.g. no-separator,
+                # e254584, token, span) consumes as filler-class.  It
+                # never increments cnt, so a pure-technical prefix (cnt
+                # == 0) still rejects; only a real negation token inside
+                # the window can exempt.
+                if (substr(window, p, 1) ~ /[A-Za-z0-9]/) {
+                    while (p <= wn && substr(window, p, 1) ~ /[A-Za-z0-9_.:\/+-]/) { p++ }
+                    continue
+                }
+                ok = 0; break
+            }
+            if (ok && cnt == 1) {
+                if (s < ex_s || ex_s < 0) { ex_s = s; ex_e = e }
+                else { ex_e = (e > ex_e ? e : ex_e) }
+            } else {
+                bad = 1
+            }
+        }
+    }
+    END {
+        if (bad) { exit 0 }
+        exit 1
+    }
+    ' "$@"
+}
+
+# DEC-371 ③ (FIX-445 B1): closed mention-marker clause strip.  Runs in
+# awk's CHARACTER mode (LC_ALL=C.UTF-8) — byte-mode negated character
+# classes are locale-broken here (multibyte exclusions over-exclude on
+# colliding lead bytes: 异/BC vs 。, ：/EF vs ，; a CJK range class then
+# swallows the terminators whole — all proven on the EVD-1588 family).
+# Clause-bounded: the marker head exempts only up to the first clause
+# terminator; a fabrication claim in a later clause stays in the
+# residual.  Locale unavailable -> no strip (conservative: the mention
+# forms stay blocked, never fail open).  rc: always 0 (stream filter).
+strip_mention_clauses() {
+    local loc_probe
+    loc_probe=$(LC_ALL=C.UTF-8 awk 'BEGIN{print length("当真")}' 2>/dev/null)
+    if [ "$loc_probe" != "2" ]; then
+        cat
+        return 0
+    fi
+    LC_ALL=C.UTF-8 awk '
+    {
+        gsub(/(载荷含|算子枚举|闭表内|闭集|技术提及)[^。；;，,]*/, "")
+        print
+    }'
+}
+
+# M0 orchestration: any leg error -> BLOCK (return 0); clean -> PASS.
+has_unnegated_fabrication_terms() {
+    local input="$1" task_id="${2:-}"
+    local prose record residual stripped rc
+    prose=$(printf '%s\n' "$input" | json_region_mask prose) || return 0
+    if [ -n "$input" ] && [ -z "$prose" ]; then return 0; fi
+    record=$(printf '%s\n' "$input" | json_region_mask record) || return 0
+    if [ -n "$record" ]; then
+        residual=$(_fix445_verify "$input" "$task_id") || return 0
+    else
+        residual="$input"
+    fi
+    residual=$(printf '%s\n' "$residual" | strip_mention_clauses) || return 0
+    stripped=$(printf '%s\n' "$residual" | sed -E \
+        -e "s/(双否定|发现|边界|命名|引用)“(不|未|别|勿|莫|无|非|禁止|拒绝|杜绝|避免|防止|绝不|决不|从不|从未|毫无|没有|不会|不能|不得|不可|并非|并无)(允许)?(不|未|别|勿|莫|无|非|禁止|拒绝|杜绝|避免|防止|绝不|决不|从不|从未|毫无|没有|不会|不能|不得|不可|并非|并无)(产生|出现|发生|进行|会有|再次|任何|一切|再)?(编造|幻觉)”(为边界|已实证|是攻击|是逃逸)/\1/g" \
+        -e "s/(不|未|别|勿|莫|无|非|禁止|拒绝|杜绝|避免|防止|绝不|决不|从不|从未|毫无|没有|不会|不能|不得|不可|并非|并无)(允许)?(不|未|别|勿|莫|无|非|禁止|拒绝|杜绝|避免|防止|绝不|决不|从不|从未|毫无|没有|不会|不能|不得|不可|并非|并无)(产生|出现|发生|进行|会有|再次|任何|一切|再)?(编造|幻觉)/\5/g" \
+        -e "s/(不|未|无|禁止|拒绝|避免)(追加扫描|新增扫描|预算|时间|权限|异常隐藏)或(事后|先|预先|再|反复|PASS)?(编造|幻觉)//g" \
+        -e "s/(不|未|别|勿|莫|无|非|禁止|拒绝|杜绝|避免|防止|绝不|决不|从不|从未|毫无|没有|不会|不能|不得|不可|并非|并无)(产生|出现|发生|进行|会有|再次|任何|一切|再)?(编造|幻觉)//g" \
+        ) || return 0
+    printf '%s\n' "$stripped" | endorsement_frame_check; rc=$?
+    if [ "$rc" -eq 0 ] || [ "$rc" -ge 2 ]; then return 0; fi
+    printf '%s\n' "$stripped" | LC_ALL=C grep -Eq "编造|幻觉"; rc=$?
+    if [ "$rc" -eq 0 ] || [ "$rc" -ge 2 ]; then return 0; fi
+    return 1
+}
+
 resolve_spg_home_candidate() {
     local candidate="$1"
     [ -n "$candidate" ] || return 1
@@ -434,7 +1238,10 @@ if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
         echo ""
         exit 1
     fi
-    if echo "$TASK_EVD_LINES" | grep -Eq "我[[:space:]]*(假设|猜测|推测|估计)|(大概|应该|可能)(已经|是|可以|完成|存在)|编造|幻觉"; then
+    # FIX-444: speculation patterns stay verbatim (no negation handling
+    # for them); 编造|幻觉 moved to the occurrence-local negation scan.
+    if echo "$TASK_EVD_LINES" | grep -Eq "我[[:space:]]*(假设|猜测|推测|估计)|(大概|应该|可能)(已经|是|可以|完成|存在)" \
+        || has_unnegated_fabrication_terms "$TASK_EVD_LINES"; then
         echo ""
         echo "╔══════════════════════════════════════════════════════════════╗"
         echo "║  FACT GROUNDING BLOCKED: Task '$TASK_ID' evidence contains  ║"

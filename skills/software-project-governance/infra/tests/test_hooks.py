@@ -40,10 +40,12 @@ including that a crashed guard (rc=1 WITHOUT a ``Result: FAIL`` line) is
 disclosed as UNAVAILABLE, never rendered as a false FAIL verdict.
 """
 
+import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -159,7 +161,16 @@ def _wg_section():
 
 
 def _find_bash():
-    """Return a FUNCTIONAL bash executable, or None (WSL stub excluded)."""
+    """Return a FUNCTIONAL, PATH-COMPATIBLE bash executable, or None.
+
+    FIX-444 (same-session diagnosis): the old probe only ran ``:`` — a
+    WSL bash WITH a distro installed is functional under that probe yet
+    cannot resolve the Windows-style ``C:/`` fixture paths these tests
+    feed it, so every file-based bash verdict silently MISSed/SKIPped
+    (BashParity MISSes; write-guard panels "no .governance/").  On
+    Windows a candidate must now ALSO prove drive-letter path
+    compatibility; non-Windows hosts keep the plain functional probe
+    (their tempfile fixtures are already POSIX paths)."""
     candidates = []
     which = shutil.which("bash")
     if which:
@@ -171,10 +182,11 @@ def _find_bash():
     ):
         if Path(p).is_file():
             candidates.append(p)
+    probe = "test -d 'C:/'" if sys.platform == "win32" else ":"
     for cand in candidates:
         try:
             proc = subprocess.run(
-                [cand, "-c", ":"], capture_output=True, timeout=10,
+                [cand, "-c", probe], capture_output=True, timeout=10,
                 check=False, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -374,6 +386,988 @@ class BashParityTests(unittest.TestCase):
         plan = _fragment(
             "| **P1** | FIX-284 | 关联 FIX-282（描述列） | FIX-279 | 0.78.1 |")
         self.assertFalse(_run_bash_function(_BASH, "FIX-282", plan))
+
+
+# ── FIX-444/FIX-445: Step 12 fabrication-term source-verified scan ──────────
+
+_FAB_FN_RE = re.compile(r"(?ms)^has_unnegated_fabrication_terms\(\) \{.*?^\}")
+_MASK_FN_RE = re.compile(r"(?ms)^json_region_mask\(\) \{.*?^\}")
+_ENGINE_FN_RE = re.compile(r"(?ms)^_fix445_engine_code\(\) \{.*?^\}")
+_VERIFY_FN_RE = re.compile(r"(?ms)^_fix445_verify\(\) \{.*?^\}")
+_FRAME_FN_RE = re.compile(r"(?ms)^endorsement_frame_check\(\) \{.*?^\}")
+_STRIP_FN_RE = re.compile(r"(?ms)^strip_mention_clauses\(\) \{.*?^\}")
+
+
+def _extract_fn(pattern, name, hook_path=_COMMIT_MSG):
+    text = hook_path.read_text(encoding="utf-8")
+    m = pattern.search(text)
+    if not m:
+        raise AssertionError(
+            "{0} not found in {1} — FIX-445 source-verification scan "
+            "incomplete".format(name, hook_path))
+    return m.group(0)
+
+
+def _extract_fabrication_fn(hook_path=_COMMIT_MSG):
+    return _extract_fn(_FAB_FN_RE, "has_unnegated_fabrication_terms()",
+                       hook_path)
+
+
+def _extract_mask_fn(hook_path=_COMMIT_MSG):
+    return _extract_fn(_MASK_FN_RE, "json_region_mask()", hook_path)
+
+
+def _extract_all_scan_fns(hook_path=_COMMIT_MSG):
+    """FIX-445: the scan is a six-function pipeline (mask + engine code +
+    verifier + framework check + mention-clause strip + orchestration) —
+    extracted together so the dual-engine run exercises the real shipped
+    pipeline (DEC-371 ③ added the strip leg)."""
+    return "\n".join(
+        _extract_fn(p, n, hook_path) for p, n in (
+            (_MASK_FN_RE, "json_region_mask()"),
+            (_ENGINE_FN_RE, "_fix445_engine_code()"),
+            (_VERIFY_FN_RE, "_fix445_verify()"),
+            (_FRAME_FN_RE, "endorsement_frame_check()"),
+            (_STRIP_FN_RE, "strip_mention_clauses()"),
+            (_FAB_FN_RE, "has_unnegated_fabrication_terms()"),
+        ))
+
+
+def _run_scan(evd_text, repo_posix=None, task_id=""):
+    """Execute the EXTRACTED Step-12 scan pipeline in real bash over an
+    evidence-row fragment fed via a quoted heredoc (dual-engine
+    discipline).  repo_posix: the repo root the corpus/artifact engine
+    resolves against (defaults to this repo for live-artifact cases;
+    tests pass a fixture repo for self-contained cases).  Returns
+    True=BLOCK / False=PASS; raises on any unexpected output."""
+    if _BASH is None:
+        raise AssertionError("no functional bash for the scan parity run")
+    fns = _extract_all_scan_fns()
+    script = (
+        "REPO_ROOT={0!r}\n"
+        "{1}\n"
+        "EVD_TEXT=$(cat <<'FIX445_EVD_EOF'\n"
+        "{2}\n"
+        "FIX445_EVD_EOF\n"
+        ")\n"
+        'if has_unnegated_fabrication_terms "$EVD_TEXT" "{3}"; '
+        "then echo BLOCK; else echo PASS; fi\n"
+    ).format(repo_posix if repo_posix else
+             str(_REPO_ROOT).replace("\\", "/"),
+             fns, evd_text, task_id)
+    proc = subprocess.run(
+        [_BASH, "-s"], input=script.encode("utf-8"),
+        capture_output=True, timeout=60, check=False)
+    out = proc.stdout.decode("utf-8", "replace").strip()
+    if out not in ("BLOCK", "PASS"):
+        raise AssertionError(
+            "FIX-445 scan run failed: rc={0} stdout={1!r} stderr={2!r}".format(
+                proc.returncode, proc.stdout, proc.stderr[:400]))
+    return out == "BLOCK"
+
+
+_SYNTH_RECORDS = [
+    {"id": "#1 synth replay (defect proof)", "command": "bash synth.sh",
+     "utc_start": "2026-10-11T12:27:10.2692827Z",
+     "utc_end": "2026-10-11T12:27:10.7367672Z",
+     "literal": "OLD_PATTERN='x｜编造｜幻觉'\ncheck \"我编造了测试结果\""
+     "\ncheck \"本次幻觉结果已通过\"",
+     "result": "3 compliant phrases BLOCK; 2 true positives BLOCK."},
+    {"id": "R3-synth-adversarial", "command": "bash adv.sh",
+     "utc_start": "2026-10-11T12:40:21.5532478Z",
+     "utc_end": "2026-10-11T12:40:23.3957955Z",
+     "observed": "PASS｜double-neg(不允许不编造) ; BLOCK｜韩国编造了数据"},
+    {"id": "R5-synth-attribution", "command": "bash attr.sh",
+     "utc_start": "2026-10-11T12:42:40.537239Z",
+     "utc_end": "2026-10-11T12:42:40.7159085Z",
+     "observed": "BARE count=4 (citation 编造｜幻觉 pair + check-quoted "
+     "我编造了测试结果 / 本次幻觉结果已通过)"},
+    {"id": "R6-synth-risk", "command": "bash risk.sh",
+     "utc_start": "2026-10-11T12:00:00.0000000Z",
+     "utc_end": "2026-10-11T12:00:01.0000000Z",
+     "observed": "复测结论：我编造了测试结果"},
+]
+
+
+def _negation_scan_fixture_repo():
+    """Self-contained artifact corpus for source-verification cases: a
+    temp repo with .governance/incidents/FIX-445-synth-records.json
+    holding _SYNTH_RECORDS (real machine-record shapes).  Rows built via
+    _synth_row() embed the SAME dicts through json.dumps, so the row-side
+    and artifact-side JSON escaping can never drift.  Returns
+    (repo_posix, td)."""
+    td = tempfile.TemporaryDirectory(prefix="fix445-synth-")
+    repo = Path(td.name) / "repo"
+    (repo / ".governance" / "incidents").mkdir(parents=True)
+    (repo / ".governance" / "incidents" /
+     "FIX-445-synth-records.json").write_text(
+        json.dumps(_SYNTH_RECORDS, ensure_ascii=False, indent=1),
+        encoding="utf-8")
+    return str(repo).replace("\\", "/"), td
+
+
+def _synth_row(record):
+    """Wrap a record dict as an evidence-row fragment carrying it as the
+    JSON 事实依据 record plus a refs mention of the synthetic artifact
+    (deterministic corpus binding)."""
+    return ('| EVD-9600 | FIX-445 | synth | 用户影响：无。目标对齐：来源'
+            '以记录为证。 事实依据：' +
+            json.dumps(record, ensure_ascii=False) +
+            ' refs: .governance/incidents/FIX-445-synth-records.json | '
+            'dev | 2026-10-11 | G11 | ok |')
+
+
+class FabricationNegationScanTests(unittest.TestCase):
+    """FIX-444 — Step 12's fabrication terms are judged per OCCURRENCE:
+    a negation/prohibition directly in front of 编造/幻觉 is a compliant
+    safety statement and must PASS; affirmative, mixed, and unknown
+    contexts must still BLOCK (fail-closed).  The pre-FIX-444 whole-line
+    grep blocked EVD-1450-style rows like "不编造时戳" (replayed in the
+    raw FIX-444 evidence log)."""
+
+    def test_step12_binds_negation_scan_and_keeps_original_patterns(self):
+        source = _COMMIT_MSG.read_text(encoding="utf-8")
+        # the negation-aware scan is wired into Step 12's block condition…
+        self.assertIn(
+            'has_unnegated_fabrication_terms "$TASK_EVD_LINES"', source)
+        # …and the original speculation patterns stay VERBATIM (their
+        # semantics are untouched — no negation handling for them):
+        self.assertIn(
+            'grep -Eq "我[[:space:]]*(假设|猜测|推测|估计)'
+            '|(大概|应该|可能)(已经|是|可以|完成|存在)"', source)
+        # the old context-free fabrication tail is gone from that grep:
+        self.assertNotIn("(大概|应该|可能)(已经|是|可以|完成|存在)|编造|幻觉",
+                         source)
+
+    def test_negated_safety_statements_pass(self):
+        # the real EVD-1450-style phrases plus the standard prohibition
+        # spellings — all compliant safety statements, none may block.
+        rows = [
+            "| EVD-1450 | 2026-10-11 | FIX-444 | 事实依据: 实测预算输出落盘"
+            "（不编造harness真实预算）| 影响分析 | — |",
+            "时间戳取自命令回显，不编造时戳。",
+            "拒绝产生幻觉的全自动声明",
+            "未编造任何数据；全量输出见 raw log。",
+            "毫无编造，全程命令可复算。",
+            # negated disjunction (EVD-1440..1445 shape): 不 scopes over
+            # the 或-coordination — "neither adds scans NOR fabricates".
+            "目标对齐：补齐已发现的argv留痕缺口，不追加扫描或编造验收；记录=C1",
+        ]
+        for row in rows:
+            with self.subTest(row=row):
+                self.assertFalse(_run_scan(row))
+
+    def test_quoted_affirmative_claim_still_blocks(self):
+        # the reference classes are shape-narrow: an affirmative claim in
+        # quotes (not stacked, not check/verdict/pattern forms) blocks.
+        self.assertTrue(_run_scan("结论“我编造了结果”已入账"))
+
+    def test_affirmative_and_mixed_occurrences_still_block(self):
+        # a negation token on the line must NOT whitelist the line: the
+        # bare affirmative occurrence still blocks (mixed-sentence rule).
+        rows = [
+            "我编造了测试结果",                                   # affirmative
+            "不编造；我编造了测试结果",                           # mixed
+            "不产生幻觉但这次幻觉结果已通过",                     # mixed
+            "本次幻觉结果已通过",                                 # affirmative
+            "禁止编造；本次编造了数据",                           # mixed
+        ]
+        for row in rows:
+            with self.subTest(row=row):
+                self.assertTrue(_run_scan(row))
+
+    def test_reference_marker_attacks_block(self):
+        # FIX-444 R1 V3 escape set + boundary variants: a marker/call form
+        # in PROSE must never clear a closure affirmative; single-key or
+        # unbacked record wraps grant nothing (FIX-445: no artifact
+        # identity -> unverified -> the spans stay and BLOCK).
+        rows = [
+            "事实依据: PASS｜我编造了测试结果; 后续复测通过",
+            "BLOCK｜我编造了测试结果",
+            "check-quoted 我编造了测试结果; 后续复测通过",
+            "我要求你“不允许不编造”并把数据当真实结果",
+            '事实依据: check "我编造了测试结果"',
+            '引用：check "我编造了测试结果" 但当真实结果',
+            'check "我编造了测试结果',          # missing close quote
+            'check "fixture" 我编造了结果',     # wrapped second occurrence
+            "不编造时戳\nPASS｜我编造了测试结果",  # newline-wrapped mixed
+        ]
+        for row in rows:
+            with self.subTest(row=row):
+                self.assertTrue(_run_scan(row))
+
+    def test_wrap_provenance_attacks_block(self):
+        # FIX-444 R2 V3N escape set (n1/n7/n8) + key-spelling variants:
+        # exemptions require IDENTITY against an in-repo artifact record —
+        # a single-key wrap, even RENAMED to literal/raw/observed/result,
+        # has no matching record; the prose finding-marker gate requires
+        # a reference-predicate tail, so ENDORSEMENT tails reject.
+        rows = [
+            '事实依据: {"result":"PASS｜我编造了测试结果;"}',       # n1
+            '事实依据: {"r":"check-quoted 我编造了; x"}',           # n8
+            "事实依据: 我发现“不允许不编造”是要求必须遵守并当真",     # n7
+            '事实依据: {"literal":"PASS｜我编造了测试结果;"}',  # renamed key
+            '事实依据: {"raw":"check \\"我编造了测试结果\\""}',   # renamed key
+            '事实依据: {"observed":"我编造了测试结果"}',         # renamed key
+            "我们引用“不允许不编造”是生产中必须遵守的要求",       # endorse var
+            '事实依据: {"id":"x","command":"y","observed":"我编造了测试结果"}',
+        ]
+        for row in rows:
+            with self.subTest(row=row):
+                self.assertTrue(_run_scan(row))
+
+    def test_finding_marker_references_pass(self):
+        # EVD-1472..1477 family: a quoted stacked-negation finding behind
+        # a marker + closed reference-predicate tail is a compliant
+        # reference (prose layer, no artifact dependency).
+        rows = [
+            "R0引用建议不是安全风险豁免，双否定“不允许不编造”已实证escape，"
+            "必须同票真实修拒",
+            'R0 发现“不允许不编造”为边界',
+        ]
+        for row in rows:
+            with self.subTest(row=row[:40]):
+                self.assertFalse(_run_scan(row))
+
+    def test_mask_failure_blocks_fail_closed(self):
+        # FIX-444 R2 B1 fault-injection finding (reviewer C6): with the
+        # mask dependency unavailable, the OLD pipeline flipped a bare
+        # affirmative to PASS (FAILOPEN).  The shipped helper must
+        # propagate BLOCK when its tools cannot run — verified
+        # behaviorally by stripping PATH so awk/python are unresolvable
+        # (printf/test/local are bash builtins; no system tool is
+        # uninstalled).  FIX-445: the whole five-function pipeline is
+        # inlined so the guard exercised is the shipped one.
+        if _BASH is None:
+            raise AssertionError("no functional bash for the fail-closed run")
+        fns = _extract_all_scan_fns()
+        script = (
+            "PATH=/no-such-dir-fix444fc\n"
+            "{0}\n"
+            "if has_unnegated_fabrication_terms \"我编造了测试结果，未复测\"; "
+            "then echo BLOCK; else echo PASS; fi\n"
+            "if has_unnegated_fabrication_terms \"不编造时戳。\"; "
+            "then echo BLOCK2; else echo PASS2; fi\n"
+        ).format(fns)
+        proc = subprocess.run(
+            [_BASH, "-s"], input=script.encode("utf-8"),
+            capture_output=True, timeout=30, check=False)
+        out = proc.stdout.decode("utf-8", "replace").split()
+        self.assertEqual(
+            ["BLOCK", "BLOCK2"], out,
+            "tool failure must propagate BLOCK, got rc={0} stdout={1!r} "
+            "stderr={2!r}".format(
+                proc.returncode, proc.stdout, proc.stderr[:400]))
+
+    def test_check_reference_mixed_still_blocks(self):
+        # the reference context only covers the quoted span: a prose
+        # affirmative outside the closing quote still blocks.
+        self.assertTrue(_run_scan('check "fixture"；我编造了结果'))
+
+    def test_double_negation_does_not_launder(self):
+        # Stacked negation forces the bare token (BLOCK, fail-closed);
+        # single negation keeps passing; curly quotes alone grant NOTHING
+        # without a marker + closed predicate tail.
+        for row in ("不允许不编造", "决不禁止编造", "“不允许不编造”"):
+            with self.subTest(row=row):
+                self.assertTrue(_run_scan(row))
+        self.assertFalse(_run_scan("不再编造"))  # single + filler 再
+
+
+class EndorsementFrameworkTests(unittest.TestCase):
+    """FIX-445 R3 §3: endorsement frameworks (把/将 × 当作/当成/视为/作为
+    × value-tails + 当真) BLOCK unless the clause-bounded prefix window
+    is a single-layer negation over the dual closed tables (full-window
+    consumption, count==1, <=16 chars, no cross-clause borrowing)."""
+
+    def test_endorsement_shapes_block(self):
+        rows = [
+            "发现“不允许不编造”为边界；请照此要求必须遵守并当真执行",  # P1
+            "双否定“不允许不编造”已实证。我要求把结果当作真实数据",    # P2
+            "双否定“不允许不编造”已实证。首先我们必须在后续所有流程与"
+            "复测环节里，将该结论视为事实",                            # long
+            "事实依据: 非常应当把该结果当作真实数据",   # residue 常
+            "事实依据: 未来将把该结论视为事实",         # residue 来
+            "事实依据: 无论复核与否，把该结果当作真实数据",  # residue 论
+            "事实依据: 不是不把该结论当作真实数据",     # count 2
+            "事实依据: 并非不将结果视为事实",           # count 2
+            "事实依据: 不许忽略复核，把该结果当作真实数据",  # cross-clause
+            "事实依据: 我们已经仔细地完整地重新地不把该结论当作真实数据",
+        ]
+        for row in rows:
+            with self.subTest(row=row):
+                self.assertTrue(_run_scan(row))
+
+    def test_single_layer_negated_frameworks_pass(self):
+        rows = [
+            "事实依据: 不允许把该结果当作真实数据",
+            "事实依据: 不把估计批戳当成真实戳",
+            "事实依据: 未将该结果当作真实数据",
+        ]
+        for row in rows:
+            with self.subTest(row=row):
+                self.assertFalse(_run_scan(row))
+
+
+class SourceVerificationTests(unittest.TestCase):
+    """FIX-445: citation spans are exempt only per-instance when the
+    carrying record field is source-verified (identity + whole-field
+    equality) against an in-repo artifact record.  Self-contained
+    fixture artifacts; the C6 typed-span rule strips ONLY the real
+    technical-citation payload spans — never a whole field value."""
+
+    def setUp(self):
+        self._repo, self._td = _negation_scan_fixture_repo()
+        self.addCleanup(self._td.cleanup)
+        self.task = "FIX-445"
+
+    def _rec(self, idx):
+        return json.loads(json.dumps(_SYNTH_RECORDS[idx],
+                                     ensure_ascii=False))
+
+    def test_verified_literal_and_verdict_spans_pass(self):
+        # 1463-form (check \"…\" + pair in literal) and 1481-form (verdict
+        # spans in observed) with exact identity + whole-value equality.
+        for idx in (0, 1):
+            with self.subTest(idx=idx):
+                self.assertFalse(_run_scan(
+                    _synth_row(self._rec(idx)),
+                    repo_posix=self._repo, task_id=self.task))
+
+    def test_c6_typed_span_only_strips_citation_payloads(self):
+        # 1483-form: pair + check-quoted attribution spans inside an
+        # observed value that whole-equals the artifact's observed —
+        # ONLY those typed spans go; the rest of the value is scanned.
+        self.assertFalse(_run_scan(
+            _synth_row(self._rec(2)),
+            repo_posix=self._repo, task_id=self.task))
+
+    def test_c6_full_credential_risk_without_span_still_blocks(self):
+        # WHOLE-FIELD ROUTE CANCELLED (trigger-point finding): even with
+        # identity + whole-value equality, an observed value whose risk
+        # content carries NO closed-type span is never stripped.
+        self.assertTrue(_run_scan(
+            _synth_row(self._rec(3)),
+            repo_posix=self._repo, task_id=self.task))
+
+    def test_credential_breakers_block(self):
+        base = self._rec(0)
+        rows = [
+            # F1: cropped identity, no artifact match
+            _synth_row({"id": "#1", "command": "x",
+                        "literal": 'check "我编造了测试结果"'}),
+            # F2: three-key wrap, unrecognized id
+            _synth_row({"id": "rec-2", "env": "e", "workdir": "w",
+                        "literal": "OLD_PATTERN=x｜编造｜幻觉"}),
+            # F3: verdict span in observed without identity
+            _synth_row({"id": "r3", "start": "t", "end": "t",
+                        "observed": "PASS｜我编造了测试结果;"}),
+        ]
+        # utc7: 7th fraction digit differs -> instants unequal
+        utc7 = self._rec(0)
+        utc7["utc_start"] = "2026-10-11T12:27:10.2692828Z"
+        utc7["literal"] = 'check "我编造了测试结果"'
+        rows.append(_synth_row(utc7))
+        # alpha: right identity, span in output_as_captured BUT the
+        # field value has extra bytes appended -> whole-value fails
+        alpha = self._rec(0)
+        alpha["output_as_captured"] = (
+            'check "我编造了测试结果" ; 复测通过')
+        alpha["result"] = "复测通过"
+        del alpha["literal"]
+        rows.append(_synth_row(alpha))
+        # beta: verdict span moved into result (never an allowed carrier)
+        beta = self._rec(1)
+        beta["result"] = "BLOCK｜韩国编造了数据"
+        del beta["observed"]
+        rows.append(_synth_row(beta))
+        # field-move: span in affected (never an allowed carrier)
+        move = self._rec(0)
+        move["affected"] = 'check "我编造了测试结果"'
+        del move["literal"]
+        rows.append(_synth_row(move))
+        # prefix: span embedded with extra prefix bytes in the field
+        prefix = self._rec(0)
+        prefix["literal"] = '前置字节check "我编造了测试结果"'
+        rows.append(_synth_row(prefix))
+        # legal payload + added bare affirmative elsewhere in the value:
+        # whole-value equality FAILS -> nothing strips -> BLOCK.
+        extra = self._rec(2)
+        extra["observed"] += " 我编造了额外数据"
+        rows.append(_synth_row(extra))
+        for row in rows:
+            with self.subTest(row=row[:90]):
+                self.assertTrue(_run_scan(
+                    row, repo_posix=self._repo, task_id=self.task))
+
+    def test_same_literal_second_instance_unverified_blocks(self):
+        # per-instance rule: a verified literal span does not clear the
+        # SAME bytes appearing again in prose (no credential there).
+        row = (_synth_row(self._rec(0)) +
+               ' 另一处同字面：check \\"我编造了测试结果\\" 照检 |')
+        self.assertTrue(_run_scan(
+            row, repo_posix=self._repo, task_id=self.task))
+
+
+class R5ClosedTableTests(unittest.TestCase):
+    """FIX-445 R5 (DEC-337): T-2′ whitelist units (CJK U+4E00..U+9FFF +
+    ASCII alnum, symbols EMPTY) + Guard G (7 endorsement operators
+    whole-span reject) + integral candidate rejection + overflow-no-
+    partial.  All cases run the real extracted pipeline against the
+    fixture artifact repo; C6 spans live in observed under full-value
+    credential."""
+
+    def setUp(self):
+        self._repo, self._td = _negation_scan_fixture_repo()
+        self.addCleanup(self._td.cleanup)
+        self.task = "FIX-445"
+
+    def _c6row(self, observed):
+        rec = {"id": "R5-synth-attribution", "command": "bash attr.sh",
+               "utc_start": "2026-10-11T12:42:40.537239Z",
+               "utc_end": "2026-10-11T12:42:40.7159085Z",
+               "observed": observed}
+        return ('| EVD-9601 | FIX-445 | r5 | 用户影响：无。目标对齐：来源以'
+                '记录为证。 事实依据：' +
+                json.dumps(rec, ensure_ascii=False) +
+                ' refs: .governance/incidents/FIX-445-synth-records.json | '
+                'dev | 2026-10-11 | G11 | ok |')
+
+    def _forge_case(self, observed):
+        """Forged-artifact premise (R5 N-1 chain level): the artifact
+        itself carries the endorsement-shaped observed value and the row
+        cites it with FULL identity + whole-value equality — the typed
+        channel must still reject via Guard G / whitelist grammar."""
+        td = tempfile.TemporaryDirectory(prefix="fix445-r5forge-")
+        repo = Path(td.name) / "repo"
+        inc = repo / ".governance" / "incidents"
+        inc.mkdir(parents=True)
+        rec = {"id": "R5-forge-case", "command": "bash forge.sh",
+               "utc_start": "2026-10-11T13:00:00.0000000Z",
+               "utc_end": "2026-10-11T13:00:01.0000000Z",
+               "observed": observed}
+        (inc / "FIX-445-forge-records.json").write_text(
+            json.dumps([rec], ensure_ascii=False, indent=1),
+            encoding="utf-8")
+        self.addCleanup(td.cleanup)
+        row = ('| EVD-9603 | FIX-445 | r5forge | 用户影响：无。目标对齐：'
+               '来源以记录为证。 事实依据：' +
+               json.dumps(rec, ensure_ascii=False) +
+               ' refs: .governance/incidents/FIX-445-forge-records.json | '
+               'dev | 2026-10-11 | G11 | ok |')
+        return row, str(repo).replace("\\", "/")
+
+    def _forge_blocks(self, observed):
+        row, repo = self._forge_case(observed)
+        self.assertTrue(_run_scan(row, repo_posix=repo, task_id=self.task))
+
+    def test_guard_no_separator_juxtaposition_blocks(self):
+        # Guard G core: CJK juxtaposition is INSIDE the whitelist unit,
+        # the 7-operator closed set must reject the whole span even
+        # under a fully-matching forged artifact (DEC-336 core).
+        for observed in (
+            "check-quoted 我编造了测试结果当真",
+            "check-quoted 我编造了测试结果当作真实凭据补充",
+            "check-quoted 我编造了测试结果将结论定案",
+            "check-quoted 我编造了测试结果把结论固化",
+            "check-quoted 我编造了测试结果视为定案 / 补充二单元",
+            "check-quoted 我编造了测试结果当成事实 / 补充二单元",
+            "check-quoted 我编造了测试结果作为依据纳入",
+        ):
+            with self.subTest(observed=observed[14:34]):
+                self._forge_blocks(observed)
+
+    def test_separator_family_blocks(self):
+        # any non-whitelisted char terminates the unit; the tail stays
+        # visible and M5/term scan see the endorsement (forged artifact
+        # premise — R4-A five variants + full-width space + CRLF).
+        for tail in (
+            "，请当真执行", "、请当真执行", "！请当真执行", "？请当真执行",
+            "\t然后当真执行", "　然后当真执行",
+            "\\n然后当真执行", "\\r\\n然后当真执行",
+        ):
+            with self.subTest(tail=tail[:8]):
+                self._forge_blocks("check-quoted 我编造了测试结果" + tail)
+
+    def test_unknown_unicode_connector_blocks(self):
+        # outside the whitelist (CJK Ext-B U+20000) terminates; the CJK
+        # tail after it forces integral rejection (no leading-truncate).
+        self._forge_blocks("check-quoted 我编造了测试结果𠀀当真执行")
+
+    def test_control_char_inside_candidate_blocks(self):
+        # integral rejection — no leading-segment exemption that would
+        # swallow the tail (R5 :17).
+        self._forge_blocks("check-quoted 我编造了\u0007测试结果当真")
+
+    def test_fifth_unit_overflow_stays_whole(self):
+        # >4 units: syntax mismatch — the overflow unit must NOT be
+        # swallowed by a partial span (no truncation laundering).
+        self._forge_blocks(
+            "check-quoted 我编造了测试结果 / 第二单元数据 / 第三单元结果 / "
+            "第四单元通过 / 我编造了溢出单元")
+
+    def test_unit_length_overflow_stays_whole(self):
+        # unit >60 chars: grammar mismatch — whole candidate rejected,
+        # nothing stripped; the bare term stays in the residual.
+        self._forge_blocks("check-quoted " + "长" * 61 + "当真")
+
+    def test_legit_c6_payload_still_passes(self):
+        # the real R5 shape: pair + two whitelisted units joined by
+        # ' / ', no guard token — PASS.
+        self.assertFalse(_run_scan(
+            self._c6row("BARE count=4 (citation 编造｜幻觉 pair + "
+                        "check-quoted 我编造了测试结果 / 本次幻觉结果已通过)"),
+            repo_posix=self._repo, task_id=self.task))
+
+    def test_last_span_in_field_terminates(self):
+        # root cause ② regression: the LAST verdict span in an observed
+        # value must not overrun the closing quote into row prose.
+        rec = {"id": "R3-synth-adversarial", "command": "bash adv.sh",
+               "utc_start": "2026-10-11T12:40:21.5532478Z",
+               "utc_end": "2026-10-11T12:40:23.3957955Z",
+               "observed": "PASS｜double-neg(不允许不编造) ; BLOCK｜韩国编造了数据"}
+        row = ('| EVD-9602 | FIX-445 | r5 | 用户影响：无。目标对齐：来源以'
+               '记录为证。 事实依据：' +
+               json.dumps(rec, ensure_ascii=False) +
+               ' refs: .governance/incidents/FIX-445-synth-records.json | '
+               'dev | 2026-10-11 | G11 | ok |')
+        self.assertFalse(_run_scan(
+            row, repo_posix=self._repo, task_id=self.task))
+
+    def test_directory_corpus_entry_is_structural_skip(self):
+        # root cause ① regression: a DIRECTORY matching the task glob is
+        # a structural non-record (skip, not a read fault) — a verified
+        # good row must still PASS with such entries present.
+        td = tempfile.TemporaryDirectory(prefix="fix445-dircorp-")
+        repo = Path(td.name) / "repo"
+        inc = repo / ".governance" / "incidents"
+        inc.mkdir(parents=True)
+        (inc / "FIX-445-phase-evidence").mkdir()  # directory in the glob
+        records = [r for r in _SYNTH_RECORDS
+                   if r["id"] == "R5-synth-attribution"]
+        (inc / "FIX-445-synth-records.json").write_text(
+            json.dumps(records, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+        self.addCleanup(td.cleanup)
+        row = self._c6row(
+            "BARE count=4 (citation 编造｜幻觉 pair + check-quoted "
+            "我编造了测试结果 / 本次幻觉结果已通过)")
+        self.assertFalse(_run_scan(
+            row, repo_posix=str(repo).replace("\\", "/"),
+            task_id=self.task))
+
+    # ── DEC-371 B1 closed-table delta red tests (FIX-444/445 R1) ─────────
+    # Each newly admitted shape carries a still-BLOCKS neighbour: the
+    # extensions must exempt ONLY the three evidenced compliant forms,
+    # never widen into real fabrication disclosures.
+
+    def test_dec371_disjunction_midclass_clean_and_neighbours_block(self):
+        """① closed mid-class disjunction (追加扫描|新增扫描|预算|时间|
+        权限|异常隐藏 + optional 事后/先/预先/再/反复/PASS tail): the
+        four evidenced false-BLOCK forms pass; a mid-class OUTSIDE the
+        closed set still blocks (the negation did not govern 编造).
+        Byte-class note: the mid-class is an explicit alternation, not a
+        [^punct] class — sed runs byte-mode here and a negated multibyte
+        class over-excludes (EVD-1610's 异常 byte BC collides with the
+        。-exclusion set), so the closed list is also the
+        locale-correct form."""
+        for row in (
+            "当前健康检查无预算或PASS编造。",       # EVD-1536 live form
+            "复测结论：无时间或编造，全部为真实回显。",
+            "拒绝异常隐藏或事后编造原命令，保持未通过产品。",  # EVD-1610
+            "补齐缺口，不追加扫描或编造验收；记录=C1",
+        ):
+            self.assertFalse(_run_scan(row), row)
+        # neighbour: 成本 is outside the closed mid-class -> 编造 is a
+        # live fabrication claim (unnegated) -> BLOCK.
+        self.assertTrue(_run_scan("状态：无成本或编造，直接入账"))
+
+    def test_dec371_ascii_prefix_and_dangzhen_tail_clean_and_block(self):
+        """② closed ASCII technical-token class + ③ 当真 object-tail
+        alignment: the EVD-1587 mention passes; a pure-ASCII prefix
+        (cnt==0, no negation) and a real 把编造X当真 attack both stay
+        blocked."""
+        self.assertFalse(
+            _run_scan("M5框架语义：已知no-separator当真不能默当获准。"))
+        # neighbour A: ASCII tokens alone never exempt (cnt must be 1).
+        self.assertTrue(
+            _run_scan("场景：known-sep当真视为真实数据"))
+        # neighbour B: the tail requirement must not swallow real attacks.
+        self.assertTrue(_run_scan("把编造结果当真提交"))
+
+    def test_dec372_analytic_verb_tail_family_clean_and_block(self):
+        """DEC-372 (R7.5): the closed analytic-verb-tail family
+        (当真对齐/当真语义/当真分支 — implementation-receipt prose;
+        regression sample = the EVD-2157 receipt sentence itself) disarms
+        the 当真 trigger; each tail carries a laundering neighbour that
+        must still BLOCK via the residual grep (the family never strips
+        编造/幻觉 claims — it only disarms the framework arm)."""
+        # clean: the three tails + the live receipt sentence shape.
+        self.assertFalse(
+            _run_scan("B1 闭表提及标记形独立函数 strip_mention_clauses "
+                      "三分支当真对齐；tail=object/imperative/modal。"))
+        self.assertFalse(_run_scan("回执：当真语义与执行尾的 disarm 分支表"))
+        self.assertFalse(_run_scan("白盒说明：当真分支枚举显式无通配"))
+        # neighbour 1 (对齐): the fabrication claim is NOT part of the
+        # analytic mention — residual grep must catch it.
+        self.assertTrue(_run_scan("把编造结果对齐后提交"))
+        # neighbour 2 (语义): endorsement laundering in the same clause.
+        self.assertTrue(_run_scan("将背书语义混入回执并编造结果"))
+        # neighbour 3 (分支): an unbacked claim next to the family word.
+        self.assertTrue(_run_scan("走当真分支的编造结果直接入账"))
+
+    def test_dec371_mention_marker_form_clean_and_clause_bounded(self):
+        """③ closed mention-marker form (载荷含/算子枚举/闭表内/闭集/
+        技术提及): the EVD-1588 operator-enumeration mention passes; the
+        exemption is clause-bounded — a fabrication claim AFTER the
+        clause terminator stays blocked."""
+        self.assertFalse(
+            _run_scan("闭表说明：载荷含把将当作当成视为作为当真任token"
+                      "整span拒免。"))
+        self.assertFalse(
+            _run_scan("算子枚举：把/将/当作/视为/作为/当真各token整span"
+                      "拒免并计残文。"))
+        # neighbour: mention head in one clause cannot launder a claim in
+        # the NEXT clause.
+        self.assertTrue(_run_scan("载荷含编造。我编造了测试结果"))
+        # neighbour: a claim BEFORE the marker is never touched by it.
+        self.assertTrue(_run_scan("我编造了载荷含测试结果"))
+
+
+class ParserPathFaultTests(unittest.TestCase):
+    """FIX-445 C-1 five rejections render malformed regions as prose
+    (zero exemptions); artifact content faults reduce the corpus; tool
+    and IO faults BLOCK the line fail-closed."""
+
+    def _repo_with_artifact(self, artifact_text, name="FIX-445-fault.json"):
+        td = tempfile.TemporaryDirectory(prefix="fix445-fault-")
+        repo = Path(td.name) / "repo"
+        (repo / ".governance" / "incidents").mkdir(parents=True)
+        (repo / ".governance" / "incidents" / name).write_text(
+            artifact_text, encoding="utf-8")
+        self.addCleanup(td.cleanup)
+        return str(repo).replace("\\", "/")
+
+    def test_row_side_malformed_records_block(self):
+        rows = [
+            # duplicate keys -> whole region malformed -> prose
+            '事实依据: {"id":"a","literal":"check \\"我编造了测试结果\\"",'
+            '"literal":"x"}',
+            # NaN constant -> malformed
+            '事实依据: {"id":"a","utc_start":NaN,"literal":"check \\"我编造'
+            '了测试结果\\""}',
+            # partial consumption (trailing bytes) -> malformed
+            '事实依据: {"id":"a","literal":"check \\"我编造了测试结果\\""} '
+            'trailing-junk',
+            # nested rescue prohibition: the span sits in a NESTED object's
+            # value — no top-level carrying field -> unverified -> BLOCK
+            '事实依据: {"outer":{"id":"a","literal":"check \\"我编造了测试'
+            '结果\\""},"result":"x"}',
+        ]
+        for row in rows:
+            with self.subTest(row=row[:60]):
+                self.assertTrue(_run_scan(row))
+
+    def test_artifact_content_faults_reduce_corpus(self):
+        repo = self._repo_with_artifact(
+            '[{"id":"a","id":"a","literal":"check \\"我编造了测试结果\\""}]')
+        row = ('事实依据: {"id":"a","literal":"check \\"我编造了测试结果'
+               '\\""} refs: .governance/incidents/FIX-445-fault.json')
+        self.assertTrue(_run_scan(row, repo_posix=repo, task_id="FIX-445"))
+
+    def test_unreadable_corpus_entry_blocks_fail_closed(self):
+        td = tempfile.TemporaryDirectory(prefix="fix445-dird-")
+        repo = Path(td.name) / "repo"
+        inc = repo / ".governance" / "incidents"
+        inc.mkdir(parents=True)
+        # non-UTF-8 corpus file: a reader fault (not malformed JSON) —
+        # must BLOCK fail-closed, never silently reduce the corpus.
+        (inc / "FIX-445-dird-entry").write_bytes(b"\x80\x81\xfe garbage")
+        self.addCleanup(td.cleanup)
+        repo_posix = str(repo).replace("\\", "/")
+        # tool fault must BLOCK even when the row itself carries no risk
+        # (the record region forces the corpus/engine leg to run) —
+        # fail-closed contract.
+        row = ('| EVD-9601 | FIX-445 | fault | 事实依据：{"id":"x",'
+               '"command":"y"} refs: .governance/incidents/ | dev | '
+               '2026-10-11 | G11 | ok |')
+        self.assertTrue(
+            _run_scan(row, repo_posix=repo_posix, task_id="FIX-445"))
+
+
+_EVD_FN_RE = re.compile(r"(?ms)^task_evidence_lines\(\) \{.*?^\}")
+_SPECULATION_GREP_RE = re.compile(r'grep -Eq "(我[^"]*)"')
+
+
+def _extract_evd_fn(hook_path=_COMMIT_MSG):
+    text = hook_path.read_text(encoding="utf-8")
+    m = _EVD_FN_RE.search(text)
+    if not m:
+        raise AssertionError(
+            "task_evidence_lines() not found in {0}".format(hook_path))
+    return m.group(0)
+
+
+def _extract_speculation_pattern(hook_path=_COMMIT_MSG):
+    """The Step-12 speculation grep pattern, EXTRACTED from the shipped
+    hook source (binding — tests never copy the regex)."""
+    text = hook_path.read_text(encoding="utf-8")
+    m = _SPECULATION_GREP_RE.search(text)
+    if not m:
+        raise AssertionError(
+            "Step-12 speculation grep not found in {0}".format(hook_path))
+    pattern = m.group(1)
+    for anchor in ("假设", "大概", "可能"):
+        if anchor not in pattern:
+            raise AssertionError(
+                "extracted speculation pattern lost an original branch: "
+                "{0!r}".format(pattern))
+    return pattern
+
+
+def _step12_replay(repo_posix, task_ids, timeout=300):
+    """Run the REAL Step-12 execution path in real bash over a repo root:
+    the shipped task_evidence_lines awk extractor plus BOTH Step-12
+    branches (the extracted speculation grep and the full extracted
+    FIX-445 scan pipeline).  Per TASK, not per row: the hook itself
+    feeds all extracted lines to the scan in one call, and batching
+    keeps the engine spawn count at one per task (per-row looping made
+    the live 4-task replay exceed 180s).  Returns ({task: row_count},
+    [hit_lines])."""
+    if _BASH is None:
+        raise AssertionError("no functional bash for the Step-12 replay")
+    script = (
+        "REPO_ROOT={0!r}\n"
+        "{1}\n"
+        "{2}\n"
+        "SPEC={3!r}\n"
+        "for TID in {4}; do\n"
+        '  LINES=$(task_evidence_lines "$TID")\n'
+        '  CNT=$(printf \'%s\\n\' "$LINES" | grep -c "^| EVD-")\n'
+        '  echo "SEEN|$TID|$CNT"\n'
+        '  if printf \'%s\\n\' "$LINES" | grep -Eq "$SPEC"; then '
+        'echo "SPEC_HIT|$TID"; fi\n'
+        '  if has_unnegated_fabrication_terms "$LINES" "$TID"; then '
+        'echo "FAB_HIT|$TID"; fi\n'
+        "done\n"
+    ).format(
+        repo_posix, _extract_evd_fn(), _extract_all_scan_fns(),
+        _extract_speculation_pattern(),
+        " ".join(task_ids))
+    proc = subprocess.run(
+        [_BASH, "-s"], input=script.encode("utf-8"),
+        capture_output=True, timeout=timeout, check=False)
+    out = proc.stdout.decode("utf-8", "replace")
+    if proc.returncode != 0 or not out:
+        raise AssertionError(
+            "Step-12 replay failed: rc={0} stdout={1!r} stderr={2!r}".format(
+                proc.returncode, proc.stdout, proc.stderr[:400]))
+    seen, hits = {}, []
+    for line in out.splitlines():
+        if line.startswith("SEEN|"):
+            parts = line.split("|")
+            task = parts[1]
+            count = int(parts[2]) if len(parts) > 2 else 1
+            seen[task] = seen.get(task, 0) + count
+        elif line.startswith("SPEC_HIT|") or line.startswith("FAB_HIT|"):
+            hits.append(line)
+    return seen, hits
+
+
+class SyntheticEvdStep12ReplayTests(unittest.TestCase):
+    """FIX-445 universal regression: a SELF-CONTAINED evidence-log fixture
+    (temp repo + its own incidents artifact, no dependency on this
+    workspace's gitignored .governance data) drives the REAL Step-12
+    path — compliant rows (prose negations/disjunction, marker-qualified
+    finding names, ARTIFACT-VERIFIED citation records incl. the C6
+    typed-span form) pass end-to-end while planted attacks (prose
+    markers, unbacked wraps, forged identities, endorsement frameworks)
+    BLOCK.  Runs in any clean clone; never skipped."""
+
+    GOOD_TASK = "FIX-9404"
+    BAD_TASK = "FIX-9405"
+
+    _BAD_ROWS = [
+        "| EVD-9101 | FIX-9405 | 攻击1 | 事实依据: PASS｜我编造了测试结果; "
+        "后续复测通过 | — | dev | 2026-10-11 | G11 | bad |",
+        "| EVD-9102 | FIX-9405 | 攻击2 | 事实依据: BLOCK｜我编造了测试结果 "
+        "| — | dev | 2026-10-11 | G11 | bad |",
+        "| EVD-9103 | FIX-9405 | 攻击3 | 事实依据: check-quoted 我编造了"
+        "测试结果; 后续复测通过 | — | dev | 2026-10-11 | G11 | bad |",
+        "| EVD-9104 | FIX-9405 | 攻击4 | 事实依据: 我要求你“不允许不编造”"
+        "并把数据当真实结果 | — | dev | 2026-10-11 | G11 | bad |",
+        '| EVD-9105 | FIX-9405 | 攻击5 | 事实依据: check "我编造了测试结果" '
+        "| — | dev | 2026-10-11 | G11 | bad |",
+        "| EVD-9106 | FIX-9405 | 攻击6（R2 n1） | 事实依据: {\"result\":"
+        "\"PASS｜我编造了测试结果;\"} | — | dev | 2026-10-11 | G11 | bad |",
+        "| EVD-9107 | FIX-9405 | 攻击7（R2 n8） | 事实依据: {\"r\":"
+        "\"check-quoted 我编造了; x\"} | — | dev | 2026-10-11 | G11 | bad |",
+        "| EVD-9108 | FIX-9405 | 攻击8（R2 n7） | 事实依据: 我发现"
+        "“不允许不编造”是要求必须遵守并当真 | — | dev | 2026-10-11 | G11 "
+        "| bad |",
+        "| EVD-9109 | FIX-9405 | 攻击9（伪造身份） | 事实依据: {\"id\":"
+        "\"#1\",\"command\":\"x\",\"literal\":\"check \\\"我编造了测试结果"
+        "\\\"\"} | — | dev | 2026-10-11 | G11 | bad |",
+        "| EVD-9110 | FIX-9405 | 攻击10（UTC 第 7 位裁剪） | 事实依据: "
+        "{\"id\":\"#1 synth replay (defect proof)\",\"command\":\"c\","
+        "\"utc_start\":\"2026-10-11T12:27:10.2692828Z\",\"utc_end\":"
+        "\"2026-10-11T12:27:10.7367672Z\",\"literal\":\"check \\\"我编造了"
+        "测试结果\\\"\"} | — | dev | 2026-10-11 | G11 | bad |",
+        "| EVD-9111 | FIX-9405 | 攻击11（背书框架） | 事实依据: 双否定"
+        "“不允许不编造”已实证。我要求把结果当作真实数据 | — | dev | "
+        "2026-10-11 | G11 | bad |",
+        "| EVD-9112 | FIX-9405 | 攻击12（嵌入字） | 事实依据: 非常应当把"
+        "该结果当作真实数据 | — | dev | 2026-10-11 | G11 | bad |",
+    ]
+
+    def _srow(self, evd, idx):
+        return ("| EVD-{0} | FIX-9404 | 已验证引用 | 用户影响：无。目标对齐："
+                "来源以记录为证。 事实依据：{1} | .governance/incidents/"
+                "FIX-9404-records.json | dev | 2026-10-11 | G11 | ok |"
+                ).format(evd, json.dumps(_SYNTH_RECORDS[idx],
+                                         ensure_ascii=False))
+
+    def _replay_repo(self, rows):
+        """Build a self-contained mini repo over `rows` and run the REAL
+        Step-12 path for BOTH fixture tasks. Returns (seen, hits)."""
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        repo = Path(td.name) / "repo"
+        gov = repo / ".governance"
+        inc = gov / "incidents"
+        inc.mkdir(parents=True)
+        (inc / "FIX-9404-records.json").write_text(
+            json.dumps(_SYNTH_RECORDS, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+        (gov / "evidence-log.md").write_text(
+            "\n".join(rows) + "\n", encoding="utf-8")
+        return _step12_replay(
+            str(repo).replace("\\", "/"), [self.GOOD_TASK, self.BAD_TASK])
+
+    def test_compliant_rows_pass_and_attacks_block_end_to_end(self):
+        # compliant rows: prose negation/disjunction/finding-marker/
+        # framework-negation plus the three artifact-verified record
+        # forms (literal spans / verdict spans / C6 typed spans) built
+        # from the SAME dicts as the artifact (no escaping drift).
+        good_rows = [
+            "| EVD-9001 | FIX-9404 | 合规否定 | 用户影响：无。目标对齐：时间"
+            "戳取自命令回显，不编造时戳。 | — | dev | 2026-10-11 | G11 | ok |",
+            "| EVD-9002 | FIX-9404 | 否定析取 | 用户影响：无。目标对齐：补齐"
+            "缺口，不追加扫描或编造验收；记录=C1 | — | dev | 2026-10-11 | G11 "
+            "| ok |",
+            self._srow(9003, 0),
+            "| EVD-9004 | FIX-9404 | 发现名引用（EVD-1472 形，标记+谓语尾） | "
+            "用户影响：无。目标对齐：双否定“不允许不编造”已实证escape，必须"
+            "同票真实修拒 | — | dev | 2026-10-11 | G11 | ok |",
+            self._srow(9005, 1),
+            self._srow(9006, 2),
+            "| EVD-9007 | FIX-9404 | 合规框架否定 | 用户影响：无。目标对齐："
+            "不允许把该结果当作真实数据 | — | dev | 2026-10-11 | G11 | ok |",
+        ]
+        seen, hits = self._replay_repo(good_rows + self._BAD_ROWS)
+        self.assertEqual(
+            len(good_rows), seen.get(self.GOOD_TASK, 0),
+            "compliant fixture rows must all be extracted")
+        self.assertEqual(
+            len(self._BAD_ROWS), seen.get(self.BAD_TASK, 0),
+            "attack fixture rows must all be extracted")
+        self.assertEqual(
+            [], [h for h in hits if h.endswith(self.GOOD_TASK)],
+            "compliant rows must be CLEAN under the real Step-12 path")
+        # FIX-445 B2 restoration (DEC-371): the synthetic attack coverage
+        # is asserted PER ROW again — each of the 12 planted attack rows
+        # must HIT in its own replay (12 bounded spawns, seconds).  The
+        # old batch-any weakening (11 escapes undetectable) is gone; the
+        # live four-task gate keeps its per-task batching for latency.
+        for row in self._BAD_ROWS:
+            row_seen, row_hits = self._replay_repo([row])
+            self.assertEqual(
+                1, row_seen.get(self.BAD_TASK, 0),
+                "attack row must be extracted alone: {0!r}".format(
+                    row[:60]))
+            self.assertEqual(
+                ["FAB_HIT|{0}".format(self.BAD_TASK)], row_hits,
+                "each planted attack row must HIT on its own under the "
+                "real Step-12 path: {0!r}".format(row[:60]))
+
+
+class RealEvdStep12ReplayTests(unittest.TestCase):
+    """FIX-445 delivery receipt: the CURRENT evidence rows of the
+    ticket family re-verified through the REAL Step-12 path over the
+    live .governance/evidence-log.md (read-only).
+
+    DEC-371 (FIX-444/445 R1): the task list is now DYNAMIC — it reads
+    the active (non-completed) P0/P1 rows from the live plan-tracker
+    instead of a hardcoded four-task family.  Root cause 甲 of the
+    pre-R1 failure (continuous archiving moves closed tasks' EVD rows
+    out of the hot file, so a static "none may be zero" list breaks) is
+    dissolved: newly in-triaged tasks legitimately have no EVD rows yet,
+    so the contract is (a) the dynamic list is non-empty, (b) at least
+    one active task has extractable rows (the replay is not broken),
+    (c) ZERO fabrication hits across every active task's rows.  The
+    universal regression lives in SyntheticEvdStep12ReplayTests; this
+    probe runs wherever the input window exists."""
+
+    def _active_task_ids(self):
+        tracker = _REPO_ROOT / ".governance" / "plan-tracker.md"
+        if not tracker.is_file():
+            return []
+        ids = []
+        for line in tracker.read_text(encoding="utf-8").splitlines():
+            m = re.match(
+                r"^\|\s*\**P[01]\**\s*\|\s*\**([A-Z]+-\d+)\**\s*\|", line)
+            if m and "✅" not in line:
+                ids.append(m.group(1))
+        return ids
+
+    def test_current_real_rows_all_clean_under_real_step12(self):
+        live = _REPO_ROOT / ".governance" / "evidence-log.md"
+        if not live.is_file():
+            self.skipTest("live .governance/evidence-log.md unavailable")
+        tasks = self._active_task_ids()
+        self.assertGreaterEqual(
+            len(tasks), 1,
+            "dynamic active-task list must be non-empty (plan-tracker "
+            "unreadable or no active P0/P1 rows?)")
+        seen, hits = _step12_replay(
+            str(_REPO_ROOT).replace("\\", "/"), tasks)
+        self.assertGreaterEqual(
+            sum(1 for t in tasks if seen.get(t, 0) >= 1), 1,
+            "replay broken: no active task yielded extractable EVD "
+            "rows (seen={0!r})".format(seen))
+        self.assertEqual(
+            [], hits,
+            "real Step-12 execution must be CLEAN on all current rows "
+            "of the active ticket set (seen={0!r})".format(seen))
+
+
+class SelfUpgradeNoBypassTests(unittest.TestCase):
+    """FIX-444 acceptance ④ (DEC-371 R1): a NORMAL self-upgrade commit —
+    the hook's own pin-bump flow, exactly like FIX-458's 0.98.0→0.99.0
+    one-line change — must clear the fact gate WITHOUT --no-verify.  The
+    gate runs the REAL extracted pipeline over the evidence prose a
+    routine upgrade receipt produces (compliant negations, the DEC-371
+    admitted forms, no fabrication claims), so the upgrade path has a
+    machine-judged non-bypass route.  Anti-neighbour: a receipt that
+    LAUNDERS a fabrication claim through upgrade prose still blocks."""
+
+    def test_upgrade_receipt_clears_gate_without_bypass(self):
+        receipt = (
+            "用户影响：获得=hook pin 随发布版正常自升级；感知=升级提交本身"
+            "走完整事实门；体验变化=正常提交无需 --no-verify 应急通道。"
+            "目标对齐：pin 头随发布权威单行对齐（上一版到活跃版，版本字面"
+            "不进本测试源——static-version-pin 纪律）；健康检查门禁"
+            "无预算或PASS编造；载荷含把将当作视为作为当真各token整span"
+            "拒免（闭表枚举说明）。"
+        )
+        self.assertFalse(_run_scan(receipt, task_id="FIX-458"))
+
+    def test_upgrade_receipt_laundering_still_blocks(self):
+        launder = (
+            "hook pin 自升级说明：载荷含编造。我编造了测试结果并把它当真"
+            "视为真实数据提交。"
+        )
+        self.assertTrue(_run_scan(launder, task_id="FIX-458"))
 
 
 class PostCommitWriteGuardWiringTests(unittest.TestCase):

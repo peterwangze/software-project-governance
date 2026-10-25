@@ -36,6 +36,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -490,6 +491,191 @@ class PinsLedgerWriterTests(unittest.TestCase):
         self.assertIn(self._TARGET_REL, issues[0]["detail"])
 
 
+class PinsWriterAmnestySyncTests(unittest.TestCase):
+    """FIX-464 — a writer-touched row automatically leaves the delivery
+    amnesty (the FIX-462 writer gap: the ledger moved but the frozen
+    in-source set kept a GHOST row, failing the snapshot contract on the
+    first real write).
+
+    Harness: the FIX-462 mini-root PLUS a real copy of pin_ledger.py, with
+    the fixture row pre-registered as a hand-written amnesty row (live
+    ledger row without provenance + matching frozenset member) — the exact
+    pre-writer state the delivery amnesty froze.  register/re-anchor must
+    remove it from the set in the same transaction.
+    """
+
+    _ACTIVE = "1.23.0"
+    _TARGET_REL = "skills/software-project-governance/infra/tests/fixture_writer_target.py"
+    _TARGET_BODY = '# fixture for the FIX-464 amnesty-sync tests\n_TARGET_VERSION = "1.23.0"\n'
+
+    def _mini_root_with_amnesty_row(self, ledger_row=True):
+        import pin_ledger
+        root = Path(tempfile.gettempdir()) / (
+            "fix464-" + uuid.uuid4().hex[:12])
+        root.mkdir()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        plugin = root / "skills" / "software-project-governance"
+        (plugin / "infra" / "checks").mkdir(parents=True)
+        (plugin / "infra" / "tests").mkdir(parents=True)
+        shutil.copyfile(_INFRA_DIR / "checks" / "version.py",
+                        plugin / "infra" / "checks" / "version.py")
+        shutil.copyfile(_INFRA_DIR / "pin_ledger.py",
+                        plugin / "infra" / "pin_ledger.py")
+        (plugin / "SKILL.md").write_text(
+            "---\nname: software-project-governance\nversion: 1.23.0\n---\n\n"
+            "# synthetic mini-root\n", encoding="utf-8")
+        (root / self._TARGET_REL).write_text(self._TARGET_BODY, encoding="utf-8")
+        # Pre-writer state: the row is live (no provenance comment) AND a
+        # delivery-amnesty member — hand-written, writer never touched it.
+        # AST-anchored insert (writer discipline): the entry block lands
+        # directly above the STATIC_PIN_EXEMPTIONS dict's closing brace.
+        if ledger_row:
+            ledger_path = root / pin_ledger.LEDGER_REL
+            text = ledger_path.read_text(encoding="utf-8")
+            parsed, perr = pin_ledger._parse_ledger(text)
+            assert perr is None, perr
+            _tree, dict_node = parsed
+            lines = text.splitlines(keepends=True)
+            insert_at = dict_node.end_lineno  # 1-based closing "}" line
+            lines[insert_at - 1:insert_at - 1] = [
+                '    "{0}": [\n'.format(self._TARGET_REL),
+                '        (2, "{0}", "FIX-464 hand-written amnesty row probe"),\n'.format(
+                    self._ACTIVE),
+                "    ],\n",
+            ]
+            ledger_path.write_text("".join(lines), encoding="utf-8")
+        self_path = root / pin_ledger.SELF_REL
+        stext = self_path.read_text(encoding="utf-8")
+        anchor = "DELIVERY_AMNESTY_ENTRIES = frozenset({\n"
+        assert anchor in stext
+        stext = stext.replace(
+            anchor, anchor + '    ("{0}", 2, "{1}"),\n'.format(
+                self._TARGET_REL, self._ACTIVE), 1)
+        self_path.write_text(stext, encoding="utf-8")
+        return root
+
+    def _mini_amnesty(self, root):
+        import pin_ledger
+        module = pin_ledger._shadow_module(root / pin_ledger.SELF_REL)
+        return module.DELIVERY_AMNESTY_ENTRIES
+
+    def test_reanchor_moves_row_out_of_amnesty(self):
+        import pin_ledger
+        root = self._mini_root_with_amnesty_row()
+        self_path = root / pin_ledger.SELF_REL
+        before = self_path.read_bytes()
+        ghost = (self._TARGET_REL, 2, self._ACTIVE)
+        self.assertIn(ghost, self._mini_amnesty(root))
+        # drift the token line 2 -> 4, then re-anchor
+        (root / self._TARGET_REL).write_text(
+            "# drift a\n# drift b\n" + self._TARGET_BODY, encoding="utf-8")
+        receipt, code = pin_ledger.reanchor_exemption(
+            root, self._TARGET_REL, 2, 4)
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["effect"], "written")
+        self.assertEqual(receipt["amnesty_sync"], "written")
+        amnesty = self._mini_amnesty(root)
+        self.assertNotIn(ghost, amnesty, "ghost row survived the re-anchor")
+        text = self_path.read_text(encoding="utf-8")
+        self.assertRegex(text, r"#\s*pins re-anchor op-[0-9a-f]{32} \(FIX-464\)")
+        # both-sided invariant on the mini root
+        live, live_text = pin_ledger._live_entries(root)
+        self.assertFalse(amnesty - live, "amnesty keeps ghost rows")
+        for (rel, ln, tok) in (live - amnesty):
+            idx = pin_ledger._ledger_entry_lineno(live_text, rel, ln, tok)
+            lines = live_text.splitlines()
+            self.assertTrue(idx >= 2 and pin_ledger._PROVENANCE_RE.search(
+                lines[idx - 2]), "unattributed live row: {0}".format((rel, ln, tok)))
+        self.assertNotEqual(self_path.read_bytes(), before)
+
+    def test_reanchor_amnesty_sync_failure_restores_both_files(self):
+        """A corrupted amnesty candidate (syntax sabotage injected into the
+        frozenset) must leave BOTH the ledger and pin_ledger untouched."""
+        import pin_ledger
+        root = self._mini_root_with_amnesty_row()
+        (root / self._TARGET_REL).write_text(
+            "# drift a\n# drift b\n" + self._TARGET_BODY, encoding="utf-8")
+        ledger_path = root / pin_ledger.LEDGER_REL
+        self_path = root / pin_ledger.SELF_REL
+        ledger_before = ledger_path.read_bytes()
+        self_before = self_path.read_bytes()
+        real_sync = pin_ledger._sync_amnesty_exit
+        def sabotaging_sync(root_arg, rel, line, token, command, op_id):
+            # land the ledger write, then make the amnesty candidate invalid
+            self_path.write_text(
+                self_path.read_text(encoding="utf-8").replace(
+                    'DELIVERY_AMNESTY_ENTRIES = frozenset({',
+                    'DELIVERY_AMNESTY_ENTRIES = frozenset({ this is not python'),
+                encoding="utf-8")
+            return real_sync(root_arg, rel, line, token, command, op_id)
+        with unittest.mock.patch.object(
+                pin_ledger, "_sync_amnesty_exit", sabotaging_sync):
+            receipt, code = pin_ledger.reanchor_exemption(
+                root, self._TARGET_REL, 2, 4)
+        self.assertEqual(code, 2, receipt)
+        self.assertIn("amnesty exit sync failed", receipt["detail"])
+        self.assertEqual(ledger_path.read_bytes(), ledger_before,
+                         "ledger not restored after a failed amnesty sync")
+        # pin_ledger keeps a sabotage-shaped body but NEVER a FIX-464 exit
+        # comment for the fixture row — the sync never swapped the file
+        # (the copied module may carry real-tree FIX-464 comments for other
+        # rows; the fixture-targeted one is the discriminator).
+        self.assertNotRegex(
+            self_path.read_text(encoding="utf-8"),
+            r"#\s*pins re-anchor op-[0-9a-f]{32} \(FIX-464\).*fixture_writer_target")
+
+    def test_register_moves_row_out_of_amnesty(self):
+        import pin_ledger
+        # register's real-life amnesty scenario: an amnesty ghost row for
+        # an exemption the ledger no longer carries (or never carried) —
+        # the writer re-registers the row and the ghost leaves the set.
+        # No ledger row is pre-seeded (ledger_row=False), so register hits
+        # a LIVE scan hit and takes the new-file-key branch.
+        root = self._mini_root_with_amnesty_row(ledger_row=False)
+        ghost = (self._TARGET_REL, 2, self._ACTIVE)
+        self.assertIn(ghost, self._mini_amnesty(root))
+        receipt, code = pin_ledger.register_exemption(
+            root, self._TARGET_REL, 2, self._ACTIVE,
+            "FIX-464 register amnesty-exit probe")
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["effect"], "written")
+        self.assertEqual(receipt["amnesty_sync"], "written")
+        self.assertNotIn(ghost, self._mini_amnesty(root))
+
+    def test_reanchor_idempotent_noop_self_heals_amnesty(self):
+        """The FIX-462 gap repair path: an already-anchored entry with a
+        GHOST amnesty row heals on the noop branch (effect= idempotent_noop,
+        amnesty_sync=written, zero ledger byte change)."""
+        import pin_ledger
+        root = self._mini_root_with_amnesty_row()
+        ghost = (self._TARGET_REL, 2, self._ACTIVE)
+        (root / self._TARGET_REL).write_text(
+            "# drift a\n# drift b\n" + self._TARGET_BODY, encoding="utf-8")
+        receipt, code = pin_ledger.reanchor_exemption(
+            root, self._TARGET_REL, 2, 4)
+        self.assertEqual(code, 0, receipt)
+        self.assertNotIn(ghost, self._mini_amnesty(root))
+        # reintroduce the ghost by hand (the drift being repaired), then
+        # re-run the same command — noop on the ledger, sync on the amnesty
+        self_path = root / pin_ledger.SELF_REL
+        stext = self_path.read_text(encoding="utf-8")
+        anchor = "DELIVERY_AMNESTY_ENTRIES = frozenset({\n"
+        stext = stext.replace(
+            anchor, anchor + '    ("{0}", 2, "{1}"),\n'.format(
+                self._TARGET_REL, self._ACTIVE), 1)
+        self_path.write_text(stext, encoding="utf-8")
+        self.assertIn(ghost, self._mini_amnesty(root))
+        ledger_path = root / pin_ledger.LEDGER_REL
+        ledger_before = ledger_path.read_bytes()
+        receipt, code = pin_ledger.reanchor_exemption(
+            root, self._TARGET_REL, 2, 4)
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["effect"], "idempotent_noop")
+        self.assertEqual(receipt["amnesty_sync"], "written")
+        self.assertEqual(ledger_path.read_bytes(), ledger_before)
+        self.assertNotIn(ghost, self._mini_amnesty(root))
+
+
 class PinsLedgerRealTreeContractTests(unittest.TestCase):
     """FIX-462 — the delivery amnesty snapshot covers every live row."""
 
@@ -503,13 +689,44 @@ class PinsLedgerRealTreeContractTests(unittest.TestCase):
                          "provenance-attributed")
 
     def test_amnesty_snapshot_matches_live_ledger_exactly(self):
+        """FIX-464 — the snapshot/live invariant, not literal equality.
+
+        The FIX-462 literal-equality form (amnesty == live) was only
+        satisfiable while the writer had never really written: the first
+        machine write ADDS a provenance-attributed live row outside the
+        amnesty (by design — machine rows never need amnesty cover), so
+        equality was a latent contradiction.  The drift contract it
+        actually wanted is the two-sided invariant:
+
+          * no GHOST rows — amnesty ⊆ live (a row the writer moved/removed
+            must leave the frozen set; enforced by _sync_amnesty_exit),
+          * no unattributed rows — live − amnesty ⊆ rows carrying a pins
+            provenance comment (face 6 semantics; hand edits surface here).
+        """
         import pin_ledger
         live = {(rel, ln, tok)
                 for rel, entries in version_checks.STATIC_PIN_EXEMPTIONS.items()
                 for ln, tok, _reason in entries}
-        self.assertEqual(pin_ledger.DELIVERY_AMNESTY_ENTRIES, frozenset(live),
-                         "the frozen amnesty drifted from the live ledger — "
-                         "rows were added/removed without the writer")
+        amnesty = pin_ledger.DELIVERY_AMNESTY_ENTRIES
+        ghosts = amnesty - live
+        self.assertFalse(
+            ghosts,
+            "ghost amnesty rows (writer touched but never left the frozen "
+            "set — the FIX-462 gap FIX-464 closes): {0}".format(sorted(ghosts)[:5]))
+        ledger_text = (_REPO_ROOT / pin_ledger.LEDGER_REL).read_text(
+            encoding="utf-8")
+        ledger_lines = ledger_text.splitlines()
+        unattributed = []
+        for (rel, ln, tok) in (live - amnesty):
+            idx = pin_ledger._ledger_entry_lineno(ledger_text, rel, ln, tok)
+            if (idx is None or idx < 2
+                    or not pin_ledger._PROVENANCE_RE.search(ledger_lines[idx - 2])):
+                unattributed.append((rel, ln, tok))
+        self.assertFalse(
+            unattributed,
+            "live rows outside the amnesty without a provenance comment "
+            "(hand edit? use pins register/re-anchor): {0}".format(
+                sorted(unattributed)[:5]))
 
 
 if __name__ == "__main__":

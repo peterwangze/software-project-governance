@@ -296,7 +296,8 @@ STATIC_PIN_EXEMPTIONS = {
     "skills/software-project-governance/infra/tests/test_static_version_pins.py": [
         # FIX-411 re-anchor: the sandbox-fixture hardening import additions
         # shifted the row 158->166 (token unchanged).
-        (166, "0.85.0", _REASON_FUTURE_TARGET),
+        # pins re-anchor op-0d25848adfe445ae9b8cb515b7f036ca (FIX-462): 166->167 via machine writer (token unchanged)
+        (167, "0.85.0", _REASON_FUTURE_TARGET),
     ],
     # 0.87.0 bump-time rows (the FIX-361 designed double signal): FIX-366's
     # bump-scenario regression constant (NEW_VERSION) and FIX-371's fixture
@@ -428,7 +429,8 @@ STATIC_PIN_EXEMPTIONS = {
     # visible skip marker added at the module head shifted the token line
     # 61->80; token and reason unchanged, re-anchored to the actual line.
     "skills/software-project-governance/infra/tests/test_evidence_migration.py": [
-        (80, "0.99.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-9dae6f1629dc4f7ca4f4644ebadc25f6 (FIX-462): 80->51 via machine writer (token unchanged)
+        (51, "0.99.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying

@@ -54,6 +54,7 @@ TASK_ID = "FIX-462"
 SCHEMA = "pin-ledger/1"
 
 LEDGER_REL = "skills/software-project-governance/infra/checks/version.py"
+SELF_REL = "skills/software-project-governance/infra/pin_ledger.py"
 SCAN_DIR_REL = "skills/software-project-governance/infra/tests"
 SKILL_MD_REL = "skills/software-project-governance/SKILL.md"
 
@@ -235,6 +236,117 @@ def _restore(ledger_path: Path, original_bytes: bytes):
     ledger_path.write_bytes(original_bytes)
 
 
+# ── FIX-464: delivery-amnesty exit sync ──────────────────────────────────────
+
+
+def _sync_amnesty_exit(root: Path, rel: str, line: int, token: str,
+                       command: str, op_id: str):
+    """FIX-464 — a writer-touched row leaves DELIVERY_AMNESTY_ENTRIES.
+
+    The amnesty contract (:data:`DELIVERY_AMNESTY_ENTRIES` docstring) says
+    "rows leave this set the moment the writer touches them" — the FIX-462
+    writer updated the ledger but never removed the touched row from the
+    frozen in-source amnesty set, so a re-anchored row became an amnesty
+    GHOST row (still listed, no longer live) and the snapshot contract
+    test failed on the very first real write.  This sync runs after every
+    successful register/re-anchor ledger swap: it rewrites this module's
+    own source to drop the touched ``(rel, line, token)`` tuple from the
+    frozenset, leaving a provenance-shaped comment in its place.
+
+    Post-check (fail-closed, temp-file shadow import — the ledger
+    post-check precedent): the candidate amnesty set (a) no longer lists
+    the touched row, (b) contains NO ghost rows (amnesty ⊆ live ledger),
+    and (c) every live row outside amnesty carries a provenance comment
+    directly above it — the exact invariant the write-guard face 6 and the
+    snapshot contract test assert.
+
+    Returns ``(state, error)``: ``("noop_not_in_amnesty", None)`` /
+    ``("noop_self_absent", None)`` (mini-root harnesses without a
+    pin_ledger.py copy) / ``("written", None)`` / ``(_, detail)`` on
+    refusal (the caller then restores BOTH files — ledger + this module).
+    """
+    root = _repo_root(root)
+    self_path = root / SELF_REL
+    if not self_path.is_file():
+        return "noop_self_absent", None
+    original_bytes = self_path.read_bytes()
+    text = original_bytes.decode("utf-8")
+
+    row_re = re.compile(r"^(?P<indent>\s*)\(\"{0}\", {1}, \"{2}\"\),$".format(
+        re.escape(rel), line, re.escape(token)))
+    lines = text.splitlines(keepends=True)
+    hit_idx = next((i for i, l in enumerate(lines)
+                    if row_re.match(l.rstrip("\r\n"))), None)
+    if hit_idx is None:
+        return "noop_not_in_amnesty", None
+
+    comment = ("{0}# pins {1} {2} (FIX-464): writer touched ({3}, {4}, "
+               "\"{5}\") — row left DELIVERY_AMNESTY_ENTRIES\n").format(
+        lines[hit_idx][:len(lines[hit_idx]) - len(lines[hit_idx].lstrip())],
+        command, op_id, rel, line, token)
+    candidate = "".join(lines[:hit_idx] + [comment] + lines[hit_idx + 1:])
+
+    try:
+        compile(candidate, str(self_path), "exec")
+    except SyntaxError as exc:
+        return "refused", "amnesty candidate does not compile: {0}".format(exc.msg)
+    fd, temp_name = tempfile.mkstemp(
+        dir=str(self_path.parent), prefix=".pin_ledger_amnesty_", suffix=".py")
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(candidate)
+        new_amnesty = _shadow_module(temp_path).DELIVERY_AMNESTY_ENTRIES
+        live, live_text = _live_entries(root)
+        if (rel, line, token) in new_amnesty:
+            return "refused", "post-check failed: the touched row is still in the candidate amnesty"
+        ghosts = new_amnesty - live
+        if ghosts:
+            return "refused", ("post-check failed: candidate amnesty keeps "
+                               "ghost rows absent from the live ledger: {0}".format(
+                                   sorted(ghosts)[:3]))
+        live_lines = live_text.splitlines()
+        for (lrel, lln, ltok) in (live - new_amnesty):
+            idx = _ledger_entry_lineno(live_text, lrel, lln, ltok)
+            if idx is None or idx < 2 or not _PROVENANCE_RE.search(live_lines[idx - 2]):
+                return "refused", ("post-check failed: live row ({0}, {1}, "
+                                   "\"{2}\") is outside amnesty without a "
+                                   "provenance comment".format(lrel, lln, ltok))
+        os.replace(temp_path, self_path)
+    except Exception as exc:
+        temp_path.unlink(missing_ok=True)
+        return "refused", "amnesty post-check could not run: {0}".format(exc)
+    return "written", None
+
+
+def _live_entries(root: Path):
+    """(frozenset of live (rel, line, token), ledger text) from disk."""
+    ledger_text = (_repo_root(root) / LEDGER_REL).read_text(encoding="utf-8")
+    parsed, err = _parse_ledger(ledger_text)
+    if err:
+        raise ValueError("ledger unreadable: {0}".format(err))
+    _tree, dict_node = parsed
+    return (frozenset((k, ln, tok) for k, _e, ln, tok in _entry_tuples(dict_node)),
+            ledger_text)
+
+
+def _ledger_entry_lineno(ledger_text: str, rel: str, line: int, token: str):
+    """1-based source line of the ``(line, "token", …)`` tuple under ``rel``."""
+    parsed, err = _parse_ledger(ledger_text)
+    if err:
+        return None
+    _tree, dict_node = parsed
+    for key_node, value_node in zip(dict_node.keys, dict_node.values):
+        if not (isinstance(key_node, ast.Constant) and key_node.value == rel):
+            continue
+        for elem in value_node.elts:
+            if (isinstance(elem, ast.Tuple) and len(elem.elts) == 3
+                    and elem.elts[0].value == line
+                    and elem.elts[1].value == token):
+                return elem.lineno
+    return None
+
+
 # ── register ────────────────────────────────────────────────────────────────
 
 
@@ -338,9 +450,16 @@ def register_exemption(root: Path, file: str, line: int, token: str,
         receipt.update({"code": "retryable", "error": True, "detail": detail,
                         "post_checks": post_checks})
         return receipt, 3
+    # FIX-464: the touched row leaves the delivery amnesty in the same
+    # transaction — a failure restores BOTH files (ledger + pin_ledger).
+    sync_state, sync_err = _sync_amnesty_exit(
+        root, rel, line, token, "register", op_id)
+    if sync_err is not None:
+        _restore(ledger_path, original_bytes)
+        return refuse("amnesty exit sync failed: {0}".format(sync_err))
     receipt.update({"code": "ok", "error": False, "effect": "written",
                     "operation_id": op_id, "detail": detail,
-                    "post_checks": post_checks})
+                    "post_checks": post_checks, "amnesty_sync": sync_state})
     return receipt, 0
 
 
@@ -389,6 +508,15 @@ def reanchor_exemption(root: Path, file: str, line_from: int, line_to: int,
             receipt.update({"code": "ok", "error": False,
                             "effect": "idempotent_noop",
                             "detail": "entry already anchored at line {0}".format(line_to)})
+            # FIX-464 self-heal: an earlier write may have drifted the
+            # amnesty set (the FIX-462 writer gap) — the noop path still
+            # runs the exit sync so re-running the command repairs the
+            # ghost row without a ledger byte change.
+            sync_state, _sync_err = _sync_amnesty_exit(
+                root, rel, line_from,
+                token if token is not None else already[0][3],
+                "re-anchor", _new_op_id())
+            receipt["amnesty_sync"] = sync_state
             return receipt, 0
         return refuse("no exemption entry at {0}:{1}{2}".format(
             rel, line_from, " with token \"{0}\"".format(token) if token else ""))
@@ -446,9 +574,17 @@ def reanchor_exemption(root: Path, file: str, line_from: int, line_to: int,
         receipt.update({"code": "retryable", "error": True, "detail": detail,
                         "post_checks": post_checks})
         return receipt, 3
+    # FIX-464: the FROM row leaves the delivery amnesty in the same
+    # transaction — failure restores BOTH files (ledger + pin_ledger).
+    sync_state, sync_err = _sync_amnesty_exit(
+        root, rel, line_from, entry_token, "re-anchor", op_id)
+    if sync_err is not None:
+        _restore(ledger_path, original_bytes)
+        return refuse("amnesty exit sync failed: {0}".format(sync_err))
     receipt.update({"code": "ok", "error": False, "effect": "written",
                     "operation_id": op_id, "token": entry_token,
-                    "detail": detail, "post_checks": post_checks})
+                    "detail": detail, "post_checks": post_checks,
+                    "amnesty_sync": sync_state})
     return receipt, 0
 
 
@@ -494,7 +630,7 @@ DELIVERY_AMNESTY_ENTRIES = frozenset({
     ("skills/software-project-governance/infra/tests/test_closure_chain.py", 86, "0.86.0"),
     ("skills/software-project-governance/infra/tests/test_triage_write_guard.py", 997, "0.86.0"),
     ("skills/software-project-governance/infra/tests/test_triage_write_guard.py", 1143, "0.86.0"),
-    ("skills/software-project-governance/infra/tests/test_static_version_pins.py", 166, "0.85.0"),
+    # pins re-anchor op-0d25848adfe445ae9b8cb515b7f036ca (FIX-464): writer touched (skills/software-project-governance/infra/tests/test_static_version_pins.py, 166, "0.85.0") — row left DELIVERY_AMNESTY_ENTRIES
     ("skills/software-project-governance/infra/tests/test_release_projection.py", 35, "0.87.0"),
     ("skills/software-project-governance/infra/tests/test_provenance_domain.py", 323, "0.93.0"),
     ("skills/software-project-governance/infra/tests/test_provenance_domain.py", 342, "0.93.0"),
@@ -506,7 +642,7 @@ DELIVERY_AMNESTY_ENTRIES = frozenset({
     ("skills/software-project-governance/infra/tests/test_archive.py", 549, "0.99.0"),
     ("skills/software-project-governance/infra/tests/test_archive.py", 724, "0.99.0"),
     ("skills/software-project-governance/infra/tests/test_archive.py", 4005, "0.99.0"),
-    ("skills/software-project-governance/infra/tests/test_evidence_migration.py", 80, "0.99.0"),
+    # pins re-anchor op-ababe4456fb347b2b8c5f4d88b160ecd (FIX-464): writer touched (skills/software-project-governance/infra/tests/test_evidence_migration.py, 80, "0.99.0") — row left DELIVERY_AMNESTY_ENTRIES
     ("skills/software-project-governance/infra/tests/test_fix390_structured_status_judgment.py", 190, "0.89.0"),
     ("skills/software-project-governance/infra/tests/test_fix390_structured_status_judgment.py", 202, "0.89.0"),
     ("skills/software-project-governance/infra/tests/test_fix390_structured_status_judgment.py", 306, "0.89.0"),

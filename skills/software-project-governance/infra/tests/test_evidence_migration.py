@@ -1,30 +1,19 @@
 """FIX-448 D1 M1 fixture tests: evidence_migration coordination layer.
 
 Design §10 offline-testable subset (all on SYNTHETIC fixture roots — the
-real hot table is never touched; every tmp path is pytest's isolated
-tmp_path, and MigrationInputs/scan/classification are injected with
-synthetic content so nothing reads the live .governance tree):
+real hot table is never touched; every tmp path is an isolated
+TemporaryDirectory cleaned up per test).
 
-  V1-subset  canonical verdicts: completed→move; active/missing/keep→retain
-             (the classification itself is archive_verdicts' single source,
-              tested extensively in test_archive.py — here we pin that the
-              planner honors it and never invents a second vocabulary)
-  V2-subset  byte exactness: LF/CRLF/BOM-adjacent prose, trailing no-LF,
-             raw '|' and Unicode rows — hot_after is exact interval removal
-             and moved slices decode back to the classified lines
-  V4-subset  interrupted worlds: execute-gate refusal; prepared-before
-             crash; cold-published/hot-unwritten; hot-committed;
-             post-finalize append → recover_evd_transfer judges each world
-             from pins + real files (never the journal alone)
-  I1        row bytes immutable: every moved slice hash equals the row's
-             original bytes hash; before-backup preserved
-  I4/I5     cold publishes first through the never-overwrite primitive
-             (idempotent_skip on re-run; foreign bytes refused by the
-             primitive's own tests in test_archive.py)
-  I6/I7     capacity reported not bent; transaction ids are fresh evdt-*
+FIX-461: the 16 pytest-style tests are now stdlib-unittest — module
+functions with fixtures/monkeypatch became TestCase methods with helper
+world-builders and mock.patch.object; per-row assertion semantics are
+preserved verbatim (no strength change), and the FIX-460 import
+shim / HAS_PYTEST / visible-skip marker / pytest __main__ branch are
+gone entirely: this module now imports and collects with ZERO pytest
+dependency.
 
-Run: python -B -m pytest skills/software-project-governance/infra/tests/\
-test_evidence_migration.py -q
+Run: python -m unittest \\
+        skills.software-project-governance.infra.tests.test_evidence_migration
 """
 
 from __future__ import annotations
@@ -32,28 +21,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
-
-try:  # FIX-460: CI is the stdlib-unittest route (FIX-095) and installs no
-    import pytest  # pytest; keep this module importable so the visible skip
-    HAS_PYTEST = True  # marker below runs instead of a ModuleNotFoundError.
-except ImportError:
-    class _PytestImportShim:
-        """Import-time no-op stand-in: module-level pytest decorators (only
-        @pytest.fixture in this file) evaluate harmlessly when pytest is
-        absent. The 16 pytest-style tests still run ONLY under a real pytest
-        (their conversion to unittest is tracked as FIX-461)."""
-
-        def __getattr__(self, _name):
-            def _passthrough(*args, **kwargs):
-                if len(args) == 1 and callable(args[0]) and not kwargs:
-                    return args[0]          # bare @pytest.x form
-                return lambda fn: fn        # @pytest.x(...) factory form
-            return _passthrough
-
-    pytest = _PytestImportShim()
-    HAS_PYTEST = False
+from unittest import mock
 
 _INFRA = Path(__file__).resolve().parent.parent
 if str(_INFRA) not in sys.path:
@@ -136,16 +107,16 @@ TASK_VERSIONS = {
 }
 
 
-@pytest.fixture
-def world(tmp_path):
-    """Isolated fixture root: hot table + plan + governance dir."""
-    gov = tmp_path / ".governance"
+def _world(tmp, **hot_over):
+    """Isolated fixture root: hot table + plan + governance dir (the old
+    pytest ``world`` fixture as a plain helper — FIX-461)."""
+    gov = tmp / ".governance"
     gov.mkdir()
     ev = gov / "evidence-log.md"
-    ev.write_bytes(_hot_table())
+    ev.write_bytes(_hot_table(**hot_over))
     plan = gov / "plan-tracker.md"
     plan.write_text(PLAN_TRACKER, encoding="utf-8")
-    return {"root": tmp_path, "gov": gov, "ev": ev, "plan": plan}
+    return {"root": tmp, "gov": gov, "ev": ev, "plan": plan}
 
 
 def _policy(**over):
@@ -164,329 +135,338 @@ def _plan(world):
     return inputs, em.plan_evd_compaction(inputs, _policy())
 
 
+class MigrationTestCase(unittest.TestCase):
+    """FIX-461 shared harness: isolated TemporaryDirectory + synthetic
+    world per test (old ``world`` fixture), and the M2 execute-flag
+    env override (old ``monkeypatch.setenv``) with guaranteed restore."""
+
+    HOT_OVER = {}   # per-class hot-table shape overrides (e.g. CRLF)
+
+    def setUp(self):
+        td = tempfile.TemporaryDirectory(prefix="fix461-")
+        self.addCleanup(td.cleanup)
+        self.tmp = Path(td.name)
+        self.world = _world(self.tmp, **self.HOT_OVER)
+
+    def _enable_m2(self):
+        self._prior_flag = os.environ.get(em.EXECUTE_ENV_FLAG)
+        os.environ[em.EXECUTE_ENV_FLAG] = "1"
+        self.addCleanup(self._restore_m2)
+
+    def _restore_m2(self):
+        if self._prior_flag is None:
+            os.environ.pop(em.EXECUTE_ENV_FLAG, None)
+        else:
+            os.environ[em.EXECUTE_ENV_FLAG] = self._prior_flag
+
+
 # ---------------------------------------------------------------------------
 # V1-subset — canonical verdicts honored (no second vocabulary)
 # ---------------------------------------------------------------------------
 
-def test_v1_completed_moves_active_missing_keep_retain(world):
-    inputs, plan = _plan(world)
-    by_id = {i["row_id"]: i for i in plan["instances"]}
-    assert by_id["EVD-910"]["decision"] == "move"
-    assert by_id["EVD-911"]["decision"] == "move"
-    assert by_id["EVD-915"]["decision"] == "move"
-    assert by_id["EVD-912"]["decision"] == "retain"
-    assert "active" in by_id["EVD-912"]["reason"]
-    assert by_id["EVD-913"]["decision"] == "retain"
-    assert "missing" in by_id["EVD-913"]["reason"]
-    assert by_id["EVD-914"]["decision"] == "retain"
-    assert "keep" in by_id["EVD-914"]["reason"]
-    # REVIEW family is never a mover in M1 (FIX-446 hardened leg is EVD-only)
-    review = [i for i in plan["instances"] if i["family"] == "REVIEW"]
-    assert review and all(i["decision"] == "retain" for i in review)
+class V1CanonicalVerdictTests(MigrationTestCase):
 
+    def test_v1_completed_moves_active_missing_keep_retain(self):
+        inputs, plan = _plan(self.world)
+        by_id = {i["row_id"]: i for i in plan["instances"]}
+        self.assertEqual(by_id["EVD-910"]["decision"], "move")
+        self.assertEqual(by_id["EVD-911"]["decision"], "move")
+        self.assertEqual(by_id["EVD-915"]["decision"], "move")
+        self.assertEqual(by_id["EVD-912"]["decision"], "retain")
+        self.assertIn("active", by_id["EVD-912"]["reason"])
+        self.assertEqual(by_id["EVD-913"]["decision"], "retain")
+        self.assertIn("missing", by_id["EVD-913"]["reason"])
+        self.assertEqual(by_id["EVD-914"]["decision"], "retain")
+        self.assertIn("keep", by_id["EVD-914"]["reason"])
+        # REVIEW family is never a mover in M1 (FIX-446 hardened leg is EVD-only)
+        review = [i for i in plan["instances"] if i["family"] == "REVIEW"]
+        self.assertTrue(review)
+        self.assertTrue(all(i["decision"] == "retain" for i in review))
 
-def test_v1_reasons_come_from_canonical_set(world):
-    inputs, plan = _plan(world)
-    canonical = {
-        "would_archive", "no_task_family_ref", "ref_version_out_of_range",
-        "unknown_evd_id_shape", "duplicate_evd_id", "explicit_keep_marker",
-        "missing_task_ref", "active_task_ref", "ambiguous_ref",
-        "task_layout_anomaly", "task_version_unparseable",
-    }
-    family_reasons = {
-        "would_archive", "no_task_family_ref", "ref_version_out_of_range",
-        "missing_task_ref", "active_task_ref", "ambiguous_ref",
-        "unknown_row_id_shape",
-    }
-    for inst in plan["instances"]:
-        pool = canonical if inst["family"] == "EVD" else family_reasons
-        assert inst["reason"] in pool, inst
+    def test_v1_reasons_come_from_canonical_set(self):
+        inputs, plan = _plan(self.world)
+        canonical = {
+            "would_archive", "no_task_family_ref", "ref_version_out_of_range",
+            "unknown_evd_id_shape", "duplicate_evd_id", "explicit_keep_marker",
+            "missing_task_ref", "active_task_ref", "ambiguous_ref",
+            "task_layout_anomaly", "task_version_unparseable",
+        }
+        family_reasons = {
+            "would_archive", "no_task_family_ref", "ref_version_out_of_range",
+            "missing_task_ref", "active_task_ref", "ambiguous_ref",
+            "unknown_row_id_shape",
+        }
+        for inst in plan["instances"]:
+            pool = canonical if inst["family"] == "EVD" else family_reasons
+            self.assertIn(inst["reason"], pool, inst)
 
 
 # ---------------------------------------------------------------------------
 # V2-subset — byte exactness
 # ---------------------------------------------------------------------------
 
-def test_v2_hot_after_is_exact_interval_removal(world):
-    inputs, plan = _plan(world)
-    raw = inputs.evidence_bytes
-    hot_after = plan["_hot_after_bytes_internal"]
-    moved = sorted((i["byte_offset"], i["byte_offset"] + i["byte_length"])
-                   for i in plan["instances"] if i["decision"] == "move")
-    rebuilt = bytearray()
-    cursor = 0
-    for s, e in moved:
-        rebuilt += raw[cursor:s]
-        cursor = e
-    rebuilt += raw[cursor:]
-    assert bytes(rebuilt) == hot_after
-    # conservation
-    moved_total = sum(e - s for s, e in moved)
-    assert len(hot_after) + moved_total == len(raw)
-    # prose survives verbatim
-    assert "附属叙述（非表格字节必须原样保留）" in hot_after.decode("utf-8")
-    # retained rows survive verbatim
-    kept = hot_after.decode("utf-8")
-    for rid in ("EVD-912", "EVD-913", "EVD-914", "REVIEW-9001"):
-        assert rid in kept
+class V2ByteExactnessTests(MigrationTestCase):
 
+    def test_v2_hot_after_is_exact_interval_removal(self):
+        inputs, plan = _plan(self.world)
+        raw = inputs.evidence_bytes
+        hot_after = plan["_hot_after_bytes_internal"]
+        moved = sorted((i["byte_offset"], i["byte_offset"] + i["byte_length"])
+                       for i in plan["instances"] if i["decision"] == "move")
+        rebuilt = bytearray()
+        cursor = 0
+        for s, e in moved:
+            rebuilt += raw[cursor:s]
+            cursor = e
+        rebuilt += raw[cursor:]
+        self.assertEqual(bytes(rebuilt), hot_after)
+        # conservation
+        moved_total = sum(e - s for s, e in moved)
+        self.assertEqual(len(hot_after) + moved_total, len(raw))
+        # prose survives verbatim
+        self.assertIn("附属叙述（非表格字节必须原样保留）",
+                      hot_after.decode("utf-8"))
+        # retained rows survive verbatim
+        kept = hot_after.decode("utf-8")
+        for rid in ("EVD-912", "EVD-913", "EVD-914", "REVIEW-9001"):
+            self.assertIn(rid, kept)
 
-def test_v2_crlf_and_no_trailing_newline(tmp_path):
-    gov = tmp_path / ".governance"
-    gov.mkdir()
-    ev = gov / "evidence-log.md"
-    ev.write_bytes(_hot_table(crlf=True, trailing_newline=False))
-    plan_p = gov / "plan-tracker.md"
-    plan_p.write_text(PLAN_TRACKER, encoding="utf-8")
-    inputs = em.MigrationInputs.capture(ev, plan_p)
-    plan = em.plan_evd_compaction(inputs, _policy())
-    raw = inputs.evidence_bytes
-    # slice-decode identity held for every instance (planner didn't refuse)
-    assert not em._is_refusal(plan)
-    for inst in plan["instances"]:
-        chunk = raw[inst["byte_offset"]:
-                    inst["byte_offset"] + inst["byte_length"]]
-        assert em._sha256_bytes(chunk) == inst["row_sha256"]
-        if inst["byte_length"]:
-            # CRLF lines keep their \r inside the slice
-            decoded = chunk.decode("utf-8")
-            if inst["byte_offset"] > 0:
-                assert decoded.endswith("\n") or inst is plan["instances"][-1]
-    # moving still exact on CRLF world
-    hot_after = plan["_hot_after_bytes_internal"]
-    assert b"\r\n" in hot_after          # retained CRLF rows untouched
+    def test_v2_crlf_and_no_trailing_newline(self):
+        # a SEPARATE root under this test's tmp: setUp already built the
+        # standard-world .governance (old pytest run used a fresh tmp_path)
+        crlf_root = self.tmp / "crlf"
+        crlf_root.mkdir()
+        world = _world(crlf_root, crlf=True, trailing_newline=False)
+        inputs = em.MigrationInputs.capture(world["ev"], world["plan"])
+        plan = em.plan_evd_compaction(inputs, _policy())
+        raw = inputs.evidence_bytes
+        # slice-decode identity held for every instance (planner didn't refuse)
+        self.assertFalse(em._is_refusal(plan))
+        for inst in plan["instances"]:
+            chunk = raw[inst["byte_offset"]:
+                        inst["byte_offset"] + inst["byte_length"]]
+            self.assertEqual(em._sha256_bytes(chunk), inst["row_sha256"])
+            if inst["byte_length"]:
+                # CRLF lines keep their \r inside the slice
+                decoded = chunk.decode("utf-8")
+                if inst["byte_offset"] > 0:
+                    self.assertTrue(
+                        decoded.endswith("\n")
+                        or inst is plan["instances"][-1])
+        # moving still exact on CRLF world
+        hot_after = plan["_hot_after_bytes_internal"]
+        self.assertIn(b"\r\n", hot_after)   # retained CRLF rows untouched
 
+    def test_v2_i1_moved_slices_hash_to_original_bytes(self):
+        inputs, plan = _plan(self.world)
+        raw = inputs.evidence_bytes
+        for inst in plan["instances"]:
+            chunk = raw[inst["byte_offset"]:
+                        inst["byte_offset"] + inst["byte_length"]]
+            self.assertEqual(em._sha256_bytes(chunk), inst["row_sha256"])
+            self.assertTrue(
+                chunk.decode("utf-8").startswith(f"| {inst['row_id']} "))
+        # instance identity = (source digest, byte range, row digest)  [I1]
+        for inst in plan["instances"]:
+            self.assertEqual(inst["source_sha256"],
+                             inputs.evidence_sha256)
 
-def test_v2_i1_moved_slices_hash_to_original_bytes(world):
-    inputs, plan = _plan(world)
-    raw = inputs.evidence_bytes
-    for inst in plan["instances"]:
-        chunk = raw[inst["byte_offset"]:
-                    inst["byte_offset"] + inst["byte_length"]]
-        assert em._sha256_bytes(chunk) == inst["row_sha256"]
-        assert chunk.decode("utf-8").startswith(f"| {inst['row_id']} ")
-    # instance identity = (source digest, byte range, row digest)  [I1]
-    for inst in plan["instances"]:
-        assert inst["source_sha256"] == inputs.evidence_sha256
-
-
-def test_v2_overlaps_refused(tmp_path, world, monkeypatch):
-    # sabotage one offset to force the overlap detector (defensive path)
-    inputs, plan = _plan(world)
-    plan["instances"][1]["byte_offset"] = plan["instances"][0]["byte_offset"]
-    # re-run conservation check manually through the public planner is not
-    # possible without re-planning; assert the internal invariant function
-    # by rebuilding the guard inline:
-    covered = sorted((i["byte_offset"], i["byte_offset"] + i["byte_length"])
-                     for i in plan["instances"])
-    overlap = any(e1 > s2 for (s1, e1), (s2, e2) in zip(covered, covered[1:]))
-    assert overlap  # the sabotage is detectable; the planner refuses on it
+    def test_v2_overlaps_refused(self):
+        # sabotage one offset to force the overlap detector (defensive path)
+        inputs, plan = _plan(self.world)
+        plan["instances"][1]["byte_offset"] = plan["instances"][0]["byte_offset"]
+        # re-run conservation check manually through the public planner is not
+        # possible without re-planning; assert the internal invariant function
+        # by rebuilding the guard inline:
+        covered = sorted((i["byte_offset"], i["byte_offset"] + i["byte_length"])
+                         for i in plan["instances"])
+        overlap = any(e1 > s2 for (s1, e1), (s2, e2) in zip(covered, covered[1:]))
+        self.assertTrue(overlap)  # sabotage detectable; planner refuses on it
 
 
 # ---------------------------------------------------------------------------
 # execute gate + I4/I5 apply path + V4 interrupted worlds
 # ---------------------------------------------------------------------------
 
-def _enable_m2(monkeypatch):
-    monkeypatch.setenv(em.EXECUTE_ENV_FLAG, "1")
+class ExecuteApplyRecoveryTests(MigrationTestCase):
 
+    def test_execute_gate_refuses_without_m2_flag(self):
+        inputs, plan = _plan(self.world)
+        receipt = em.apply_evd_plan(plan, inputs, self.world["gov"])
+        self.assertTrue(em._is_refusal(receipt))
+        self.assertEqual(receipt["code"], "execute_not_authorized")
+        self.assertFalse((self.world["gov"] / "migration-staging").exists())
 
-def test_execute_gate_refuses_without_m2_flag(world):
-    inputs, plan = _plan(world)
-    receipt = em.apply_evd_plan(plan, inputs, world["gov"])
-    assert em._is_refusal(receipt)
-    assert receipt["code"] == "execute_not_authorized"
-    assert not (world["gov"] / "migration-staging").exists()
+    def test_i4_i5_apply_publishes_cold_before_hot(self):
+        self._enable_m2()
+        inputs, plan = _plan(self.world)
+        receipt = em.apply_evd_plan(plan, inputs, self.world["gov"])
+        self.assertEqual(receipt["status"], "applied", receipt)
+        # cold segments exist with verbatim payload
+        segs = sorted((self.world["gov"] / "archive" / "evidence")
+                      .glob("evdt-segment-*.md"))
+        self.assertTrue(segs)
+        seg_text = "\n".join(p.read_text(encoding="utf-8") for p in segs)
+        for rid in ("EVD-910", "EVD-911", "EVD-915"):
+            self.assertIn(rid, seg_text)
+        for rid in ("EVD-912", "EVD-913", "EVD-914"):
+            self.assertNotIn(rid, seg_text)
+        # hot file is the pinned postimage; movers gone, retained intact
+        hot = self.world["ev"].read_bytes()
+        self.assertEqual(em._sha256_bytes(hot),
+                         plan["outputs"]["hot_after_sha256"])
+        kept = hot.decode("utf-8")
+        for rid in ("EVD-912", "EVD-913", "EVD-914", "REVIEW-9001"):
+            self.assertIn(rid, kept)
+        for rid in ("EVD-910", "EVD-911", "EVD-915"):
+            self.assertNotIn(rid, kept)
+        # staged before-backup preserved (I1)
+        tx = receipt["transaction_id"]
+        before = (self.world["gov"] / "migration-staging" / tx /
+                  "before-evidence.md")
+        self.assertEqual(before.read_bytes(), inputs.evidence_bytes)
+        # manifest finalized
+        manifest = json.loads(
+            (self.world["gov"] / "migration-staging" / tx /
+             "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["phase"], "finalized")
+        self.assertTrue(tx.startswith("evdt-"))  # I7 fresh id namespace
 
+    def test_i5_never_overwrite_idempotent_skip(self):
+        self._enable_m2()
+        inputs, plan = _plan(self.world)
+        receipt = em.apply_evd_plan(plan, inputs, self.world["gov"])
+        self.assertEqual(receipt["status"], "applied")
+        outcomes = {s["relative_path"]: s["outcome"]
+                    for s in receipt["published_segments"]}
+        self.assertTrue(all(v == "created" for v in outcomes.values()))
+        # replay the SAME publish: the primitive must judge idempotent_skip
+        # (rebuilding is prevented by the hot CAS first — so call the publish
+        # primitive directly, as the second transaction would)
+        import archive_migration_engine as eng
+        seg0 = (self.world["gov"] / "archive" / "evidence" /
+                "evdt-segment-000.md")
+        seg_lines = seg0.read_text(encoding="utf-8").split("\n")
+        header_line, body = seg_lines[0], [ln for ln in seg_lines[1:] if ln]
+        out = eng._write_archive_file_never_overwrite(seg0, header_line, body)
+        self.assertEqual(out, "idempotent_skip")
 
-def test_i4_i5_apply_publishes_cold_before_hot(world, monkeypatch):
-    _enable_m2(monkeypatch)
-    inputs, plan = _plan(world)
-    receipt = em.apply_evd_plan(plan, inputs, world["gov"])
-    assert receipt["status"] == "applied", receipt
-    # cold segments exist with verbatim payload
-    segs = sorted((world["gov"] / "archive" / "evidence").glob("evdt-segment-*.md"))
-    assert segs
-    seg_text = "\n".join(p.read_text(encoding="utf-8") for p in segs)
-    for rid in ("EVD-910", "EVD-911", "EVD-915"):
-        assert rid in seg_text
-    for rid in ("EVD-912", "EVD-913", "EVD-914"):
-        assert rid not in seg_text
-    # hot file is the pinned postimage; movers gone, retained intact
-    hot = world["ev"].read_bytes()
-    assert em._sha256_bytes(hot) == plan["outputs"]["hot_after_sha256"]
-    kept = hot.decode("utf-8")
-    for rid in ("EVD-912", "EVD-913", "EVD-914", "REVIEW-9001"):
-        assert rid in kept
-    for rid in ("EVD-910", "EVD-911", "EVD-915"):
-        assert rid not in kept
-    # staged before-backup preserved (I1)
-    tx = receipt["transaction_id"]
-    before = world["gov"] / "migration-staging" / tx / "before-evidence.md"
-    assert before.read_bytes() == inputs.evidence_bytes
-    # manifest finalized
-    manifest = json.loads((world["gov"] / "migration-staging" / tx /
-                           "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["phase"] == "finalized"
-    assert tx.startswith("evdt-")          # I7 fresh id namespace
+    def test_v4_world_hot_before_intact(self):
+        # simulate: cold published, hot unwritten (restore the before bytes)
+        self._enable_m2()
+        inputs, plan = _plan(self.world)
+        receipt = em.apply_evd_plan(plan, inputs, self.world["gov"])
+        tx = receipt["transaction_id"]
+        before = (self.world["gov"] / "migration-staging" / tx /
+                  "before-evidence.md").read_bytes()
+        self.world["ev"].write_bytes(before)   # crash world: hot never committed
+        judged = em.recover_evd_transfer(tx, self.world["gov"], self.world["ev"])
+        self.assertEqual(judged["status"], "judged")
+        self.assertEqual(judged["world"], "hot_before_intact")
 
+    def test_v4_world_hot_after_then_new_append(self):
+        self._enable_m2()
+        inputs, plan = _plan(self.world)
+        receipt = em.apply_evd_plan(plan, inputs, self.world["gov"])
+        tx = receipt["transaction_id"]
+        # finalized world immediately after: judged as after-committed
+        judged = em.recover_evd_transfer(tx, self.world["gov"], self.world["ev"])
+        self.assertEqual(judged["world"], "hot_after_committed")
+        # legal later world: a new append moves the digest → unknown, never
+        # rolled back over (§8.2 last row)
+        with self.world["ev"].open("ab") as fh:
+            fh.write(b"| EVD-920 | FIX-903 | late | row |\n")
+        judged2 = em.recover_evd_transfer(tx, self.world["gov"], self.world["ev"])
+        self.assertEqual(judged2["world"], "unknown_world")
+        self.assertIn("never roll back", judged2["action"])
 
-def test_i5_never_overwrite_idempotent_skip(world, monkeypatch):
-    _enable_m2(monkeypatch)
-    inputs, plan = _plan(world)
-    receipt = em.apply_evd_plan(plan, inputs, world["gov"])
-    assert receipt["status"] == "applied"
-    outcomes = {s["relative_path"]: s["outcome"]
-                for s in receipt["published_segments"]}
-    assert all(v == "created" for v in outcomes.values())
-    # replay the SAME publish: the primitive must judge idempotent_skip
-    # (rebuilding is prevented by the hot CAS first — so call the publish
-    # primitive directly, as the second transaction would)
-    import archive_migration_engine as eng
-    seg0 = world["gov"] / "archive" / "evidence" / "evdt-segment-000.md"
-    seg_lines = seg0.read_text(encoding="utf-8").split("\n")
-    header_line, body = seg_lines[0], [ln for ln in seg_lines[1:] if ln]
-    out = eng._write_archive_file_never_overwrite(seg0, header_line, body)
-    assert out == "idempotent_skip"
-
-
-def test_v4_world_hot_before_intact(world, monkeypatch):
-    # simulate: cold published, hot unwritten (restore the before bytes)
-    _enable_m2(monkeypatch)
-    inputs, plan = _plan(world)
-    receipt = em.apply_evd_plan(plan, inputs, world["gov"])
-    tx = receipt["transaction_id"]
-    before = (world["gov"] / "migration-staging" / tx /
-              "before-evidence.md").read_bytes()
-    world["ev"].write_bytes(before)     # crash world: hot never committed
-    judged = em.recover_evd_transfer(tx, world["gov"], world["ev"])
-    assert judged["status"] == "judged"
-    assert judged["world"] == "hot_before_intact"
-
-
-def test_v4_world_hot_after_then_new_append(world, monkeypatch):
-    _enable_m2(monkeypatch)
-    inputs, plan = _plan(world)
-    receipt = em.apply_evd_plan(plan, inputs, world["gov"])
-    tx = receipt["transaction_id"]
-    # finalized world immediately after: judged as after-committed
-    judged = em.recover_evd_transfer(tx, world["gov"], world["ev"])
-    assert judged["world"] == "hot_after_committed"
-    # legal later world: a new append moves the digest → unknown, never
-    # rolled back over (§8.2 last row)
-    with world["ev"].open("ab") as fh:
-        fh.write(b"| EVD-920 | FIX-903 | late | row |\n")
-    judged2 = em.recover_evd_transfer(tx, world["gov"], world["ev"])
-    assert judged2["world"] == "unknown_world"
-    assert "never roll back" in judged2["action"]
-
-
-def test_v4_input_divergence_cas_refusal(world, monkeypatch):
-    _enable_m2(monkeypatch)
-    inputs, plan = _plan(world)
-    with world["ev"].open("ab") as fh:      # concurrent append after snapshot
-        fh.write(b"| EVD-919 | FIX-903 | concurrent | row |\n")
-    receipt = em.apply_evd_plan(plan, inputs, world["gov"])
-    assert em._is_refusal(receipt)
-    assert receipt["code"] == "input_diverged"
-    assert not (world["gov"] / "migration-staging").exists()
+    def test_v4_input_divergence_cas_refusal(self):
+        self._enable_m2()
+        inputs, plan = _plan(self.world)
+        with self.world["ev"].open("ab") as fh:  # concurrent append after snapshot
+            fh.write(b"| EVD-919 | FIX-903 | concurrent | row |\n")
+        receipt = em.apply_evd_plan(plan, inputs, self.world["gov"])
+        self.assertTrue(em._is_refusal(receipt))
+        self.assertEqual(receipt["code"], "input_diverged")
+        self.assertFalse((self.world["gov"] / "migration-staging").exists())
 
 
 # ---------------------------------------------------------------------------
 # CODE R0 fix batch: P3-2 fault injection + P1-1 disk read-back strength
 # ---------------------------------------------------------------------------
 
-def test_p3_2_cold_primitive_failure_hot_untouched(world, monkeypatch):
-    """I4 under fault: the cold primitive raising (conflict path) must
-    leave the hot table bit-identical and surface a STRUCTURED refusal
-    (CODE R0 P3-2 + P3-4), never a traceback."""
-    import archive_migration_engine as eng
+class CodeR0FaultInjectionTests(MigrationTestCase):
 
-    def boom(*a, **k):
-        raise eng.BigTableMigrationError(
-            {"code": "archive_target_conflict",
-             "detail": "foreign bytes under the exclusive-create target"})
+    def test_p3_2_cold_primitive_failure_hot_untouched(self):
+        """I4 under fault: the cold primitive raising (conflict path) must
+        leave the hot table bit-identical and surface a STRUCTURED refusal
+        (CODE R0 P3-2 + P3-4), never a traceback."""
+        import archive_migration_engine as eng
 
-    monkeypatch.setattr(em._engine, "_write_archive_file_never_overwrite",
-                        boom)
-    _enable_m2(monkeypatch)
-    inputs, plan = _plan(world)
-    before = world["ev"].read_bytes()
-    receipt = em.apply_evd_plan(plan, inputs, world["gov"])
-    assert em._is_refusal(receipt)
-    assert receipt["code"] == "archive_target_conflict"
-    assert "hot table untouched" in receipt["detail"]
-    assert world["ev"].read_bytes() == before   # hot bit-identical
+        def boom(*a, **k):
+            raise eng.BigTableMigrationError(
+                {"code": "archive_target_conflict",
+                 "detail": "foreign bytes under the exclusive-create target"})
 
+        with mock.patch.object(
+                em._engine, "_write_archive_file_never_overwrite", boom):
+            self._enable_m2()
+            inputs, plan = _plan(self.world)
+            before = self.world["ev"].read_bytes()
+            receipt = em.apply_evd_plan(plan, inputs, self.world["gov"])
+            self.assertTrue(em._is_refusal(receipt))
+            self.assertEqual(receipt["code"], "archive_target_conflict")
+            self.assertIn("hot table untouched", receipt["detail"])
+            self.assertEqual(self.world["ev"].read_bytes(), before)
 
-def test_p1_1_disk_readback_rejects_corrupted_segment(world, monkeypatch):
-    """P1-1: cold verify must READ THE DISK — a segment whose landed
-    bytes drift from the publish formula (post-write corruption) is
-    refused BEFORE the hot CAS, leaving the hot table untouched."""
-    real_publish = em._engine._write_archive_file_never_overwrite
+    def test_p1_1_disk_readback_rejects_corrupted_segment(self):
+        """P1-1: cold verify must READ THE DISK — a segment whose landed
+        bytes drift from the publish formula (post-write corruption) is
+        refused BEFORE the hot CAS, leaving the hot table untouched."""
+        real_publish = em._engine._write_archive_file_never_overwrite
 
-    def corrupting_publish(filepath, header, body_lines):
-        result = real_publish(filepath, header, body_lines)
-        # simulate landing corruption: one extra byte after fsync
-        with open(filepath, "ab") as fh:
-            fh.write(b"X")
-        return result
+        def corrupting_publish(filepath, header, body_lines):
+            result = real_publish(filepath, header, body_lines)
+            # simulate landing corruption: one extra byte after fsync
+            with open(filepath, "ab") as fh:
+                fh.write(b"X")
+            return result
 
-    monkeypatch.setattr(em._engine, "_write_archive_file_never_overwrite",
-                        corrupting_publish)
-    _enable_m2(monkeypatch)
-    inputs, plan = _plan(world)
-    before = world["ev"].read_bytes()
-    receipt = em.apply_evd_plan(plan, inputs, world["gov"])
-    assert em._is_refusal(receipt)
-    assert receipt["code"] in ("identity_changed",
-                               "byte_conservation_failed")
-    assert world["ev"].read_bytes() == before   # hot CAS never ran
+        with mock.patch.object(
+                em._engine, "_write_archive_file_never_overwrite",
+                corrupting_publish):
+            self._enable_m2()
+            inputs, plan = _plan(self.world)
+            before = self.world["ev"].read_bytes()
+            receipt = em.apply_evd_plan(plan, inputs, self.world["gov"])
+            self.assertTrue(em._is_refusal(receipt))
+            self.assertIn(receipt["code"],
+                          ("identity_changed", "byte_conservation_failed"))
+            self.assertEqual(self.world["ev"].read_bytes(), before)
 
 
 # ---------------------------------------------------------------------------
 # I6 capacity + resource limits
 # ---------------------------------------------------------------------------
 
-def test_i6_capacity_reported_not_bent(world):
-    inputs, plan = _plan(world)
-    cap = plan["capacity"]
-    assert cap["error_gate_bytes"] == 650_000
-    assert cap["warn_gate_bytes"] == 400_000
-    assert cap["status"] in ("blocked", "warn_zone", "under_error_gate")
-    assert "BLOCKED" in cap["note"] or "never modified" in cap["note"]
+class CapacityLimitTests(MigrationTestCase):
 
+    def test_i6_capacity_reported_not_bent(self):
+        inputs, plan = _plan(self.world)
+        cap = plan["capacity"]
+        self.assertEqual(cap["error_gate_bytes"], 650_000)
+        self.assertEqual(cap["warn_gate_bytes"], 400_000)
+        self.assertIn(cap["status"], ("blocked", "warn_zone",
+                                      "under_error_gate"))
+        self.assertTrue("BLOCKED" in cap["note"]
+                        or "never modified" in cap["note"])
 
-def test_resource_limit_row_over_100kb_stays_hot(tmp_path):
-    gov = tmp_path / ".governance"
-    gov.mkdir()
-    ev = gov / "evidence-log.md"
-    ev.write_bytes(_hot_table())
-    plan_p = gov / "plan-tracker.md"
-    plan_p.write_text(PLAN_TRACKER, encoding="utf-8")
-    inputs = em.MigrationInputs.capture(ev, plan_p)
-    plan = em.plan_evd_compaction(inputs, _policy())
-    big = max(plan["instances"], key=lambda i: i["byte_length"])
-    assert big["byte_length"] <= em.MAX_ROW_BYTES  # fixture rows are small
-
-
-# ---------------------------------------------------------------------------
-# FIX-460: visible CI skip marker (stdlib-unittest collection contract)
-# ---------------------------------------------------------------------------
-
-class PytestSuiteCoverageMarker(unittest.TestCase):
-    """unittest discover collects ZERO of the 16 pytest-style tests above
-    (module functions with fixtures/monkeypatch params); this marker makes
-    that coverage hole VISIBLE in CI output (skipped=1 with reason) instead
-    of a silent zero-collection. Conversion to unittest = FIX-461."""
-
-    @unittest.skipUnless(
-        HAS_PYTEST,
-        "16 pytest-style tests run under pytest locally; stdlib-unittest CI "
-        "cannot collect them - conversion tracked as FIX-461")
-    def test_pytest_suite_covered_elsewhere(self):
-        pass
+    def test_resource_limit_row_over_100kb_stays_hot(self):
+        inputs, plan = _plan(self.world)
+        big = max(plan["instances"], key=lambda i: i["byte_length"])
+        self.assertLessEqual(big["byte_length"],
+                             em.MAX_ROW_BYTES)   # fixture rows are small
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-q"]) if HAS_PYTEST else 2)
+    unittest.main()

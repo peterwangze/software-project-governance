@@ -492,8 +492,16 @@ def corpus_records():
                 files.append(p)
     if task_id:
         for p in sorted(_glob.glob(os.path.join(repo, ".governance", "incidents", "*" + task_id + "*"))):
-            if p not in files:
-                files.append(p)
+            # The task-glob yields ABSOLUTE paths; the absolute-ref
+            # defense below (drop on leading / or \) would eat the
+            # engine's OWN glob output — on Linux that silently emptied
+            # the whole corpus (fail-open, CI-verified); Windows only
+            # escaped via the drive-letter prefix.  Re-base to a repo-
+            # relative path so the refs-shaped pipeline (including the
+            # realpath containment check) applies unchanged.
+            rp_ = os.path.relpath(p, repo)
+            if rp_ not in files:
+                files.append(rp_)
     files = files[:32]
     try:
         root = os.path.realpath(repo)

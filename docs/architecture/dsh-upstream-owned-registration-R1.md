@@ -399,7 +399,7 @@ P/C/R 三 holder 分支表、READY+C/R>0 只 retire、最后释放才 fence/drai
 
 ## 10. Proposed ADR 增量（Coordinator 机录，Architect 不自批）
 
-在原设计 §9 ADR 基础上追加 R1 决策记录：**2026-10-20，"Owned registration dispose-start 观察与 0.2.1 消费者分支生命周期"**——背景=R0 三 BLOCKING + 安装态升级 0.2.1-rc.2；决策=(a) B1 采用 registry 级 `internal/plugin` 公开事件观察（候选 B1-B/B1-C 排除理由 §3.2），(b) B2 selector 分支冻结（统一父 selector 排除），(c) B3 operation/attempt 双生命周期 + 冻结 token 内部事务（compose 期统一 acquire 排除）；备选与排除=§3.2/§4.1/§5 各候选表；影响=§7 模块面（subagent 替换旧 driver 条目；webhook 未取得）；后果/风险=运行验证 NOT_RUN、webhook 覆盖缺口明示、root-owner 理由映射；可逆性=同原设计（丢弃隔离补丁/恢复已钉 artifact）；后续动作=独立 R1 静态复核 → 通过后 Coordinator 派精确隔离实现/运行；当前结论 PENDING。
+在原设计 §9 ADR 基础上追加 R1 决策记录：**2026-10-20，"Owned registration dispose-start 观察与 0.2.1 消费者分支生命周期"**——背景=R0 三 BLOCKING + 安装态升级 0.2.1-rc.2；决策=B1 采用 registry 级 `internal/plugin` 公开事件观察（候选 B1-B/B1-C 排除理由 §3.2）；B2 selector 分支冻结（统一父 selector 排除）；B3 operation/attempt 双生命周期 + 冻结 token 内部事务（compose 期统一 acquire 排除）；备选与排除=§3.2/§4.1/§5 各候选表；影响=§7 模块面（subagent 替换旧 driver 条目；webhook 未取得）；后果/风险=运行验证 NOT_RUN、webhook 覆盖缺口明示、root-owner 理由映射；可逆性=同原设计（丢弃隔离补丁/恢复已钉 artifact）；后续动作=独立 R1 静态复核 → 通过后 Coordinator 派精确隔离实现/运行；当前结论 PENDING。
 
 **R2 决策增量（F1 修复，2026-10-20）**：owner→record 索引采用**多值** `WeakMap<Fiber, Set<OwnedRecord>>`（与 id 主表联动）。备选排除：**(b) 显式单 record/owner 合同 + 新错误码**（如 OWNER_ALREADY_OWNS）——排除，理由：原设计合同（:70-71/:192）未限制 owner 单 record，收紧合同会 (i) 拒收"不同 id 同 owner"这一合同合法输入，(ii) 新增错误面并改变 begin 语义（与 R0 已接受的合同面冲突），而多值索引是零合同变更的局部数据结构修正（R1 审查 F1 最小解除推荐项，本 R2 未取得反驳证据）。影响=§3.3 CH-1.1/CH-1.2/CH-1.3/CH-1.5、§8 T01+、§9 性能行；可逆性=可逆——实现期若须回退为方案 (b)，须同步重开合同文本、错误表与 T01+ 行并重新过独立复审。
 

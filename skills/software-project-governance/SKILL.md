@@ -235,7 +235,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ### 动作级执法（FEAT-095）——六边界分层阻断
 
-执行前 MUST 读 [执法完整细则](references/behavior-contract-details.md) §enforcement。六边界：dispatch-execute/dispatch-review/accept-completion/merge/release/goal-resume。exit 2 硬阻断（fail-closed），3 限流，4 重建提示（动作放行）。四类硬阻断按 task/channel scoped；fix/re-review/forensics 仅豁免相关阻塞复审。review-debt 全局准入限流仅执行派发/goal续跑，保留白名单与用户提额门；WIP checkpoint 始终放行。未知/异常不静默放行；GOVERNANCE_ENFORCEMENT=off 一切放行、零记录零副作用。逐次留机器记录，检查语义不变；仅协议+CLI执法，未接线宿主拦截。
+执行前 MUST 读 [执法完整细则](references/behavior-contract-details.md) §enforcement。六边界：dispatch-execute/dispatch-review/accept-completion/merge/release/goal-resume。exit 2 硬阻断（fail-closed），3 限流，4 重建提示（动作放行）。四类硬阻断按 task/channel scoped；fix/re-review/forensics 仅豁免相关阻塞复审。review-debt 全局准入限流仅执行派发/goal续跑，保留白名单与用户提额门；WIP checkpoint 始终放行。未知/异常不静默放行；GOVERNANCE_ENFORCEMENT=off 一切放行、零记录零副作用。逐次留机器记录，检查语义不变。执法分层：dsh 宿主级 guard 已接线（FEAT-099 PoC 证实——真实 dsh-tools 管线 in-process 拦截 subagent/subagent_fork 修订错配派发，隔离环境验证；无锚派发放行不误伤、活体模型会话面未测如实披露）；其余平台协议+CLI 级。
 
 ### 产品代码 vs 治理记录边界
 

@@ -64,6 +64,7 @@ python skills/software-project-governance/infra/verify_workflow.py check-runtime
 - `browser`：**degraded**（有 web_search，无浏览器自动化）。
 - `mcp`：**degraded**（安装含 MCP client 包，服务器可用性取决于主机配置）。
 - `git_hooks`：**native**（仓库级控制）。
+- `enforcement_host_guard`：**native**（FEAT-099 PoC 证实——自有 host row 注册 `ctx.tools.guard` 单调守卫，覆盖 `subagent`/`subagent_fork` 修订错配派发：带锚错配调用被真实 dsh-tools 管线拒绝且工具体未执行〔in-process 探针、隔离 DSH_HOME、2026-10-27〕；fail-closed 面齐备〔锚非法/投影不可读/开关非法保守拒绝〕、`off` 零注册、guard 面 p95 0.187ms。**未测面如实披露**：活体模型会话；无锚派发放行〔U7 强制缺口在案，协议面 MUST 携锚〕。PoC 级能力：expected 源为 fixture 投影，生产源（bootstrap 聚合机写投影）属后续批）。
 - workflow closure：**degraded**（仅 browser 与 MCP 依赖主机），当前最强的原生能力画像。
 
 本适配器不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 生产就绪。

@@ -770,8 +770,23 @@
       ],
       "apply_never_throws": true,
       "warn_only": true,
+      "warn_only_scope": "row lifecycle only — preset delivery failures warn; the enforcement guard's DENY is a first-class host pipeline outcome and never a row warn (FEAT-99 narrowing; DEC pending, design §3a-1)",
       "top_level_io": false,
-      "runtime_dependencies": []
+      "runtime_dependencies": [],
+      "enforcement_guard": {
+        "module": "lib/dsh-native/guard.js",
+        "primitive": "ctx.tools.guard (monotonic, synchronous, capability-detected)",
+        "tool_face": ["subagent", "subagent_fork"],
+        "rule": "revision-mismatch — mirror of infra/enforcement.py decide(); deny reason/remedy templates come from the single-source strategy projection lib/dsh-native/strategy-projection.json (byte-guarded against enforcement-check --print-strategy)",
+        "switch": "GOVERNANCE_ENFORCEMENT — off registers nothing (zero-drift); an illegal value fails CLOSED, never guessed",
+        "governance_root": "GOVERNANCE_REPO_ROOT only — the guard never guesses a default governance root",
+        "fail_closed": "anchored calls with an unreadable projection, a malformed anchor, an invalid switch or an unlocatable root are denied (C1/C3/C4/C6b); unanchored calls pass (C7, U7 gap filed)",
+        "registration_fault": "ENFORCEMENT_REGISTER_FAILED warns once and degrades to protocol+CLI enforcement",
+        "capability_miss_code": "ENFORCEMENT_TOOLS_UNAVAILABLE — info-level structured code (known host shape) so the row warn face stays exactly-one-per-delivery-failure",
+        "window": "known enforcement gap between row activation and guard registration completion (C0) — disclosed, V8-observed timestamp anchor, not a fault",
+        "anchor_protocol": "[governance-dispatch task=<ID> rev=<int> channel=<normal|fix|re-review|forensics> actor=<role>] on the first prompt line",
+        "status": "PoC-verified in-process on dsh-tools@0.1.5-rc.3 + cordis@4.0.5 (FEAT-099, 2026-10-27, isolated DSH_HOME): anchored mismatch denied with the tool body never invoked; guard-plane p95 0.187ms; live model session untested (disclosed); expected-revision source is a fixture projection until the bootstrap-aggregate production batch (review N1: observed_revision is a whole-file fingerprint)"
+      }
     },
     "patch": {
       "file": "cordis.patch.yml",

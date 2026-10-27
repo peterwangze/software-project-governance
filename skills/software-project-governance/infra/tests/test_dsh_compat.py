@@ -2699,13 +2699,15 @@ class WriteSideHomeConvergenceTests(unittest.TestCase):
 import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 const libPath = process.argv[2]
+const libUrl = pathToFileURL(libPath)
 const src = readFileSync(libPath, 'utf8').replace(/^export /gm, '')
-  // The row imports its native bridge with a RELATIVE specifier. A
-  // data: URL module has no hierarchical base, so rewrite that one
-  // specifier to its absolute file URL before evaluating the source.
-  .replace(/from '\\.\\/dsh-native\\/bridge\\.js'/g,
-    "from '" + new URL('./dsh-native/bridge.js', pathToFileURL(libPath)).href + "'")
-const shim = 'import.meta.url = ' + JSON.stringify(pathToFileURL(libPath).href) + ';\\n'
+  // The row imports its lib/dsh-native modules with RELATIVE specifiers
+  // (bridge.js, guard.js — FEAT-099). A data: URL module has no
+  // hierarchical base, so rewrite EVERY such specifier to its absolute
+  // file URL before evaluating the source.
+  .replace(/from '\\.\\/dsh-native\\/([A-Za-z0-9_.-]+\\.js)'/g,
+    (_m, name) => "from '" + new URL('./dsh-native/' + name, libUrl).href + "'")
+const shim = 'import.meta.url = ' + JSON.stringify(libUrl.href) + ';\\n'
   + src + '\\nexport { resolveDshHome, CONTRACT_BINDING };\\n'
 const mod = await import('data:text/javascript;base64,'
   + Buffer.from(shim).toString('base64'))

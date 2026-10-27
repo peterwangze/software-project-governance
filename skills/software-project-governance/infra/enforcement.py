@@ -36,10 +36,15 @@ DEC-330 arch 联合裁定「检查必须影响执行权限否则 advisory 无效
       （一切放行、零记录、零副作用）；非法值不猜 → 保守阻断披露。
 
   执法降级披露（M-0 调研结论，docs/research/
-  feat-095-harness-enforcement-capability-2026-10-10.md §5-§7 U1-U7）：
-  六平台均无已接线的宿主级拦截——本模块是**CLI 级判定面 +
-  协议级（SKILL.md「动作级执法」契约段）**，不做任何宿主级拦截能力
-  声明；绕过面 = 不调用本判定（RPG 实证 §3.4），协议面 MUST 补位。
+  feat-095-harness-enforcement-capability-2026-10-10.md §5-§7 U1-U7；
+  FEAT-099 U1 已证实并接线 dsh 宿主级）：
+  本模块仍是**CLI 级判定面 + 协议级（SKILL.md「动作级执法」契约段）**；
+  dsh 平台的宿主级拦截已由 FEAT-099 PoC 接线证实（lib/dsh-native/
+  guard.js——自有 host row 注册 ctx.tools.guard 单调守卫，镜像本模块
+  revision-mismatch 判定，策略与 deny 文案单源 = --print-strategy 投影；
+  in-process 真实 dsh-tools 管线验证，活体模型会话未测如实披露）；其余
+  五平台无宿主级拦截——绕过面 = 不调用本判定/无锚派发（RPG 实证
+  §3.4），协议面 MUST 补位。
 
   CLI 出口码（三态可区分 + 提示态）：0 = ALLOW；2 = HARD_BLOCK（含
   fail-closed）；3 = THROTTLE；4 = STALE_NOTICE（非阻断提示）。
@@ -557,8 +562,14 @@ def _strategy_public(table=None):
             }
             for boundary, row in table["boundaries"].items()
         },
-        "hard_block_rules": [rule["id"]
-                             for rule in table["hard_block_rules"]],
+        # FEAT-099 D2（裁定 b）：reason/remedy 模板随投影发布——宿主侧
+        # JS 判定器（lib/dsh-native/guard.js）以本投影为策略与 deny 文案
+        # 的单源；投影字节断言（fixture ≡ --print-strategy stdout）守护
+        # 漂移。判定语义零改动：这里只投影数据，不新增逻辑。
+        "hard_block_rules": [
+            {"id": rule["id"], "reason": rule["reason"], "remedy": rule["remedy"]}
+            for rule in table["hard_block_rules"]
+        ],
         "thresholds": dict(table["thresholds"]),
         "staleness_days": dict(table["staleness_days"]),
         "allowlist_channels": list(table.get("allowlist_channels", ())),

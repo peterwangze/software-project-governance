@@ -14800,7 +14800,8 @@ class QualityBudgetTests(unittest.TestCase):
             self.assertFalse(r["pass"])
             self.assertTrue(any("accessibility.exception" in issue for issue in r["entries"][0]["issues"]))
 
-    def test_in_progress_quality_budget_rejects_not_run_yet(self):
+    def test_in_progress_quality_budget_allows_not_run_yet(self):
+        # FIX-475: unfinished in-progress markers may honestly report NOT_RUN_YET.
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [
                 "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 🔄 进行中 |",
@@ -14808,6 +14809,46 @@ class QualityBudgetTests(unittest.TestCase):
             with patch.object(vw, "SAMPLE_PATH", sp):
                 payload = vw.generate_execution_packets()
             payload["packets"]["FIX-090"]["quality_budget"] = self._valid_quality_budget(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertTrue(r["pass"])
+    def test_planning_quality_budget_allows_not_run_yet(self):
+        # FIX-475: 「📋 规划中」 live cells (FEAT-111 shape) must not be structurally rejected.
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FEAT-111 | Prior-Art Gate | DEC-377④ | 未规划版本 | prior-art | 📋 规划中 (DEC-377④ 入账 2026-10-28) |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FEAT-111"]["quality_budget"] = self._valid_quality_budget(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertTrue(r["pass"])
+    def test_dispatched_quality_budget_allows_not_run_yet(self):
+        # FIX-475: 「🚧 派发中」 live cells (FIX-475 shape) must not be structurally rejected.
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-093 | Dispatch Fix | TRIAGE | 0.100.0 | code | 🚧 派发中 (Coordinator spawn Developer) |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-093"]["quality_budget"] = self._valid_quality_budget(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_quality_budget(packet_path)
+            self.assertTrue(r["pass"])
+    def test_unmarked_active_quality_budget_rejects_not_run_yet(self):
+        # FIX-475 boundary: an active status cell with no unfinished-marker
+        # vocabulary word still cannot claim NOT_RUN_YET.
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-094 | Blocked Gate | — | 0.100.0 | code | 🚧 blocked 证据已交付 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-094"]["quality_budget"] = self._valid_quality_budget(status="NOT_RUN_YET")
             packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             with patch.object(vw, "SAMPLE_PATH", sp):
                 r = vw.check_quality_budget(packet_path)
@@ -14997,7 +15038,8 @@ class VerticalSliceTests(unittest.TestCase):
             self.assertFalse(r["pass"])
             self.assertTrue(any("whole project/codebase" in issue for issue in r["entries"][0]["issues"]))
 
-    def test_in_progress_vertical_slice_rejects_not_run_yet(self):
+    def test_in_progress_vertical_slice_allows_not_run_yet(self):
+        # FIX-475: unfinished in-progress markers may honestly report NOT_RUN_YET.
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [
                 "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 🔄 进行中 |",
@@ -15005,6 +15047,46 @@ class VerticalSliceTests(unittest.TestCase):
             with patch.object(vw, "SAMPLE_PATH", sp):
                 payload = vw.generate_execution_packets()
             payload["packets"]["FIX-091"]["vertical_slice"] = self._valid_vertical_slice(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertTrue(r["pass"])
+    def test_planning_vertical_slice_allows_not_run_yet(self):
+        # FIX-475: 「📋 规划中」 live cells (FEAT-111 shape) must not be structurally rejected.
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FEAT-111 | Prior-Art Gate | DEC-377④ | 未规划版本 | prior-art | 📋 规划中 (DEC-377④ 入账 2026-10-28) |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FEAT-111"]["vertical_slice"] = self._valid_vertical_slice(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertTrue(r["pass"])
+    def test_dispatched_vertical_slice_allows_not_run_yet(self):
+        # FIX-475: 「🚧 派发中」 live cells (FIX-475 shape) must not be structurally rejected.
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P1** | FIX-093 | Dispatch Fix | TRIAGE | 0.100.0 | code | 🚧 派发中 (Coordinator spawn Developer) |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-093"]["vertical_slice"] = self._valid_vertical_slice(status="NOT_RUN_YET")
+            packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                r = vw.check_vertical_slices(packet_path)
+            self.assertTrue(r["pass"])
+    def test_unmarked_active_vertical_slice_rejects_not_run_yet(self):
+        # FIX-475 boundary: an active status cell with no unfinished-marker
+        # vocabulary word still cannot claim NOT_RUN_YET.
+        with tempfile.TemporaryDirectory() as td:
+            _, sp, packet_path = self._setup_plan(td, [
+                "| **P0** | FIX-094 | Blocked Gate | — | 0.100.0 | code | 🚧 blocked 证据已交付 |",
+            ])
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                payload = vw.generate_execution_packets()
+            payload["packets"]["FIX-094"]["vertical_slice"] = self._valid_vertical_slice(status="NOT_RUN_YET")
             packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             with patch.object(vw, "SAMPLE_PATH", sp):
                 r = vw.check_vertical_slices(packet_path)
@@ -15040,6 +15122,42 @@ class VerticalSliceTests(unittest.TestCase):
                 r = vw.check_vertical_slices(packet_path)
             self.assertFalse(r["pass"])
             self.assertTrue(any("review/prose-only" in issue for issue in r["entries"][0]["issues"]))
+
+
+class TaskPendingStatusMarkerTests(unittest.TestCase):
+    """FIX-475: single shared pending-marker vocabulary for Check 18f/18g."""
+
+    def test_live_unfinished_markers_allow_pending(self):
+        for cell in (
+            "📋 规划中 (DEC-377④ 入账 2026-10-28)",
+            "🚧 派发中 (Coordinator spawn Developer)",
+            "🔄 进行中",
+            "开发中",
+            "📋 待实施",
+            "⏳ 待实施 (triage 入账)",
+            "pending",
+            "planned",
+            "In Progress",
+            "in_progress",
+            "WIP",
+        ):
+            self.assertTrue(vw._is_task_pending_status_allowed({"status": cell}), repr(cell))
+    def test_terminal_and_unmarked_statuses_stay_rejected(self):
+        for cell in (
+            "✅ 完成 (对账回写)",
+            "✅ committed",
+            "completed",
+            "已交付",
+            "已发布",
+            "📋 待启动",
+            "🚧 blocked 证据已交付",
+            "",
+        ):
+            self.assertFalse(vw._is_task_pending_status_allowed({"status": cell}), repr(cell))
+    def test_marker_vocabulary_excludes_terminal_words(self):
+        joined = " ".join(vw.TASK_PENDING_STATUS_MARKERS).lower()
+        for terminal in ("✅", "完成", "committed", "completed", "已交付", "已发布"):
+            self.assertNotIn(terminal, joined)
 
 
 class DeterministicScaffoldTests(unittest.TestCase):

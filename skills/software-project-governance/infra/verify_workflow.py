@@ -14594,9 +14594,30 @@ def _quality_budget_dimensions(contract):
     return None
 
 
-def _is_quality_budget_pending_allowed(task):
+# FIX-475: single shared vocabulary + predicate for the Check 18f/18g
+# pending allowance — no second semantic source (FIX-292 lesson). Markers
+# substring-match the lowercased plan-tracker status cell, so live emoji
+# forms (「📋 规划中 (…)」/「🚧 派发中 (…)」) match via the text marker.
+# Terminal words (✅/完成/completed/…) must never join this whitelist;
+# terminal tasks are already excluded upstream by
+# _active_execution_packet_tasks -> _is_incomplete_task_status.
+TASK_PENDING_STATUS_MARKERS = (
+    "规划中",
+    "待实施",
+    "pending",
+    "planned",
+    "派发中",
+    "进行中",
+    "开发中",
+    "in progress",
+    "in_progress",
+    "wip",
+)
+
+
+def _is_task_pending_status_allowed(task):
     status = str(task.get("status", "")).strip().lower()
-    return "待实施" in status or "pending" in status or "planned" in status
+    return any(marker in status for marker in TASK_PENDING_STATUS_MARKERS)
 
 
 def _has_quality_validation_signal(value):
@@ -14647,7 +14668,7 @@ def _validate_quality_budget(task, packet):
             if not _is_meaningful_product_success_text(item.get("exception")):
                 issues.append(f"quality_budget.{dimension}.exception must justify the exemption")
             continue
-        if status in QUALITY_BUDGET_PENDING_STATUSES and _is_quality_budget_pending_allowed(task):
+        if status in QUALITY_BUDGET_PENDING_STATUSES and _is_task_pending_status_allowed(task):
             continue
         if status not in QUALITY_BUDGET_PASS_STATUSES:
             issues.append(f"quality_budget.{dimension}.status must be PASS or a justified EXEMPT status")
@@ -14733,11 +14754,6 @@ VERTICAL_SLICE_WEAK_PROSE_RE = re.compile(
 )
 
 
-def _is_vertical_slice_pending_allowed(task):
-    status = str(task.get("status", "")).strip().lower()
-    return "待实施" in status or "pending" in status or "planned" in status
-
-
 def _validate_vertical_slice(task, packet):
     issues = []
     contract = packet.get("vertical_slice") if isinstance(packet, dict) else None
@@ -14769,7 +14785,7 @@ def _validate_vertical_slice(task, packet):
     status = str(contract.get("status", "")).strip().lower()
     if PRODUCT_SUCCESS_PLACEHOLDER_RE.search(status):
         issues.append("vertical_slice.status must be PASS or NOT_RUN_YET for planned work")
-    elif status in VERTICAL_SLICE_PENDING_STATUSES and _is_vertical_slice_pending_allowed(task):
+    elif status in VERTICAL_SLICE_PENDING_STATUSES and _is_task_pending_status_allowed(task):
         pass
     elif status not in VERTICAL_SLICE_PASS_STATUSES:
         issues.append("vertical_slice.status must be PASS unless the task is explicitly pending/planned")

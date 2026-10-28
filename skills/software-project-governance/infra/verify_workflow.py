@@ -13385,8 +13385,26 @@ def _is_review_evidence(raw_ids, evd_type):
     )
 
 
+# FEAT-104: forensic (investigation-only) evidence markers — anchored at the
+# head of the evd_type field ONLY (explicit "[取证]"/"[forensics]"/"取证:"
+# tags, or 取证/调查/诊断/对账/复盘 followed by a delimiter, a report/minutes
+# suffix word, or end-of-field). Mid-prose matches are deliberately NOT
+# forensic: free-text guessing must not hide implementation rows from review
+# debt ("修复并附调查记录" / "诊断脚本实现" stay implementation).
+_FORENSIC_HEAD_RE = re.compile(
+    r"(?:\[(?:取证|forensics)\]|(?:取证|forensics)\s*[:：]"
+    r"|(?:取证|调查|诊断|对账|复盘)"
+    r"(?=$|[\s：:、，,）)】\]—\-]|报告|会议|纪要|记录))",
+    re.IGNORECASE,
+)
+
+
 def _is_audit_or_review_type(evd_type):
-    return any(token in evd_type for token in ("审查", "审视", "审计", "Review"))
+    """Non-implementation evidence: audit/review rows (FIX-174) plus forensic
+    investigation-only rows (FEAT-104) never constitute execution evidence
+    for review-debt / review-coverage judgments (activity ≠ delivery)."""
+    return (any(token in evd_type for token in ("审查", "审视", "审计", "Review"))
+            or bool(evd_type and _FORENSIC_HEAD_RE.match(evd_type.strip())))
 
 
 def _normalize_priority(value):

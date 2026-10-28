@@ -731,7 +731,21 @@ class BaselineArtifactTests(unittest.TestCase):
         # stdlib-only). The count/review/status logic, event stream and
         # aggregation live in premise_tracker.py; task_priority carries the
         # report field + render section + cache-guard key.
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28366)
+        # FEAT-104 rider re-anchor (0.100.0 assembly window, 2026-10-28,
+        # DEC-376 B-family first item — DEC-320/324 precedent isomorphic):
+        # 28366 -> 28384, +18/-0 net, all attributed to the forensic-vs-
+        # implementation evidence discrimination in _is_audit_or_review_type
+        # (Check 21 review debt / review coverage / Check 16-17 hot-evidence
+        # consumers): anchored-marker comment block +7, _FORENSIC_HEAD_RE
+        # compile +6, docstring rewrite +3, return expansion +1, blank +1.
+        # R4 print census 1383 unchanged (no engine prints added); R5 cli
+        # keys 109 / segments 74 unchanged (no new CLI surface); R6 211
+        # unchanged (no new module — logic inline in the engine). Pin-ledger
+        # rider in the same change: 4 stale rows re-anchored via `pins
+        # re-anchor` (machine writer, op-493e21b7/op-b81c0a2b/op-e074d204/
+        # op-6ad5349f) after the +163-line test insertion in
+        # test_verify_workflow.py (CheckReviewDebtForensicsEvidenceTests).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28384)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

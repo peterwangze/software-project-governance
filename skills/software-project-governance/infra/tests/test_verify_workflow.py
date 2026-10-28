@@ -18272,6 +18272,169 @@ class CheckReviewDebtDegradedFuseTests(unittest.TestCase):
             self.assertEqual(r["review_debt_count"], 0)
 
 
+class CheckReviewDebtForensicsEvidenceTests(unittest.TestCase):
+    """FEAT-104 (DEC-376 B-family): Check 21 forensic-vs-implementation evidence.
+
+    Forensic (investigation-only) evidence rows — read-only investigation /
+    diagnosis / reconciliation rows citing product paths as investigation
+    TARGETS — prove an activity happened, not that a product-code
+    implementation was delivered, so they must NOT constitute execution
+    evidence for the review-debt judgment (no review obligation arises).
+    Implementation rows keep triggering review debt exactly as before
+    (zero semantic change for the implementation side).
+    """
+
+    def _setup(self, tmpdir, plan="", evidence=""):
+        root = Path(tmpdir)
+        gov = root / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text(plan, encoding="utf-8")
+        ep.write_text(evidence, encoding="utf-8")
+        return sp, ep
+
+    @staticmethod
+    def _plan_with_tasks(*tids):
+        return "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 任务跟踪",
+            _TASK_COLS,
+            _TASK_SEP,
+            *[_task(tid, "已完成") for tid in tids],
+        ])
+
+    def test_forensics_rows_do_not_create_review_debt(self):
+        """Anchored forensic-type rows + product-path locations → no debt (RED pre-fix)."""
+        forensics_types = [
+            "[取证] verify_workflow 只读调查",
+            "取证：e2e 夹具漂移归因",
+            "取证: compact form",
+            "[forensics] read-only probe",
+            "Forensics: english colon form",
+            "调查：夹具漂移根因排查",
+            "调查",
+            "调查报告",
+            "诊断：CI 失败定位",
+            "对账：TPA 活跃表核对",
+            "复盘：0.99 发布回顾",
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            plan = self._plan_with_tasks("FIX-210")
+            rows = [
+                _evidence_row_generic(
+                    f"EVD-21{i}", "FIX-210",
+                    evd_type=evd_type,
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                    author="Analyst (read-only)",
+                )
+                for i, evd_type in enumerate(forensics_types)
+            ]
+            sp, ep = self._setup(td, plan=plan, evidence="\n".join(rows))
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_review_debt()
+        # Forensics-only task never enters the debt pool.
+        self.assertEqual(r["total_tasks"], 0)
+        self.assertEqual(r["review_debt_count"], 0)
+        self.assertEqual(r["review_debt_tasks"], [])
+        self.assertTrue(r["pass"])
+
+    def test_implementation_rows_still_create_review_debt(self):
+        """Implementation rows keep triggering review debt (zero semantic change)."""
+        impl_types = ["修复", "文件编辑", "E2E 命令验证"]
+        with tempfile.TemporaryDirectory() as td:
+            plan = self._plan_with_tasks("FIX-211", "FIX-212", "FIX-213")
+            rows = [
+                _evidence_row_generic(
+                    f"EVD-21{i}", tid,
+                    evd_type=evd_type,
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                    author="Developer",
+                )
+                for i, (tid, evd_type) in enumerate(zip(
+                    ("FIX-211", "FIX-212", "FIX-213"), impl_types))
+            ]
+            sp, ep = self._setup(td, plan=plan, evidence="\n".join(rows))
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_review_debt()
+        self.assertEqual(r["review_debt_count"], 3)
+        self.assertEqual(sorted(r["review_debt_tasks"]),
+                         ["FIX-211", "FIX-212", "FIX-213"])
+        self.assertFalse(r["pass"])
+
+    def test_mixed_forensics_and_implementation_still_debt(self):
+        """any() aggregation: one implementation row keeps the task in the pool."""
+        with tempfile.TemporaryDirectory() as td:
+            plan = self._plan_with_tasks("FIX-214")
+            rows = [
+                _evidence_row_generic(
+                    "EVD-214a", "FIX-214",
+                    evd_type="调查：夹具漂移根因排查",
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                    author="Analyst (read-only)",
+                ),
+                _evidence_row_generic(
+                    "EVD-214b", "FIX-214",
+                    evd_type="修复",
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                    author="Developer",
+                ),
+            ]
+            sp, ep = self._setup(td, plan=plan, evidence="\n".join(rows))
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_review_debt()
+        self.assertEqual(r["review_debt_count"], 1)
+        self.assertIn("FIX-214", r["review_debt_tasks"])
+
+    def test_prose_forensics_words_do_not_reclassify(self):
+        """Mid-prose mentions are free text, not structural markers → still debt."""
+        prose_types = [
+            "修复并附调查记录",
+            "诊断脚本实现",
+            "调查脚本实现",
+            "取证脚本实现",
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            tids = [f"FIX-21{i}" for i in range(5, 9)]
+            plan = self._plan_with_tasks(*tids)
+            rows = [
+                _evidence_row_generic(
+                    f"EVD-{tid}", tid,
+                    evd_type=evd_type,
+                    file_location="skills/software-project-governance/infra/verify_workflow.py",
+                    author="Developer",
+                )
+                for tid, evd_type in zip(tids, prose_types)
+            ]
+            sp, ep = self._setup(td, plan=plan, evidence="\n".join(rows))
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_review_debt()
+        self.assertEqual(r["review_debt_count"], 4)
+
+    def test_predicate_unit_matrix(self):
+        """Direct matrix for _is_audit_or_review_type (regression + FEAT-104)."""
+        # Audit/review family regression (FIX-174 semantics unchanged).
+        for t in ("Code Review R1", "审计报告", "代码审查", "审视",
+                  "Review (degraded)", "独立审视记录"):
+            self.assertTrue(vw._is_audit_or_review_type(t), msg=t)
+        # FEAT-104 forensic family: explicit tags + anchored head tokens.
+        for t in ("[取证] x", "取证：x", "取证: x", "[forensics] x",
+                  "Forensics: x", "调查", "调查报告", "调查会议纪要",
+                  "调查：x", "诊断：x", "对账：x", "复盘：x",
+                  "取证记录"):
+            self.assertTrue(vw._is_audit_or_review_type(t), msg=t)
+        # Implementation family: unchanged (still execution evidence).
+        for t in ("", "修复", "文件编辑", "实现", "开发", "E2E 命令验证",
+                  "修复并附调查记录", "诊断脚本实现", "调查脚本实现",
+                  "取证脚本实现"):
+            self.assertFalse(vw._is_audit_or_review_type(t), msg=t)
+
+
 class CheckM5RuntimeTriggersTests(unittest.TestCase):
     """FIX-174 (DEC-094): Check 29 — M5 runtime trigger scan.
 

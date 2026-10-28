@@ -388,16 +388,20 @@ STATIC_PIN_EXEMPTIONS = {
         # (rot-guard caught the stale ledger at fb56415; CI never saw it —
         # the FIX-458 hook-pin integrity FAIL killed the run before the
         # unit-test step); re-anchored to the actual token lines.
-        (21309, "0.93.0", _REASON_FUTURE_TARGET),
-        (21341, "0.93.0", _REASON_FUTURE_TARGET),
+        # pins re-anchor op-e074d2043855458c93570f778c026b89 (FIX-462): 21309->21472 via machine writer (token unchanged)
+        (21472, "0.93.0", _REASON_FUTURE_TARGET),
+        # pins re-anchor op-6ad5349fce3c4a6db28a8e5bfc6fc278 (FIX-462): 21341->21504 via machine writer (token unchanged)
+        (21504, "0.93.0", _REASON_FUTURE_TARGET),
         # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
         # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
         # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
         # 目标版本 column — scenario payload written while 0.93.1 was active,
         # surfacing exactly once at this bump; the word-set judgement
         # consumes the row text, never the version cell.
-        (20808, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
-        (20811, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-493e21b7822b433eb69cb0ed4dfbefc0 (FIX-462): 20808->20971 via machine writer (token unchanged)
+        (20971, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-b81c0a2b03d245518cf7d592d513c4fd (FIX-462): 20811->20974 via machine writer (token unchanged)
+        (20974, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.95.0 bump-time rows (the FIX-361 designed double signal): the
     # FEAT-076 Q6 date-window fallback fail-closed fixture (roadmap row

@@ -44,6 +44,17 @@ Behavior contract (ADR-017 §4.4 / FIX-237.4 / DEC-139):
     produces NO record and a non-zero CLI exit — the task cannot be created
     without a triage record. Step-e WARN issues are advisory (exit 0) —
     the WARN lives in the CLI output and the machine record.
+  - **Prior-art intake gate (FEAT-111 / DEC-377④)**: a design/research
+    family task (``PRIOR_ART_REQUIRED_FAMILIES`` — FEAT/DESIGN/
+    RESEARCH/AUDIT, derived from the repo's task-family vocabulary) MUST
+    carry a prior-art external-input face (``prior_art`` entries citing
+    precedent/competitor/external evidence); missing or placeholder
+    entries → ``{"error": ...}`` zero-write, exactly like the other
+    fail-closed intake conditions. Execution/repair families are exempt
+    with the additive disclosure key ``prior_art_required=false``.
+    ``PRIOR_ART_NORMALIZATION_DATE`` bounds the Check-32 record-validity
+    face (historical records are exempt — they are immutable and cannot
+    retroactively gain a prior-art face).
   - **Machine record**: ``.governance/change-triage/{TASK_ID}.json`` holds
     the five-step analysis + the ``task-priority-analysis`` snapshot
     (``report_json`` + ``report_text``); an evidence-log row (id
@@ -149,6 +160,58 @@ _TASK_FAMILY_PREFIXES = frozenset({
 _CROSS_ENTITY_PREFIXES = frozenset({
     "RISK", "DEC", "REVIEW", "EVD", "TIER", "CONSTRAINT", "TOOL", "ADR",
 })
+
+# FEAT-111 / DEC-377④ — prior-art intake gate（设计/研究类任务外部输入面）。
+#
+# 分类表从仓库权威任务族词汇派生（上方 ``_TASK_FAMILY_PREFIXES``，与
+# task_priority/archive 同源——语义子集，不发明新前缀；ratchet 测试钉死
+# 子集关系）：设计/研究类 = 新能力设计（FEAT——本票自身即设计类任务）、
+# 显式设计（DESIGN）、调研（RESEARCH）、审计/调研（AUDIT，如 AUDIT-160
+# 三路调研）。执行/修复类（FIX/REL/MAINT/FMT/DIAG/...）豁免——外部先例
+# 同样支持该边界：Rust RFC Prior art 节/专利审查 prior-art 检索/学术新颖性
+# 审查/CERN 变更控制分型均只对设计/提案类工作强制先例面，不对缺陷修复与
+# 发布执行类强制。先例出处：AUDIT-160 路线 C 外部杠杆审计（「工程效能系统
+# 活动分型」先例）→ DEC-377④ 用户裁决采纳。
+PRIOR_ART_REQUIRED_FAMILIES = frozenset({
+    "FEAT", "DESIGN", "RESEARCH", "AUDIT",
+})
+
+# Check 32 记录校验的 normalization 边界：created_at >= 本日期的设计/研究类
+# 记录 MUST 携带合法 prior_art 面；此前记录（含无 created_at 的历史/夹具
+# 形态）豁免——不可变记录无法追溯补先例（TRIAGE_NORMALIZATION_DATE 同款
+# 日期边界先例）。钉在门禁生效日 2026-10-29：本票自身（FEAT-111）的
+# triage 记录于 2026-10-28（门禁实现落地前）入账，属边界前历史形态；
+# CLI fail-closed 门禁自代码落地即生效（无日期边界），仅记录校验面以
+# 本日期为界。
+PRIOR_ART_NORMALIZATION_DATE = date(2026, 10, 29)
+
+# 占位串判定——词汇镜像 verify_workflow 的 PRODUCT_SUCCESS_PLACEHOLDER_RE
+# 语义族（todo/tbd/to_be_defined/n\/a/none/null/unknown + 待补/待定/暂无/
+# 占位），FULL-match 于 strip 后的整条目：诚实引用 merely CONTAINING 该族
+# 词（如「无直接 unknown 先例」）不拒——锚定整条目，非子串搜索。
+_PRIOR_ART_PLACEHOLDER_RE = re.compile(
+    r"(?:todo|tbd|to[\s_-]*be[\s_-]*defined|n[\s/-]*a|none|null|unknown|"
+    r"待补|待定|暂无|占位)",
+    re.IGNORECASE)
+
+
+def is_prior_art_placeholder(entry: str) -> bool:
+    """True when one prior-art entry is an empty/placeholder no-op.
+
+    Single source for both faces（FIX-292 无第二语义教训）: the run_triage
+    intake rejection and the Check 32 record-validity judgement consume
+    THIS predicate — no second definition elsewhere.
+    """
+    text = str(entry or "").strip()
+    if not text:
+        return True
+    return bool(_PRIOR_ART_PLACEHOLDER_RE.fullmatch(text))
+
+
+def normalize_prior_art_entries(entries) -> list:
+    """Strip + drop empty entries (order preserved); no other filtering —
+    placeholder judgement is the required-family rejection's concern."""
+    return [str(e).strip() for e in (entries or []) if str(e).strip()]
 
 
 def split_dep_ids(raw: str) -> list:
@@ -1338,7 +1401,8 @@ def _intake_demand_source(task_id, priority, demand_source, demand_basis):
 
 def _build_triage_record(task_id, title, priority_context, version_result,
                          depends_on, files, reason, demand_source,
-                         demand_basis, dependency, conflicts, side_effect):
+                         demand_basis, dependency, conflicts, side_effect,
+                         prior_art_entries, prior_art_required):
     """FIX-417 (moved verbatim from run_triage): assemble the immutable
     machine record (TRIAGE_SCHEMA_VERSION 1 — additive keys only).
 
@@ -1393,6 +1457,11 @@ def _build_triage_record(task_id, title, priority_context, version_result,
     }
     record["demand_source"] = demand_source
     record["demand_basis"] = demand_basis
+    # FEAT-111 / DEC-377④ — prior-art external-input face（additive，schema
+    # 保持 1——FIX-271 先例）：设计/研究类 required=true 且 entries 非空占位；
+    # 执行/修复类 required=false 披露豁免（entries 可自愿携带）。
+    record["prior_art"] = list(prior_art_entries)
+    record["prior_art_required"] = bool(prior_art_required)
     return record
 
 
@@ -1437,7 +1506,8 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
                target_version: str, depends_on, files, reason: str = "",
                acceptance: str = "", declared_side_effects: str = "",
                demand_source: str = "machine-signal", demand_basis: str = "",
-               plan_tracker_text: str, current_version: str = "",
+               prior_art=None, plan_tracker_text: str,
+               current_version: str = "",
                governance_dir, existing_records=None, records_dir=None,
                evidence_path=None) -> dict:
     """Run the mandatory five-step triage and write the machine record.
@@ -1519,6 +1589,25 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
                          "product-code task (quick lane covers .governance/ "
                          "records only — FIX-228 boundary)"}
 
+    # ── prior-art intake gate (FEAT-111 / DEC-377④, fail-closed) ──
+    prior_art_entries = normalize_prior_art_entries(prior_art)
+    prior_art_required = task_id.split("-", 1)[0] in PRIOR_ART_REQUIRED_FAMILIES
+    if prior_art_required:
+        placeholders = [e for e in prior_art_entries
+                        if is_prior_art_placeholder(e)]
+        if not prior_art_entries or placeholders:
+            return {"error":
+                    "prior-art external-input face is REQUIRED for "
+                    "design/research family task {0} (PRIOR_ART_REQUIRED_"
+                    "FAMILIES — DEC-377④ 终结自嗨)：entries MUST 引用先例/"
+                    "竞品/外部证据（如 Rust RFC Prior art 节、专利审查 "
+                    "prior-art 检索指南、竞品文档链接）；{1}——补齐 "
+                    "--prior-art 后重试（fail-closed 零写入）".format(
+                        task_id,
+                        "占位/无效条目: {0}".format(
+                            "; ".join(repr(e) for e in placeholders))
+                        if placeholders else "当前无任何条目")}
+
     # ── demand_source intake (FEAT-077 / ADR-021 §2.2.1, fail-closed) ──
     demand_source, demand_basis, intake_error = _intake_demand_source(
         task_id, priority, demand_source, demand_basis)
@@ -1588,7 +1677,7 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     record = _build_triage_record(
         task_id, title, priority_context, version_result, depends_on,
         files, reason, demand_source, demand_basis, dependency, conflicts,
-        side_effect)
+        side_effect, prior_art_entries, prior_art_required)
 
     # Machine-write the triage record + evidence row.
     if evidence_path is None:
@@ -1644,4 +1733,8 @@ __all__ = [
     "acquire_dispatch_locks",
     "agent_locks_acquire_cli",
     "run_triage",
+    "PRIOR_ART_REQUIRED_FAMILIES",
+    "PRIOR_ART_NORMALIZATION_DATE",
+    "is_prior_art_placeholder",
+    "normalize_prior_art_entries",
 ]

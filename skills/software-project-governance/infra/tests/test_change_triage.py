@@ -28,6 +28,14 @@ Covers the mandatory change-control triage for product-code task intake:
     same-day change-triage files cross-check (WARN-disclosed mismatch),
     Check 26 optional-boolean expected_new schema sync + FEAT-011 write
     guard consumption.
+  - FEAT-111 (DEC-377④): prior-art intake gate — design/research task
+    families (FEAT/DESIGN/RESEARCH/AUDIT, derived from the repo's
+    task-family vocabulary) MUST carry an external-input face
+    (precedent/competitor/external evidence) at triage; missing or
+    placeholder values are rejected fail-closed (exit 2, zero writes);
+    execution families are exempt with ``prior_art_required=false``
+    disclosure. Check 32 record validity enforces the same face for
+    post-boundary design/research records.
 
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_change_triage.py -v
@@ -1982,6 +1990,265 @@ class DemandRevisionChannelTests(unittest.TestCase):
     def test_never_raises_on_missing_governance_dir(self):
         summary = self._revise(governance_dir=self.gov / "ghost" / "deep")
         self.assertIn("error", summary)  # record 不存在分支命中（目录缺失）
+
+
+# ─── FEAT-111 / DEC-377④ — prior-art intake gate ────────────────────────────
+#
+# 设计/研究类任务族（FEAT/DESIGN/RESEARCH/AUDIT）triage 时 MUST 附外部输入面
+# （先例/竞品/外部证据引用），缺失或占位串 → fail-closed 拒收（exit 2 零写入）；
+# 执行/修复类（FIX/REL 等族）豁免并以 prior_art_required=false 披露。
+# 分类表 = 仓库既有任务族词汇的语义子集（task_priority._TASK_FAMILY_PREFIXES
+# 派生，不发明新体系——AUDIT-160 路线 C「工程效能系统活动分型」先例）。
+
+
+class PriorArtIntakeTests(unittest.TestCase):
+    """run_triage intake — design/research families require a prior-art
+    external-input face (fail-closed); execution families exempt with
+    disclosure (FEAT-111 / DEC-377④)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="ctpa_")
+        self.gov = _governance_dir(self.tmpdir)
+
+    def _run(self, **overrides):
+        kwargs = {
+            "task_id": "FEAT-201",
+            "title": "new design-class task",
+            "priority": "P1",
+            "target_version": "0.73.0",
+            "depends_on": ["FIX-100"],
+            "files": ["skills/software-project-governance/infra/x.py"],
+            "reason": "FEAT-111 fixture",
+            "plan_tracker_text": _FIXTURE_TRACKER,
+            "current_version": "0.72.0",
+            "governance_dir": self.gov,
+        }
+        kwargs.update(overrides)
+        return ct.run_triage(**kwargs)
+
+    def test_design_family_without_prior_art_fails_closed(self):
+        summary = self._run()
+        self.assertIn("error", summary)
+        self.assertIn("prior-art", summary["error"])
+        self.assertFalse((self.gov / "change-triage" / "FEAT-201.json").exists())
+        evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
+        self.assertNotIn("TRIAGE-FEAT-201", evidence)
+
+    def test_design_family_placeholder_entries_fail_closed(self):
+        for bad in ("", "  ", "TO_BE_DEFINED", "to be defined", "待定",
+                    "暂无", "n/a", "N/A", "占位"):
+            summary = self._run(prior_art=[bad])
+            self.assertIn("error", summary, bad)
+            self.assertIn("prior-art", summary["error"], bad)
+            self.assertFalse(
+                (self.gov / "change-triage" / "FEAT-201.json").exists(), bad)
+
+    def test_design_family_mixed_list_with_one_placeholder_fails_closed(self):
+        summary = self._run(
+            prior_art=["Rust RFC 2333 prior_art 节", "待补"])
+        self.assertIn("error", summary)
+        self.assertIn("prior-art", summary["error"])
+        self.assertFalse((self.gov / "change-triage" / "FEAT-201.json").exists())
+
+    def test_legit_entry_containing_placeholder_word_is_not_rejected(self):
+        """Placeholder judgement is FULL-match on the stripped entry — an
+        honest citation that merely CONTAINS a placeholder-family word
+        (e.g. 「（无直接 unknown 先例）」) must NOT be rejected."""
+        entry = "Rust RFC 2333 prior_art（本设计无直接 unknown 先例，取其节结构）"
+        summary = self._run(prior_art=[entry])
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(
+            (self.gov / "change-triage" / "FEAT-201.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["prior_art"], [entry])
+
+    def test_design_family_with_prior_art_writes_record_with_field(self):
+        entries = [
+            "Rust RFC 2333 prior_art（提案模板常设先例节）",
+            "WIPO TISC prior-art 检索指南（授权前强制检索）",
+        ]
+        summary = self._run(prior_art=entries)
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(
+            (self.gov / "change-triage" / "FEAT-201.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["prior_art"], entries)
+        self.assertTrue(record["prior_art_required"])
+
+    def test_execution_family_without_prior_art_exempt_with_disclosure(self):
+        summary = self._run(task_id="FIX-103")
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(
+            (self.gov / "change-triage" / "FIX-103.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["prior_art"], [])
+        self.assertFalse(record["prior_art_required"])
+
+    def test_execution_family_with_prior_art_records_entries(self):
+        entries = ["竞品 X 的同类门禁文档（自愿引用，非强制）"]
+        summary = self._run(task_id="FIX-103", prior_art=entries)
+        self.assertFalse(summary.get("error"), summary)
+        record = json.loads(
+            (self.gov / "change-triage" / "FIX-103.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["prior_art"], entries)
+        self.assertFalse(record["prior_art_required"])
+
+    def test_required_families_subset_of_task_family_vocabulary(self):
+        """Ratchet：分类表成员 MUST 全部来自仓库权威任务族词汇
+        （task_priority._TASK_FAMILY_PREFIXES）——禁止发明新前缀。"""
+        import task_priority
+        self.assertLessEqual(
+            ct.PRIOR_ART_REQUIRED_FAMILIES,
+            set(task_priority._TASK_FAMILY_PREFIXES))
+        for family in ("FEAT", "DESIGN", "RESEARCH", "AUDIT"):
+            self.assertIn(family, ct.PRIOR_ART_REQUIRED_FAMILIES)
+
+
+class PriorArtCheck32Tests(unittest.TestCase):
+    """Check 32 record-validity face — post-boundary design/research
+    records without a valid prior-art face FAIL; historical (pre-boundary
+    / undated) and execution-family records stay exempt."""
+
+    def _record(self, task_id="FEAT-201", created_at=None, prior_art=None,
+                include_prior_art=True):
+        record = _record(task_id=task_id)
+        if created_at is not None:
+            record["created_at"] = created_at
+        if include_prior_art:
+            record["prior_art"] = prior_art
+        return record
+
+    def test_design_record_without_prior_art_fails_validity(self):
+        record = self._record(created_at="2026-10-29", include_prior_art=False)
+        issues = td.validate_triage_record(record)
+        self.assertTrue(any("prior-art" in i for i in issues), issues)
+
+    def test_design_record_empty_prior_art_list_fails_validity(self):
+        record = self._record(created_at="2026-10-29", prior_art=[])
+        issues = td.validate_triage_record(record)
+        self.assertTrue(any("prior-art" in i for i in issues), issues)
+
+    def test_design_record_placeholder_entry_fails_validity(self):
+        record = self._record(
+            created_at="2026-10-29", prior_art=["Rust RFC 2333", "TO_BE_DEFINED"])
+        issues = td.validate_triage_record(record)
+        self.assertTrue(any("prior-art" in i for i in issues), issues)
+
+    def test_design_record_with_valid_entries_passes_validity(self):
+        record = self._record(
+            created_at="2026-10-29",
+            prior_art=["Rust RFC 2333 prior_art", "WIPO TISC 检索指南"])
+        issues = td.validate_triage_record(record)
+        self.assertFalse(
+            [i for i in issues if "prior-art" in i], issues)
+
+    def test_pre_boundary_design_record_exempt(self):
+        """边界=门禁生效日 2026-10-29：此前入账的设计/研究类记录（含
+        FEAT-111 自身 2026-10-28 的 triage 记录——门禁实现落地前入账，
+        不可变记录无法追溯补先例面）豁免。"""
+        record = self._record(created_at="2026-10-28", include_prior_art=False)
+        issues = td.validate_triage_record(record)
+        self.assertFalse([i for i in issues if "prior-art" in i], issues)
+
+    def test_missing_created_at_treated_as_pre_boundary(self):
+        """Conservative read: a record without ``created_at``（测试夹具/历史
+        形态）is exempt from the prior-art face — the CLI fail-closed gate is
+        the primary enforcement for fresh intake（与 Check-32 既有既知限制
+        同口径）。"""
+        record = self._record(include_prior_art=False)
+        issues = td.validate_triage_record(record)
+        self.assertFalse([i for i in issues if "prior-art" in i], issues)
+
+    def test_execution_family_record_not_enforced(self):
+        record = self._record(
+            task_id="FIX-102", created_at="2026-10-28", include_prior_art=False)
+        issues = td.validate_triage_record(record)
+        self.assertFalse([i for i in issues if "prior-art" in i], issues)
+
+    def test_check32_integration_design_record_missing_prior_art_fails(self):
+        tmpdir = tempfile.mkdtemp(prefix="ct32pa_")
+        gov = _governance_dir(tmpdir)
+        (gov / "plan-tracker.md").write_text(_FIXTURE_TRACKER, encoding="utf-8")
+        (gov / "change-triage").mkdir(exist_ok=True)
+        record = self._record(created_at="2026-10-29", include_prior_art=False)
+        (gov / "change-triage" / "FEAT-201.json").write_text(
+            json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        result = td.check_change_triage(
+            root=Path(tmpdir), governance_dir=gov,
+            verify_path=_INFRA_DIR / "verify_workflow.py")
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertTrue(any("prior-art" in i for i in result["issues"]),
+                        result["issues"])
+
+
+class PriorArtGateCliTests(unittest.TestCase):
+    """CLI subprocess — the --prior-art flag wires the intake gate
+    (FEAT-111): design-family intake without it exits 2; with valid
+    references the record carries the entries."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="ctpacli_")
+        self.root = Path(self.tmpdir)
+        self.gov = _governance_dir(self.tmpdir)
+        from checks.version import extract_skill_version
+
+        self.planned = extract_skill_version(_INFRA_DIR.parent / "SKILL.md")
+        self.assertTrue(self.planned, "SKILL.md frontmatter version is missing")
+        tracker = _FIXTURE_TRACKER.replace(
+            "| **0.75.0** | **规划** |",
+            f"| **{self.planned}** | **规划** |")
+        (self.gov / "plan-tracker.md").write_text(tracker, encoding="utf-8")
+
+    def _run_cli(self, *extra):
+        argv = [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
+                "change-triage", "--project-root", str(self.root),
+                "--demand-source", "machine-signal"]
+        return subprocess.run(
+            argv + list(extra),
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+
+    def test_cli_design_family_without_prior_art_exits_two(self):
+        done = self._run_cli(
+            "--task", "FEAT-201", "--title", "t", "--priority", "P1",
+            "--version", self.planned, "--depends-on", "FIX-100",
+            "--files", "skills/software-project-governance/infra/x.py",
+            "--reason", "r",
+        )
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertFalse((self.gov / "change-triage" / "FEAT-201.json").exists())
+
+    def test_cli_design_family_with_prior_art_writes_record(self):
+        done = self._run_cli(
+            "--task", "FEAT-201", "--title", "t", "--priority", "P1",
+            "--version", self.planned, "--depends-on", "FIX-100",
+            "--files", "skills/software-project-governance/infra/x.py",
+            "--reason", "r",
+            "--prior-art", "Rust RFC 2333 prior_art 节;WIPO TISC 检索指南",
+        )
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        record = json.loads(
+            (self.gov / "change-triage" / "FEAT-201.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(
+            record["prior_art"],
+            ["Rust RFC 2333 prior_art 节", "WIPO TISC 检索指南"])
+        self.assertTrue(record["prior_art_required"])
+
+    def test_cli_execution_family_without_prior_art_still_passes(self):
+        done = self._run_cli(
+            "--task", "FIX-103", "--title", "t", "--priority", "P2",
+            "--version", self.planned, "--depends-on", "FIX-100",
+            "--files", "skills/software-project-governance/infra/x.py",
+            "--reason", "r",
+        )
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        record = json.loads(
+            (self.gov / "change-triage" / "FIX-103.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(record["prior_art"], [])
+        self.assertFalse(record["prior_art_required"])
 
 
 if __name__ == "__main__":

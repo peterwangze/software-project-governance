@@ -15,6 +15,13 @@ task intake:
     tasks (earliest evidence before the normalization date) and quick-lane
     tasks (evidence only under ``.governance/`` — FIX-228 boundary) are
     exempt.
+  - **Prior-art face (FEAT-111 / DEC-377④)**: a design/research family
+    record (``PRIOR_ART_REQUIRED_FAMILIES`` — FEAT/DESIGN/RESEARCH/AUDIT)
+    created on/after :data:`PRIOR_ART_NORMALIZATION_DATE` MUST carry a
+    non-empty ``prior_art`` list free of placeholder entries; execution/
+    repair families and pre-boundary records are exempt. Placeholder
+    semantics is single-sourced from
+    :func:`change_triage.is_prior_art_placeholder`.
 
 The date-based exemption mirrors the FIX-174 / FIX-233 precedent
 (``FIX173_NAMING_NORMALIZATION_DATE``): tasks created before the feature
@@ -54,6 +61,11 @@ import re
 from datetime import date
 from pathlib import Path
 
+from change_triage import (
+    PRIOR_ART_NORMALIZATION_DATE,
+    PRIOR_ART_REQUIRED_FAMILIES,
+    is_prior_art_placeholder,
+)
 from task_priority import parse_task_dependencies
 
 
@@ -153,8 +165,37 @@ def check_triage_wiring(verify_path) -> dict:
     }
 
 
+def _prior_art_enforced(record: dict) -> bool:
+    """FEAT-111 / DEC-377④ — True when the record's prior-art face is
+    enforceable: design/research family AND created on/after the
+    normalization boundary.
+
+    A record without a parseable ``created_at``（历史/夹具形态）is exempt
+    (conservative read, same posture as the documented no-record
+    limitation: the CLI fail-closed gate is the primary enforcement for
+    fresh intake — immutable historical records cannot retroactively
+    gain a prior-art face).
+    """
+    task_id = str(record.get("task_id", "") or "")
+    family = task_id.split("-", 1)[0]
+    if family not in PRIOR_ART_REQUIRED_FAMILIES:
+        return False
+    created_raw = str(record.get("created_at", "") or "").strip()
+    try:
+        created = date.fromisoformat(created_raw)
+    except ValueError:
+        return False
+    return created >= PRIOR_ART_NORMALIZATION_DATE
+
+
 def validate_triage_record(record: dict) -> list:
     """Validate one triage record against the four-step contract.
+
+    FEAT-111 / DEC-377④ addition: an enforced design/research record
+    (see :func:`_prior_art_enforced`) MUST carry a non-empty ``prior_art``
+    list free of placeholder entries — single-source placeholder
+    semantics via :func:`change_triage.is_prior_art_placeholder`
+    (FIX-292: no second definition here).
 
     Returns:
         list of issue strings (empty = valid).
@@ -189,6 +230,27 @@ def validate_triage_record(record: dict) -> list:
             issues.append("record snapshot.report_json is empty")
         if not snapshot.get("report_text"):
             issues.append("record snapshot.report_text is empty")
+    if _prior_art_enforced(record):
+        prior_art = record.get("prior_art")
+        if not isinstance(prior_art, list) or not prior_art:
+            issues.append(
+                "record prior-art face (prior_art field): design/research "
+                "family task {0!r} (created on/after {1}) requires a "
+                "prior-art external-input face — entries missing "
+                "(DEC-377④; run change-triage with --prior-art)".format(
+                    record.get("task_id", ""),
+                    PRIOR_ART_NORMALIZATION_DATE.isoformat()))
+        else:
+            placeholders = [e for e in prior_art
+                            if is_prior_art_placeholder(e)]
+            if placeholders:
+                issues.append(
+                    "record prior-art face (prior_art field): placeholder/"
+                    "no-op entries rejected for design/research family "
+                    "task {0!r}: {1} (entries MUST cite precedent/"
+                    "competitor/external evidence — DEC-377④)".format(
+                        record.get("task_id", ""),
+                        "; ".join(repr(e) for e in placeholders)))
     return issues
 
 

@@ -25677,6 +25677,14 @@ def cmd_change_triage(args):
     so a structural breach cannot be introduced silently (AUDIT-148 §4.2
     Check-14 无写时检测 gap).
 
+    FEAT-111 / DEC-377④ (prior-art intake gate): ``--prior-art`` carries
+    the external-input face — design/research family tasks
+    (FEAT/DESIGN/RESEARCH/AUDIT) without valid precedent/competitor/
+    external-evidence entries are rejected fail-closed inside
+    :func:`change_triage.run_triage` (exit 2, zero writes); execution/
+    repair families are exempt with ``prior_art_required=false`` on the
+    record.
+
     FIX-288 ⑨ (version fact source): ``current_version`` is the PROJECT's
     current version — the highest 「已发布」 row of the HOST plan-tracker
     version roadmap (:func:`change_triage.derive_project_current_version`) —
@@ -25716,6 +25724,14 @@ def cmd_change_triage(args):
         declared_side_effects=getattr(args, "side_effects", "") or "",
         demand_source=getattr(args, "demand_source", "") or "",
         demand_basis=getattr(args, "demand_basis", "") or "",
+        # FEAT-111 / DEC-377④: prior-art intake gate — comma/semicolon
+        # split mirrors --files; design/research families without valid
+        # entries are rejected fail-closed inside run_triage (zero write).
+        prior_art=[
+            e.strip()
+            for e in str(getattr(args, "prior_art", "") or "")
+            .replace(";", ",").split(",") if e.strip()
+        ],
         plan_tracker_text=plan_tracker_text,
         current_version=current_version,
         governance_dir=GOVERNANCE_DIR,
@@ -27861,6 +27877,15 @@ def main(argv=None):
                         help="Traceability basis REQUIRED for user-named "
                              "(user quote / DEC ref / session-record anchor; "
                              "BC-4 防 出身洗白)")
+    ctri_p.add_argument("--prior-art", default="", dest="prior_art",
+                        help="Prior-art external-input references (comma/"
+                             "semicolon-separated) — REQUIRED for design/"
+                             "research task families (FEAT/DESIGN/RESEARCH/"
+                             "AUDIT): cite precedent/competitor/external "
+                             "evidence (e.g. Rust RFC Prior art 节、专利审查 "
+                             "prior-art 检索、竞品文档); missing or placeholder "
+                             "values are rejected fail-closed (FEAT-111 / "
+                             "DEC-377④; execution/repair families exempt)")
     ctri_p.add_argument("--version", default="未规划版本",
                         help="Target version (semver X.Y.Z or 未规划版本)")
     ctri_p.add_argument("--depends-on", default="",

@@ -1,6 +1,8 @@
 # change-triage — 变更控制 triage（产品代码新任务强制入账门禁）
 
 > **FIX-237.4 / ADR-017 §4.4**：产品代码新任务（涉及 `skills/**`、`agents/**`、`infra/**`、`commands/**`、`adapters/**` 等）**MUST** 先运行本命令完成五步 triage 并产出机器 triage 记录，之后才允许创建 task。快速通道仅限 `.governance/` 治理记录（FIX-228 边界）。
+>
+> **FEAT-111 / DEC-377④（prior-art 入账门禁）**：设计/研究类任务族（`FEAT`/`DESIGN`/`RESEARCH`/`AUDIT`——从仓库任务族词汇派生的语义子集）triage 时 **MUST** 附外部输入面（`--prior-art`：先例/竞品/外部证据引用，如 Rust RFC Prior art 节、专利审查 prior-art 检索指南、竞品文档链接）；缺失或占位串（空/`TO_BE_DEFINED`/`待定` 族）→ **拒收**（fail-closed，退出码 2 零写入）。执行/修复类（`FIX`/`REL`/`MAINT` 等族）豁免，记录以 `prior_art_required=false` 披露。Check 32 对生效日（2026-10-29）起的设计/研究类记录强制校验同一面（此前入账的不可变记录与执行族豁免）。
 
 ## 命令
 
@@ -18,6 +20,7 @@ python skills/software-project-governance/infra/verify_workflow.py change-triage
 | `--task` | ✅ | 新任务 ID（`PREFIX-NNN`，如 `FIX-241`） |
 | `--priority` | ✅ | 提议优先级 `P0`/`P1`/`P2`（结合 in-flight + 版本链判定） |
 | `--files` | ✅ | 新任务将修改的产品文件（逗号分隔；`.governance/` 快速通道不适用本命令） |
+| `--prior-art` | 设计/研究类 ✅ | 外部输入面引用（逗号/分号分隔）。**设计/研究类族（`FEAT`/`DESIGN`/`RESEARCH`/`AUDIT`）必填**：引用先例/竞品/外部证据（如 Rust RFC Prior art 节、专利审查 prior-art 检索指南）；缺失或占位串拒收（FEAT-111 / DEC-377④）；执行/修复族豁免（可自愿携带） |
 | `--version` | 否 | 目标版本（semver `X.Y.Z` 或 `未规划版本`，默认 `未规划版本`） |
 | `--depends-on` | 否 | 任务族依赖 ID（逗号分隔；`RISK-`/`DEC-`/`REVIEW-` 等跨实体引用自动忽略） |
 | `--title` | 否 | 一句话任务标题 |
@@ -40,12 +43,13 @@ python skills/software-project-governance/infra/verify_workflow.py change-triage
 - 目标版本低于项目当前版本 / 非 semver
 - 新任务自身制造依赖环
 - `--task` 非 `PREFIX-NNN`
+- **设计/研究类族（`FEAT`/`DESIGN`/`RESEARCH`/`AUDIT`）缺 `--prior-art` 或条目为占位串**（FEAT-111 / DEC-377④——终结「自引问题自修复」自嗨循环的机制性倒逼）
 
 ## 产出
 
-- 机器 triage 记录：`.governance/change-triage/{TASK_ID}.json`（含五步分析 + task-priority-analysis 输出快照）
+- 机器 triage 记录：`.governance/change-triage/{TASK_ID}.json`（含五步分析 + task-priority-analysis 输出快照；FEAT-111 增量键：`prior_art`（引用条目列表）+ `prior_art_required`（设计/研究类 `true` / 执行类 `false` 豁免披露））
 - evidence-log 行：`| TRIAGE-{TASK_ID} | {TASK_ID} | 变更控制 | ... | TRIAGED |`（调用快照 = 记录文件中的命令输出 JSON，FIX-237.5）
-- Check 32（`check-governance`）验证：CLI 接线存在、记录合法、晚于 normalization 边界的产品代码任务无记录 = FAIL
+- Check 32（`check-governance`）验证：CLI 接线存在、记录合法、晚于 normalization 边界的产品代码任务无记录 = FAIL；**2026-10-29 起的设计/研究类记录缺合法 `prior_art` 面 = FAIL**（历史记录与执行族豁免）
 
 ## 使用时机
 

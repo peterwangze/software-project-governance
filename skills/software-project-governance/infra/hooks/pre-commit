@@ -130,6 +130,24 @@ normalize_existing_path() {
     return 1
 }
 
+# FIX-478: project the NON-bootstrap lines of a CLAUDE.md stream (stdin →
+# stdout). The bootstrap section starts after a `## Governance Bootstrap`
+# heading and ends at the first non-template H2 (or EOF). The template H2
+# whitelist mirrors the five H2 sections rendered by the canonical
+# governance-init.md Step 7 templates (lightweight/standard/strict); any H2 a
+# template does not own — the trailing `## 当前项目治理状态快速入口` section as
+# well as consumer-owned `## 项目信息` / `## 治理入口` — closes the exempt
+# segment. Maintenance: when the canonical template gains an H2 section, add
+# its prefix to the whitelist here — this function is the single source for
+# both projections (FIX-292 lesson).
+claude_non_bootstrap_lines() {
+    awk '
+        /^## Governance Bootstrap/ { in_bootstrap = 1; next }
+        in_bootstrap && /^## / && $0 !~ /^## (干活前检查|提问规则|收工前检查|详细规则|故障排除)/ { in_bootstrap = 0 }
+        !in_bootstrap { print }
+    '
+}
+
 is_claude_bootstrap_self_upgrade() {
     local files="$1"
 
@@ -185,16 +203,19 @@ is_claude_bootstrap_self_upgrade() {
 
     local head_non_bootstrap
     local staged_non_bootstrap
-    head_non_bootstrap=$(git show "HEAD:CLAUDE.md" 2>/dev/null | awk '
-        /^## Governance Bootstrap/ { in_bootstrap=1; next }
-        /^## 当前项目治理状态快速入口/ { in_bootstrap=0 }
-        !in_bootstrap { print }
-    ' || true)
-    staged_non_bootstrap=$(git show ":CLAUDE.md" 2>/dev/null | awk '
-        /^## Governance Bootstrap/ { in_bootstrap=1; next }
-        /^## 当前项目治理状态快速入口/ { in_bootstrap=0 }
-        !in_bootstrap { print }
-    ' || true)
+    # FIX-478: both sides go through the same boundary projection (single
+    # source) so consumer-native layouts cannot smuggle project-owned H2
+    # content through the bootstrap exemption. A failed projection must never
+    # collapse into "both sides empty" (that would fail open): each side
+    # carries its own sentinel, so one-sided and two-sided failures both yield
+    # head != staged and block. The `if !` guards keep `set -e` from aborting
+    # the hook on a projection failure before the comparison runs.
+    if ! head_non_bootstrap=$(git show "HEAD:CLAUDE.md" 2>/dev/null | claude_non_bootstrap_lines); then
+        head_non_bootstrap="__CLAUDE_PROJECTION_FAILED__:HEAD"
+    fi
+    if ! staged_non_bootstrap=$(git show ":CLAUDE.md" 2>/dev/null | claude_non_bootstrap_lines); then
+        staged_non_bootstrap="__CLAUDE_PROJECTION_FAILED__:STAGED"
+    fi
     if [ "$head_non_bootstrap" != "$staged_non_bootstrap" ]; then
         return 1
     fi

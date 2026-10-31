@@ -16291,6 +16291,146 @@ class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
 
+    # ── FIX-478: consumer-native layout (project-owned H2 after bootstrap) ──
+    def _run_consumer_native_host_hook(self, *, plan_version="0.37.0",
+                                       initial_version="0.35.0",
+                                       install_version="0.37.0",
+                                       change_outside_bootstrap=False,
+                                       fail_projection=False):
+        """FIX-478: consumer-native entry file — the bootstrap section is
+        followed by project-owned H2s (`## 项目信息` / `## 治理入口`) instead
+        of the template trailing-section boundary (`## 当前项目治理状态快速入口`).
+
+        The installed plugin root is exposed through SPG_HOME (the FIX-477
+        resolution path), because a consumer host carries no repo-local skill.
+
+        ``fail_projection=True`` installs a BASH_ENV awk shim that fails only
+        for the bootstrap-boundary projection program, so the two projections
+        break while every other awk call still works (the fail-closed probe).
+        """
+        def _claude_text(bootstrap_body, owner="alice"):
+            return (
+                "# Kingdom War — Claude Code 项目指引\n\n"
+                "## Governance Bootstrap\n\n"
+                f"{bootstrap_body}\n\n"
+                "## 项目信息\n\n"
+                f"- owner: {owner}\n"
+                "- stack: Python + Pyglet\n\n"
+                "## 治理入口\n\n"
+                "- plan: .governance/plan-tracker.md\n"
+            )
+
+        with tempfile.TemporaryDirectory() as td, \
+                tempfile.TemporaryDirectory() as install_td:
+            root = Path(td)
+            install_root = Path(install_td)
+            (install_root / "SKILL.md").write_text(
+                f"---\nversion: {install_version}\n---\n", encoding="utf-8")
+            (install_root / "infra" / "hooks").mkdir(parents=True, exist_ok=True)
+
+            subprocess.run(["git", "init"], cwd=root, check=True,
+                           capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"],
+                           cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"],
+                           cwd=root, check=True)
+
+            claude = root / "CLAUDE.md"
+            claude.write_text(_claude_text("old bootstrap"), encoding="utf-8")
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            (gov / "plan-tracker.md").write_text(
+                f"## 项目配置\n- **工作流版本**: {initial_version}\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(["git", "add", "CLAUDE.md", ".governance/plan-tracker.md"],
+                           cwd=root, check=True)
+            subprocess.run(["git", "commit", "-m", "INIT-001: baseline"],
+                           cwd=root, check=True, capture_output=True, text=True)
+
+            claude.write_text(
+                _claude_text("updated bootstrap",
+                             owner="MALLORY" if change_outside_bootstrap else "alice"),
+                encoding="utf-8",
+            )
+            (gov / "plan-tracker.md").write_text(
+                f"## 项目配置\n- **工作流版本**: {plan_version}\n- note: staged\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "CLAUDE.md", ".governance/plan-tracker.md"],
+                           cwd=root, check=True)
+
+            env = dict(os.environ)
+            env["SPG_HOME"] = str(install_root)
+            env.pop("SOFTWARE_PROJECT_GOVERNANCE_HOME", None)
+            if fail_projection:
+                # Inject the failure through BASH_ENV (sourced by the
+                # non-interactive hook shell): a PATH stub cannot win, because
+                # MSYS prepends its own bin dirs ahead of the inherited PATH.
+                shim = install_root / "awk-fail-shim.sh"
+                shim.write_text(
+                    "# FIX-478 fail-closed probe: fail only the bootstrap\n"
+                    "# boundary projection; delegate every other awk call.\n"
+                    "awk() {\n"
+                    '  case "$1" in\n'
+                    '    *"Governance Bootstrap"*) return 2 ;;\n'
+                    "  esac\n"
+                    '  command awk "$@"\n'
+                    "}\n",
+                    encoding="utf-8",
+                )
+                env["BASH_ENV"] = str(shim)
+            hook = _INFRA_DIR / "hooks" / "pre-commit"
+            return subprocess.run(
+                [self._bash(), hook.as_posix()],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+    def test_pre_commit_blocks_non_bootstrap_change_in_consumer_native_layout(self):
+        """FIX-478 RED: the exempt segment must end at the first non-template
+        H2 — editing `## 项目信息` during a version bump must BLOCK."""
+        result = self._run_consumer_native_host_hook(
+            plan_version="0.37.0",
+            initial_version="0.35.0",
+            install_version="0.37.0",
+            change_outside_bootstrap=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
+
+    def test_pre_commit_allows_bootstrap_only_change_in_consumer_native_layout(self):
+        """FIX-478 GREEN: bootstrap-only update + version bump stays allowed."""
+        result = self._run_consumer_native_host_hook(
+            plan_version="0.37.0",
+            initial_version="0.35.0",
+            install_version="0.37.0",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("bootstrap self-upgrade detected", result.stdout)
+
+    def test_pre_commit_blocks_when_bootstrap_projection_fails(self):
+        """FIX-478 P2 (fail-closed): a broken boundary projection must BLOCK.
+
+        Without per-side sentinels both projections collapse to empty on an
+        awk failure, compare equal, and the hook fails OPEN. Injected here via
+        a PATH-prepended awk stub that fails only the projection program.
+        """
+        result = self._run_consumer_native_host_hook(
+            plan_version="0.37.0",
+            initial_version="0.35.0",
+            install_version="0.37.0",
+            fail_projection=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("bootstrap self-upgrade detected", result.stdout)
+        self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
+
 
 class ExternalInstalledRuntimePathResolverTests(unittest.TestCase):
     """FIX-132: hooks and native commands must work without repo-local skills/."""

@@ -44,6 +44,7 @@
 | F5 | 升级后宿主健康面 43 issues（8 FAIL） | quick/full 实测 | 宿主治理数据债，登记（不属 FIX-001） |
 | F6 | `.governance` 运行时新文件未纳入 ignore | `governance-store-ops.json` / `execution-packets.json` / `authority-ledger/` / `.write-guard-*` | 已随 FIX-001 commit 纳入忽略 |
 | F7 | 升级遗留未提交治理面变更与后续任务混在同一工作树 | `git status` 5 项 unstaged | 单 commit 承载 + 披露（宿主先例 429ae39） |
+| **F9** | **插件缓存按版本键：未 bump 的修复无法经 `plugin update` 传播** | `claude plugin update` → `up_to_date`（0.99.0，版本未变）；缓存仍为 2026-10-31 快照；需 uninstall+install 才刷新到 a95f847 | 已用 uninstall+install 刷新；正式路径=版本 bump 发版（DEC-380 后处置） |
 | **F8** | **pre-commit BOOTSTRAP DISCIPLINE 在消费方宿主 fail-closed 误拦** | `is_claude_bootstrap_self_upgrade` 从 `$REPO_ROOT/skills/software-project-governance/SKILL.md` 取 source_ver（infra/hooks/pre-commit:151）；宿主无此路径 → source_ver 空 → 合法 bootstrap 自升级永不被识别；实测 commit 被 BLOCK，只能 `--no-verify` | **已修 FIX-477（d452855 已推送）**；REVIEW-FIX-477-R0 AWN/0 |
 
 ## 5. 真实任务（缺陷修复 FIX-001）
@@ -89,6 +90,8 @@
 - **审查/提交**：REVIEW-FIX-477-R0 **APPROVED_WITH_NOTES / unresolved_blockers=0**（txn-40001c9c seq178；report `docs/reviews/review-FIX-477-CODE-R0.md`）；commit **d452855**（3 files，+159/−1）已推送 origin；台账 commit e29c07f。插件仓 `.git/hooks/pre-commit` 在同次 commit 中**字节比较自升级到 24230 bytes**（修复传播机制实证）。
 - **P2-1 披露（未随本票修）**：consumer 布局的 bootstrap 段结束边界仍用 dogfood 专属 H2（`## 当前项目治理状态快速入口`）。FIX-477 使该路径首次可达 → 版本 bump 同提交可夹带 bootstrap 标题之后内容（如 `## 项目信息`）。属既有逻辑面，建议单独立项（边界泛化 + consumer-native 负例）。
 - **FIX-478（P2-1 闭环，commit fdb7cee 已推送）**：边界泛化为「首个非模板 H2 结束」（模板 5 H2 白名单）+ 投影失败 fail-closed（按侧哨兵，单侧/双侧失败均 BLOCK）；R0 AWN/0 → R1 delta AWN/0（R0 P2-1 fail-open CLOSED）；dogfood 投影逐字节不变、consumer 投影 9B→69B；安装 hook 自升级 25632 bytes。残余 P3 披露：哨兵魔法串理论可伪造（需环境控制≈--no-verify）、测试注释两处陈旧、helper 近重复、边界用例未入 CI。
+- **安装面刷新与宿主复验（F9）**：marketplace clone → a95f847；`plugin update` 报 up_to_date（缓存按版本键），故 uninstall+install 刷新缓存（cache hook 25632B，sha256 与仓内一致）；宿主 `.git/hooks/pre-commit` 自升级 23466→25632B（输出 “Hook self-upgraded”）；`SPG_HOME=真实缓存` 的端到端夹具：bootstrap-only 正例 **exit 0 allowed**、项目段夹带负例 **exit 1 BOOTSTRAP DISCIPLINE**（EVD-2193）。
+
 
 
 

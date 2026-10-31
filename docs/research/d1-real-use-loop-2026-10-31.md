@@ -44,7 +44,7 @@
 | F5 | 升级后宿主健康面 43 issues（8 FAIL） | quick/full 实测 | 宿主治理数据债，登记（不属 FIX-001） |
 | F6 | `.governance` 运行时新文件未纳入 ignore | `governance-store-ops.json` / `execution-packets.json` / `authority-ledger/` / `.write-guard-*` | 已随 FIX-001 commit 纳入忽略 |
 | F7 | 升级遗留未提交治理面变更与后续任务混在同一工作树 | `git status` 5 项 unstaged | 单 commit 承载 + 披露（宿主先例 429ae39） |
-| **F8** | **pre-commit BOOTSTRAP DISCIPLINE 在消费方宿主 fail-closed 误拦** | `is_claude_bootstrap_self_upgrade` 从 `$REPO_ROOT/skills/software-project-governance/SKILL.md` 取 source_ver（infra/hooks/pre-commit:151）；宿主无此路径 → source_ver 空 → 合法 bootstrap 自升级永不被识别；实测 commit 被 BLOCK，只能 `--no-verify` | **登记 FIX-477**（D1 真实使用新需求池首项） |
+| **F8** | **pre-commit BOOTSTRAP DISCIPLINE 在消费方宿主 fail-closed 误拦** | `is_claude_bootstrap_self_upgrade` 从 `$REPO_ROOT/skills/software-project-governance/SKILL.md` 取 source_ver（infra/hooks/pre-commit:151）；宿主无此路径 → source_ver 空 → 合法 bootstrap 自升级永不被识别；实测 commit 被 BLOCK，只能 `--no-verify` | **已修 FIX-477（d452855 已推送）**；REVIEW-FIX-477-R0 AWN/0 |
 
 ## 5. 真实任务（缺陷修复 FIX-001）
 
@@ -86,6 +86,9 @@
 - **开发期发现的真实回归**：首版按「安装根优先」实现，导致 plugin 布局用例被 BLOCK（本环境 `find_spg_home` 经 DSH preset 解析到真实仓 0.99.0，而非临时仓 0.37.0）——改为 repo-local 优先后恢复。
 - **回归证据**：`PreCommitClaudeBootstrapUpgradeHookTests` 7/7 OK（16.2s）；`test_hooks` 70/70 OK（148.6s）；`test_pre_commit_review_evidence` 11/11 OK；hook `bash -n` exit 0。
 - **独立端到端复验（Coordinator，模拟消费方宿主）**：同一临时仓把 hook 换成修复版、`SPG_HOME` 指向含修复 hook 的安装根 → `✅ GOVERNANCE: CLAUDE.md bootstrap self-upgrade detected; Step 6 allowed.` exit 0（红基线为 exit 1 BOOTSTRAP DISCIPLINE，EVD-2190）。
+- **审查/提交**：REVIEW-FIX-477-R0 **APPROVED_WITH_NOTES / unresolved_blockers=0**（txn-40001c9c seq178；report `docs/reviews/review-FIX-477-CODE-R0.md`）；commit **d452855**（3 files，+159/−1）已推送 origin；台账 commit e29c07f。插件仓 `.git/hooks/pre-commit` 在同次 commit 中**字节比较自升级到 24230 bytes**（修复传播机制实证）。
+- **P2-1 披露（未随本票修）**：consumer 布局的 bootstrap 段结束边界仍用 dogfood 专属 H2（`## 当前项目治理状态快速入口`）。FIX-477 使该路径首次可达 → 版本 bump 同提交可夹带 bootstrap 标题之后内容（如 `## 项目信息`）。属既有逻辑面，建议单独立项（边界泛化 + consumer-native 负例）。
+
 
 
 

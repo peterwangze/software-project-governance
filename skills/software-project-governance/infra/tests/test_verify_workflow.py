@@ -16185,6 +16185,112 @@ class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
 
+    # ── FIX-477: consumer-host layout (no repo-local skill) ──────────────
+    def _run_consumer_host_hook(self, *, plan_version="0.37.0",
+                                initial_version="0.35.0",
+                                install_version="0.37.0",
+                                change_outside_bootstrap=False):
+        """Consumer host: only .governance/ + CLAUDE.md, no repo-local skill.
+
+        The installed plugin root (SKILL.md + infra/hooks) is exposed through
+        SPG_HOME, which the hook's find_spg_home() resolves at runtime — the
+        same path a real consumer host uses.
+        """
+        with tempfile.TemporaryDirectory() as td, \
+                tempfile.TemporaryDirectory() as install_td:
+            root = Path(td)
+            install_root = Path(install_td)
+            (install_root / "SKILL.md").write_text(
+                f"---\nversion: {install_version}\n---\n", encoding="utf-8")
+            (install_root / "infra" / "hooks").mkdir(parents=True, exist_ok=True)
+
+            subprocess.run(["git", "init"], cwd=root, check=True,
+                           capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"],
+                           cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"],
+                           cwd=root, check=True)
+
+            claude = root / "CLAUDE.md"
+            claude.write_text(
+                "# Project\n\n"
+                "## Governance Bootstrap\n\n"
+                "old bootstrap\n\n"
+                "## 当前项目治理状态快速入口\n\n"
+                "- stable local content\n",
+                encoding="utf-8",
+            )
+            gov = root / ".governance"
+            gov.mkdir(parents=True, exist_ok=True)
+            (gov / "plan-tracker.md").write_text(
+                f"## 项目配置\n- **工作流版本**: {initial_version}\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(["git", "add", "CLAUDE.md", ".governance/plan-tracker.md"],
+                           cwd=root, check=True)
+            subprocess.run(["git", "commit", "-m", "INIT-001: baseline"],
+                           cwd=root, check=True, capture_output=True, text=True)
+
+            if change_outside_bootstrap:
+                claude.write_text(
+                    "# Project changed directly\n\n"
+                    "## Governance Bootstrap\n\n"
+                    "updated bootstrap\n\n"
+                    "## 当前项目治理状态快速入口\n\n"
+                    "- stable local content\n",
+                    encoding="utf-8",
+                )
+            else:
+                claude.write_text(
+                    "# Project\n\n"
+                    "## Governance Bootstrap\n\n"
+                    "updated bootstrap\n\n"
+                    "## 当前项目治理状态快速入口\n\n"
+                    "- stable local content\n",
+                    encoding="utf-8",
+                )
+            (gov / "plan-tracker.md").write_text(
+                f"## 项目配置\n- **工作流版本**: {plan_version}\n- note: staged\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "CLAUDE.md", ".governance/plan-tracker.md"],
+                           cwd=root, check=True)
+
+            env = dict(os.environ)
+            env["SPG_HOME"] = str(install_root)
+            env.pop("SOFTWARE_PROJECT_GOVERNANCE_HOME", None)
+            hook = _INFRA_DIR / "hooks" / "pre-commit"
+            return subprocess.run(
+                [self._bash(), hook.as_posix()],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+    def test_pre_commit_allows_bootstrap_self_upgrade_in_consumer_host_layout(self):
+        """FIX-477 RED: installed-root SKILL.md must be resolvable without a
+        repo-local skill copy (consumer host bootstrap self-upgrade)."""
+        result = self._run_consumer_host_hook(
+            plan_version="0.37.0", initial_version="0.35.0", install_version="0.37.0")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("bootstrap self-upgrade detected", result.stdout)
+
+    def test_pre_commit_blocks_non_bootstrap_change_in_consumer_host_layout(self):
+        """FIX-477 GREEN guard: resolving the installed root must not widen
+        discipline — a non-bootstrap CLAUDE.md edit still blocks."""
+        result = self._run_consumer_host_hook(
+            plan_version="0.37.0",
+            initial_version="0.35.0",
+            install_version="0.37.0",
+            change_outside_bootstrap=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("BOOTSTRAP DISCIPLINE", result.stdout)
+
 
 class ExternalInstalledRuntimePathResolverTests(unittest.TestCase):
     """FIX-132: hooks and native commands must work without repo-local skills/."""

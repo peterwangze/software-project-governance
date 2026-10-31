@@ -147,8 +147,22 @@ is_claude_bootstrap_self_upgrade() {
         return 1
     fi
 
+    # FIX-477: consumer hosts carry only .governance/ + the platform entry
+    # file — no repo-local skill copy — so fall back to the installed root
+    # resolved by find_spg_home() (SPG_RESOLVED_HOME is live by the time Step 6
+    # calls this function). The repo-local skill stays authoritative whenever
+    # it exists, so workflow-development layouts keep exactly the FIX-081
+    # discipline: a resolvable installed root of another version must never
+    # widen or bypass it (proved by
+    # test_pre_commit_allows_claude_bootstrap_self_upgrade).
+    local skill_md="$REPO_ROOT/skills/software-project-governance/SKILL.md"
+    if [ ! -f "$skill_md" ] && [ -n "${SPG_RESOLVED_HOME:-}" ] \
+        && [ -f "$SPG_RESOLVED_HOME/SKILL.md" ]; then
+        skill_md="$SPG_RESOLVED_HOME/SKILL.md"
+    fi
+
     local source_ver
-    source_ver=$(grep -E '^version:' "$REPO_ROOT/skills/software-project-governance/SKILL.md" 2>/dev/null | head -1 | sed 's/version:[[:space:]]*//')
+    source_ver=$(grep -E '^version:' "$skill_md" 2>/dev/null | head -1 | sed 's/version:[[:space:]]*//')
     [ -z "$source_ver" ] && return 1
 
     if ! git show ":CLAUDE.md" 2>/dev/null | grep -q "## Governance Bootstrap"; then

@@ -88,6 +88,8 @@
 - **独立端到端复验（Coordinator，模拟消费方宿主）**：同一临时仓把 hook 换成修复版、`SPG_HOME` 指向含修复 hook 的安装根 → `✅ GOVERNANCE: CLAUDE.md bootstrap self-upgrade detected; Step 6 allowed.` exit 0（红基线为 exit 1 BOOTSTRAP DISCIPLINE，EVD-2190）。
 - **审查/提交**：REVIEW-FIX-477-R0 **APPROVED_WITH_NOTES / unresolved_blockers=0**（txn-40001c9c seq178；report `docs/reviews/review-FIX-477-CODE-R0.md`）；commit **d452855**（3 files，+159/−1）已推送 origin；台账 commit e29c07f。插件仓 `.git/hooks/pre-commit` 在同次 commit 中**字节比较自升级到 24230 bytes**（修复传播机制实证）。
 - **P2-1 披露（未随本票修）**：consumer 布局的 bootstrap 段结束边界仍用 dogfood 专属 H2（`## 当前项目治理状态快速入口`）。FIX-477 使该路径首次可达 → 版本 bump 同提交可夹带 bootstrap 标题之后内容（如 `## 项目信息`）。属既有逻辑面，建议单独立项（边界泛化 + consumer-native 负例）。
+- **FIX-478（P2-1 闭环，commit fdb7cee 已推送）**：边界泛化为「首个非模板 H2 结束」（模板 5 H2 白名单）+ 投影失败 fail-closed（按侧哨兵，单侧/双侧失败均 BLOCK）；R0 AWN/0 → R1 delta AWN/0（R0 P2-1 fail-open CLOSED）；dogfood 投影逐字节不变、consumer 投影 9B→69B；安装 hook 自升级 25632 bytes。残余 P3 披露：哨兵魔法串理论可伪造（需环境控制≈--no-verify）、测试注释两处陈旧、helper 近重复、边界用例未入 CI。
+
 
 
 

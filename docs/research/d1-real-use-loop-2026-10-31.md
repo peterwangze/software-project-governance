@@ -92,6 +92,29 @@
 - **FIX-478（P2-1 闭环，commit fdb7cee 已推送）**：边界泛化为「首个非模板 H2 结束」（模板 5 H2 白名单）+ 投影失败 fail-closed（按侧哨兵，单侧/双侧失败均 BLOCK）；R0 AWN/0 → R1 delta AWN/0（R0 P2-1 fail-open CLOSED）；dogfood 投影逐字节不变、consumer 投影 9B→69B；安装 hook 自升级 25632 bytes。残余 P3 披露：哨兵魔法串理论可伪造（需环境控制≈--no-verify）、测试注释两处陈旧、helper 近重复、边界用例未入 CI。
 - **安装面刷新与宿主复验（F9）**：marketplace clone → a95f847；`plugin update` 报 up_to_date（缓存按版本键），故 uninstall+install 刷新缓存（cache hook 25632B，sha256 与仓内一致）；宿主 `.git/hooks/pre-commit` 自升级 23466→25632B（输出 “Hook self-upgraded”）；`SPG_HOME=真实缓存` 的端到端夹具：bootstrap-only 正例 **exit 0 allowed**、项目段夹带负例 **exit 1 BOOTSTRAP DISCIPLINE**（EVD-2193）。
 
+## 9. 第二轮：宿主治理数据债清理（FIX-002，2026-11-03）
+
+用户裁决「继续 D1 第二轮」→ 执行宿主 F5 债务清理（纯治理记录，走 change-triage 快速通道，未改产品代码）。
+
+| 项 | 事实 |
+|---|---|
+| 防护 | 全量备份 `python-game-backup-20261103-0820`（robocopy /XJ；1273 files / 123,329,424 B / 1273 SHA256；exit 1 = 有复制，正常） |
+| 修复前 | `check-governance --level strict` = **44 issues**，8 blocking FAIL（Check 14 ×4、Check 28c ×3、其余 1 按 gradual 计 WARN） |
+| 修复动作 | ①任务表 4 行（102/103/105/106）补 `纠偏动作` 单元格恢复 20 列；②新增 `## 版本规划`（9 行，首列表头=版本）与 `## 需求跟踪矩阵`（9 行）；③session-snapshot 补 `**工作流版本**: 0.99.0` + `session_date: 2026-11-03`；④`## 当前活跃事项` 顶部引入 0.99 紧凑任务表（FIX-001/FIX-002），旧 20 列表降为 `### 历史任务表`（只读）；⑤EVD 编号归一 34/35 → 034/035 |
+| 修复后 | **37 issues**，blocking FAIL **0**；Check 14 / 28c / 35 由 FAIL 转 PASS |
+| 宿主提交 | `529f325`（4 files，+254/−12），pre-commit + commit-msg 均通过（无 --no-verify）；EVD-035、TRIAGE-FIX-002 |
+| 残余 WARN | Check 9 ×34（FIX-479）、Check 13（DEC-ID 期望区间被推到 377，疑似跨仓编号污染，**待诊断**）、Check 23（lightweight × 11 Gate 行）、Check 29（evidence 散文缺通知前缀）、Check 36（受 FIX-480 影响） |
+
+**本轮新摩擦（升级路径兼容，已回流主仓入账）**：
+
+- **F10 / FIX-480（P1）**：0.99 紧凑表解析器不识别 0.54 期 **ID 首列 20 列**任务表 →
+  ①Check 1 对 34 个已完成任务报「Completed tasks: 0」**假 PASS**（比 FAIL 更危险）；
+  ②Check 36 `task_status_map` 把备注文本读成状态；③TPA 全任务 `priority=P9`；
+  ④**commit-msg `task_in_plan_tracker` 正则只认 `| P<n> | ID |` 行 → 宿主任何提交恒被拒**（本轮实测：FIX-002 首提交被 BLOCK，补紧凑表行后才通过）。后果：升级后的消费方宿主若不重构任务表，治理门禁形同虚设（只能 `--no-verify`）。
+- **F11 / FIX-479（P2）**：Check 9 终态筛选只认 `已完成`/`已终止`，未归一 `✅ 已完成`/`✅ committed` → 已完成任务计入 overdue（宿主 34 假 WARN，占其剩余 issue 92%）。
+- **F12（并入 FIX-480 验收，不单独立项）**：`change_triage.parse_version_chain` 对 `## 版本规划` 表头首列非精确 `版本`（如 `版本/里程碑`）抛 `KeyError` 裸栈（非 fail-closed 结构化错误）。本轮以数据侧改名规避。
+
+
 
 
 

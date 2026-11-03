@@ -364,6 +364,15 @@ def parse_version_chain(plan_tracker_text: str) -> list:
     (``\\d+\\.\\d+`` — FIX-250 P3-1 / FIX-248 R0), so trailing tables after the
     roadmap are never appended.
 
+    Raises:
+        ValueError: ``version_chain.unrecognized_header`` — a header whose
+            first cell merely CONTAINS 「版本」 (e.g. ``版本/里程碑``) but
+            whose row carries no exact 「版本」 column (FIX-480 fail-closed:
+            the pre-fix code crashed the data-row lookup with a bare
+            ``KeyError``; the structured error names the offending header so
+            the tracker can be fixed, and is never swallowed into an empty
+            chain).
+
     Returns:
         list of dicts ``{"version": str, "status": str}`` in row order.
     """
@@ -379,6 +388,13 @@ def parse_version_chain(plan_tracker_text: str) -> list:
                 name: i for i, name in enumerate(cells)
                 if name in ("版本", "状态")
             }
+            if "版本" not in header_idx:
+                raise ValueError(
+                    "version_chain.unrecognized_header: roadmap header "
+                    "first cell {0!r} contains 「版本」 but the row has no "
+                    "exact 「版本」 column (cells: {1!r}) — the version "
+                    "chain cannot be located fail-closed; rename the "
+                    "column to exactly 「版本」".format(cells[0], cells))
             continue
         if not header_idx or len(cells) <= max(header_idx.values()):
             continue

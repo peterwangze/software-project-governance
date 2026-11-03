@@ -9974,40 +9974,33 @@ class GovernanceDataSource:
             for entry in self.get_all_completed_task_entries()
         }
 
-    def _plan_profile(self):
-        """Resolve the Profile declared by this data source's plan-tracker."""
-        if not self.sample_path.is_file():
-            return ""
-        config = parse_project_config(self.sample_path)
-        m = re.match(r"^\s*(\w+)", config.get("Profile", ""))
-        return m.group(1).lower() if m else ""
-
-    def _hot_task_status_index(self):
-        """FIX-287②: profile-driven task-table status column for hot rows."""
-        return _task_status_column_index(
-            _PROFILE_TASK_COLUMNS.get(self._plan_profile())
-        )
-
     def get_all_completed_task_entries(self):
-        """Return completed task entries with source metadata."""
+        """Return completed task entries with source metadata.
+
+        FIX-480: the hot face reads through the SINGLE parse source —
+        ``task_priority.parse_task_dependencies`` — so the 0.99 compact
+        shape and the 0.54-era id-first 20-column host shape converge on
+        one TaskDep model (no second semantic source; the pre-fix
+        profile-column channel mis-located the status cell on the 20-col
+        shape and reported ``Completed tasks: 0`` — the python_game false
+        PASS). Completion keeps BOTH historical wordings: the ✅ semantics
+        (``TaskDep.is_completed``) and the exact ``已完成`` cell (the
+        lightweight/profile-column channel's word, kept so trackers using
+        the bare word stay counted).
+        """
         completed = []
         if self.sample_path.is_file():
             content = self.sample_path.read_text(encoding="utf-8")
-            status_index = self._hot_task_status_index()
-            for line in content.split("\n"):
-                line_stripped = line.strip()
-                if not line_stripped.startswith("| ") or "---" in line_stripped:
-                    continue
-                parts = _split_markdown_table_row(line)
-                task_id = next(
-                    (c.strip().strip("*") for c in parts
-                     if re.match(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$", c.strip())),
-                    None,
-                )
-                if task_id is None:
-                    continue
-                if status_index < len(parts) and parts[status_index] == "已完成":
-                    completed.append({"id": task_id, "status": "已完成", "source": "hot"})
+            try:
+                from task_priority import parse_task_dependencies  # noqa: WPS433 (deferred, matches the module's TPA call style)
+                tasks = parse_task_dependencies(content)
+            except Exception:  # unreadable/unparsable → empty, never crash
+                tasks = []
+            for dep in tasks:
+                if dep.is_completed() or dep.status.strip() == "已完成":
+                    completed.append(
+                        {"id": dep.task_id, "status": dep.status,
+                         "source": "hot"})
         for entry in self._scan_archive_files(self.archive_tasks_dir, self._extract_task_ids):
             if entry.get("status") == "已完成":
                 completed.append({**entry, "source": "archive"})
@@ -15711,18 +15704,13 @@ _PROFILE_TASK_COLUMNS = {
     "strict": 20,
 }
 
-# FIX-287②: legacy standard/strict task tables (20 columns) keep the status
-# cell at the 10th column; compact profiles (fewer columns, e.g. lightweight
-# 6-column tables) carry it in the last column. Derived from
-# _PROFILE_TASK_COLUMNS — replaces the per-row `parts[9]` hardcode.
-_LEGACY_TASK_STATUS_COLUMN = 9
-
-
-def _task_status_column_index(expected_cols):
-    """Resolve the task-table status cell index from the profile column count."""
-    if expected_cols is None or expected_cols > _LEGACY_TASK_STATUS_COLUMN:
-        return _LEGACY_TASK_STATUS_COLUMN
-    return expected_cols - 1
+# FIX-480: the profile-driven status-column helpers
+# (``_task_status_column_index`` / ``_LEGACY_TASK_STATUS_COLUMN``) were
+# removed with the GovernanceDataSource hot-face convergence onto
+# task_priority.parse_task_dependencies — the status cell is now located by
+# HEADER SEMANTICS on both supported shapes, not inferred from the declared
+# profile's column count (the 0.54-era python_game host with a mismatched
+# Profile line mis-located the status column and reported 0 completed).
 
 
 def check_profile_consistency():
@@ -16375,6 +16363,11 @@ def _run_full_engine_checks(args):
     print("\n┌─ Check 1: Evidence Completeness ─────────────────────┐")
     ev_result = check_evidence_completeness()
     print(f"│  Completed tasks: {ev_result['completed_count']}")
+    # FIX-480 fail-closed: an unrecognized task-table shape makes the
+    # completed-count face NOT_RUN — WARN, never a silent 0-completed PASS.
+    for _shape_warn in ev_result.get("parse_warnings", []):
+        all_issues += 1
+        print(f"│  [WARN] {_shape_warn}")
     print(f"│  Tasks with evidence: {ev_result['evidenced_count']}")
     missing = ev_result["missing_evidence"]
     if missing:

@@ -215,7 +215,12 @@ FROZEN_SEGMENTS = 74
 # re / uuid / datetime / pathlib — all already in the cold face, so the
 # face grows by exactly this one module; measured 211 live). Baseline
 # regenerated in the same change.
-FROZEN_ENGINE_IMPORT_COUNT = 211
+# FIX-480: 211 -> 212 — bookkeeping catch-up in the same baseline regen,
+# NOT a new module: the FIX-480 rider's module-set diff vs HEAD is empty
+# (cold-face probe identical), but the committed r6 face still carried the
+# FIX-463-era 211 while the live face measured 212; the regen re-records
+# the measured truth and this count follows it.
+FROZEN_ENGINE_IMPORT_COUNT = 212
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
 FORBIDDEN_REGISTRY_NAMES = {

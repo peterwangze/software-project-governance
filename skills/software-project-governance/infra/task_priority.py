@@ -1018,7 +1018,12 @@ def parse_task_dependencies(plan_tracker_text_or_path) -> list:
     ``| 优先级 | ID | ... |`` tables (``### 优先级一览`` and ``### 已归档版本
     task``) and the headerless window table directly under ``### 最近完成
     （本会话提交窗口）`` (a 7-col task table with NO header row; FIX-251).
-    Duplicate task IDs across tables are de-duplicated keeping the
+    FIX-480 additionally recognizes the 0.54-era ID-first task table
+    (``| ID | 阶段 | ... | 状态 | 优先级 | ... | 备注 |``, the v0.54.1
+    template's 20-column shape, plus the 任务ID-led legacy variant): both
+    header shapes converge onto the single TaskDep model via header-semantic
+    column mapping (no second semantic source — FIX-292). Duplicate task IDs
+    across tables are de-duplicated keeping the
     FIRST occurrence (the ``优先级一览`` table is authoritative for active
     tasks; the archived-version pointer table repeats FIX-082..087 only as a
     hot-fact-source proof and would otherwise shadow the active entry — though
@@ -1112,6 +1117,23 @@ def parse_task_dependencies(plan_tracker_text_or_path) -> list:
         # tables put 任务ID/描述 first; risk/decision/evidence logs have
         # different headers).
         if len(cells) >= 2 and cells[0] == "优先级" and cells[1] == "ID":
+            in_table = True
+            col_index = _build_column_index(cells)
+            header_width = len(cells)
+            after_heading = False
+            continue
+
+        # Header detection, shape 2 (FIX-480 upgrade path): the 0.54-era
+        # ID-first task table. The v0.54.1 template header leads with the
+        # task ID and locates 状态/优先级 (and, on variants, 依赖/目标版本)
+        # by header cells anywhere across a 20-column row; the FIX-287②
+        # legacy variant leads with 任务ID. Exact-cell matching keeps every
+        # non-task table out — Gate / 项目 / 版本 / 里程碑 / 需求ID first
+        # cells all miss, and a 状态 column is required (a task table
+        # without a status column is not a supported task table).
+        clean_cells = [_strip_markdown(c) for c in cells]
+        if (clean_cells and clean_cells[0] in ("ID", "任务ID")
+                and "状态" in clean_cells):
             in_table = True
             col_index = _build_column_index(cells)
             header_width = len(cells)
@@ -1251,14 +1273,17 @@ def _coerce_text(plan_tracker_text_or_path) -> str:
 def _build_column_index(header_cells: list) -> dict:
     """Map header cell names to their 0-based data-cell index.
 
-    Recognizes: 优先级, ID, 依赖, 目标版本, 状态. Other columns (事项, 闭环路径,
-    负责人, 审查人, ...) are irrelevant to dependency analysis and ignored.
+    Recognizes: 优先级, ID / 任务ID (FIX-480 R0 P1-1 — both id-first header
+    labels map to the same "id" key so the id-first dispatch fires for the
+    任务ID-led legacy variant too), 依赖, 目标版本, 状态. Other columns (事项,
+    闭环路径, 负责人, 审查人, ...) are irrelevant to dependency analysis and
+    ignored.
     """
     idx = {}
     for i, cell in enumerate(header_cells):
         # Strip markdown emphasis just in case.
         clean = _strip_markdown(cell)
-        if clean == "ID" and "id" not in idx:
+        if clean in ("ID", "任务ID") and "id" not in idx:
             idx["id"] = i
         elif clean == "优先级" and "priority" not in idx:
             idx["priority"] = i
@@ -1269,6 +1294,89 @@ def _build_column_index(header_cells: list) -> dict:
         elif clean == "状态" and "status" not in idx:
             idx["status"] = i
     return idx
+
+
+def _scan_demand_source(cells: list) -> str:
+    """FEAT-077 / ADR-021 §2.2.2 (2) — 行内〔需求源〕标注：扫描整行原始
+    cells（依赖列或状态列均可携带；首个命中胜出）。中文标注不进入
+    _ID_TOKEN_RE 的提取路径（F5），依赖解析零回归。Shared by both header
+    shapes (FIX-480) — one marker vocabulary, never restated.
+    """
+    for c in cells:
+        marker = _DEMAND_SOURCE_MARKER_RE.search(c)
+        if marker:
+            return _MARKER_TO_DEMAND_SOURCE[marker.group(1)]
+    return DEMAND_SOURCE_LEGACY
+
+
+def _parse_id_first_task_row(cells: list, col_index: dict):
+    """Parse one ID-first (0.54-era) task-table row via header semantics.
+
+    FIX-480 upgrade-path shape: the header leads with ``ID`` (the v0.54.1
+    20-column template) or ``任务ID`` (the FIX-287② legacy variant) and the
+    状态 / 优先级 / 依赖 / 目标版本 columns sit at header-declared offsets.
+    Fields are read strictly from the header-driven ``col_index`` — the
+    compact-table relative offsets would on this shape read the 任务项 cell
+    as deps, the 目标/预期结果 as the version and the trailing 备注 as the
+    status (the python_game red face: Check 36 mojibake + TPA P9).
+
+    Fail-closed: a semantic column the header does NOT declare (依赖 /
+    目标版本 on the stock 0.54 template) yields the empty value — never a
+    guess from a neighbouring column.
+
+    The declared ID cell may carry markdown emphasis; a row whose declared
+    ID cell is not a bare ID falls back to the anchor scan (tolerating the
+    same malformed-row family the compact parser handles).
+    """
+    n = len(cells)
+
+    task_id = ""
+    id_idx = col_index.get("id", -1)
+    if 0 <= id_idx < n:
+        cand = _strip_markdown(cells[id_idx])
+        if _ID_CELL_RE.match(cand):
+            task_id = cand
+    if not task_id:
+        # Anchor fallback (malformed rows: the declared ID cell drifted).
+        for i, c in enumerate(cells):
+            cand = _strip_markdown(c)
+            if _ID_CELL_RE.match(cand):
+                id_idx = i
+                task_id = cand
+                break
+    if not task_id:
+        return None
+
+    def _cell_at(name):
+        idx = col_index.get(name)
+        if idx is None or idx >= n:
+            return ""
+        return cells[idx]
+
+    # Priority: the header-declared 优先级 column; fallbacks mirror the
+    # compact parser (cell before the ID, then a scan up to the ID).
+    priority = _parse_priority(_cell_at("priority"))
+    if priority == _NO_PRIORITY_SENTINEL and id_idx - 1 >= 0:
+        priority = _parse_priority(cells[id_idx - 1])
+    if priority == _NO_PRIORITY_SENTINEL:
+        for c in cells[:id_idx + 1]:
+            if _PRIORITY_RE.search(c):
+                priority = _parse_priority(c)
+                break
+
+    status = _strip_markdown(_cell_at("status"))
+    task_family, cross_entity = _parse_dependency_cell(_cell_at("deps"))
+    target_version = _strip_markdown(_cell_at("version"))
+
+    return TaskDep(
+        task_id=task_id,
+        priority=priority,
+        status=status,
+        dependencies=task_family,
+        cross_entity_refs=cross_entity,
+        target_version=target_version,
+        demand_source=_scan_demand_source(cells),
+    )
 
 
 def _parse_task_row(cells: list, col_index: dict, header_width: int = 0):
@@ -1315,6 +1423,12 @@ def _parse_task_row(cells: list, col_index: dict, header_width: int = 0):
     if not task_id:
         return None
 
+    # FIX-480 shape dispatch: an ID-first header (ID/任务ID declared at
+    # column 0 WITH a semantic 状态 column) parses strictly by header
+    # semantics — the compact relative offsets below do not apply to it.
+    if col_index.get("id") == 0 and "status" in col_index:
+        return _parse_id_first_task_row(cells, col_index)
+
     n = len(cells)
 
     # Priority: cell immediately before the ID. Fall back to a header index or
@@ -1355,15 +1469,9 @@ def _parse_task_row(cells: list, col_index: dict, header_width: int = 0):
             status = c
             break
 
-    # FEAT-077 / ADR-021 §2.2.2 (2) — 行内〔需求源〕标注：扫描整行原始
-    # cells（依赖列或状态列均可携带；首个命中胜出）。中文标注不进入
-    # _ID_TOKEN_RE 的提取路径（F5），依赖解析零回归。
-    demand_source = DEMAND_SOURCE_LEGACY
-    for c in cells:
-        marker = _DEMAND_SOURCE_MARKER_RE.search(c)
-        if marker:
-            demand_source = _MARKER_TO_DEMAND_SOURCE[marker.group(1)]
-            break
+    # FEAT-077 / ADR-021 §2.2.2 (2) — 行内〔需求源〕标注（FIX-480: shared
+    # helper, one marker vocabulary for both header shapes）.
+    demand_source = _scan_demand_source(cells)
 
     return TaskDep(
         task_id=task_id,

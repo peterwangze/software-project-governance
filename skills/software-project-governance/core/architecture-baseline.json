@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "50dfb4a94e530652f047fafc4f470a38d79c6e82",
+    "git_head": "91962aaeb4dfff6bed82cf46094abdaac97ec9be",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 28384,
+    "anchor_loc": 28418,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -81,7 +81,7 @@
         "count": 1,
         "kind": "import_vw",
         "lines": [
-          49
+          50
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/evidence_domain.py"
@@ -90,7 +90,7 @@
         "count": 1,
         "kind": "vw_call",
         "lines": [
-          97
+          98
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/evidence_domain.py"
@@ -99,7 +99,7 @@
         "count": 1,
         "kind": "vw_def",
         "lines": [
-          41
+          42
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/evidence_domain.py"
@@ -246,10 +246,10 @@
         "count": 4,
         "kind": "import_vw",
         "lines": [
-          260,
-          266,
-          479,
-          485
+          322,
+          328,
+          541,
+          547
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/triage_domain.py"
@@ -459,7 +459,7 @@
       "_print_check_summary": 9,
       "_print_product_gate_skipped": 3,
       "_print_sequential_id_check": 13,
-      "_run_full_engine_checks": 632,
+      "_run_full_engine_checks": 633,
       "check_agent_adapter_contract": 3,
       "check_architecture_fact_source": 2,
       "check_files": 4,
@@ -542,7 +542,7 @@
       "cmd_write_guard_bootstrap": 2,
       "main": 1
     },
-    "total": 1383
+    "total": 1384
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",
@@ -554,8 +554,8 @@
     "snapshot_present_at_regen": true
   },
   "r6_startup_budget": {
-    "import_count": 211,
-    "import_set_sha256": "b4ca0b136ff3dd292f4ef3a75e5856559fef3da4e45f78fc76392bd46ad4a85e",
+    "import_count": 212,
+    "import_set_sha256": "765044bd9705168e06ed342e6d47a049edc191109b578031bfe19e64fef3fba2",
     "note": "collection + comparison frame only; FEAT-018's tolerance table fills threshold, then the face tightens — advisory until then, never fatal in v1",
     "probe": "python -I -B -c 'import verify_workflow' (isolated)",
     "threshold": null

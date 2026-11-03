@@ -27,6 +27,7 @@ design and the line-number baseline used during extraction.
 import re
 import json
 from datetime import date, datetime
+from pathlib import Path
 
 # ── Shared-helper access (deferred to avoid import cycle) ──────────
 # Same deferred-_vw() pattern as checks.manifest (Phase 1) and
@@ -243,12 +244,71 @@ def parse_evidence_task_map():
     return task_map
 
 
+def _hot_task_shape_warnings(sample_path):
+    """FIX-480 fail-closed: task-like rows NO supported header shape
+    recognizes must WARN (NOT_RUN), never a silent 0-completed PASS.
+
+    A "task-like row" is a table row carrying a bare ``PREFIX-NNN`` cell
+    whose prefix is NOT a cross-entity record (RISK/DEC/REVIEW/EVD/…, by
+    identity from task_priority's ``_CROSS_ENTITY_PREFIXES`` — never
+    restated) and not ``REQ`` (the requirement matrix is not a task table;
+    same ruling as the commit-msg FIX-282 P2-1 tightening). An unknown
+    host prefix DOES count — an upgrade-path task table must not silently
+    degrade back to the false PASS. The parse itself goes through the
+    single source (``task_priority.parse_task_dependencies``); a tracker
+    whose task-like rows ALL parse needs no warning (a TRUE 0 stays a
+    PASS).
+    """
+    warnings = []
+    path = Path(sample_path)
+    if not path.is_file():
+        return warnings
+    content = path.read_text(encoding="utf-8")
+    try:
+        from task_priority import (  # noqa: WPS433 (deferred, mirrors verify_workflow's TPA call style)
+            _CROSS_ENTITY_PREFIXES,
+            parse_task_dependencies,
+        )
+        parsed = parse_task_dependencies(content)
+    except Exception as exc:  # unreadable/unparsable — surface, never hide
+        return ["task_table_parse_failed: {0}: {1}".format(
+            type(exc).__name__, exc)]
+    if parsed:
+        return warnings
+    task_like = 0
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        for cell in stripped.strip("|").split("|"):
+            m = re.match(r"^([A-Z]+)-\d+$", cell.strip().strip("*"))
+            if (m and m.group(1) not in _CROSS_ENTITY_PREFIXES
+                    and m.group(1) != "REQ"):
+                task_like += 1
+                break
+    if task_like:
+        warnings.append(
+            "task_table_shape_unrecognized: {0} task-like row(s) present "
+            "but 0 parsed — supported shapes: 0.99 compact "
+            "「| 优先级 | ID | … |」 and 0.54 id-first "
+            "「| ID | … | 状态 | 优先级 | … |」; the completed-count face "
+            "is NOT_RUN (fail-closed), not PASS".format(task_like))
+    return warnings
+
+
 def check_evidence_completeness():
     """Check that every completed task has at least one evidence entry.
 
     Uses GovernanceDataSource to transparently aggregate hot files + archive
     files. Falls back to single-file mode when archive/ directory does not
     exist (backward compatible).
+
+    FIX-480: returns ``completed_ids`` (the counted IDs — the four consumer
+    faces share one parse source) and ``parse_warnings`` — when the hot
+    plan-tracker carries task-like rows that no supported header shape
+    recognizes, the completed-count face is NOT_RUN and the warning says so
+    (the python_game 0.54-era host previously got a silent
+    ``Completed tasks: 0`` PASS for 34 completed tasks).
     """
     _resolve_shared()
     ds = GovernanceDataSource()
@@ -265,9 +325,12 @@ def check_evidence_completeness():
     matched = completed & evidenced
     return {
         "completed_count": len(completed),
+        "completed_ids": sorted(completed),
         "evidenced_count": len(matched),
         "missing_evidence": sorted(current_missing),
         "historical_missing_evidence": sorted(historical_missing),
+        "parse_warnings": _hot_task_shape_warnings(
+            getattr(ds, "sample_path", None)),
     }
 
 

@@ -159,7 +159,10 @@ SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 #   -> 1383 (0.99.x emergency window, FIX-463 decision-premise rider,
 #   2026-10-24: +7 — the check-governance Check 2b Decision Premise WARN
 #   face's report lines; the rider's only print growth, disclosed).
-FACTS_PRINT_TOTAL = 1383
+#   -> 1384 (FIX-480 upgrade-path task-table rider, 2026-11-03: +1 — the
+#   check-governance Check 1 unrecognized-shape WARN face's report loop;
+#   the rider's only print growth, disclosed).
+FACTS_PRINT_TOTAL = 1384
 
 
 def _committed_baseline():
@@ -745,7 +748,17 @@ class BaselineArtifactTests(unittest.TestCase):
         # re-anchor` (machine writer, op-493e21b7/op-b81c0a2b/op-e074d204/
         # op-6ad5349f) after the +163-line test insertion in
         # test_verify_workflow.py (CheckReviewDebtForensicsEvidenceTests).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28384)
+        # FIX-480 rider re-anchor (0.100.0 window, 2026-11-03): 28384 ->
+        # 28418. Net -8 vs the pre-rider tree (28426): the GovernanceDataSource
+        # hot face converged onto task_priority.parse_task_dependencies
+        # replaced the profile-column channel (helpers _plan_profile /
+        # _hot_task_status_index / _task_status_column_index removed, -35)
+        # against the added Check 1 shape-WARN wiring (+27). R4 print census
+        # 1383 -> 1384 (+1: the Check 1 shape-WARN report loop); R6 211 ->
+        # 212 in the same regen (the pre-rider committed baseline lagged the
+        # measured live face — FIX-463-era 211 vs live 212, module-set diff
+        # empty vs HEAD, i.e. a bookkeeping catch-up, not a new module).
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28418)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

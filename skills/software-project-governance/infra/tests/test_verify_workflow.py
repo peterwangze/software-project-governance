@@ -28016,5 +28016,226 @@ class TestFeat095EnforcementBoundaries(unittest.TestCase):
             self.assertIn(anchor, skill_text, f"SKILL.md missing {anchor}")
 
 
+# ─── FIX-480: upgrade-path task-table parsing (0.54 id-first 20 columns) ────
+
+_FIX480_FIXTURE = (
+    _HERE / "fixtures" / "plan-tracker-id-first-20col.md"
+)
+
+_TASK_IN_PLAN_TRACKER_FN_RE = re.compile(
+    r"(?ms)^task_in_plan_tracker\(\) \{.*?^\}")
+
+
+class Fix480UpgradePathTaskTableTests(unittest.TestCase):
+    """FIX-480: the 0.54-era id-first 20-column task table across the four
+    consumer faces.
+
+    Verified live on the python_game host (TRIAGE-FIX-480): Check 1 reported
+    ``Completed tasks: 0`` (false PASS) for 34 completed tasks, Check 36 read
+    the trailing 备注 cell as the status, TPA mis-ranked every task P9, and
+    commit-msg ``task_in_plan_tracker`` never matched (every host commit had
+    to ``--no-verify``). The fix converges both header shapes onto the single
+    task_priority TaskDep model and makes an unparsable task-table shape a
+    Check 1 WARN (NOT_RUN) instead of a false PASS.
+    """
+
+    def _write_governance(self, tmpdir, plan, evidence=""):
+        gov = tmpdir / ".governance"
+        gov.mkdir(parents=True, exist_ok=True)
+        sp = gov / "plan-tracker.md"
+        ep = gov / "evidence-log.md"
+        sp.write_text(plan, encoding="utf-8")
+        ep.write_text(evidence, encoding="utf-8")
+        return sp, ep
+
+    # ── Check 1 face: completed counting on the 20-column host shape ──
+
+    def test_check1_counts_completed_on_id_first_20col_table(self):
+        """Pre-fix red face: lightweight-profile column mismatch + the 20-col
+        shape made Check 1 report 0 completed (false PASS)."""
+        plan = _FIX480_FIXTURE.read_text(encoding="utf-8")
+        evidence = _evd_row("EVD-001", "INIT-001")
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._write_governance(Path(td), plan, evidence)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_evidence_completeness()
+                # Both completion wordings on the 20-col shape must count:
+                # ✅ 已完成 (INIT-001) and the bare 已完成 (FEAT-003).
+                self.assertIn("INIT-001", r["completed_ids"])
+                self.assertIn("FEAT-003", r["completed_ids"])
+                self.assertEqual(r["completed_count"], 2)
+
+    def test_check1_warns_when_task_table_shape_unrecognized(self):
+        """fail-closed: a table with task-like ID rows that NO supported
+        header shape recognizes must WARN (NOT_RUN), not pass with 0."""
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## 项目配置",
+            "",
+            "- **Profile**: lightweight",
+            "",
+            "## 当前活跃事项",
+            "",
+            "| 任务编号 | 阶段 | 状态 |",
+            "| --- | --- | --- |",
+            "| FIX-900 | 开发实现 | ✅ 已完成 |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._write_governance(Path(td), plan)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_evidence_completeness()
+                self.assertTrue(
+                    r.get("parse_warnings"),
+                    "unrecognized task-table shape must surface a WARN, "
+                    "not a silent 0-completed PASS")
+
+    def test_check1_no_shape_warning_when_no_task_like_rows(self):
+        """A tracker with no task-like rows has a TRUE 0 — no WARN."""
+        plan = "\n".join([
+            "# 计划跟踪",
+            "",
+            "## Gate 状态跟踪",
+            "",
+            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
+            "| --- | --- | --- | --- | --- |",
+            "| G1 | → 调研 | passed | 2026-01-01 | EVD-001 |",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            sp, ep = self._write_governance(Path(td), plan)
+            with patch.object(vw, "SAMPLE_PATH", sp), \
+                 patch.object(vw, "EVIDENCE_PATH", ep):
+                r = vw.check_evidence_completeness()
+                self.assertEqual(r.get("parse_warnings"), [])
+
+    # ── commit-msg face: task_in_plan_tracker matches BOTH shapes ──
+
+    @staticmethod
+    def _bash_exe():
+        for candidate in (
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files\Git\usr\bin\bash.exe",
+            "bash",
+        ):
+            try:
+                probe = subprocess.run(
+                    [candidate, "-c", "echo ok"],
+                    capture_output=True, timeout=10)
+                if probe.returncode == 0:
+                    return candidate
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+        return None
+
+    def _run_task_in_plan_tracker(self, task_id, plan_text):
+        """Execute the REAL ``task_in_plan_tracker`` extracted from the
+        hook source (not re-typed) against a fixture plan-tracker.
+        Returns True/False (HIT/MISS)."""
+        bash = self._bash_exe()
+        if not bash:
+            self.skipTest("no working bash (hooks are bash)")
+        hook_text = (_INFRA_DIR / "hooks" / "commit-msg").read_text(
+            encoding="utf-8")
+        m = _TASK_IN_PLAN_TRACKER_FN_RE.search(hook_text)
+        self.assertIsNotNone(
+            m, "task_in_plan_tracker() not found in commit-msg source")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".governance").mkdir()
+            (root / ".governance" / "plan-tracker.md").write_text(
+                plan_text, encoding="utf-8")
+            root_posix = str(root).replace("\\", "/")
+            script = (
+                "REPO_ROOT={0!r}\n"
+                "{1}\n"
+                'if task_in_plan_tracker "{2}"; then echo HIT; '
+                "else echo MISS; fi\n"
+            ).format(root_posix, m.group(0), task_id)
+            script = script.replace("\r\n", "\n").replace("\r", "\n")
+            proc = subprocess.run(
+                [bash, "-s"], input=script.encode("utf-8"),
+                capture_output=True, timeout=30)
+        out = proc.stdout.decode("utf-8", "replace").strip()
+        self.assertIn(
+            out, ("HIT", "MISS"),
+            "hook run failed: rc={0} stderr={1!r}".format(
+                proc.returncode, proc.stderr[:400]))
+        return out == "HIT"
+
+    _COMPACT_ROW = (
+        "| 优先级 | ID | 任务项 | 依赖 | 目标版本 | 状态 |\n"
+        "| --- | --- | --- | --- | --- | --- |\n"
+        "| **P1** | FIX-480 | 升级路径解析兼容 | TRIAGE-FIX-480 | 0.100.0 | "
+        "⏳ 进行中 |")
+
+    _ID_FIRST_20COL_ROW = "\n".join([
+        "| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| FIX-480 | 开发实现 | 升级路径解析兼容 | 两形状解析器 | TRIAGE-FIX-480 | 解析层修复 | dev | — | — | ⏳ 进行中 | P1 | 2026-11-03 | 2026-11-03 |  | G5 | 红绿用例 | — | 无 | 无 | 无 |",
+    ])
+
+    def test_commit_msg_matches_compact_priority_first_row(self):
+        self.assertTrue(
+            self._run_task_in_plan_tracker("FIX-480", self._COMPACT_ROW),
+            "compact priority-first rows must keep matching (zero regression)")
+
+    def test_commit_msg_matches_id_first_20col_row(self):
+        """Pre-fix red face: the matcher never hit the 0.54 shape, so every
+        host commit needed --no-verify (TRIAGE-FIX-480, commit 529f325)."""
+        self.assertTrue(
+            self._run_task_in_plan_tracker("FIX-480", self._ID_FIRST_20COL_ROW),
+            "id-first 20-column task rows must match task_in_plan_tracker")
+
+    def test_commit_msg_still_misses_req_matrix_row(self):
+        """FIX-282 P2-1 tightening lock: a REQ-xxx requirement-matrix row
+        (first cell = requirement ID) must NOT satisfy task existence."""
+        plan = (
+            "| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| REQ-002 | 用户能在 5 分钟内完成初始化 | PR/FAQ | P0 | MAINT-012 "
+            "| ⚠️ 部分 | — |")
+        self.assertFalse(self._run_task_in_plan_tracker("REQ-002", plan))
+
+    def test_commit_msg_still_misses_archive_pointer_row(self):
+        """FIX-282 P2-1 tightening lock: archived pointer rows ('—' first
+        cell) must keep missing."""
+        plan = (
+            "| — | FIX-082 | Runtime capability contract | AUDIT-102 | 0.38.0 "
+            "| ✅ 已交付 |")
+        self.assertFalse(self._run_task_in_plan_tracker("FIX-082", plan))
+
+    # ── parse_version_chain face: structured fail-closed header error ──
+
+    def test_parse_version_chain_nonexact_version_header_fail_closed(self):
+        """Pre-fix red face: a roadmap header whose first cell merely
+        CONTAINS 「版本」 (e.g. 版本/里程碑) but has no exact 「版本」
+        column crashed with a bare KeyError inside the data-row lookup."""
+        import change_triage as ct
+        text = "\n".join([
+            "| 版本/里程碑 | 状态 |",
+            "| --- | --- |",
+            "| 0.5.0 | 已发布 |",
+        ])
+        with self.assertRaises(ValueError) as cm:
+            ct.parse_version_chain(text)
+        # Structured, diagnosable error — not a bare KeyError traceback.
+        self.assertIn("version_chain", str(cm.exception))
+        self.assertIn("版本/里程碑", str(cm.exception))
+
+    def test_parse_version_chain_exact_header_still_parses(self):
+        """Zero regression: the exact 「版本」 header keeps parsing."""
+        import change_triage as ct
+        text = "\n".join([
+            "| 版本 | 状态 |",
+            "| --- | --- |",
+            "| **0.54.1** | **已发布** |",
+        ])
+        self.assertEqual(
+            ct.parse_version_chain(text),
+            [{"version": "0.54.1", "status": "已发布"}])
+
+
 if __name__ == "__main__":
     unittest.main()

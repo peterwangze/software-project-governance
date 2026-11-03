@@ -2761,5 +2761,139 @@ class CollapsedPremiseReportTests(unittest.TestCase):
         self.assertNotIn("Collapsed decision premises", format_report(report))
 
 
+# ─── FIX-480: 0.54-era ID-first 20-column task table (upgrade path) ─────────
+#
+# The 0.99 compact parser only recognized the ``| 优先级 | ID | ... |``
+# header. A 0.54-era host plan-tracker (verified live on python_game,
+# TRIAGE-FIX-480) uses the v0.54.1 template's ID-first 20-column table:
+#
+#   | ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) |
+#     协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 |
+#     实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |
+#
+# Pre-fix symptoms proven by these tests (the red face):
+#   - the table parsed to 0 rows (Check 1 "Completed tasks: 0" false PASS);
+#   - the trailing 备注 cell was read as the status (Check 36 mojibake);
+#   - every priority defaulted to P9 (TPA mis-ranking).
+# The fix maps BOTH header shapes onto the single TaskDep model via
+# header-semantic column indexing (FIX-292: no second semantic source).
+
+_ID_FIRST_20COL_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "plan-tracker-id-first-20col.md"
+)
+
+# Variant whose 20-column header carries 依赖/目标版本 semantic columns
+# (renamed from the template's 目标/预期结果/输入 slots, keeping 20 cells).
+# The header-semantic mapping must read them; the template shape (no such
+# columns) must yield empty deps / empty version — never a guess.
+_ID_FIRST_20COL_WITH_DEPS = "\n".join([
+    "# 0.54 期 ID 首列 20 列表（依赖/目标版本语义列变体——FIX-480）",
+    "",
+    "## 当前活跃事项",
+    "",
+    "| ID | 阶段 | 任务项 | 依赖 | 目标版本 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| FEAT-002 | 开发实现 | 实现战斗模块 | — | 0.54.0 | 战斗模块代码 | bob | — | — | ⏳ 进行中 | P1 | 2026-01-06 | 2026-02-01 |  | G5 | E2E 通过 | — | 无 | 无 | 无 |",
+    "| FEAT-101 | 开发实现 | 战斗数值平衡 | FEAT-002 | 0.54.1 | 数值平衡表 | carol | — | — | ⏳ 待开始 | P2 | 2026-02-01 | 2026-02-10 |  | G5 | 数值回归通过 | — | 无 | 无 | 无 |",
+])
+
+
+class Fix480IdFirstTwentyColumnTableTests(unittest.TestCase):
+    """FIX-480 red/green: 0.54-era id-first 20-column tables parse to the
+    single TaskDep model via header-semantic column mapping."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tasks = parse_task_dependencies(_ID_FIRST_20COL_FIXTURE)
+        cls.by_id = {t.task_id: t for t in cls.tasks}
+
+    def test_rows_parse(self):
+        """Pre-fix red face: the 20-column table parsed to 0 rows."""
+        self.assertEqual([t.task_id for t in self.tasks],
+                         ["INIT-001", "FEAT-002", "FEAT-003"])
+
+    def test_priority_maps_by_header_semantics(self):
+        """Pre-fix red face: every priority defaulted to the P9 sentinel."""
+        self.assertEqual(self.by_id["INIT-001"].priority, "P0")
+        self.assertEqual(self.by_id["FEAT-002"].priority, "P1")
+        self.assertEqual(self.by_id["FEAT-003"].priority, "P2")
+
+    def test_status_maps_by_header_semantics_not_last_cell(self):
+        """Pre-fix red face: the trailing 备注 cell was read as the status
+        (the Check 36 mojibake on the python_game host)."""
+        self.assertEqual(self.by_id["FEAT-003"].status.strip(), "已完成")
+        self.assertNotIn("备注", self.by_id["FEAT-003"].status)
+        self.assertTrue(self.by_id["INIT-001"].is_completed())
+        self.assertFalse(self.by_id["FEAT-002"].is_completed())
+
+    def test_template_shape_has_no_guessed_deps_or_version(self):
+        """The v0.54.1 template header carries no 依赖/目标版本 column —
+        the mapping must yield empty values (fail-closed, never a guess
+        from a neighbouring column)."""
+        for task in self.tasks:
+            self.assertEqual(task.dependencies, ())
+            self.assertEqual(task.target_version, "")
+
+    def test_dependency_and_version_columns_map_when_present(self):
+        tasks = {
+            t.task_id: t
+            for t in parse_task_dependencies(_ID_FIRST_20COL_WITH_DEPS)
+        }
+        self.assertEqual(tasks["FEAT-101"].dependencies, ("FEAT-002",))
+        self.assertEqual(tasks["FEAT-101"].target_version, "0.54.1")
+
+
+# ─── FIX-480 R0 P1-1: the 任务ID-led legacy variant (FIX-287②) ────────────────
+#
+# The shape-2 header detection accepts a 任务ID first cell, but
+# _build_column_index only mapped the exact cell "ID" — the variant's
+# col_index carried no "id" key, so the id-first dispatch never fired and
+# the rows fell through to the compact relative offsets (review R0 live
+# repro: status='里程碑备注', target_version=邻列错位). The red face below
+# pins the header-semantic expectations for this variant.
+
+_ID_FIRST_TASKID_LED_20COL = "\n".join([
+    "# 任务ID（FIX-287② legacy）首列 20 列变体——FIX-480 R0 P1-1",
+    "",
+    "## 当前活跃事项",
+    "",
+    "| 任务ID | 阶段 | 任务项 | 依赖 | 目标版本 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 里程碑备注 |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| FIX-501 | 开发实现 | 变体任务甲 | FIX-502 | 0.54.2 | 模块代码 | dev | — | — | 已完成 | P1 | 2026-01-01 | 2026-01-02 | 2026-01-02 | G5 | 验收通过 | EVD-501 | 无 | 无 | 里程碑备注 |",
+    "| FIX-502 | 开发实现 | 变体任务乙 | — | 0.54.2 | 模块代码 | dev | — | — | ⏳ 进行中 | P2 | 2026-01-01 | 2026-01-03 |  | G5 | 验收通过 | — | 无 | 无 | 里程碑备注 |",
+])
+
+
+class Fix480TaskIdLedVariantTests(unittest.TestCase):
+    """FIX-480 R0 P1-1: the 任务ID-led legacy variant parses by header
+    semantics (not the compact offsets that read the trailing 里程碑备注
+    cell as the status)."""
+
+    def test_build_column_index_maps_taskid_led_header(self):
+        """R0 live repro anchor: the variant header must yield an id key."""
+        from task_priority import _build_column_index
+        idx = _build_column_index(["任务ID", "状态", "优先级"])
+        self.assertEqual(idx.get("id"), 0)
+        self.assertEqual(idx.get("status"), 1)
+        self.assertEqual(idx.get("priority"), 2)
+
+    def test_taskid_led_variant_fields_map_by_header_semantics(self):
+        tasks = {
+            t.task_id: t
+            for t in parse_task_dependencies(_ID_FIRST_TASKID_LED_20COL)
+        }
+        self.assertEqual(sorted(tasks), ["FIX-501", "FIX-502"])
+        done = tasks["FIX-501"]
+        # Pre-fix red face: status read the trailing 里程碑备注 cell and
+        # target_version read a neighbouring column via compact offsets.
+        self.assertEqual(done.status.strip(), "已完成")
+        self.assertNotIn("备注", done.status)
+        self.assertEqual(done.priority, "P1")
+        self.assertEqual(done.target_version, "0.54.2")
+        self.assertEqual(done.dependencies, ("FIX-502",))
+        self.assertEqual(tasks["FIX-502"].status.strip(), "⏳ 进行中")
+        self.assertEqual(tasks["FIX-502"].priority, "P2")
+
+
 if __name__ == "__main__":
     unittest.main()

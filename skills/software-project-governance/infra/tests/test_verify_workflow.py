@@ -28393,5 +28393,206 @@ class Fix479Check9TerminalStatusNormalizationTests(unittest.TestCase):
         self.assertEqual(flagged, {"DRV-002"})
 
 
+class Fix481ActiveTaskHeaderSemanticMappingTests(unittest.TestCase):
+    """FIX-481 (D1 第三轮): parse_current_active_tasks must locate the
+    状态 / 优先级 columns by HEADER SEMANTICS on the 0.54-era ID-first
+    20-column table, converging on the same mapping dependency analysis
+    uses (FIX-480, P5 single semantic source).
+
+    Host python_game Layer1 probe 2026-11-04: the positional read took
+    the trailing 备注 cell as the status (DEV-001 status=<备注 text>) and
+    阶段 as the title, so 20 ✅-terminal history rows fed
+    ``_active_execution_packet_tasks`` as fake active P0/P1 — host Check
+    18c~18i ×20 = 120 fake FAILs (89% of the host's 135 quick issues),
+    and ``discover_governance_context``'s active_tasks projection was
+    equally polluted. The compact 优先级-led shape keeps its existing
+    positional behavior (zero regression).
+    """
+
+    _COMPACT_TABLE = (
+        "| 优先级 | ID | 事项 | 需求来源 | 目标版本 | 验收要求 | 状态 |",
+        "|--------|----|------|----------|----------|----------|------|",
+    )
+
+    _ID_SEPARATOR = "| " + " | ".join(["---"] * 20) + " |"
+
+    @staticmethod
+    def _id_first_header(lead="任务ID"):
+        return (
+            f"| {lead} | 阶段 | 事项 | 目标/预期结果 | 输入 | 输出 "
+            "| Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 "
+            "| 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 "
+            "| 证据 | 风险/偏差 | 纠偏动作 | 备注 |"
+        )
+
+    @staticmethod
+    def _id_first_row(tid, status, priority="P0",
+                      title="命中率系统与AI增强",
+                      note="Task 5-8 已实现: 命中率系统+AI增强+技能集成, P1 已修复"):
+        return (
+            f"| {tid} | 开发 | {title} | Test goal | Test input "
+            f"| Test output | 项目负责人 | Claude | — | {status} "
+            f"| {priority} | 2026-09-01 | 2026-09-15 | 2026-09-15 "
+            f"| G6 | Test criteria | EVD-999 | — | — | {note} |"
+        )
+
+    def _parse(self, lines):
+        plan = "\n".join(
+            ["# 计划跟踪", "", "## 当前活跃事项", "", *lines, ""])
+        with tempfile.TemporaryDirectory() as td:
+            sp = Path(td) / ".governance" / "plan-tracker.md"
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            sp.write_text(plan, encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                parsed = vw.parse_current_active_tasks()
+                packet = vw._active_execution_packet_tasks()
+        return parsed, packet
+
+    # ── red face: the host misread reproduced in-repo ──
+
+    def test_id_first_status_title_read_by_header_semantics(self):
+        """Host live shape (TRIAGE-FIX-481): DEV-001 状态 column holds
+        「✅ 已完成」 while the trailing 备注 cell holds prose. RED
+        pre-fix: status=<备注 text> and title=阶段 (「开发」)."""
+        parsed, _ = self._parse([
+            self._id_first_header(),
+            self._ID_SEPARATOR,
+            self._id_first_row("DEV-001", "✅ 已完成", priority="P0"),
+        ])
+        self.assertEqual([t["task_id"] for t in parsed], ["DEV-001"])
+        row = parsed[0]
+        self.assertEqual(row["status"], "✅ 已完成")
+        self.assertEqual(row["title"], "命中率系统与AI增强")
+        self.assertEqual(row["priority"], "P0")
+        self.assertEqual(row["target_version"], "")
+        self.assertEqual(row["closure_path"], "")
+        self.assertEqual(row["dependency"], "")
+
+    def test_id_first_terminal_rows_leave_packet_task_set(self):
+        """The 120-fake-FAIL root cause: ✅-terminal ID-first rows must
+        NOT enter _active_execution_packet_tasks; a genuinely active
+        compact P1 row stays. RED pre-fix: the three history rows enter
+        the packet set with garbage statuses."""
+        _, packet = self._parse([
+            self._id_first_header(),
+            self._ID_SEPARATOR,
+            self._id_first_row("DEV-001", "✅ 已完成", priority="P0"),
+            self._id_first_row("ARC-001", "✅ committed", priority="P1"),
+            self._id_first_row("SYS-001", "✅ 完成", priority="P1"),
+            *self._COMPACT_TABLE,
+            "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.100.0 | tests | ⏳ 待实施 |",
+        ])
+        self.assertEqual([t["task_id"] for t in packet], ["NEW-001"])
+
+    def test_compound_prefix_packet_verdict_is_fix479_domain(self):
+        """Scope pin (pre-existing, both shapes alike): the packet filter
+        delegates to ``_is_incomplete_task_status`` →
+        ``_status_is_completed_cell``, which does not strip leading
+        decorations — a 「⏳ ✅ committed」 compound prefix stays ACTIVE
+        there. Routing FIX-479's ``_status_is_terminal_cell`` into that
+        filter is follow-up material in the FIX-479/FIX-292 domain;
+        FIX-481's red line does not touch it. Locked here so the
+        boundary cannot drift silently."""
+        _, packet = self._parse([
+            self._id_first_header(),
+            self._ID_SEPARATOR,
+            self._id_first_row("SYS-002", "⏳ ✅ committed", priority="P1"),
+        ])
+        self.assertEqual([t["task_id"] for t in packet], ["SYS-002"])
+
+    def test_id_first_genuinely_active_row_survives(self):
+        """Scope guard: the fix must not over-filter — a genuinely active
+        ID-first row (状态 column 「🔄 进行中」, P1) keeps its packet-set
+        membership via the real status cell."""
+        _, packet = self._parse([
+            self._id_first_header(),
+            self._ID_SEPARATOR,
+            self._id_first_row("DEV-002", "🔄 进行中", priority="P1"),
+        ])
+        self.assertEqual([t["task_id"] for t in packet], ["DEV-002"])
+
+    def test_id_led_header_variant_supported(self):
+        """FIX-479 blueprint shape: the v0.54.1 template's plain-``ID``
+        lead parses identically to the 任务ID-led legacy variant (both
+        accepted by task_priority's FIX-480 header detection)."""
+        parsed, _ = self._parse([
+            self._id_first_header(lead="ID"),
+            self._ID_SEPARATOR,
+            self._id_first_row("DEV-003", "✅ 已完成", priority="P1"),
+        ])
+        self.assertEqual(parsed[0]["status"], "✅ 已完成")
+        self.assertEqual(parsed[0]["title"], "命中率系统与AI增强")
+
+    # ── green pin: compact shape behavior unchanged ──
+
+    def test_compact_shape_fields_unchanged(self):
+        """Zero-regression pin: the compact 优先级-led table keeps the
+        exact positional reads (title=事项, dependency=需求来源,
+        target_version, closure_path=验收要求, status=last cell)."""
+        parsed, packet = self._parse([
+            *self._COMPACT_TABLE,
+            "| P1 | FIX-001 | 紧凑表任务 | TRIAGE-X | 0.99.0 "
+            "| 独立审查 | ✅ 已完成 (2026-10-31) |",
+            "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.100.0 "
+            "| tests | ⏳ 待实施 |",
+        ])
+        by_id = {t["task_id"]: t for t in parsed}
+        self.assertEqual(set(by_id), {"FIX-001", "NEW-001"})
+        compact = by_id["FIX-001"]
+        self.assertEqual(compact["title"], "紧凑表任务")
+        self.assertEqual(compact["dependency"], "TRIAGE-X")
+        self.assertEqual(compact["target_version"], "0.99.0")
+        self.assertEqual(compact["closure_path"], "独立审查")
+        self.assertEqual(compact["status"], "✅ 已完成 (2026-10-31)")
+        self.assertEqual([t["task_id"] for t in packet], ["NEW-001"])
+
+    # ── P5 single-source parity + no second header index ──
+
+    def test_single_source_parity_with_task_priority(self):
+        """P5 pin: every ID-first row's id/priority/status/target_version
+        equals what task_priority.parse_task_dependencies yields for the
+        same document — the two consumers can never drift apart."""
+        import task_priority as tpa
+        lines = [
+            self._id_first_header(),
+            self._ID_SEPARATOR,
+            self._id_first_row("DEV-001", "✅ 已完成", priority="P0"),
+            self._id_first_row("ARC-001", "🔄 进行中", priority="P2"),
+            *self._COMPACT_TABLE,
+            "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.100.0 | tests | ⏳ 待实施 |",
+        ]
+        plan = "\n".join(["# 计划跟踪", "", "## 当前活跃事项", "", *lines, ""])
+        with tempfile.TemporaryDirectory() as td:
+            sp = Path(td) / ".governance" / "plan-tracker.md"
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            sp.write_text(plan, encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                parsed = vw.parse_current_active_tasks()
+        deps = {d.task_id: d for d in tpa.parse_task_dependencies(plan)}
+        for row in parsed:
+            if row["task_id"] not in {"DEV-001", "ARC-001"}:
+                continue
+            dep = deps[row["task_id"]]
+            self.assertEqual(row["status"], dep.status, row["task_id"])
+            self.assertEqual(row["target_version"], dep.target_version,
+                             row["task_id"])
+            self.assertEqual(row["priority"], dep.priority, row["task_id"])
+
+    def test_parser_delegates_without_second_header_index(self):
+        """P5 pin: the parser delegates ID-first rows to the shared
+        public mapping (parse_task_dependencies) and builds no local
+        header-name index for the semantic columns."""
+        src = Path(vw.__file__).read_text(encoding="utf-8")
+        start = src.index("def parse_current_active_tasks(")
+        end = src.index("def _active_execution_packet_tasks(")
+        func_src = src[start:end]
+        self.assertIn("parse_task_dependencies(", func_src,
+                      "ID-first rows must delegate to the shared public mapping")
+        self.assertNotIn('"状态"', func_src,
+                         "no local header-name literal for the status column")
+        self.assertNotIn("'状态'", func_src,
+                         "no local header-name literal for the status column")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13588,13 +13588,52 @@ def _is_nonactive_subsection(heading):
 
 
 def parse_current_active_tasks():
-    """Parse hot active task rows from plan-tracker compact tables."""
+    """Parse hot active task rows from plan-tracker compact tables.
+
+    FIX-481 (D1 third round): two live header shapes inside 当前活跃事项.
+    The compact 优先级-led table keeps the ID-anchored relative-offset
+    reads below (unchanged behavior). The 0.54-era ID-first 20-column
+    table (任务ID / ``ID`` leading, 状态 at a header-declared offset,
+    trailing 备注) is parsed by HEADER SEMANTICS through the same public
+    mapping dependency analysis uses — ``task_priority.parse_task_dependencies``
+    is fed the table's own header + the single row, so task_id / priority
+    / status / target_version come from the SAME header-semantic mapping
+    FIX-480 established (P5 single semantic source; no second header-index
+    implementation lives here). Host python_game Layer1 probe 2026-11-04:
+    the old positional read took the trailing 备注 cell as the status and
+    阶段 as the title, so 20 ✅-terminal history rows fed
+    ``_active_execution_packet_tasks`` as fake active P0/P1 — host Check
+    18c~18i ×20 = 120 fake FAILs (89% of the host's 135 quick issues),
+    and ``discover_governance_context``'s active_tasks projection was
+    equally polluted.
+
+    Field trade-offs on the ID-first shape (honest not-applicable
+    marking): title is read from the header-declared 事项 column when
+    present (task_priority's column index deliberately ignores
+    display-only columns — the lookup here is by exact header cell name,
+    not a second semantic index); dependency carries the task-family IDs
+    the header declares (empty on the stock 0.54 template — fail-closed,
+    never a neighbouring-column guess); target_version likewise
+    header-declared or empty; closure_path stays empty (the 0.54 template
+    declares no 闭环路径 column; consumers fall back closure_path →
+    title → task_id).
+    """
     if not SAMPLE_PATH.is_file():
         return []
+    # Deferred peer import (matches the module's TPA call style, e.g. the
+    # dependency-analysis entry): the public FIX-480 mapping is the single
+    # header-semantics source for ID-first rows.
+    from task_priority import parse_task_dependencies  # noqa: WPS433
     content = SAMPLE_PATH.read_text(encoding="utf-8")
     tasks = []
     in_active_section = False
     collecting = True
+    # FIX-481: remember the header of the table currently being walked.
+    # 优先级-led headers keep the compact positional parser; ID-first
+    # headers (任务ID / ID leading — the lead labels task_priority's own
+    # header detection accepts) switch data rows to header semantics.
+    table_header_line = ""
+    table_header_cells = []
     for line in content.split("\n"):
         if line.startswith("## 当前活跃事项"):
             in_active_section = True
@@ -13617,7 +13656,12 @@ def parse_current_active_tasks():
         if not stripped.startswith("|") or "---" in stripped:
             continue
         cells = _governance_table_cells(stripped)
-        if not cells or cells[0] in {"优先级", "任务ID"}:
+        if not cells or cells[0] in {"优先级", "任务ID", "ID"}:
+            # Header row: record the current table's shape, never emit
+            # (the pre-FIX-481 skip set plus the plain-``ID`` lead FIX-480
+            # recognizes).
+            table_header_line = stripped
+            table_header_cells = cells
             continue
         task_idx = next(
             (idx for idx, cell in enumerate(cells)
@@ -13625,6 +13669,39 @@ def parse_current_active_tasks():
             None,
         )
         if task_idx is None:
+            continue
+        if table_header_cells and table_header_cells[0] in {"任务ID", "ID"}:
+            # FIX-481 header-semantic path — single source: the row is
+            # parsed by the same public mapping dependency analysis uses.
+            # The micro-document (this table's header + this one row)
+            # drives task_priority's own header detection and ID-first
+            # dispatch, so the semantic columns land where the header
+            # declares them — 状态 never the trailing 备注, 优先级 never
+            # a prose scan hit. A row the shared parser cannot resolve
+            # (no ID cell) is skipped — same conservative skip the
+            # task_idx guard above applies to the compact path.
+            dep_rows = parse_task_dependencies(
+                table_header_line + "\n" + stripped)
+            if not dep_rows:
+                continue
+            dep = dep_rows[0]
+            title_idx = next(
+                (idx for idx, cell in enumerate(table_header_cells)
+                 if cell.strip() in {"事项", "任务项"}),
+                None,
+            )
+            tasks.append({
+                "task_id": dep.task_id,
+                "priority": dep.priority,
+                "title": (cells[title_idx].strip()
+                          if title_idx is not None and title_idx < len(cells)
+                          else ""),
+                "dependency": ",".join(dep.dependencies),
+                "target_version": dep.target_version,
+                "closure_path": "",
+                "status": dep.status,
+                "raw_line": stripped,
+            })
             continue
         task_id = cells[task_idx].strip().strip("*")
         priority = ""

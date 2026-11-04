@@ -10508,8 +10508,10 @@ def check_protocol_compliance():
         status = parts[10] if len(parts) > 10 else ""
         owner = parts[7] if len(parts) > 7 else ""
 
-        # Only check active tasks (not completed/terminated)
-        if status in ("已完成", "已终止"):
+        # Only check active tasks — FIX-479: shared terminal predicate
+        # (_status_is_terminal_cell; emoji-prefixed terminal shapes like
+        # 「✅ 已完成」 are terminal too, same source as Check 9)
+        if _status_is_terminal_cell(status):
             continue
 
         # Check for DRI violations
@@ -10930,8 +10932,13 @@ def check_task_deadline():
         # Column mapping: 0=empty,1=ID,...,12=计划开始,13=计划完成,14=实际完成
         plan_complete_str = parts[13] if len(parts) > 13 else ""
 
-        # Only check non-completed tasks
-        if status in ("已完成", "已终止"):
+        # Only check non-terminal tasks — FIX-479: shared terminal
+        # predicate (_status_is_terminal_cell, same source as the DRI
+        # face in check_protocol_compliance) normalizes emoji-prefixed
+        # terminal shapes (「✅ 已完成」/「✅ committed」/「✅ 完成」/
+        # 「⏳ ✅ committed」); the overdue semantics for genuinely active
+        # rows (passed deadline → WARN) are unchanged.
+        if _status_is_terminal_cell(status):
             continue
 
         all_active += 1
@@ -11208,6 +11215,47 @@ def _status_is_completed_cell(cell):
         if max(assertions) > active_pos:
             return True
     return bool(re.search(r"完成\s*(?:[（(]|$)", text))
+
+
+# ── FIX-479 — shared TERMINAL-status predicate for plan-table task rows ────
+#
+# check_task_deadline (Check 9) and check_protocol_compliance (DRI) both
+# filtered terminal rows with a bare two-word membership test (exact
+# 「已完成」/「已终止」 only), which misses the emoji-prefixed
+# terminal shapes live plan-trackers carry (host python_game Layer1 probe
+# 2026-11-04: 35 false-overdue rows, e.g. DEV-001/ARC-001「✅ 已完成」).
+# P5 single-semantic-source rule: terminal detection converges HERE — one
+# vocabulary constant + one predicate, both plan-table call sites source
+# from it. Completion semantics stay single-sourced in
+# _status_is_completed_cell (bare/✅-prefixed wording, W-7 mixed chains,
+# FIX-393 writer-committed); the ONLY vocabulary this predicate adds is
+# the leading decoration set below — a display-prefix emoji before a
+# terminal cell (「⏳ ✅ committed」 compound prefix) is not a state
+# assertion and must not resurrect a delivered row as active.
+_TERMINAL_CELL_DECORATIONS = ("⏳", "🔄", "📋", "🆕", "⏸")
+
+
+def _status_is_terminal_cell(cell):
+    """True when a plan-table status cell is a TERMINAL state (FIX-479).
+
+    Terminal ⟺ the canonical completed predicate
+    (:func:`_status_is_completed_cell`) fires on the cell AS WRITTEN or
+    after stripping a leading decoration-emoji run (「⏳ ✅ committed」:
+    the leading ⏳/🔄/📋/🆕/⏸ is a display decoration, not a state).
+    Genuine active cells stay non-terminal — stripping their decoration
+    leaves an active cell (「🔄 进行中」→「进行中」,「📋 规划中」→「规划中」)
+    and the completed predicate keeps returning False, so the overdue
+    and DRI semantics for active rows are unchanged.
+    """
+    text = _status_clean_cell(cell)
+    if _status_is_completed_cell(text):
+        return True
+    stripped = text
+    while stripped[:1] in _TERMINAL_CELL_DECORATIONS:
+        stripped = stripped[1:].lstrip()
+    if stripped != text:
+        return _status_is_completed_cell(stripped)
+    return False
 
 
 def _status_table_stream(content):

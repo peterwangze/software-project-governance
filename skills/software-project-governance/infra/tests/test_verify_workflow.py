@@ -28237,5 +28237,161 @@ class Fix480UpgradePathTaskTableTests(unittest.TestCase):
             [{"version": "0.54.1", "status": "已发布"}])
 
 
+class Fix479Check9TerminalStatusNormalizationTests(unittest.TestCase):
+    """FIX-479: emoji-prefixed terminal statuses must not count as overdue.
+
+    ``check_task_deadline`` (Check 9) and ``check_protocol_compliance``
+    (DRI face) both filtered terminal rows with the bare-word membership
+    test ``status in ("已完成", "已终止")``, which misses the emoji-prefixed
+    terminal shapes live plan-trackers carry — host python_game Layer1
+    probe 2026-11-04: ``check_task_deadline()`` returned overdue_count=35
+    with samples DEV-001/ARC-001/ARC-002/SYS-001/SYS-010 all in state
+    「✅ 已完成」 (all false overdue; TRIAGE-FIX-479). Scope red line: the
+    overdue SEMANTICS stay — a genuinely active row with a passed
+    plan-complete date still lands in overdue.
+
+    The fixture mirrors the host 0.54-era ID-first 20-column 样例跟踪表
+    shape (status at parts[10], priority at parts[11], 计划完成 at
+    parts[13] — exactly the column map check_task_deadline parses).
+    """
+
+    _PAST = "2020-01-01"    # always past — pure terminal-filter probe
+    _FUTURE = "2099-12-31"  # never past — active-but-not-overdue guard
+
+    _HEADER = (
+        "| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) "
+        "| 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 "
+        "| 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |"
+    )
+    _SEPARATOR = "| " + " | ".join(["---"] * 20) + " |"
+
+    @staticmethod
+    def _row(tid, status, priority="P1", plan="2020-01-01", owner="项目负责人"):
+        return (
+            f"| {tid} | 维护 | FIX-479 fixture task | Test goal | Test input "
+            f"| Test output | {owner} | Claude | 项目负责人 | {status} "
+            f"| {priority} | 2019-12-01 | {plan} | — | G8 "
+            f"| Test criteria | EVD-999 | — | — | Test note |"
+        )
+
+    def _deadline_result(self, rows):
+        plan = "\n".join(
+            ["# 计划跟踪", "", "## 样例跟踪表", "",
+             self._HEADER, self._SEPARATOR] + list(rows) + [""])
+        with tempfile.TemporaryDirectory() as td:
+            sp = Path(td) / ".governance" / "plan-tracker.md"
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            sp.write_text(plan, encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                return vw.check_task_deadline()
+
+    def _dri_result(self, rows):
+        plan = "\n".join(
+            ["# 计划跟踪", "", "## 样例跟踪表", "",
+             self._HEADER, self._SEPARATOR] + list(rows) + [""])
+        with tempfile.TemporaryDirectory() as td:
+            sp = Path(td) / ".governance" / "plan-tracker.md"
+            sp.parent.mkdir(parents=True, exist_ok=True)
+            sp.write_text(plan, encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", sp):
+                return vw.check_protocol_compliance()
+
+    # ── red face: host false-overdue shapes reproduced in-repo ──
+
+    def test_emoji_prefixed_terminal_rows_not_overdue(self):
+        """Host live shapes (TRIAGE-FIX-479): ✅-prefixed terminal cells —
+        including the 「⏳ ✅ committed」 compound prefix — must NOT be
+        overdue. RED against the bare-word filter: all six rows below
+        counted overdue pre-fix."""
+        result = self._deadline_result([
+            self._row("DEV-001", "✅ 已完成"),
+            self._row("ARC-001", "✅ committed"),
+            self._row("ARC-002", "✅ 完成", priority="P2"),
+            self._row("SYS-001", "⏳ ✅ committed", priority="P2"),
+            self._row("ACT-001", "🔄 进行中"),
+            self._row("ACT-002", "📋 规划中", priority="P2"),
+        ])
+        overdue_ids = {t["task_id"] for t in result["overdue"]}
+        self.assertEqual(overdue_ids, {"ACT-001", "ACT-002"})
+        self.assertEqual(result["overdue_count"], 2)
+
+    def test_genuine_active_rows_still_overdue(self):
+        """Scope guard: overdue semantics unchanged — every genuinely
+        active status with a passed plan-complete date still WARNs; a
+        future deadline stays out of overdue; active rows (not only
+        overdue ones) still count into total_active."""
+        result = self._deadline_result([
+            self._row("ACT-101", "🔄 进行中"),
+            self._row("ACT-102", "📋 规划中", priority="P2"),
+            self._row("ACT-103", "⏳ 待实施", priority="P2"),
+            self._row("ACT-104", "未开始", priority="P3"),
+            self._row("FUT-001", "🔄 进行中", plan=self._FUTURE),
+            self._row("DEV-101", "✅ 已完成"),
+        ])
+        overdue_ids = {t["task_id"] for t in result["overdue"]}
+        self.assertEqual(
+            overdue_ids, {"ACT-101", "ACT-102", "ACT-103", "ACT-104"})
+        self.assertNotIn("FUT-001", overdue_ids)
+        self.assertEqual(result["total_active"], 5)
+
+    def test_bare_terminal_wordings_still_excluded(self):
+        """Backward-compat pin: the two legacy bare wordings the old
+        filter recognized keep being skipped (and do not inflate
+        total_active)."""
+        result = self._deadline_result([
+            self._row("PLAN-001", "已完成", priority="P3"),
+            self._row("MAINT-001", "已终止", priority="P3"),
+        ])
+        self.assertEqual(result["overdue_count"], 0)
+        self.assertEqual(result["total_active"], 0)
+
+    # ── red face: shared predicate API + shape table ──
+
+    def test_shared_terminal_predicate_shapes(self):
+        """Single shared terminal predicate (FIX-479 P5 single semantic
+        source): completed semantics delegate to
+        ``_status_is_completed_cell``; a leading decoration emoji before
+        a terminal cell (「⏳ ✅ committed」) must not resurrect the row;
+        genuine active cells — decoration-stripped or not — stay
+        non-terminal."""
+        terminal = [
+            "已完成", "已终止",                       # legacy bare words
+            "✅ 已完成", "✅ committed", "✅ 完成",    # host live shapes
+            "⏳ ✅ committed",                        # compound prefix
+            "✅ 已终止", "⏳ 已终止",                  # terminated + prefix
+        ]
+        active = [
+            "🔄 进行中", "⏳ 待实施", "📋 规划中", "未开始", "进行中",
+            "⏳ 未完成", "",
+        ]
+        for cell in terminal:
+            self.assertTrue(vw._status_is_terminal_cell(cell), cell)
+        for cell in active:
+            self.assertFalse(vw._status_is_terminal_cell(cell), cell)
+
+    def test_call_sites_share_single_terminal_predicate(self):
+        """Both plan-table call sites (check_task_deadline Check 9 +
+        check_protocol_compliance DRI) source the SAME predicate; the old
+        scattered bare-word tuple leaves zero residue."""
+        src = Path(vw.__file__).read_text(encoding="utf-8")
+        self.assertEqual(
+            len(re.findall(r"if _status_is_terminal_cell\(status\):", src)), 2,
+            "both call sites must use the shared terminal predicate")
+        self.assertNotIn('in ("已完成", "已终止")', src,
+                         "old scattered word-form must be gone")
+
+    def test_dri_check_skips_emoji_terminal_rows(self):
+        """DRI face (the other same-shape call site): emoji-prefixed
+        terminal rows are skipped like bare-word terminal rows; an
+        active row with an empty owner is still flagged."""
+        result = self._dri_result([
+            self._row("DRV-001", "✅ 已完成", owner=""),
+            self._row("DRV-002", "🔄 进行中", owner=""),
+            self._row("DRV-003", "已完成", owner=""),
+        ])
+        flagged = {v["task_id"] for v in result["dri_violations"]}
+        self.assertEqual(flagged, {"DRV-002"})
+
+
 if __name__ == "__main__":
     unittest.main()

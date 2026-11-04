@@ -758,7 +758,18 @@ class BaselineArtifactTests(unittest.TestCase):
         # 212 in the same regen (the pre-rider committed baseline lagged the
         # measured live face — FIX-463-era 211 vs live 212, module-set diff
         # empty vs HEAD, i.e. a bookkeeping catch-up, not a new module).
-        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28418)
+        # FIX-482 sanctioned regen (DEC-384, 0.100.0 window, 2026-11-04):
+        # 28418 -> 28543 (+125), the FIX-479/FIX-481 D1 growth window —
+        # FIX-479 terminal-cell predicate family + FIX-481
+        # parse_current_active_tasks header-semantic rewrite; 实测为准 at
+        # regen (no per-ticket arithmetic — the anchor pins the measured
+        # whole). DEC-384 scope: the anchor upgrade rides FIX-482; mainfile
+        # slimming is a 0.100.0 candidate ticket (Coordinator 域, plan-tracker
+        # 载明), not a license for further growth — only-down resumes from
+        # 28543. R4 print census 1384 unchanged; R2 48 sites / 37 entries
+        # unchanged; R6 212 unchanged; exemptions carried 1/1 (authored zone
+        # verbatim); regen head 08f35a9.
+        self.assertEqual(data["r1_mainfile_budget"]["anchor_loc"], 28543)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

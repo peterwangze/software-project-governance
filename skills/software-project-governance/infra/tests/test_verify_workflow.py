@@ -28531,7 +28531,7 @@ class Fix481ActiveTaskHeaderSemanticMappingTests(unittest.TestCase):
         target_version, closure_path=验收要求, status=last cell)."""
         parsed, packet = self._parse([
             *self._COMPACT_TABLE,
-            "| P1 | FIX-001 | 紧凑表任务 | TRIAGE-X | 0.99.0 "
+            "| P1 | FIX-001 | 紧凑表任务 | TRIAGE-X | 0.55.0 "
             "| 独立审查 | ✅ 已完成 (2026-10-31) |",
             "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.100.0 "
             "| tests | ⏳ 待实施 |",
@@ -28541,7 +28541,7 @@ class Fix481ActiveTaskHeaderSemanticMappingTests(unittest.TestCase):
         compact = by_id["FIX-001"]
         self.assertEqual(compact["title"], "紧凑表任务")
         self.assertEqual(compact["dependency"], "TRIAGE-X")
-        self.assertEqual(compact["target_version"], "0.99.0")
+        self.assertEqual(compact["target_version"], "0.55.0")
         self.assertEqual(compact["closure_path"], "独立审查")
         self.assertEqual(compact["status"], "✅ 已完成 (2026-10-31)")
         self.assertEqual([t["task_id"] for t in packet], ["NEW-001"])

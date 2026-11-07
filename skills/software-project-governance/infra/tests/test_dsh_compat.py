@@ -18,6 +18,14 @@ Covers:
   - Composition discovery: both shipped forms (``agent.cordis.yml`` and
     ``*.cordis.yml.template``) under the package root, excluding vendored
     trees.
+  - Composition walk safety (FIX-484): a self-referential Windows junction is
+    skipped and counted, never followed; the repo-sandbox pair is pruned before
+    descending; a scan past its depth/entry/second ceiling raises
+    ``CompositionScanOverflow``, which the caller maps to ``NOT_RUN`` /
+    ``SCAN_OVERFLOW`` — a capped scan never reports PASS; and a contract glob
+    that is not ``<name>`` or ``**/<name>`` is rejected loudly
+    (``ContractMalformed`` → FAIL) instead of being silently reduced to its
+    basename.
   - Aggregation contract with an injected probe report: FAIL carries row id +
     module + schema message, a parse error is a finding, a partially
     unverified run degrades to PASS **with disclosure** (never a silent
@@ -41,6 +49,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -62,6 +71,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import dsh_compat  # noqa: E402
+import dsh_contract  # noqa: E402
 import dsh_fixtures  # noqa: E402
 
 # FIX-310: the composition template IS the preset payload's render source
@@ -3839,6 +3849,341 @@ class CompositionSkipTests(unittest.TestCase):
             found = [path.relative_to(root).as_posix()
                      for path in dsh_compat.discover_compositions(root)]
         self.assertEqual(found, ["product/sandboxes/run/agent.cordis.yml"])
+
+
+# ── FIX-484: the walk itself — pruning, junctions, ceilings ─────────────────
+class CompositionWalkLoopTests(unittest.TestCase):
+    """FIX-484: a self-referential junction must not make the walk recurse.
+
+    The repository carries exactly this shape
+    (``.governance/sandboxes/*/profiles/web/node_modules/
+    @peterwangze/software-project-governance-plugin`` → the repo root,
+    git-ignored, so it never appears in review). ``Path.glob('**/…')``
+    enumerated that loop forever: ``check-dsh-preset-compat`` (Check 28v) burned
+    58 min of CPU without starting its probe child and ``test_dsh_compat``
+    never finished. These cases build the same shape in a scratch tree, so the
+    regression is pinned without ever touching the real
+    ``.governance/sandboxes`` (deleting a tree that holds a junction can delete
+    the repository it points at).
+    """
+
+    @staticmethod
+    def _link_dir(link, target):
+        """A real directory junction/symlink; ``None`` only if BOTH forms fail."""
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            completed = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace")
+            if completed.returncode == 0:
+                return "junction"
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            return None
+        return "symlink"
+
+    @staticmethod
+    def _unlink_dir_link(link):
+        """Remove the link itself, never its target (``rmdir`` for a junction)."""
+        for remove in (os.unlink, os.rmdir):
+            try:
+                remove(link)
+                return True
+            except OSError:
+                continue
+        return False
+
+    def test_self_referential_junction_does_not_recurse(self):
+        with _scratch("spg-walk-loop-") as td:
+            root = Path(td)
+            (root / "z" / "x").mkdir(parents=True)
+            (root / "z" / "x" / "agent.cordis.yml").write_text(
+                "[]\n", encoding="utf-8")
+            link = self._link_dir(root / "z" / "x" / "loop", root)
+            if link is None:
+                # Only a host where BOTH forms fail is exempt (the regression
+                # is real on every platform that can build either loop).
+                self.skipTest("cannot create a directory junction or symlink")
+            try:
+                report = {}
+                started = time.monotonic()
+                found = [path.relative_to(root).as_posix()
+                         for path in dsh_compat.discover_compositions(
+                             root, report=report)]
+                elapsed = time.monotonic() - started
+            finally:
+                self.assertTrue(self._unlink_dir_link(root / "z" / "x" / "loop"),
+                                "could not remove the test junction")
+        self.assertEqual(found, ["z/x/agent.cordis.yml"], found)
+        # The defect was unbounded — the old walk never returned at all, so any
+        # bound separates "stopped" from "still circling". The walk's own clock
+        # is asserted too: a loop followed through would cross the 30 s budget
+        # long before completing.
+        self.assertLess(elapsed, 5.0, elapsed)
+        self.assertLess(report["elapsed"], 5.0, report)
+        self.assertGreaterEqual(report["skipped_reparse_points"], 1, report)
+        self.assertFalse(report["bounded_out"], report)
+
+    def test_a_loop_does_not_hide_compositions_beside_it(self):
+        # The walk must skip the *link*, not the directory that carries it, and
+        # must not duplicate anything through the loop.
+        with _scratch("spg-walk-loop2-") as td:
+            root = Path(td)
+            for relative in ("a", "z/x"):
+                directory = root.joinpath(*relative.split("/"))
+                directory.mkdir(parents=True)
+                (directory / "agent.cordis.yml").write_text(
+                    "[]\n", encoding="utf-8")
+            link = self._link_dir(root / "z" / "x" / "loop", root)
+            if link is None:
+                self.skipTest("cannot create a directory junction or symlink")
+            try:
+                found = [path.relative_to(root).as_posix()
+                         for path in dsh_compat.discover_compositions(root)]
+            finally:
+                self.assertTrue(self._unlink_dir_link(root / "z" / "x" / "loop"),
+                                "could not remove the test junction")
+        self.assertEqual(found, ["a/agent.cordis.yml", "z/x/agent.cordis.yml"],
+                         found)
+
+    def test_the_scan_disclosure_line_names_the_skipped_junction(self):
+        # A skipped junction must reach the human report, not only the counters:
+        # `check_dsh_preset_compat` appends the disclosure to `details`, which the
+        # renderers print under PASS/NOT_RUN. `env={}` stops the check after
+        # discovery (no install), which is enough to pin the line.
+        with _scratch("spg-walk-disclose-") as td:
+            root = Path(td)
+            (root / "sub").mkdir()
+            (root / "sub" / "agent.cordis.yml").write_text(
+                "[]\n", encoding="utf-8")
+            link = self._link_dir(root / "sub" / "loop", root)
+            if link is None:
+                self.skipTest("cannot create a directory junction or symlink")
+            try:
+                report = dsh_compat.check_dsh_preset_compat(
+                    root=root, env={}, which=_which_map({}))
+            finally:
+                self.assertTrue(
+                    self._unlink_dir_link(root / "sub" / "loop"),
+                    "could not remove the test junction")
+        details = "\n".join(report["details"])
+        self.assertIn("reparse point(s)/symlink(s) not followed", details)
+        self.assertGreaterEqual(report["scan"]["skipped_reparse_points"], 1,
+                                report["scan"])
+        # root and `sub` were entered; the junction was counted, never stepped
+        # into (a followed junction would recurse and inflate `dirs`).
+        self.assertEqual(report["scan"]["dirs"], 2, report["scan"])
+
+
+class CompositionWalkPruneTests(unittest.TestCase):
+    """FIX-484: ``.governance/sandboxes`` is pruned *before* descending."""
+
+    def test_the_repo_sandbox_tree_is_never_entered(self):
+        with _scratch("spg-walk-prune-") as td:
+            root = Path(td)
+            fake = root / ".governance" / "sandboxes" / "x"
+            fake.mkdir(parents=True)
+            (fake / "agent.cordis.yml.template").write_text(
+                "[]\n", encoding="utf-8")
+            # A sibling `.governance` tree that is NOT the sandbox pair stays in
+            # scope — pruning must not degrade into "skip `.governance`".
+            product = root / ".governance" / "product"
+            product.mkdir(parents=True)
+            (product / "agent.cordis.yml").write_text("[]\n", encoding="utf-8")
+            report = {}
+            found = [path.relative_to(root).as_posix()
+                     for path in dsh_compat.discover_compositions(
+                         root, report=report)]
+        self.assertEqual(found, [".governance/product/agent.cordis.yml"], found)
+        # `dirs` is the observable form of "never entered": root, `.governance`
+        # and `.governance/product` only. `sandboxes`/`x` are absent because the
+        # pair is pruned before `os.scandir` is ever called on it.
+        self.assertEqual(report["dirs"], 3, report)
+
+
+class CompositionWalkBudgetTests(unittest.TestCase):
+    """FIX-484: a capped scan is disclosed as NOT_RUN — never a partial PASS."""
+
+    @staticmethod
+    def _deep_tree(root, levels):
+        directory = Path(root)
+        for index in range(levels):
+            directory = directory / f"level{index}"
+        directory.mkdir(parents=True)
+        (directory / "agent.cordis.yml").write_text("[]\n", encoding="utf-8")
+        return directory
+
+    def test_exceeding_the_depth_budget_raises_instead_of_truncating(self):
+        with _scratch("spg-walk-budget-") as td:
+            root = Path(td)
+            self._deep_tree(root, 3)
+            report = {}
+            with self.assertRaises(dsh_compat.CompositionScanOverflow) as caught:
+                dsh_compat.discover_compositions(
+                    root, budget=dsh_compat.ScanBudget(max_depth=1),
+                    report=report)
+        counters = caught.exception.counters
+        self.assertTrue(counters["bounded_out"], counters)
+        self.assertTrue(counters["max_depth_hit"], counters)
+        self.assertGreaterEqual(counters["dirs"], 1, counters)
+        # The out-parameter is filled before the raise: a caller never has to
+        # catch the exception to learn what the walk saw.
+        self.assertTrue(report["bounded_out"], report)
+
+    def test_the_preset_check_maps_an_overflow_to_not_run_scan_overflow(self):
+        with _scratch("spg-walk-budget-check-") as td:
+            root = Path(td)
+            self._deep_tree(root, 3)
+            # The budget is injected the way this file injects the probe/install
+            # seams: by replacing the module-level default (no signature change).
+            with mock.patch.object(dsh_compat, "DEFAULT_SCAN_BUDGET",
+                                   dsh_compat.ScanBudget(max_depth=1)):
+                report = dsh_compat.check_dsh_preset_compat(
+                    root=root, env={}, which=_which_map({}))
+        # A capped scan can never be PASS and never crashes: the verdict is the
+        # same NOT_RUN face an environment gap gets, but the reason names the
+        # overflow and the counters ride on the report so it is not mistaken for
+        # "no dsh installed".
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertEqual(report["issues"], [], report)
+        self.assertIn("SCAN_OVERFLOW", report["reason"])
+        self.assertIn("SCAN_OVERFLOW", "\n".join(report["details"]))
+        self.assertTrue(report["scan"]["bounded_out"], report["scan"])
+        self.assertTrue(report["scan"]["max_depth_hit"], report["scan"])
+
+    def test_the_time_budget_reads_the_injected_clock(self):
+        # The injectable clock is what makes the seconds ceiling testable
+        # without a 30 s sleep; the walk must read it, not `time.monotonic`.
+        now = [100.0]
+
+        def clock():
+            now[0] += 1.0
+            return now[0]
+
+        with _scratch("spg-walk-clock-") as td:
+            root = Path(td)
+            (root / "agent.cordis.yml").write_text("[]\n", encoding="utf-8")
+            with self.assertRaises(dsh_compat.CompositionScanOverflow) as caught:
+                dsh_compat.discover_compositions(
+                    root, budget=dsh_compat.ScanBudget(max_seconds=0.5),
+                    clock=clock)
+        counters = caught.exception.counters
+        self.assertIn("seconds", str(caught.exception))
+        self.assertFalse(counters["max_depth_hit"], counters)
+        self.assertGreaterEqual(counters["elapsed"], 1.0)
+        self.assertTrue(counters["bounded_out"], counters)
+
+    def test_a_file_at_max_depth_is_matched_and_a_deeper_directory_overflows(self):
+        # The bound is on DIRECTORY depth: a file sitting in a depth-1 directory
+        # is matched under `max_depth=1`, while a depth-2 directory is refused.
+        # Pins the `depth + 1 > budget.max_depth` edge against drift in either
+        # direction (off-by-one would either overflow one level early or walk
+        # one level too deep).
+        with _scratch("spg-walk-edge-") as td:
+            root = Path(td)
+            sub = root / "sub"
+            sub.mkdir()
+            (sub / "agent.cordis.yml").write_text("[]\n", encoding="utf-8")
+            report = {}
+            found = [path.relative_to(root).as_posix()
+                     for path in dsh_compat.discover_compositions(
+                         root, budget=dsh_compat.ScanBudget(max_depth=1),
+                         report=report)]
+            self.assertEqual(found, ["sub/agent.cordis.yml"], found)
+            self.assertFalse(report["bounded_out"], report)
+            self.assertFalse(report["max_depth_hit"], report)
+            (sub / "deep").mkdir()
+            with self.assertRaises(dsh_compat.CompositionScanOverflow) as caught:
+                dsh_compat.discover_compositions(
+                    root, budget=dsh_compat.ScanBudget(max_depth=1))
+        self.assertTrue(caught.exception.counters["max_depth_hit"],
+                        caught.exception.counters)
+
+
+class CompositionGlobValidationTests(unittest.TestCase):
+    """FIX-484 R1: the basename translation is honest about its two shapes.
+
+    ``rsplit('/', 1)[-1]`` used to accept *any* contract glob by silently
+    discarding the directory part, so a future multi-segment glob would match at
+    every depth instead of where it was declared. These cases pin the loud
+    rejection (and the FAIL, not NOT_RUN, classification).
+    """
+
+    @staticmethod
+    def _with_globs(globs):
+        """Patch only the composition-glob fact, delegating everything else."""
+        original = dsh_compat._fact
+
+        def fake(alias):
+            if alias == "_composition_globs":
+                return tuple(globs)
+            return original(alias)
+
+        return mock.patch.object(dsh_compat, "_fact", side_effect=fake)
+
+    def test_unsupported_glob_shapes_are_rejected(self):
+        shapes = ("agent-presets/**/*.cordis.yml", "a/**/b.yml", "**/**/x.yml",
+                  "**/x/y.yml", "**/", "**", "")
+        for pattern in shapes:
+            with self.subTest(pattern=pattern):
+                with _scratch("spg-globs-bad-") as td:
+                    with self._with_globs((pattern,)):
+                        with self.assertRaises(
+                                dsh_contract.ContractMalformed) as caught:
+                            dsh_compat.discover_compositions(Path(td))
+                message = str(caught.exception)
+                self.assertIn(repr(pattern), message)
+                self.assertIn("**/<name>", message)
+
+    def test_the_two_legal_shapes_are_translated(self):
+        with _scratch("spg-globs-ok-") as td:
+            root = Path(td)
+            (root / "sub").mkdir()
+            (root / "agent.cordis.yml").write_text("[]\n", encoding="utf-8")
+            (root / "sub" / "agent.cordis.yml").write_text(
+                "[]\n", encoding="utf-8")
+            (root / "sub" / "z.cordis.yml.template").write_text(
+                "[]\n", encoding="utf-8")
+            with self._with_globs(("agent.cordis.yml",
+                                   "**/*.cordis.yml.template")):
+                found = [path.relative_to(root).as_posix()
+                         for path in dsh_compat.discover_compositions(root)]
+        self.assertEqual(found, ["agent.cordis.yml", "sub/agent.cordis.yml",
+                                 "sub/z.cordis.yml.template"], found)
+
+    def test_the_preset_check_maps_a_bad_glob_to_fail_not_not_run(self):
+        # §2.5.1: a contract that is present but wrong is a product defect
+        # (FAIL); NOT_RUN is reserved for "the contract is absent/unreadable".
+        # A plain ValueError would have been classified NOT_RUN by
+        # `_contract_failure_report`, hence the contract's own failure class.
+        with _scratch("spg-globs-check-") as td:
+            root = Path(td)
+            with self._with_globs(("agent-presets/**/*.cordis.yml",)):
+                report = dsh_compat.check_dsh_preset_compat(
+                    root=root, env={}, which=_which_map({}))
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertTrue(report["issues"], report)
+        self.assertIn("ContractMalformed", report["reason"])
+        self.assertIn("agent-presets/**/*.cordis.yml", report["reason"])
+
+
+class RepoRootWalkTests(unittest.TestCase):
+    """FIX-484: the real repository root — the tree that used to never finish."""
+
+    def test_the_repo_root_scan_is_complete_and_disclosed(self):
+        report = {}
+        found = [path.relative_to(_REPO_ROOT).as_posix()
+                 for path in dsh_compat.discover_compositions(
+                     _REPO_ROOT, report=report)]
+        self.assertEqual(
+            found, ["agent-presets/governance/agent.cordis.yml.template"], found)
+        # A complete scan says so; the 30 s clock ceiling is the performance
+        # guard here — a regression past it raises instead of returning late.
+        self.assertFalse(report["bounded_out"], report)
+        self.assertEqual(report["skipped_errors"], 0, report)
+        self.assertGreaterEqual(report["dirs"], 1, report)
 
 
 if __name__ == "__main__":

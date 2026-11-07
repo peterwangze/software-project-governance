@@ -226,7 +226,7 @@ $env:DSH_HOME = "$env:TEMP\feat113-home"; $env:ELECTRON_RUN_AS_NODE = "1"
 - `AsarReader(path, fs)`：读 16 字节头；校验 `[0:4]==4`；`payload=int.from_bytes([4:8])`；`json_len=int.from_bytes([12:16])`；JSON = 从 16 起 `json_len` 字节，trim 到最后一个 `}`（尾随对齐填充）；内容基址 `8+payload`。
 - `entry(rel) -> {offset:int(字符串), size:int, link?, unpacked?}`；路径按 `/` 分段，`.`/`..` 拒绝，逐段命中索引，`link` 解析最多 8 跳并记 `link_chain`（环 → `ASAR_LINK_CYCLE`）。
 - `read_bytes(rel)`：`offset/size` 必须落在 `[content_base, file_size]` 内，否则 `ASAR_ENTRY_OUT_OF_RANGE`；`unpacked: true` 的条目从 `<asar>.unpacked/<rel>` 读 —— `app.asar.unpacked` **不能**当作平面（缺索引），但可以作为单条目读取来源。
-- 错误码：`ASAR_HEADER_TRUNCATED`、`ASAR_MAGIC_INVALID`、`ASAR_JSON_INVALID`、`ASAR_ENTRY_MISSING`、`ASAR_ENTRY_OUT_OF_RANGE`、`ASAR_LINK_CYCLE`。
+- 错误码：`ASAR_HEADER_TRUNCATED`、`ASAR_MAGIC_INVALID`、`ASAR_JSON_INVALID`、`ASAR_ENTRY_MISSING`、`ASAR_ENTRY_OUT_OF_RANGE`、`ASAR_LINK_CYCLE`、`ASAR_ENTRY_CORRUPT`（S1 R1 新增：`size>0` 且无 `offset`/`link` 的畸形 file 节点——bounds 计算前拒绝，不落 TypeError；`size=0` 无 offset 合法读空）。
 - `identity()`：`{path,size,header_sha256(JSON 字节),entry_count(有界计数,上限 200k),content_base,unpacked_present}`，**不含 mtime**（避免证据抖动）。
 
 ### 3.4 语义与降级

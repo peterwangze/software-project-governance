@@ -4276,6 +4276,132 @@ class ContractV2DeclaredBindingTests(unittest.TestCase):
                          "agent-presets/governance/overlay.cordis.yml")
 
 
+def _tiny_desktop_app(root, version="0.2.2-rc.1"):
+    """A synthetic desktop install: ``app/resources/app.asar`` built from bytes.
+
+    FEAT-113 §9.3: the fake archive is serialized in-test (same header
+    framing as the real container); nothing touches ``D:\\app\\dsh``.
+    """
+    import struct
+    app = Path(root) / "app"
+    (app / "resources").mkdir(parents=True, exist_ok=True)
+    payload_json = json.dumps({"version": version}).encode("utf-8")
+    index = {"files": {"dsh": {"files": {"node_modules": {"files": {
+        "@deepseek-ai": {"files": {"dsh": {"files": {
+            "package.json": {"size": len(payload_json), "offset": "0"}}}}}}}}}}}
+    text = json.dumps(index).encode("utf-8")
+    pad = b"\x00" * ((-len(text)) % 4)
+    payload = 8 + len(text) + len(pad)
+    (app / "resources" / "app.asar").write_bytes(
+        struct.pack("<IIII", 4, payload, 4 + len(text) + len(pad), len(text))
+        + text + pad + payload_json)
+    return app
+
+
+class _RecordingProcesses:
+    """ProcessPort double for the plane wiring: canned executables + calls."""
+
+    def __init__(self, executables):
+        self.executables = list(executables)
+        self.calls = []
+
+    def ancestor_executables(self, max_ancestors):
+        self.calls.append(max_ancestors)
+        return list(self.executables)
+
+
+class PlaneIdentityWiringTests(unittest.TestCase):
+    """FEAT-113 S1 — `locate_dsh_install` grows the plane-identity face.
+
+    Additive only (design §10 S1): ``install["planes"]`` lists the §3.2
+    identity objects; the pre-existing resolution fields — source, plane,
+    node_modules, verdict semantics — keep their exact pre-S1 behavior, which
+    the whole `InstallDiscoveryTests`/`SecondPlaneDiscoveryTests` suite above
+    still pins.
+    """
+
+    def test_the_report_lists_plane_identities_beside_the_install(self):
+        with _scratch("spg-test-planes-") as td:
+            node_modules = _fake_install(Path(td) / "node_modules")
+            probe = dsh_compat.locate_dsh_install(
+                env={dsh_compat.NODE_MODULES_ENV: str(node_modules)},
+                which=_which_map({}), processes=None)
+        self.assertEqual(probe["status"], "OK")
+        self.assertEqual(probe["source"], f"${dsh_compat.NODE_MODULES_ENV}")
+        listing = probe["planes"]
+        self.assertEqual(listing["verdict"], "OK")
+        faces = [identity for identity in listing["identities"]
+                 if identity["kind"] == "disk-node-modules"]
+        self.assertEqual(len(faces), 1)
+        face = faces[0]
+        self.assertEqual(face["schema"], "dsh-plane/1")
+        self.assertEqual(face["source"], f"env:{dsh_compat.NODE_MODULES_ENV}")
+        self.assertEqual(face["dsh_version"], "0.0.0-test")
+        self.assertIsNone(face["header_sha256"])
+
+    def test_every_return_path_carries_the_planes_face(self):
+        probe = dsh_compat.locate_dsh_install(
+            env={dsh_compat.INSTALL_DIR_ENV: str(_REPO_ROOT / "no-such")},
+            which=_which_map({}), processes=None)
+        # legacy semantics untouched…
+        self.assertEqual(probe["status"], "NOT_RUN")
+        self.assertIn("refusing to fall back", probe["reason"])
+        # …while the plane face tells the §3.4 story of the same override
+        self.assertEqual(probe["planes"]["verdict"], "NOT_RUN")
+        self.assertIn("PLANE_UNUSABLE", probe["planes"]["reason"])
+        unusable = probe["planes"]["identities"]
+        self.assertEqual(len(unusable), 1)
+        self.assertFalse(unusable[0]["usable"])
+
+    def test_the_probe_lists_the_asar_plane_when_a_port_is_injected(self):
+        with _scratch("spg-test-probe-") as td:
+            app = _tiny_desktop_app(td)
+            exe = app / "DeepSeek Harness.exe"
+            exe.write_bytes(b"MZ")
+            port = _RecordingProcesses([str(exe)])
+            probe = dsh_compat.locate_dsh_install(
+                env={}, which=_which_map({}), processes=port)
+        self.assertEqual(probe["status"], "NOT_RUN")  # no disk install here
+        self.assertEqual(probe["planes"]["verdict"], "OK")
+        asar_faces = [identity for identity in
+                      probe["planes"]["identities"]
+                      if identity["kind"] == "asar-desktop"]
+        self.assertEqual(len(asar_faces), 1)
+        face = asar_faces[0]
+        self.assertEqual(face["source"], "process-ancestor")
+        self.assertEqual(face["dsh_version"], "0.2.2-rc.1")
+        self.assertEqual(len(face["header_sha256"]), 64)
+        self.assertTrue(face["runner"]["electron_run_as_node"])
+        # the port saw the contract's ancestor bound, not a local guess
+        self.assertEqual(port.calls,
+                         [dsh_contract.get(
+                             "host.planes.process_probe.max_ancestors")])
+
+    def test_the_shim_without_anchor_return_path_keeps_the_planes_face(self):
+        # R1 (review finding 6): the OTHER early return — `dsh` on PATH but
+        # no node_modules above it — must carry the planes face too (the
+        # single early assignment guarantees it structurally; this pins it).
+        with _scratch("spg-test-shim-") as td:
+            shim = Path(td) / "bin" / "dsh.exe"
+            shim.parent.mkdir(parents=True, exist_ok=True)
+            shim.write_bytes(b"MZ")
+            probe = dsh_compat.locate_dsh_install(
+                env={}, which=_which_map({"dsh": str(shim)}),
+                processes=None)
+        self.assertEqual(probe["status"], "NOT_RUN")
+        self.assertIn("no node_modules carrying", probe["reason"])
+        self.assertEqual(probe["planes"]["verdict"], "OK")
+        self.assertEqual(probe["planes"]["identities"], [])
+
+    def test_the_probe_kill_switch_keeps_the_port_untouched(self):
+        port = _RecordingProcesses(["C:/Windows/System32/cmd.exe"])
+        probe = dsh_compat.locate_dsh_install(
+            env={"DSH_PLANE_PROBE_PROCESS": "0"},
+            which=_which_map({}), processes=port)
+        self.assertEqual(port.calls, [])
+        self.assertEqual(probe["planes"]["identities"], [])
+
+
 class RepoRootWalkTests(unittest.TestCase):
     """FIX-484: the real repository root — the tree that used to never finish."""
 

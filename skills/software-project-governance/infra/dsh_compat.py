@@ -1277,8 +1277,46 @@ def _profile_planes(env: dict) -> list:
     return planes
 
 
+#: FEAT-113 S1: the ancestor-process probe default for `locate_dsh_install`.
+#: Design §3.2 source 3: the probe is on "仅用于 doctor/28v 证据" — the two
+#: faces that read their evidence through this function (dsh doctor and the
+#: 28v report builder below). `dsh_boundary` never calls here and inherits
+#: nothing; the `--install` path does not call here either, so it keeps the
+#: explicit/offline posture. Callers pass ``processes=None`` to keep the probe
+#: off, or inject a fake port in tests.
+_PROBE_DEFAULT = object()
+
+
+def _plane_listing(env, processes):
+    """The FEAT-113 §3.2 plane-identity face — additive report fields only.
+
+    The listing never feeds the legacy resolution fields below: the selected
+    install plane, its verdict semantics and `other_planes` are computed by
+    the pre-existing logic untouched (design §10 S1: wire the capability,
+    change no verdict). `dsh_plane` reads every host fact from the contract
+    and raises the accessor's own failure classes on a contract defect — the
+    §2.5.1 classification this module already applies to its other reads.
+    The one downgraded failure is the sibling module itself being unimportable
+    (a dsh_compat copied without its S1 siblings — the guard-copy sandbox):
+    the additive face reports it and stays empty, exactly like an
+    unimportable accessor never decides the guard's verdict with a traceback.
+    """
+    try:
+        import dsh_plane  # noqa: PLC0415 — sibling module, lazy on purpose
+    except ImportError as error:
+        return {"verdict": "NOT_RUN",
+                "reason": f"plane identity module unavailable: {error}",
+                "identities": []}
+    if processes is _PROBE_DEFAULT:
+        processes = dsh_plane.RealProcesses()
+    planes = dsh_plane.resolve(env, processes=processes)
+    verdict, reason = dsh_plane.plane_verdict(planes)
+    return {"verdict": verdict, "reason": reason,
+            "identities": [plane.identity() for plane in planes]}
+
+
 def locate_dsh_install(env: Optional[dict] = None,
-                       which=shutil.which) -> dict:
+                       which=shutil.which, *, processes=_PROBE_DEFAULT) -> dict:
     """Locate the plugin set a preset mount actually uses.
 
     Precedence:
@@ -1312,6 +1350,12 @@ def locate_dsh_install(env: Optional[dict] = None,
     * ``protocol`` — ``native`` (registry package found), ``legacy`` (a CLI
       plane was resolved but carries no registry package), or ``unknown``
       (neither plane was resolvable; never silently reported as legacy).
+
+    FEAT-113 S1 adds one report field, computed independently of everything
+    above: ``planes`` — ``{"verdict", "reason", "identities"}`` with the
+    §3.2 plane identity objects (``schema: dsh-plane/1``) for every plane
+    resolvable in the contract's ``host.planes.precedence`` order. It never
+    changes the legacy fields: a plane listing cannot flip a verdict.
     """
     env = os.environ if env is None else env
     result = {
@@ -1336,7 +1380,12 @@ def locate_dsh_install(env: Optional[dict] = None,
         "protocol": None,
         "oracle_packages": {},
         "other_planes": [],
+        # FEAT-113 S1: the §3.2 plane identities (report face only — the
+        # fields above keep their exact pre-S1 semantics).
+        "planes": {"verdict": "OK", "reason": "", "identities": []},
     }
+    # Computed before any return so every path (OK and NOT_RUN) carries it.
+    result["planes"] = _plane_listing(env, processes)
 
     chosen = None
     chosen_plane = None

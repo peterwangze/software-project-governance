@@ -577,13 +577,16 @@ class TestAccessorContract(unittest.TestCase):
 
     def test_load_returns_the_declared_namespaces(self):
         contract = _contract()
-        self.assertEqual(contract["schema_version"], 1)
-        for namespace in ("evidence", "host", "own", "coverage", "elimination"):
+        self.assertEqual(contract["schema_version"], 2)
+        for namespace in ("evidence", "host", "own", "coverage", "elimination",
+                          "deprecations"):
             self.assertIn(namespace, contract)
             self.assertIsInstance(contract[namespace], dict, namespace)
 
     def test_supported_schema_versions_is_the_declared_closed_set(self):
-        self.assertEqual(dsh_contract.SUPPORTED_SCHEMA_VERSIONS, (1,))
+        # FEAT-113 S0 (§8.2.1): v2 only — the in-package contract ships with
+        # its code, so v1 raises ContractSchemaUnknown (no legal v1 scenario).
+        self.assertEqual(dsh_contract.SUPPORTED_SCHEMA_VERSIONS, (2,))
         self.assertEqual(
             dsh_contract.CONTRACT_REL, "adapters/dsh/host-contract.json")
 
@@ -770,6 +773,302 @@ class TestAccessorContract(unittest.TestCase):
             self.assertNotIn(forbidden, source, forbidden)
 
 
+class TestContractV2AdditiveKeys(unittest.TestCase):
+    """FEAT-113 S0 — contract v2 (design §8.2.1): additive keys, zero deletions.
+
+    S0 is deliberately one-directional: v2 only *adds* keys and marks two of
+    the old ones deprecated via the `deprecations` sidecar. Every case here
+    pins one half of that contract:
+
+      * the new keys are present, readable through `get`, and carry exactly the
+        §8.2.1 values (the table is normative);
+      * a missing new key is `ContractMalformed` — v2 widens the required set,
+        it does not widen acceptance;
+      * `schema_version` 1 is `ContractSchemaUnknown` (the in-package contract
+        ships with its code; there is no legal v1 scenario, §8.2.1 last row);
+      * `host.rows` / `own.preset.template` stay REQUIRED **and** are recorded
+        as deprecated — "required-but-deprecated" is a distinct state from
+        "optional", so deleting either is still malformed (the timing block:
+        弃用 ≠ 允许缺失).
+    """
+
+    def setUp(self):
+        self.contract = _contract()
+
+    # ── the new keys: present, readable, normative ─────────────────────────
+    def test_own_overlay_declares_the_two_governance_rows(self):
+        self.assertEqual(dsh_contract.get("own.overlay", self.contract), {
+            "path": "agent-presets/governance/overlay.cordis.yml",
+            "rows": ["persona", "skill-filesystem"],
+            "persona_body_token": "__GOVERNANCE_PERSONA_BODY__",
+            "persona_body_source": "agent-presets/governance/persona.md.template",
+            "allow_js": False,
+        })
+
+    def test_own_native_base_preset_selector_reuses_the_declared_names(self):
+        base_preset = dsh_contract.get("own.native.base_preset", self.contract)
+        self.assertEqual(base_preset, {
+            "patch_rel": "dsh/node_modules/@deepseek-ai/dsh-web-app/"
+                         "presets/{id}.patch.yml",
+            "row_selector": {
+                "name": "@deepseek-ai/dsh-agent-preset",
+                "config_id": "standard",
+            },
+            "rows_path": "config.plugins",
+            "insert_selector": "- insert:",
+        })
+        # `<base_row_name>` / `<base_preset_id>` of §8.2.1 are the two
+        # already-declared facts — the selector must not fork a second name.
+        self.assertEqual(base_preset["row_selector"]["name"],
+                         self.contract["own"]["native"]["base_row_name"])
+        self.assertEqual(base_preset["row_selector"]["config_id"],
+                         self.contract["own"]["native"]["base_preset_id_default"])
+
+    def test_own_preset_render_provenance_declares_the_d5_fields(self):
+        provenance = dsh_contract.get("own.preset.render_provenance",
+                                      self.contract)
+        self.assertEqual(provenance["filename"], "render-provenance.json")
+        self.assertEqual(provenance["schema"], "dsh-preset-provenance/1")
+        self.assertEqual(provenance["fields"], [
+            "schema", "package_version", "rendered_at",
+            "overlay", "persona", "plane", "base",
+            "overlay_rows", "rows", "policy",
+        ])
+        self.assertEqual(provenance["absent_policy"], "warn-one-release")
+
+    def test_own_render_persona_prefix_carries_the_eleven_rule_fields(self):
+        # §6.2.2.1 field table, verbatim: the 5-step persona body derivation
+        # (§6.2.2.1) must be declarative, so the Python/JS differential gate
+        # can judge drift instead of a human re-reading two renderers.
+        self.assertEqual(
+            dsh_contract.get("own.render.persona_prefix", self.contract),
+            {
+                "mode": "base-prefix-then-body",
+                "separator": "\n\n",
+                "trailing": "\n",
+                "empty_prefix": "body-only",
+                "body_source": "agent-presets/governance/persona.md.template",
+                "body_token": "__GOVERNANCE_REPO_ROOT__",
+                "body_token_value": "posix_pkg_root",
+                "body_crlf": "lf",
+                "body_trim": True,
+                "body_empty_policy": "refuse",
+                "leftover_scan": "__[A-Za-z0-9_]+__",
+            })
+
+    def test_persona_prefix_reuses_not_forks_the_existing_facts(self):
+        # The three "复用" clauses of §6.2.2.1: body_source == persona_source,
+        # body_token == persona_repo_token, leftover_scan == the render scan.
+        render = self.contract["own"]["render"]
+        native = self.contract["own"]["native"]
+        prefix = render["persona_prefix"]
+        self.assertEqual(prefix["body_source"], native["persona_source"])
+        self.assertEqual(prefix["body_token"], native["persona_repo_token"])
+        self.assertEqual(prefix["leftover_scan"], render["leftover_scan"])
+
+    def test_host_planes_declare_precedence_and_the_asar_face(self):
+        planes = dsh_contract.get("host.planes", self.contract)
+        self.assertEqual(planes["precedence"], [
+            "env:DSH_INSTALL_DIR",
+            "env:DSH_DESKTOP_APP_DIR",
+            "process-ancestor",
+            "env:DSH_HARNESS_NODE_MODULES",
+            "home-profile",
+            "path",
+        ])
+        self.assertEqual(planes["asar"], {
+            "header": [
+                "[0:4]==4",
+                "[4:8]=payload_size",
+                "[12:16]=json_size",
+                "json starts at byte 16, trimmed to the last '}'",
+            ],
+            "content_base": "8+payload_size",
+            "runner": {"flag": "ELECTRON_RUN_AS_NODE",
+                       "module_flag": "--input-type=module"},
+            "runtime_rel": "resources/runtime/versions.json",
+            "unpacked_cannot_serve": True,
+            "entry_count_cap": 200000,
+        })
+        self.assertEqual(planes["env"], {"desktop_app_dir": "DSH_DESKTOP_APP_DIR",
+                                         "profile_dir": "DSH_PROFILE_DIR"})
+        self.assertEqual(planes["process_probe"],
+                         {"enabled_in": ["doctor", "boundary"],
+                          "max_ancestors": 4})
+
+    def test_host_home_discovery_declares_the_bounded_walk(self):
+        self.assertEqual(dsh_contract.get("host.home.discovery",
+                                          self.contract), {
+            "roots": ["agent-presets", "adapters/dsh"],
+            "suffixes": [".cordis.yml", ".cordis.yml.template"],
+            "exclude_names": ["overlay.cordis.yml"],
+            "bounds": {"max_depth": 24, "max_entries": 50000,
+                       "max_seconds": 30},
+            "follow_reparse": False,
+        })
+
+    def test_host_apis_loader_ctx_declares_the_probe_stub_face(self):
+        self.assertEqual(dsh_contract.get("host.apis.loader_ctx",
+                                          self.contract), {
+            "members": ["baseUrl", "process", "console", "get", "has"],
+            "unlisted_member": "throw",
+            "stub_values": {"get": "undefined", "has": False},
+            "evidence": "ctx_members_used ⊆ members",
+        })
+
+    # ── missing new key → malformed (v2 widens the required set) ───────────
+    def test_a_missing_v2_key_is_malformed_and_names_the_block(self):
+        # Drop whole blocks AND single leaves: the required-paths table must
+        # catch both, naming an offending path under the dropped block.
+        blocks = [
+            ("own.overlay", lambda d: d["own"].pop("overlay")),
+            ("own.preset.render_provenance",
+             lambda d: d["own"]["preset"].pop("render_provenance")),
+            ("own.render.persona_prefix",
+             lambda d: d["own"]["render"].pop("persona_prefix")),
+            ("host.planes", lambda d: d["host"].pop("planes")),
+            ("host.home.discovery",
+             lambda d: d["host"]["home"].pop("discovery")),
+            ("host.apis.loader_ctx",
+             lambda d: d["host"]["apis"].pop("loader_ctx")),
+            ("own.native.base_preset",
+             lambda d: d["own"]["native"].pop("base_preset")),
+            ("deprecations", lambda d: d.pop("deprecations")),
+        ]
+        for prefix, mutate in blocks:
+            with self.subTest(block=prefix):
+                payload = json.loads(json.dumps(_contract()))
+                mutate(payload)
+                with self.assertRaises(
+                        dsh_contract.ContractMalformed) as caught:
+                    dsh_contract.load_contract(raw=json.dumps(payload))
+                self.assertIn(prefix, str(caught.exception), prefix)
+                self.assertIn("ContractMalformed", str(caught.exception))
+
+    def test_a_missing_v2_leaf_is_malformed_and_names_the_leaf(self):
+        leaves = (
+            "own.overlay.path",
+            "own.overlay.allow_js",
+            "own.native.base_preset.row_selector.name",
+            "own.preset.render_provenance.absent_policy",
+            "own.render.persona_prefix.body_token",
+            "host.planes.asar.runner.flag",
+            "host.planes.process_probe.max_ancestors",
+            "host.home.discovery.bounds.max_seconds",
+            "host.home.discovery.follow_reparse",
+            "host.apis.loader_ctx.unlisted_member",
+        )
+        for dotted in leaves:
+            with self.subTest(leaf=dotted):
+                payload = json.loads(json.dumps(_contract()))
+                node = payload
+                parts = dotted.split(".")
+                for part in parts[:-1]:
+                    node = node[part]
+                node.pop(parts[-1])
+                with self.assertRaises(
+                        dsh_contract.ContractMalformed) as caught:
+                    dsh_contract.load_contract(raw=json.dumps(payload))
+                self.assertIn(dotted, str(caught.exception), dotted)
+
+    def test_v2_sequence_shapes_are_validated_like_host_apis(self):
+        # §8.2.1 constrains these as lists of declared names; the accessor's
+        # nested-shape checks mirror the host.apis style (fail loud, name the
+        # field) instead of accepting any JSON value at the declared path.
+        for dotted, bad in (
+            ("own.overlay.rows", "skill-filesystem"),
+            ("host.planes.precedence", []),
+            ("host.planes.precedence", [23]),
+            ("host.home.discovery.roots", "agent-presets"),
+            ("host.home.discovery.suffixes", [None]),
+            ("host.apis.loader_ctx.members", "baseUrl"),
+        ):
+            with self.subTest(field=dotted, value=bad):
+                payload = json.loads(json.dumps(_contract()))
+                node = payload
+                parts = dotted.split(".")
+                for part in parts[:-1]:
+                    node = node[part]
+                node[parts[-1]] = bad
+                with self.assertRaises(
+                        dsh_contract.ContractMalformed) as caught:
+                    dsh_contract.load_contract(raw=json.dumps(payload))
+                self.assertIn(dotted, str(caught.exception), dotted)
+
+    # ── schema 1 is gone ────────────────────────────────────────────────────
+    def test_schema_version_1_is_now_contract_schema_unknown(self):
+        # §8.2.1 last row: the in-package contract ships with its code, so a
+        # v1 document is not an "older but legal" contract — it is unknown,
+        # fail-closed, never parsed with v2 assumptions.
+        payload = json.loads(json.dumps(_contract()))
+        payload["schema_version"] = 1
+        with self.assertRaises(dsh_contract.ContractSchemaUnknown) as caught:
+            dsh_contract.load_contract(raw=json.dumps(payload))
+        message = str(caught.exception)
+        self.assertIn("ContractSchemaUnknown", message)
+        self.assertIn("schema_version 1", message)
+        self.assertIn("(supported: 2)", message)
+        self.assertIn("host-contract.json", message)
+
+    # ── deprecated ≠ optional ──────────────────────────────────────────────
+    def test_deprecated_keys_stay_required_and_are_reported_deprecated(self):
+        for dotted in ("host.rows", "own.preset.template"):
+            with self.subTest(path=dotted):
+                # (a) still in the accessor's required-paths table…
+                self.assertIn(dotted, dsh_contract.REQUIRED_PATHS)
+                # (b) …recorded as deprecated by the sidecar, readable
+                #     through the accessor's single-source predicate…
+                self.assertTrue(dsh_contract.is_deprecated(dotted,
+                                                           self.contract))
+                self.assertEqual(
+                    self.contract["deprecations"]["entries"][dotted],
+                    {"deprecated_in": 2})
+                # (c) …and still load-bearing: deleting one is malformed,
+                #     exactly like any other required key ("弃用 ≠ 允许缺失").
+                payload = json.loads(json.dumps(_contract()))
+                node = payload
+                parts = dotted.split(".")
+                for part in parts[:-1]:
+                    node = node[part]
+                node.pop(parts[-1])
+                with self.assertRaises(
+                        dsh_contract.ContractMalformed) as caught:
+                    dsh_contract.load_contract(raw=json.dumps(payload))
+                self.assertIn(dotted, str(caught.exception), dotted)
+
+    def test_is_deprecated_is_false_for_every_undeprecated_path(self):
+        # The predicate must not degrade into "true for anything old": only
+        # the sidecar decides, and today that is exactly the two S0 keys.
+        for dotted in ("host.install.scope", "own.render.tokens",
+                       "schema_version", "own.overlay.path"):
+            self.assertFalse(dsh_contract.is_deprecated(dotted, self.contract),
+                             dotted)
+        self.assertEqual(
+            sorted(self.contract["deprecations"]["entries"]),
+            ["host.rows", "own.preset.template"])
+
+    def test_deprecations_sidecar_entries_are_shape_checked(self):
+        for dotted, bad, expected in (
+            ("host.rows", {"deprecated_in": "2"}, "deprecated_in"),
+            ("host.rows", {}, "deprecated_in"),
+            ("own.preset.template", "2", "must be an object"),
+        ):
+            with self.subTest(entry=dotted, value=bad):
+                payload = json.loads(json.dumps(_contract()))
+                payload["deprecations"]["entries"][dotted] = bad
+                with self.assertRaises(
+                        dsh_contract.ContractMalformed) as caught:
+                    dsh_contract.load_contract(raw=json.dumps(payload))
+                self.assertIn(f"deprecations.entries[{dotted}]",
+                              str(caught.exception))
+                self.assertIn(expected, str(caught.exception))
+        payload = json.loads(json.dumps(_contract()))
+        payload["deprecations"]["entries"] = {}
+        with self.assertRaises(dsh_contract.ContractMalformed) as caught:
+            dsh_contract.load_contract(raw=json.dumps(payload))
+        self.assertIn("deprecations.entries", str(caught.exception))
+
+
 class TestContractFields(unittest.TestCase):
     """K-1 field-table coverage (§2.4), including the recorded-sub-block rule."""
 
@@ -943,15 +1242,27 @@ class TestContractFields(unittest.TestCase):
         # own. The anchor is the binding plus the renderer that consumes it.
         self.assertIn('"ORACLE_PACKAGES": "host.apis"', guard_text)
         self.assertIn("def _render_probe_script()", guard_text)
-        for package, entry in apis.items():
+        # Contract v2 (FEAT-113 §8.2.1) adds ONE structural sub-key — the
+        # loader ctx stub face — which is not a package: the oracle set is
+        # still exactly the four packages, and the guard skips the structural
+        # key by deriving it from the loader-ctx binding (never a literal).
+        packages = {name: entry for name, entry in apis.items()
+                    if name != "loader_ctx"}
+        for package, entry in packages.items():
             self.assertTrue(entry["role"], package)
             self.assertTrue(entry["exports"], package)
-        self.assertEqual(len(apis), 4)
+        self.assertEqual(len(packages), 4)
+        self.assertEqual(len(apis), 5)
+        self.assertIn('"LOADER_CTX_MEMBERS": "host.apis.loader_ctx.members"',
+                      guard_text)
+        self.assertNotIn('"loader_ctx"', guard_text,
+                         "the structural key must be derived, not restated")
         # Every declared symbol must be reachable from a role the renderer
         # resolves (`load` → YAML, `entryListSchema` → dialect,
         # `evaluate`/`isJsExpr` → loader, `resolveConfig` → cordis), otherwise
         # `_render_probe_script()` raises instead of running a partial probe.
-        symbols = {symbol for entry in apis.values() for symbol in entry["exports"]}
+        symbols = {symbol for entry in packages.values()
+                   for symbol in entry["exports"]}
         for required in ("load", "entryListSchema", "evaluate", "isJsExpr",
                          "resolveConfig"):
             self.assertIn(required, symbols)

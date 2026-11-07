@@ -401,7 +401,33 @@ _DECLARED_BINDING = {
     # capability. Declared in the contract (`own.native.registry_row_name`)
     # because the name is a host fact, not ours.
     "REGISTRY_PACKAGE": "own.native.registry_row_name",
+    # FEAT-113 S0 (contract v2, design §8.2.1/§10): the four v2 facts the
+    # upcoming slices read. Nothing consumes them in S0 — the bindings exist
+    # so the new contract keys flow through the same lazy mechanism (a
+    # contract defect surfaces as the §2.5.1 verdict, never an import-time
+    # traceback) and each is pinned end-to-end by
+    # `ContractV2DeclaredBindingTests`. No reader is switched here:
+    # `discover_compositions` still walks `host.home.composition_globs`
+    # (`host.home.discovery` is wired in S2); the overlay fragment (S4),
+    # base-preset patch (S4/S5) and loader ctx stub face (S3) arrive with
+    # their slices, which will add the `_FACT_ALIASES` they need then.
+    "OVERLAY_PATH": "own.overlay.path",
+    "BASE_PRESET_PATCH_REL": "own.native.base_preset.patch_rel",
+    "LOADER_CTX_MEMBERS": "host.apis.loader_ctx.members",
+    "DISCOVERY_ROOTS": "host.home.discovery.roots",
 }
+
+#: The structural (non-package) sub-key of `host.apis`, derived from the
+#: loader-ctx binding's contract path (`host.apis.loader_ctx.members` →
+#: `loader_ctx`) rather than restated as a literal. Contract v2 (FEAT-113
+#: §8.2.1) declares the loader ctx stub face *inside* `host.apis`; the oracle
+#: facts are still exactly the package → `exports` entries, so the two
+#: `host.apis` readers (`ORACLE_PACKAGES`, `oracle_api_symbols`) skip this one
+#: sub-key. No package fact changes: the probe request, the symbol map and the
+#: verdicts keep their pre-v2 shape for the four oracle packages.
+_APIS_STRUCTURAL_KEYS = frozenset({
+    _DECLARED_BINDING["LOADER_CTX_MEMBERS"].split(".")[-2],
+})
 
 #: Sequence-shaped bindings: the contract field is a JSON array.
 _SEQUENCE_FACTS = frozenset({"INSTALL_ANCHOR_REL", "COMPOSITION_GLOBS"})
@@ -451,8 +477,10 @@ def _contract_value(name: str):
     value = dsh_contract.get(_DECLARED_BINDING[name])
     if name == "ORACLE_PACKAGES":
         # `host.apis` is the package → {exports, role} map; the declared order is
-        # the order the probe reports them in.
-        value = tuple(value)
+        # the order the probe reports them in. The v2 structural sub-key
+        # (`loader_ctx`, see `_APIS_STRUCTURAL_KEYS`) is not a package and never
+        # reaches the probe request.
+        value = tuple(k for k in value if k not in _APIS_STRUCTURAL_KEYS)
     elif name in _SEQUENCE_FACTS:
         value = tuple(value)
     elif name in _WRAPPED_FACTS:
@@ -495,6 +523,10 @@ def oracle_api_symbols() -> dict:
     names, so a symbol rename upstream becomes a contract change instead of a
     silent `undefined` at runtime. A declared package without an `exports` list
     is a contract defect and raises `ContractMalformed` (never a silent skip).
+    The one structural sub-key of `host.apis` that is not a package — the v2
+    `loader_ctx` stub face, derived from the binding table
+    (`_APIS_STRUCTURAL_KEYS`) — is skipped instead: it is a declaration shape,
+    not an oracle with a missing `exports` defect.
     """
     import dsh_contract  # noqa: PLC0415 — sibling accessor, imported on first need
 
@@ -504,6 +536,8 @@ def oracle_api_symbols() -> dict:
             "ContractMalformed: `host.apis` must be a non-empty object")
     symbols = {}
     for package, entry in apis.items():
+        if package in _APIS_STRUCTURAL_KEYS:
+            continue
         field = f"host.apis[{package}]"
         if not isinstance(package, str) or not package.strip():
             raise dsh_contract.ContractMalformed(

@@ -4169,6 +4169,113 @@ class CompositionGlobValidationTests(unittest.TestCase):
         self.assertIn("agent-presets/**/*.cordis.yml", report["reason"])
 
 
+class ContractV2DeclaredBindingTests(unittest.TestCase):
+    """FEAT-113 S0 — the contract-v2 facts read through the existing lazy face.
+
+    Design §8.2.1/§10 (S0 row): `dsh_compat.py` grows only `_DECLARED_BINDING`
+    entries for the four v2 facts the upcoming slices need. Nothing consumes
+    them yet (no reader is switched in S0 — `discover_compositions` still walks
+    `host.home.composition_globs`, and `host.home.discovery` is wired in S2),
+    so the bindings exist to make the new contract keys readable through the
+    same lazy mechanism a contract defect already flows through: the §2.5.1
+    verdict, not an import-time traceback.
+    """
+
+    #: The pre-S0 binding set: S0 may only ADD names, never rename or drop.
+    _PRE_S0_BINDINGS = frozenset({
+        "INSTALL_DIR_ENV", "NODE_MODULES_ENV", "DSH_SCOPE", "DSH_PACKAGE",
+        "INSTALL_ANCHOR_REL", "ORACLE_PACKAGES", "DSH_HOME_ENV",
+        "PROFILES_DIR_NAME", "COMPOSITION_FILENAMES", "COMPOSITION_GLOBS",
+        "COMPAT_SECTION_TITLE", "BUILTIN_GROUP_NAME",
+        "GROUP_DISABLED_SHORT_CIRCUIT", "GROUP_ANCESTOR_INHERITED",
+        "REGISTRY_PACKAGE",
+    })
+
+    _V2_BINDINGS = {
+        "OVERLAY_PATH": "own.overlay.path",
+        "BASE_PRESET_PATCH_REL": "own.native.base_preset.patch_rel",
+        "LOADER_CTX_MEMBERS": "host.apis.loader_ctx.members",
+        "DISCOVERY_ROOTS": "host.home.discovery.roots",
+    }
+
+    def test_each_new_binding_resolves_end_to_end_to_the_contract_value(self):
+        for name, path in self._V2_BINDINGS.items():
+            with self.subTest(binding=name):
+                # End to end: the public attribute face (PEP 562)…
+                self.assertEqual(getattr(dsh_compat, name),
+                                 dsh_contract.get(path))
+                # …and the internal resolver the future slices will call.
+                self.assertEqual(dsh_compat._contract_value(name),
+                                 dsh_contract.get(path))
+        # The normative S0 values, pinned once so a contract edit that
+        # silently changes them is caught here, not in S2/S3.
+        self.assertEqual(dsh_compat.OVERLAY_PATH,
+                         "agent-presets/governance/overlay.cordis.yml")
+        self.assertEqual(
+            dsh_compat.BASE_PRESET_PATCH_REL,
+            "dsh/node_modules/@deepseek-ai/dsh-web-app/presets/{id}.patch.yml")
+        self.assertEqual(dsh_compat.LOADER_CTX_MEMBERS,
+                         ["baseUrl", "process", "console", "get", "has"])
+        self.assertEqual(dsh_compat.DISCOVERY_ROOTS,
+                         ["agent-presets", "adapters/dsh"])
+
+    def test_the_existing_bindings_are_untouched(self):
+        declared = set(dsh_compat._DECLARED_BINDING)
+        self.assertTrue(self._PRE_S0_BINDINGS <= declared,
+                        sorted(self._PRE_S0_BINDINGS - declared))
+        # Additive only: S0 adds exactly the four v2 facts, nothing renamed.
+        self.assertEqual(declared - self._PRE_S0_BINDINGS,
+                         set(self._V2_BINDINGS))
+        # The old facts still resolve (the lazy face serves them unchanged).
+        self.assertEqual(dsh_compat._fact("_composition_globs"),
+                         tuple(dsh_contract.get("host.home.composition_globs")))
+        self.assertEqual(dsh_compat._fact("_builtin_group_name"),
+                         "cordis:group")
+
+    def test_the_oracle_face_of_host_apis_is_unchanged_by_loader_ctx(self):
+        # The v2 `host.apis.loader_ctx` stub face is a declaration shape, not
+        # a package: the oracle facts stay exactly the four pre-v2 packages
+        # (same names, same declared order), so the probe request and the
+        # symbol map keep their pre-v2 shape — S0 is additive only.
+        self.assertEqual(dsh_compat._fact("_oracle_packages"), (
+            "@deepseek-ai/cordis",
+            "@deepseek-ai/cordis-plugin-include",
+            "@deepseek-ai/cordis-plugin-loader",
+            "js-yaml",
+        ))
+        self.assertEqual(sorted(dsh_compat.oracle_api_symbols()),
+                         sorted(dsh_compat._fact("_oracle_packages")))
+        self.assertNotIn("loader_ctx", dsh_compat.oracle_api_symbols())
+
+    def test_deleting_own_overlay_from_a_contract_copy_flips_the_accessor(self):
+        # The mirror of the guard's own contract-failure classification, at
+        # accessor scope: a contract copy that lost `own.overlay` must make
+        # the NEW binding fail with the contract's own failure class — the
+        # vocabulary `check_dsh_preset_compat` maps to FAIL (§2.5.1), never a
+        # silent None. The mutated document is swapped into the accessor's
+        # memoized cache (the lazy mechanism's read path); both caches are
+        # restored afterwards so no other test observes the copy.
+        payload = json.loads(json.dumps(dsh_contract.load_contract()))
+        del payload["own"]["overlay"]
+        key = str(dsh_contract.contract_path())
+        saved = dict(dsh_contract._CACHE)
+        dsh_compat._declared_cache.clear()
+        try:
+            dsh_contract._CACHE[key] = payload
+            with self.assertRaises(dsh_contract.ContractMalformed) as caught:
+                dsh_compat._contract_value("OVERLAY_PATH")
+        finally:
+            dsh_contract._CACHE.clear()
+            dsh_contract._CACHE.update(saved)
+            dsh_compat._declared_cache.clear()
+        message = str(caught.exception)
+        self.assertIn("ContractMalformed", message)
+        self.assertIn("own.overlay.path", message)
+        # Restored: the shipped contract serves the binding again.
+        self.assertEqual(dsh_compat._contract_value("OVERLAY_PATH"),
+                         "agent-presets/governance/overlay.cordis.yml")
+
+
 class RepoRootWalkTests(unittest.TestCase):
     """FIX-484: the real repository root — the tree that used to never finish."""
 

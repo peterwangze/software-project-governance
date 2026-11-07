@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "evidence": {
     "_note": "版本证据面。`audit` 指向本契约的事实来源快照；其余字段只能由 `dsh-doctor --record-evidence` 在真实平面写入（设计 §2.4/§2.7，V8）。V1 一律为 null（未记录），禁止人工誊抄——誊抄会把契约退化为第二事实源。",
     "audit": {
@@ -85,13 +85,69 @@
         "note": "G06-b'（R0 F-6）：写入侧的「与上游一致」不适用于探测侧。guard 只认显式 DSH_HOME，从不猜 ~/.dsh（dsh_compat._profile_planes:560-563），这是安全属性，反相断言见 test_dsh_compat.py::test_dsh_home_is_never_guessed_when_unset。"
       }
     },
+    "planes": {
+      "precedence": [
+        "env:DSH_INSTALL_DIR",
+        "env:DSH_DESKTOP_APP_DIR",
+        "process-ancestor",
+        "env:DSH_HARNESS_NODE_MODULES",
+        "home-profile",
+        "path"
+      ],
+      "asar": {
+        "header": [
+          "[0:4]==4",
+          "[4:8]=payload_size",
+          "[12:16]=json_size",
+          "json starts at byte 16, trimmed to the last '}'"
+        ],
+        "content_base": "8+payload_size",
+        "runner": {
+          "flag": "ELECTRON_RUN_AS_NODE",
+          "module_flag": "--input-type=module"
+        },
+        "runtime_rel": "resources/runtime/versions.json",
+        "unpacked_cannot_serve": true,
+        "entry_count_cap": 200000
+      },
+      "env": {
+        "desktop_app_dir": "DSH_DESKTOP_APP_DIR",
+        "profile_dir": "DSH_PROFILE_DIR"
+      },
+      "process_probe": {
+        "enabled_in": [
+          "doctor",
+          "boundary"
+        ],
+        "max_ancestors": 4
+      }
+    },
     "home": {
       "user_preset_dir": ".agent-presets",
       "composition_file": "agent.cordis.yml",
       "composition_globs": [
         "**/agent.cordis.yml",
         "**/*.cordis.yml.template"
-      ]
+      ],
+      "discovery": {
+        "roots": [
+          "agent-presets",
+          "adapters/dsh"
+        ],
+        "suffixes": [
+          ".cordis.yml",
+          ".cordis.yml.template"
+        ],
+        "exclude_names": [
+          "overlay.cordis.yml"
+        ],
+        "bounds": {
+          "max_depth": 24,
+          "max_entries": 50000,
+          "max_seconds": 30
+        },
+        "follow_reparse": false
+      }
     },
     "row_contract": {
       "id_field": "id",
@@ -708,6 +764,21 @@
           "load"
         ],
         "role": "加载 entryListSchema 所用的 YAML 解析器"
+      },
+      "loader_ctx": {
+        "members": [
+          "baseUrl",
+          "process",
+          "console",
+          "get",
+          "has"
+        ],
+        "unlisted_member": "throw",
+        "stub_values": {
+          "get": "undefined",
+          "has": false
+        },
+        "evidence": "ctx_members_used ⊆ members"
       }
     },
     "cli": {
@@ -797,6 +868,16 @@
         "no-!!js"
       ]
     },
+    "overlay": {
+      "path": "agent-presets/governance/overlay.cordis.yml",
+      "rows": [
+        "persona",
+        "skill-filesystem"
+      ],
+      "persona_body_token": "__GOVERNANCE_PERSONA_BODY__",
+      "persona_body_source": "agent-presets/governance/persona.md.template",
+      "allow_js": false
+    },
     "preset": {
       "id": "governance",
       "payload_dir": "agent-presets/governance",
@@ -804,7 +885,24 @@
       "metadata": "agent-presets/governance/preset.yml",
       "version_marker": ".dsh-bundle-version",
       "skill_root_marker": "skill-root.txt",
-      "write_policy": "staging+rename, no-lock, best-effort"
+      "write_policy": "staging+rename, no-lock, best-effort",
+      "render_provenance": {
+        "filename": "render-provenance.json",
+        "schema": "dsh-preset-provenance/1",
+        "fields": [
+          "schema",
+          "package_version",
+          "rendered_at",
+          "overlay",
+          "persona",
+          "plane",
+          "base",
+          "overlay_rows",
+          "rows",
+          "policy"
+        ],
+        "absent_policy": "warn-one-release"
+      }
     },
     "native": {
       "_note": "FEAT-102 原生派生面：从当前宿主已组合的 base 预设声明派生本包预设，只改两个内容差量（persona.prefix 追加、skill-filesystem.customSkillDirs 追加），其余行原样继承——宿主升级新增/替换/禁用工具行时本包不再失效。能力检测，绝不按版本号判等。",
@@ -818,6 +916,15 @@
         "adapters/dsh/skill-shims"
       ],
       "base_preset_id_default": "standard",
+      "base_preset": {
+        "patch_rel": "dsh/node_modules/@deepseek-ai/dsh-web-app/presets/{id}.patch.yml",
+        "row_selector": {
+          "name": "@deepseek-ai/dsh-agent-preset",
+          "config_id": "standard"
+        },
+        "rows_path": "config.plugins",
+        "insert_selector": "- insert:"
+      },
       "persona_source": "agent-presets/governance/persona.md.template",
       "persona_repo_token": "__GOVERNANCE_REPO_ROOT__",
       "registration": "public agentPresets.register during this row's activation; the registry record exists synchronously after the call; this row disposes only its own registration and never writes $DSH_HOME",
@@ -832,6 +939,19 @@
       },
       "newline_policy": "lf",
       "leftover_scan": "__[A-Za-z0-9_]+__",
+      "persona_prefix": {
+        "mode": "base-prefix-then-body",
+        "separator": "\n\n",
+        "trailing": "\n",
+        "empty_prefix": "body-only",
+        "body_source": "agent-presets/governance/persona.md.template",
+        "body_token": "__GOVERNANCE_REPO_ROOT__",
+        "body_token_value": "posix_pkg_root",
+        "body_crlf": "lf",
+        "body_trim": true,
+        "body_empty_policy": "refuse",
+        "leftover_scan": "__[A-Za-z0-9_]+__"
+      },
       "custom_skill_dirs_shape": {
         "key_indent": 4,
         "item_indent": 6,
@@ -2501,6 +2621,17 @@
     "notes": {
       "field_semantics": "`class` 取自 audit_baseline 的分类；`decision` 词表 = maintain-in-contract / weakened / kept-as-is / eliminated / registered-not-fixed / historical-record-only；`slice` 是设计切片列表（§3.2/§3.3 的「切片」列）；`removed_at` 仅消除项有；`weakened_at` 只在设计给出单一落地切片时出现（多平面项保留完整 slice 列表）；`evidence` 指向事实源（AUDIT-153 节号 + 设计节/行）。",
       "necessary_default": "未被 §3.2/§3.3 单独裁决的必要项 = maintain-in-contract，slice [\"V1\"]（契约登记平面；设计 §3.3 聚类表「必要：必须被契约化维护」）。§2.9.4 的接线改动由 V8 切片自身承载。"
+    }
+  },
+  "deprecations": {
+    "_note": "FEAT-113 S0（契约 v2，设计 §8.2.1 时序块）：弃用 sidecar——`entries` 的键是契约内 dotted path，值为 `{deprecated_in: <int>}`。被列出的键仍留在 dsh_contract.REQUIRED_PATHS（「必填但已弃用」≠「可选」：缺失仍 ContractMalformed，读者无法区分「新契约」与「契约破损」）；本块只记录弃用事实，读取经 dsh_contract.is_deprecated()。物理删除 host.rows 与 own.preset.template 集中在 S7 退场原子切片（§10），S0–S6 期间全部读者保持原样。",
+    "entries": {
+      "host.rows": {
+        "deprecated_in": 2
+      },
+      "own.preset.template": {
+        "deprecated_in": 2
+      }
     }
   }
 }

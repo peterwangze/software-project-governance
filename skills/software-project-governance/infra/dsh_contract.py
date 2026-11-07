@@ -16,6 +16,7 @@ Public surface (§2.5.1 — four APIs, three exception classes):
     ``contract_path(root=None)``  absolute path of the contract
     ``load_contract(root=None, *, raw=None)`` -> dict
     ``get(path, contract=None)``  dotted / bracketed path lookup
+    ``is_deprecated(path, contract=None)`` -> bool (v2, see below)
     ``reset_cache()``             drop the memoized document (tests)
 
     ``ContractUnreadable``        file missing or unreadable
@@ -40,6 +41,30 @@ Two structural rules the design fixes explicitly:
     resolves guard references inside itself, otherwise
     ``registry → checks.dsh_boundary → dsh_contract → registry`` is a cycle
     (ADR-018 §8). Only the standard library is imported.
+
+Contract v2 (FEAT-113 S0, design §8.2.1) is **additive only**: the new keys
+(``own.overlay``, ``own.native.base_preset``, ``own.preset.render_provenance``,
+``own.render.persona_prefix``, ``host.planes``, ``host.home.discovery``,
+``host.apis.loader_ctx``) join ``REQUIRED_PATHS`` — a missing one is
+``ContractMalformed`` — and ``SUPPORTED_SCHEMA_VERSIONS`` becomes ``(2,)``: the
+in-package contract ships with its code, so a v1 document is
+``ContractSchemaUnknown`` (there is no legal v1 scenario; never parse it with
+v2 assumptions).
+
+**Deprecation representation (v2).** ``host.rows`` and ``own.preset.template``
+stay in ``REQUIRED_PATHS`` *and* are recorded as deprecated by a sidecar block
+in the contract itself — the single source, this module holds no second copy:
+
+    "deprecations": {
+      "_note": "...",
+      "entries": {"host.rows": {"deprecated_in": 2}, ...}
+    }
+
+"Required-but-deprecated" is a distinct state from "optional": a *missing*
+deprecated key is still ``ContractMalformed`` (otherwise a reader could not
+tell "the new contract" from "a broken contract" — §8.2.1 timing block); only
+the deprecation is recorded, and :func:`is_deprecated` reads it back. The
+physical removal of both keys is the S7 atomic retirement slice, not S0.
 """
 
 from __future__ import annotations
@@ -58,6 +83,7 @@ __all__ = [
     "contract_path",
     "load_contract",
     "get",
+    "is_deprecated",
     "reset_cache",
 ]
 
@@ -66,7 +92,10 @@ CONTRACT_REL = "adapters/dsh/host-contract.json"
 
 #: Closed set of accepted `schema_version` values (design §2.5.1). An unknown
 #: version is fail-closed everywhere: never parse it with old assumptions.
-SUPPORTED_SCHEMA_VERSIONS: Tuple[int, ...] = (1,)
+#: v2 (FEAT-113 S0, §8.2.1): the in-package contract ships with its code, so
+#: v1 is no longer a legal scenario — reading one raises
+#: `ContractSchemaUnknown` instead of being honored as "older but fine".
+SUPPORTED_SCHEMA_VERSIONS: Tuple[int, ...] = (2,)
 
 #: The eight fields §2.4 requires on every `host.rows[]` entry.
 _ROW_FIELDS = ("row_id", "package", "disabled_expr", "platform_conditional",
@@ -78,6 +107,11 @@ _RECORDED_FIELDS = ("schema_export", "required_keys", "accepted_keys",
 
 #: Field table of §2.4, flattened to dotted paths. Presence is required; a
 #: `null` value is a legitimate "declared but not yet recorded/adjudicated".
+#: v2 (FEAT-113 §8.2.1) appends the new additive keys, and keeps two entries
+#: in a deliberately distinct state — "required-but-deprecated": `host.rows`
+#: and `own.preset.template` remain listed here (a missing one is malformed)
+#: while the `deprecations` sidecar records that each was deprecated in
+#: schema 2 (removal is the S7 slice; see `is_deprecated`).
 REQUIRED_PATHS: Tuple[str, ...] = (
     "schema_version",
     "evidence.audit.id",
@@ -107,9 +141,28 @@ REQUIRED_PATHS: Tuple[str, ...] = (
     "host.env.write_side.tilde_expansion",
     "host.env.probe_side.require_explicit",
     "host.env.probe_side.no_fallback",
+    "host.planes.precedence",
+    "host.planes.asar.header",
+    "host.planes.asar.content_base",
+    "host.planes.asar.runner.flag",
+    "host.planes.asar.runner.module_flag",
+    "host.planes.asar.runtime_rel",
+    "host.planes.asar.unpacked_cannot_serve",
+    "host.planes.asar.entry_count_cap",
+    "host.planes.env.desktop_app_dir",
+    "host.planes.env.profile_dir",
+    "host.planes.process_probe.enabled_in",
+    "host.planes.process_probe.max_ancestors",
     "host.home.user_preset_dir",
     "host.home.composition_file",
     "host.home.composition_globs",
+    "host.home.discovery.roots",
+    "host.home.discovery.suffixes",
+    "host.home.discovery.exclude_names",
+    "host.home.discovery.bounds.max_depth",
+    "host.home.discovery.bounds.max_entries",
+    "host.home.discovery.bounds.max_seconds",
+    "host.home.discovery.follow_reparse",
     "host.row_contract.id_field",
     "host.row_contract.name_field",
     "host.row_contract.config_field",
@@ -128,6 +181,10 @@ REQUIRED_PATHS: Tuple[str, ...] = (
     "host.skill_frontmatter.description_required",
     "host.skill_frontmatter.fence",
     "host.apis",
+    "host.apis.loader_ctx.members",
+    "host.apis.loader_ctx.unlisted_member",
+    "host.apis.loader_ctx.stub_values",
+    "host.apis.loader_ctx.evidence",
     "host.cli.version_command",
     "host.cli.dump_config_command",
     "host.cli.plugin_command",
@@ -150,6 +207,11 @@ REQUIRED_PATHS: Tuple[str, ...] = (
     "own.host_row.runtime_dependencies",
     "own.patch.file",
     "own.patch.shape_invariants",
+    "own.overlay.path",
+    "own.overlay.rows",
+    "own.overlay.persona_body_token",
+    "own.overlay.persona_body_source",
+    "own.overlay.allow_js",
     "own.preset.id",
     "own.preset.payload_dir",
     "own.preset.template",
@@ -157,9 +219,29 @@ REQUIRED_PATHS: Tuple[str, ...] = (
     "own.preset.version_marker",
     "own.preset.skill_root_marker",
     "own.preset.write_policy",
+    "own.preset.render_provenance.filename",
+    "own.preset.render_provenance.schema",
+    "own.preset.render_provenance.fields",
+    "own.preset.render_provenance.absent_policy",
+    "own.native.base_preset.patch_rel",
+    "own.native.base_preset.row_selector.name",
+    "own.native.base_preset.row_selector.config_id",
+    "own.native.base_preset.rows_path",
+    "own.native.base_preset.insert_selector",
     "own.render.tokens",
     "own.render.newline_policy",
     "own.render.leftover_scan",
+    "own.render.persona_prefix.mode",
+    "own.render.persona_prefix.separator",
+    "own.render.persona_prefix.trailing",
+    "own.render.persona_prefix.empty_prefix",
+    "own.render.persona_prefix.body_source",
+    "own.render.persona_prefix.body_token",
+    "own.render.persona_prefix.body_token_value",
+    "own.render.persona_prefix.body_crlf",
+    "own.render.persona_prefix.body_trim",
+    "own.render.persona_prefix.body_empty_policy",
+    "own.render.persona_prefix.leftover_scan",
     "own.render.custom_skill_dirs_shape",
     "own.paths.host_row",
     "own.paths.launcher",
@@ -185,6 +267,7 @@ REQUIRED_PATHS: Tuple[str, ...] = (
     "elimination.audit_baseline.count_reconciliation",
     "elimination.dispositions",
     "elimination.notes",
+    "deprecations.entries",
 )
 
 _MISSING = object()
@@ -303,6 +386,12 @@ def _resolve(document: Any, path: str) -> Any:
     return node
 
 
+def _is_name_list(value: Any) -> bool:
+    """A non-empty JSON array of non-empty strings (a declared name list)."""
+    return (isinstance(value, list) and bool(value)
+            and all(isinstance(item, str) and item for item in value))
+
+
 def _validate(document: Any, path: Path) -> None:
     if not isinstance(document, dict):
         raise _fail_malformed(path, "the document must be a JSON object")
@@ -354,6 +443,53 @@ def _validate(document: Any, path: Path) -> None:
     if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl <= 0:
         raise _fail_malformed(
             path, "`evidence.verified_on_ttl_days` must be a positive integer")
+    # ── contract v2 (FEAT-113 §8.2.1): additive keys ──────────────────────
+    # Nested shape checks only where the §8.2.1 table constrains the value as
+    # a list of declared names — the same style as the `host.apis` guard the
+    # compat check applies (fail loud, name the field). Everything else about
+    # the new keys is presence-only (REQUIRED_PATHS above), deliberately not
+    # over-fitted: the values are normative data, not this module's business.
+    overlay_rows = document["own"]["overlay"]["rows"]
+    if not _is_name_list(overlay_rows):
+        raise _fail_malformed(
+            path, "`own.overlay.rows` must be a non-empty list of row ids")
+    precedence = document["host"]["planes"]["precedence"]
+    if not _is_name_list(precedence):
+        raise _fail_malformed(
+            path,
+            "`host.planes.precedence` must be a non-empty list of "
+            "plane sources")
+    discovery = document["host"]["home"]["discovery"]
+    for field in ("roots", "suffixes"):
+        if not _is_name_list(discovery[field]):
+            raise _fail_malformed(
+                path,
+                f"`host.home.discovery.{field}` must be a non-empty "
+                f"list of strings")
+    members = document["host"]["apis"]["loader_ctx"]["members"]
+    if not _is_name_list(members):
+        raise _fail_malformed(
+            path,
+            "`host.apis.loader_ctx.members` must be a non-empty list of "
+            "ctx member names")
+    # The deprecation sidecar: `entries` maps a dotted contract path to
+    # `{deprecated_in: <int>}`. Shape only — which keys may be deprecated is
+    # a contract-maintenance fact, not a validation rule.
+    deprecations = document["deprecations"]["entries"]
+    if not isinstance(deprecations, dict) or not deprecations:
+        raise _fail_malformed(
+            path, "`deprecations.entries` must be a non-empty object")
+    for dotted, entry in deprecations.items():
+        field = f"deprecations.entries[{dotted}]"
+        if not isinstance(dotted, str) or not dotted:
+            raise _fail_malformed(
+                path, "`deprecations.entries` keys must be dotted paths")
+        if not isinstance(entry, dict):
+            raise _fail_malformed(path, f"`{field}` must be an object")
+        version = entry.get("deprecated_in")
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise _fail_malformed(
+                path, f"`{field}.deprecated_in` must be an integer")
     schema_version = document["schema_version"]
     if not isinstance(schema_version, int) or isinstance(schema_version, bool):
         raise _fail_malformed(path, "`schema_version` must be an integer")
@@ -414,6 +550,27 @@ def get(path: str, contract: Optional[Dict[str, Any]] = None) -> Any:
         raise _fail_malformed(
             contract_path(), f"path `{path}` is not declared")
     return value
+
+
+def is_deprecated(path: str,
+                  contract: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether ``path`` is recorded as deprecated by the contract's sidecar.
+
+    Contract v2 (FEAT-113 S0, §8.2.1): the ``deprecations.entries`` block —
+    ``{<dotted path>: {"deprecated_in": <int>}}`` — is the single source of
+    this fact; this module keeps no second copy. Deprecation is metadata
+    only: a deprecated path is still in :data:`REQUIRED_PATHS`, so a missing
+    one is ``ContractMalformed`` ("required-but-deprecated" is a distinct
+    state from "optional" — the timing block of §8.2.1). Returns ``False``
+    for any path the sidecar does not record.
+    """
+    document = load_contract() if contract is None else contract
+    entries = _resolve(document, "deprecations.entries")
+    if not isinstance(entries, dict):
+        return False
+    entry = entries.get(path)
+    version = entry.get("deprecated_in") if isinstance(entry, dict) else None
+    return isinstance(version, int) and not isinstance(version, bool)
 
 
 def reset_cache() -> None:

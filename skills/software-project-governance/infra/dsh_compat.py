@@ -87,19 +87,27 @@ Verdicts (repo optional-tooling policy)
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
+
+# FEAT-113 S2 (design §9.1/§10.2): the bounded walk's traversal moved to
+# `dsh_walk` — the same loop, behind injectable `fs`/`clock`/budget seams.
+# These three names are re-exported so every existing reader keeps working
+# unchanged (`dsh_compat.ScanBudget`, `except CompositionScanOverflow`,
+# `mock.patch.object(dsh_compat, "DEFAULT_SCAN_BUDGET", ...)`) — and so this
+# module's `discover_compositions` resolves its default budget from ITS OWN
+# namespace, which is what makes patching it here still steer the walk. The
+# single source of all three definitions is `dsh_walk`.
+import dsh_walk
+from dsh_walk import DEFAULT_SCAN_BUDGET, CompositionScanOverflow, ScanBudget  # noqa: E402,F401
 
 __all__ = [
     "CHECK_SECTION_TITLE",
@@ -401,20 +409,23 @@ _DECLARED_BINDING = {
     # capability. Declared in the contract (`own.native.registry_row_name`)
     # because the name is a host fact, not ours.
     "REGISTRY_PACKAGE": "own.native.registry_row_name",
-    # FEAT-113 S0 (contract v2, design §8.2.1/§10): the four v2 facts the
-    # upcoming slices read. Nothing consumes them in S0 — the bindings exist
-    # so the new contract keys flow through the same lazy mechanism (a
-    # contract defect surfaces as the §2.5.1 verdict, never an import-time
-    # traceback) and each is pinned end-to-end by
-    # `ContractV2DeclaredBindingTests`. No reader is switched here:
-    # `discover_compositions` still walks `host.home.composition_globs`
-    # (`host.home.discovery` is wired in S2); the overlay fragment (S4),
-    # base-preset patch (S4/S5) and loader ctx stub face (S3) arrive with
-    # their slices, which will add the `_FACT_ALIASES` they need then.
+    # FEAT-113 S0 (contract v2, design §8.2.1/§10): the v2 facts the slices
+    # read, through the same lazy mechanism (a contract defect surfaces as the
+    # §2.5.1 verdict, never an import-time traceback); each pinned end-to-end
+    # by `ContractV2DeclaredBindingTests`. S0 declared the four facts with no
+    # reader switched; S2 adds the two remaining discovery leaves its default
+    # scan face consumes (`host.home.discovery` is wired in S2 — the overlay
+    # fragment (S4), base-preset patch (S4/S5) and loader ctx stub face (S3)
+    # arrive with their slices, which will add the `_FACT_ALIASES` they need
+    # then).
     "OVERLAY_PATH": "own.overlay.path",
     "BASE_PRESET_PATCH_REL": "own.native.base_preset.patch_rel",
     "LOADER_CTX_MEMBERS": "host.apis.loader_ctx.members",
     "DISCOVERY_ROOTS": "host.home.discovery.roots",
+    # FEAT-113 S2: the default scan face (design §5.2) — excluded fragment
+    # names and the walk ceilings come from the contract, never a local copy.
+    "DISCOVERY_EXCLUDE_NAMES": "host.home.discovery.exclude_names",
+    "DISCOVERY_BOUNDS": "host.home.discovery.bounds",
 }
 
 #: The structural (non-package) sub-key of `host.apis`, derived from the
@@ -459,6 +470,10 @@ _FACT_ALIASES = {
     "_group_disabled_short_circuit": "GROUP_DISABLED_SHORT_CIRCUIT",
     "_group_ancestor_inherited": "GROUP_ANCESTOR_INHERITED",
     "_registry_package": "REGISTRY_PACKAGE",
+    # FEAT-113 S2: the declared discovery face the default scan consumes.
+    "_discovery_roots": "DISCOVERY_ROOTS",
+    "_discovery_exclude_names": "DISCOVERY_EXCLUDE_NAMES",
+    "_discovery_bounds": "DISCOVERY_BOUNDS",
 }
 
 
@@ -1513,46 +1528,18 @@ def locate_dsh_install(env: Optional[dict] = None,
 
 
 # ── composition discovery ───────────────────────────────────────────────────
-#: One composition walk's hard ceilings (FIX-484). The walk is a bounded
-#: `os.scandir` traversal, not `Path.glob('**/…')`: the glob enumerates the tree
-#: before any filter runs, so nothing can keep it out of a self-referential
-#: directory junction — and this repository carries one
-#: (`.governance/sandboxes/*/profiles/web/node_modules/
-#: @peterwangze/software-project-governance-plugin` → the repo root, git-ignored,
-#: so it never shows up in review). The walk went in circles inside that chain,
-#: never returning: `check-dsh-preset-compat` burned 58 minutes of CPU without
-#: ever starting its probe child, and `test_dsh_compat` never finished. The
-#: rewrite decides *before* descending (skip policy, reparse points, visited
-#: identities) and the budget closes the remaining unbounded direction — a tree
-#: that is merely enormous no longer blocks the guard either.
-@dataclass(frozen=True)
-class ScanBudget:
-    """Ceilings for one composition walk; crossing one raises, never truncates."""
-
-    max_depth: int = 32
-    max_entries: int = 200_000
-    max_seconds: float = 30.0
-
-
-#: The budget a call that injects none uses. Module-level on purpose: a test (or
-#: a host with a known-large package tree) replaces it with `mock.patch.object`.
-DEFAULT_SCAN_BUDGET = ScanBudget()
-
-
-class CompositionScanOverflow(RuntimeError):
-    """A composition walk exceeded its ``ScanBudget`` (FIX-484).
-
-    Carries the walk's counters (``dirs``, ``entries``,
-    ``skipped_reparse_points``, ``skipped_errors``, ``elapsed``,
-    ``max_depth_hit``, ``bounded_out``) so the caller can report *why* discovery
-    produced no list. Deliberately not a silent partial return: a capped scan
-    that returned "the files found so far" would read exactly like a complete
-    scan, and every verdict built on it would be a green lie.
-    """
-
-    def __init__(self, message: str, *, counters: dict):
-        super().__init__(message)
-        self.counters = dict(counters)
+#: FIX-484 built the bounded walk (pruned `os.scandir` traversal, reparse/
+#: visited defenses, budget ceilings) inside `discover_compositions` after the
+#: repository's self-referential junction (`.governance/sandboxes/*/…/
+#: node_modules/@peterwangze/software-project-governance-plugin` → repo root,
+#: git-ignored) made the old `Path.glob('**/…')` enumerate a loop forever —
+#: `check-dsh-preset-compat` burned 58 minutes of CPU and `test_dsh_compat`
+#: never finished. FEAT-113 S2 extracted that traversal VERBATIM into
+#: `dsh_walk.walk` (design §10.2: extraction, not reimplementation): the
+#: loop body, counters and raise-not-truncate budget semantics are the same
+#: code, with only the I/O lifted behind injectable seams. `ScanBudget`,
+#: `DEFAULT_SCAN_BUDGET` and `CompositionScanOverflow` are re-exported from
+#: `dsh_walk` (see the import above); their docstrings live there.
 
 
 def _composition_glob_basename(pattern) -> str:
@@ -1587,6 +1574,12 @@ def _composition_glob_basename(pattern) -> str:
     return name
 
 
+def _composition_patterns() -> tuple:
+    """The contract's composition globs, validated and reduced to basenames."""
+    return tuple(_composition_glob_basename(pattern)
+                 for pattern in _fact("_composition_globs"))
+
+
 def discover_compositions(root: os.PathLike, *, budget: Optional[ScanBudget] = None,
                           report: Optional[dict] = None,
                           clock=time.monotonic) -> list:
@@ -1595,38 +1588,29 @@ def discover_compositions(root: os.PathLike, *, budget: Optional[ScanBudget] = N
     Covers both shipped forms: a mounted preset's own ``agent.cordis.yml`` and
     the render source ``*.cordis.yml.template`` (the same row contract, with the
     renderer's absolute path tokens substituted at sync time). Which names count
-    is still declared by the contract (``host.home.composition_globs``); only
-    the walk is this module's own (FIX-484).
+    is still declared by the contract (``host.home.composition_globs``); the
+    traversal itself lives in ``dsh_walk.walk`` since FEAT-113 S2 (design
+    §10.2) — extracted verbatim, not reimplemented — and this function is the
+    thin adapter that injects this module's own policy:
 
-    The walk is a pruned ``os.scandir`` traversal, not ``Path.glob('**/…')``:
-    the glob enumerates first and filters afterwards, so the skip policy could
-    never keep it out of a self-referential junction such as this repository's
-    (``.governance/sandboxes/*/…/node_modules/@peterwangze/
-    software-project-governance-plugin`` → repo root). Every decision is
-    therefore made *before* descending:
-
-    * skipped trees (``_SKIP_DIRS`` / ``_SKIP_PATH_PAIRS`` — the same predicate
-      the old post-filter used, so ``.governance/sandboxes/**`` is pruned rather
-      than walked-then-filtered);
-    * reparse points and symlinks are never followed — they are counted in
-      ``skipped_reparse_points`` and disclosed, never silently dropped. A
-      Windows junction is neither reported by ``os.path.islink`` nor excluded by
-      ``is_dir(follow_symlinks=False)``, so the honest test is the
-      ``FILE_ATTRIBUTE_REPARSE_POINT`` attribute of the *non-following* stat;
-    * a directory already visited — keyed by ``(st_dev, st_ino)`` — is not
-      entered twice (a cycle the attribute test cannot see, e.g. a bind mount);
-    * a declared glob that is not ``<name>`` or ``**/<name>`` is rejected
-      loudly (``ContractMalformed``) instead of being reduced to its basename —
-      the translation below is faithful only for those two shapes (FIX-484 R1);
-    * ``budget`` ceilings are enforced while walking; crossing one raises
-      ``CompositionScanOverflow`` instead of returning a partial list.
+    * the validated contract globs (``_composition_glob_basename`` rejects a
+      declared shape that is not ``<name>`` or ``**/<name>`` loudly —
+      ``ContractMalformed`` — instead of silently reducing it to its basename,
+      FIX-484 R1);
+    * the repository-scan skip policy (``_SKIP_DIRS`` / ``_SKIP_PATH_PAIRS``
+      via ``_is_skipped_relative`` — design §5.4 keeps that policy here, the
+      guard's own concern, and injects it into the generic walk);
+    * the default budget (``DEFAULT_SCAN_BUDGET``, resolved from THIS module's
+      namespace so `mock.patch.object(dsh_compat, …)` still steers it).
 
     ``report`` is an optional out-parameter: a passed dict is filled with
     ``dirs``, ``entries``, ``skipped_reparse_points``, ``skipped_errors``,
     ``elapsed``, ``max_depth_hit`` and ``bounded_out`` so the caller can
     disclose what the walk skipped (and whether a cap ended it). ``clock`` is the
     injected monotonic clock the time budget reads (tests drive time without
-    sleeping).
+    sleeping). Crossing a budget ceiling raises
+    ``dsh_walk.CompositionScanOverflow`` (re-exported here) instead of
+    returning a partial list.
 
     Returns ``list[Path]`` sorted by relative posix path — the same shape (and
     the same root-relative-or-absolute spelling) the glob implementation
@@ -1634,97 +1618,101 @@ def discover_compositions(root: os.PathLike, *, budget: Optional[ScanBudget] = N
     """
     root = Path(root)
     budget = DEFAULT_SCAN_BUDGET if budget is None else budget
-    # `**/name` is depth-agnostic, so the basename is the whole match (verified
-    # against pathlib: it matches at depth 0 too). `fnmatch` is the same
-    # case-insensitive-on-Windows comparison pathlib itself uses. The basename
-    # is only a faithful translation of the two legal shapes; `_composition_
-    # glob_basename` rejects every other declared shape loudly (FIX-484 R1).
-    patterns = tuple(_composition_glob_basename(pattern)
-                     for pattern in _fact("_composition_globs"))
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return dsh_walk.walk(root, budget=budget, report=report, clock=clock,
+                         patterns=_composition_patterns(),
+                         skip_predicate=_is_skipped_relative)
 
+
+def _merge_scan_counters(aggregate: dict, per_root: dict) -> dict:
+    """Fold one root's walk counters into the running aggregate (S2).
+
+    Same keys as a single walk: the four counting keys and ``elapsed`` sum,
+    ``max_depth_hit``/``bounded_out`` OR — so a multi-root scan discloses on
+    exactly the face a single-root scan does.
+    """
+    for key in ("dirs", "entries", "skipped_reparse_points",
+                "skipped_errors", "elapsed"):
+        aggregate[key] = aggregate.get(key, 0) + per_root.get(key, 0)
+    for key in ("max_depth_hit", "bounded_out"):
+        aggregate[key] = bool(aggregate.get(key) or per_root.get(key))
+    return aggregate
+
+
+def _declared_discovery_budget() -> ScanBudget:
+    """The contract's ``host.home.discovery.bounds`` as a :class:`ScanBudget`.
+
+    The accessor presence-checks the v2 keys only (design §8.2.1: normative
+    data, not its business), so a bound that is present but not a number is a
+    defect for THIS module to catch — with the accessor's own
+    ``ContractMalformed`` (the §2.5.1 "present but wrong" class
+    ``check_dsh_preset_compat`` maps to FAIL), never a coerced guess.
+    """
+    import dsh_contract  # noqa: PLC0415 — failure vocabulary only at need
+
+    bounds = _fact("_discovery_bounds")
+    values = {}
+    for field in ("max_depth", "max_entries", "max_seconds"):
+        value = bounds.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise dsh_contract.ContractMalformed(
+                f"host.home.discovery.bounds.{field} must be a number "
+                f"(declared: {value!r})")
+        values[field] = value
+    return ScanBudget(max_depth=int(values["max_depth"]),
+                      max_entries=int(values["max_entries"]),
+                      max_seconds=float(values["max_seconds"]))
+
+
+def _scan_declared_roots(base: Path) -> tuple:
+    """FEAT-113 S2 (design §5.2): the default scan face.
+
+    Walks each contract-declared ``host.home.discovery.roots`` subtree under
+    ``base`` — not the whole repository tree — under the contract's own
+    ``discovery.bounds``, honoring ``discovery.exclude_names``: a declared
+    fragment name (``overlay.cordis.yml``) that some future widened glob would
+    match is dropped at the discovery layer and disclosed, never validated as
+    a composition.
+
+    Returns ``(paths, counters)``: the union of the per-root walks, globally
+    sorted by ``base``-relative posix path, and the aggregated counters — the
+    same keys one walk's ``report`` fills (see :func:`_merge_scan_counters`)
+    plus ``roots`` (the declared roots actually walked) and
+    ``excluded_by_name`` (files dropped by ``exclude_names``), so the
+    aggregation is documented on the report face instead of implied.
+
+    A per-root overflow re-raises ``CompositionScanOverflow`` carrying the
+    counters aggregated so far merged with the failing root's — the verdict
+    mapping (``NOT_RUN`` / ``SCAN_OVERFLOW``) and the counter keys stay exactly
+    the single-root face's.
+    """
+    budget = _declared_discovery_budget()
+    exclude = frozenset(_fact("_discovery_exclude_names"))
     counters = {"dirs": 0, "entries": 0, "skipped_reparse_points": 0,
                 "skipped_errors": 0, "elapsed": 0.0, "max_depth_hit": False,
-                "bounded_out": False}
-    started = clock()
+                "bounded_out": False, "excluded_by_name": 0}
+    patterns = _composition_patterns()
     found: list = []
-    visited = set()
-
-    def finish(*, bounded_out: bool, max_depth_hit: bool = False) -> dict:
-        counters["elapsed"] = max(0.0, clock() - started)
-        counters["max_depth_hit"] = max_depth_hit
-        counters["bounded_out"] = bounded_out
-        if report is not None:
-            report.update(counters)
-        return dict(counters)
-
-    def overflow(kind: str, limit, *, max_depth_hit: bool = False) -> None:
-        snapshot = finish(bounded_out=True, max_depth_hit=max_depth_hit)
-        raise CompositionScanOverflow(
-            f"composition scan {kind} budget exceeded (cap {limit!r}) after "
-            f"{snapshot['dirs']} dir(s), {snapshot['entries']} entries, "
-            f"{snapshot['skipped_reparse_points']} skipped reparse point(s), "
-            f"{snapshot['elapsed']:.3f}s — refusing to return a partial "
-            f"composition list", counters=snapshot)
-
-    # The root is the caller's explicit choice, so it is walked even when it is
-    # itself reached through a junction; its identity only seeds cycle detection.
-    try:
-        root_stat = os.stat(root)
-    except OSError:
-        counters["skipped_errors"] += 1
-    else:
-        if root_stat.st_ino:  # no inode identity (some filesystems) → budget only
-            visited.add((root_stat.st_dev, root_stat.st_ino))
-
-    stack = [(root, 0, ())]
-    while stack:
-        directory, depth, parts = stack.pop()
+    walked: list = []
+    for relative in _fact("_discovery_roots"):
+        rel_posix = Path(relative).as_posix()
+        walked.append(rel_posix)
+        per_root: dict = {}
         try:
-            scan = os.scandir(directory)
-        except OSError:
-            counters["skipped_errors"] += 1
-            continue
-        counters["dirs"] += 1
-        with scan:
-            for entry in scan:
-                counters["entries"] += 1
-                if counters["entries"] > budget.max_entries:
-                    overflow("entries", budget.max_entries)
-                if clock() - started > budget.max_seconds:
-                    overflow("seconds", budget.max_seconds)
-                try:
-                    entry_stat = os.stat(entry.path, follow_symlinks=False)
-                    is_reparse = bool(
-                        getattr(entry_stat, "st_file_attributes", 0) & reparse_flag)
-                    is_link = entry.is_symlink()
-                except OSError:  # vanished or unreadable mid-walk
-                    counters["skipped_errors"] += 1
-                    continue
-                if is_reparse or is_link:
-                    counters["skipped_reparse_points"] += 1
-                    continue
-                child_parts = parts + (entry.name,)
-                if stat.S_ISDIR(entry_stat.st_mode):
-                    if _is_skipped_relative(child_parts):
-                        continue
-                    identity = (entry_stat.st_dev, entry_stat.st_ino)
-                    if identity in visited:
-                        continue
-                    if depth + 1 > budget.max_depth:
-                        overflow("max_depth", budget.max_depth, max_depth_hit=True)
-                    if identity[1]:
-                        visited.add(identity)
-                    stack.append((Path(entry.path), depth + 1, child_parts))
-                elif stat.S_ISREG(entry_stat.st_mode):
-                    if _is_skipped_relative(child_parts):
-                        continue
-                    if any(fnmatch.fnmatch(entry.name, pattern)
-                           for pattern in patterns):
-                        found.append(Path(entry.path))
-
-    finish(bounded_out=False)
-    return sorted(set(found), key=lambda item: item.relative_to(root).as_posix())
+            found.extend(dsh_walk.walk(base / Path(relative), budget=budget,
+                                       report=per_root, patterns=patterns,
+                                       skip_predicate=_is_skipped_relative))
+        except CompositionScanOverflow as exc:
+            counters = _merge_scan_counters(counters, exc.counters)
+            counters["roots"] = walked
+            raise CompositionScanOverflow(
+                f"composition scan overflowed while walking declared root "
+                f"{rel_posix!r}: {exc}", counters=counters) from exc
+        _merge_scan_counters(counters, per_root)
+    counters["roots"] = walked
+    counters["excluded_by_name"] = sum(1 for path in found if path.name in exclude)
+    kept = [path for path in found if path.name not in exclude]
+    return (sorted(set(kept), key=lambda item: item.relative_to(base).as_posix()),
+            counters)
 
 
 # ── the probe request: the contract-declared API facts, injected ────────────
@@ -2274,6 +2262,12 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
     and by the ``check-dsh-preset-compat`` subcommand.
     """
     probe_runner = _run_probe if probe_runner is None else probe_runner
+    # FEAT-113 S2 (design §5.2): an EXPLICIT root (the CLI's `--root`, the
+    # doctor's project face) is the caller's deliberate tree and is walked
+    # whole; only the DEFAULT face (no root passed — Check 28v, `run_cli`,
+    # `emit_check_section`) narrows to the contract's declared discovery
+    # roots. The distinction is made before `root` is normalized away.
+    root_explicit = root is not None
     root = Path(root) if root is not None else Path(__file__).resolve().parents[3]
     env = os.environ if env is None else env
     report = {
@@ -2344,10 +2338,23 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         _render_probe_script()
         scan: dict = {}
         if compositions is None:
+            if root_explicit:
+                # The caller's explicit tree (design §5.2: `--root` 传入时才扫
+                # 任意根) — walked whole, still bounded by the default budget.
+                paths = discover_compositions(root, report=scan)
+            else:
+                # FEAT-113 S2 (design §5.2): the DEFAULT face walks the
+                # contract's declared discovery roots under the package root
+                # instead of the whole repository tree — the shipped
+                # compositions live in two payload directories, and the whole
+                # -tree walk paid ~7k directories (and every sandbox copy the
+                # skip policy then had to prune) for one file.
+                paths, scan = _scan_declared_roots(root)
             # FIX-484: the bounded walk discloses what it declined to enter, so
             # a scan that skipped a junction or an unreadable entry shows up on
-            # this report instead of vanishing into the tree.
-            paths = discover_compositions(root, report=scan)
+            # this report instead of vanishing into the tree. `scan` is either
+            # one walk's counters or the S2 aggregate over the declared roots
+            # (same keys; `roots`/`excluded_by_name` document the aggregation).
             report["scan"] = dict(scan)
             if scan["skipped_reparse_points"] or scan["skipped_errors"]:
                 report["details"].append(
@@ -2355,12 +2362,24 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
                     f"point(s)/symlink(s) not followed, {scan['skipped_errors']} "
                     f"unreadable entries skipped ({scan['dirs']} dir(s), "
                     f"{scan['entries']} entries, {scan['elapsed']:.3f}s)")
+            if scan.get("excluded_by_name"):
+                # Design §5.2: a declared fragment excluded at the discovery
+                # layer leaves one disclosure line, so it can never silently
+                # read as "no fragment exists".
+                report["details"].append(
+                    f"composition scan: {scan['excluded_by_name']} file(s) "
+                    f"excluded by discovery.exclude_names "
+                    f"({', '.join(_fact('_discovery_exclude_names'))}) — "
+                    f"a fragment is not a composition")
         else:
             paths = [Path(item) for item in compositions]
         paths = [path if path.is_absolute() else root / path for path in paths]
         if not paths:
+            where = (f", walked the declared discovery roots "
+                     f"{', '.join(_fact('_discovery_roots'))}"
+                     if not root_explicit else "")
             report["reason"] = (
-                f"no preset composition found under {root.as_posix()} "
+                f"no preset composition found under {root.as_posix()}{where} "
                 f"(looked for {' and '.join(_fact('_composition_globs'))})")
             return report
 
@@ -2749,9 +2768,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except Exception:
         pass
 
-    root = args.root if args.root is not None else Path(__file__).resolve().parents[3]
+    # FEAT-113 S2: `root=None` (no `--root`) routes through the DEFAULT scan
+    # face — the contract's declared discovery roots under the package root
+    # (design §5.2). An explicit `--root` keeps whole-root semantics, bounded.
     report = check_dsh_preset_compat(
-        root=root,
+        root=args.root,
         compositions=args.paths or None,
         timeout=args.timeout,
     )

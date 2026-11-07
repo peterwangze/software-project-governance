@@ -2338,7 +2338,10 @@ class TestGuardContractFailureVerdicts(unittest.TestCase):
                 shutil.copyfile(source, root / name)
         infra_rel = Path("skills") / "software-project-governance" / "infra"
         (root / infra_rel).mkdir(parents=True, exist_ok=True)
-        for module in ("dsh_contract.py", "dsh_compat.py"):
+        # FEAT-113 S2: `dsh_walk.py` rides along — the guard imports its
+        # traversal sibling at import time, and this throwaway repo must carry
+        # the pair the way the real tree does.
+        for module in ("dsh_contract.py", "dsh_compat.py", "dsh_walk.py"):
             shutil.copyfile(_INFRA_DIR / module, root / infra_rel / module)
         target = root / dsh_contract.CONTRACT_REL
         if drop:

@@ -18,6 +18,10 @@ Covers:
   - Composition discovery: both shipped forms (``agent.cordis.yml`` and
     ``*.cordis.yml.template``) under the package root, excluding vendored
     trees.
+  - Default scan face (FEAT-113 S2): without an explicit root the check walks
+    the contract's declared ``host.home.discovery.roots`` subtrees only (same
+    report keys, aggregation documented), honoring ``exclude_names`` and the
+    contract's ``bounds``; an explicit root keeps whole-root semantics.
   - Composition walk safety (FIX-484): a self-referential Windows junction is
     skipped and counted, never followed; the repo-sandbox pair is pruned before
     descending; a scan past its depth/entry/second ceiling raises
@@ -4170,18 +4174,17 @@ class CompositionGlobValidationTests(unittest.TestCase):
 
 
 class ContractV2DeclaredBindingTests(unittest.TestCase):
-    """FEAT-113 S0 — the contract-v2 facts read through the existing lazy face.
+    """FEAT-113 S0/S2 — the contract-v2 facts read through the existing lazy face.
 
-    Design §8.2.1/§10 (S0 row): `dsh_compat.py` grows only `_DECLARED_BINDING`
-    entries for the four v2 facts the upcoming slices need. Nothing consumes
-    them yet (no reader is switched in S0 — `discover_compositions` still walks
-    `host.home.composition_globs`, and `host.home.discovery` is wired in S2),
-    so the bindings exist to make the new contract keys readable through the
-    same lazy mechanism a contract defect already flows through: the §2.5.1
-    verdict, not an import-time traceback.
+    S0 (design §8.2.1/§10) declared the first four v2 facts with no reader
+    switched; S2 wires `host.home.discovery` into the default scan face and
+    adds the two remaining discovery leaves (`exclude_names`, `bounds`) to the
+    same lazy mechanism. The bindings still exist so the new contract keys
+    flow through the same path a contract defect already flows through: the
+    §2.5.1 verdict, not an import-time traceback.
     """
 
-    #: The pre-S0 binding set: S0 may only ADD names, never rename or drop.
+    #: The pre-S0 binding set: S0/S2 may only ADD names, never rename or drop.
     _PRE_S0_BINDINGS = frozenset({
         "INSTALL_DIR_ENV", "NODE_MODULES_ENV", "DSH_SCOPE", "DSH_PACKAGE",
         "INSTALL_ANCHOR_REL", "ORACLE_PACKAGES", "DSH_HOME_ENV",
@@ -4196,6 +4199,11 @@ class ContractV2DeclaredBindingTests(unittest.TestCase):
         "BASE_PRESET_PATCH_REL": "own.native.base_preset.patch_rel",
         "LOADER_CTX_MEMBERS": "host.apis.loader_ctx.members",
         "DISCOVERY_ROOTS": "host.home.discovery.roots",
+        # FEAT-113 S2: the default scan face's remaining discovery leaves
+        # (design §5.2 — roots, exclude_names and bounds are all contract
+        # data; the walk consumes them, never a local copy).
+        "DISCOVERY_EXCLUDE_NAMES": "host.home.discovery.exclude_names",
+        "DISCOVERY_BOUNDS": "host.home.discovery.bounds",
     }
 
     def test_each_new_binding_resolves_end_to_end_to_the_contract_value(self):
@@ -4218,6 +4226,14 @@ class ContractV2DeclaredBindingTests(unittest.TestCase):
                          ["baseUrl", "process", "console", "get", "has"])
         self.assertEqual(dsh_compat.DISCOVERY_ROOTS,
                          ["agent-presets", "adapters/dsh"])
+        # The S2 leaves the default scan face consumes, pinned once for the
+        # same reason: a contract edit that silently changes them is caught
+        # here, not in the walk.
+        self.assertEqual(dsh_compat.DISCOVERY_EXCLUDE_NAMES,
+                         ["overlay.cordis.yml"])
+        self.assertEqual(dsh_compat.DISCOVERY_BOUNDS,
+                         {"max_depth": 24, "max_entries": 50000,
+                          "max_seconds": 30})
 
     def test_the_existing_bindings_are_untouched(self):
         declared = set(dsh_compat._DECLARED_BINDING)
@@ -4417,6 +4433,128 @@ class RepoRootWalkTests(unittest.TestCase):
         self.assertFalse(report["bounded_out"], report)
         self.assertEqual(report["skipped_errors"], 0, report)
         self.assertGreaterEqual(report["dirs"], 1, report)
+
+
+class DefaultScanFaceTests(unittest.TestCase):
+    """FEAT-113 S2 (design §5.2): the default scan walks the declared roots.
+
+    ``discover_compositions`` keeps whole-root semantics (the FIX-484
+    regressions above pin it); what narrows is the CALLER face —
+    ``check_dsh_preset_compat`` with no explicit ``root`` (Check 28v,
+    ``run_cli``, ``emit_check_section``) walks each contract-declared
+    ``host.home.discovery.roots`` subtree under the package root, under the
+    contract's ``bounds``, honoring ``exclude_names``. An explicit root (the
+    CLI's ``--root``, the doctor's project face) keeps whole-root semantics.
+    """
+
+    _NO_INSTALL = {"status": "NOT_RUN", "reason": "no dsh install discovered",
+                   "source": None, "node_modules": None, "dsh_package": None,
+                   "dsh_version": None}
+
+    def test_the_default_face_walks_only_the_declared_roots(self):
+        # The install seam stops the check right after discovery, so the scan
+        # face is the observable. A whole-tree walk of this repository costs
+        # ~7k directories (FIX-484's measured baseline); the declared-roots
+        # face walks the two payload trees only — and never `.governance/` or
+        # `skills/`, which is why the count is small by construction.
+        report = dsh_compat.check_dsh_preset_compat(
+            env={}, which=_which_map({}), install=dict(self._NO_INSTALL))
+        scan = report["scan"]
+        self.assertEqual(
+            scan["roots"],
+            list(dsh_contract.get("host.home.discovery.roots")), scan)
+        self.assertLess(scan["dirs"], 100,
+                        {"dirs": scan["dirs"],
+                         "whole_tree_baseline": 7242,
+                         "note": "the default face must not walk the repo tree"})
+        # Same disclosure keys as a single walk (S2 aggregates, it does not
+        # reshape) plus the two keys that document the aggregation.
+        self.assertLessEqual(
+            {"dirs", "entries", "skipped_reparse_points", "skipped_errors",
+             "elapsed", "max_depth_hit", "bounded_out"}, set(scan), scan)
+        self.assertFalse(scan["bounded_out"], scan)
+        self.assertEqual(scan["excluded_by_name"], 0, scan)
+
+    def test_an_explicit_root_keeps_whole_root_semantics(self):
+        # `--root` (and every test that passes a scratch root) must keep the
+        # FIX-484 single-walk face: no `roots` aggregate, whole tree, bounded.
+        with _scratch("spg-s2-explicit-") as td:
+            root = Path(td)
+            (root / "sub").mkdir()
+            (root / "sub" / "agent.cordis.yml").write_text(
+                "[]", encoding="utf-8")
+            report = dsh_compat.check_dsh_preset_compat(
+                root=root, env={}, which=_which_map({}))
+        self.assertNotIn("roots", report["scan"], report["scan"])
+        self.assertEqual(report["scan"]["dirs"], 2, report["scan"])
+
+    def test_exclude_names_drop_declared_fragments_from_the_default_face(self):
+        # `overlay.cordis.yml` matches neither declared glob today — the
+        # exclusion is the guard against a FUTURE widened glob promoting the
+        # fragment to a composition (design §5.2: 必须在发现层显式排除). The
+        # globs are widened here the same way CompositionGlobValidationTests
+        # patches them, so the exclusion is observable now.
+        with _scratch("spg-s2-exclude-") as td:
+            base = Path(td)
+            for relative in ("agent-presets/governance/agent.cordis.yml",
+                             "agent-presets/governance/overlay.cordis.yml"):
+                directory = base.joinpath(*relative.split("/")[:-1])
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / relative.split("/")[-1]).write_text(
+                    "[]", encoding="utf-8")
+            (base / "adapters" / "dsh").mkdir(parents=True)
+            with CompositionGlobValidationTests._with_globs(("**/*.cordis.yml",)):
+                paths, counters = dsh_compat._scan_declared_roots(base)
+        self.assertEqual([path.relative_to(base).as_posix() for path in paths],
+                         ["agent-presets/governance/agent.cordis.yml"], paths)
+        self.assertEqual(counters["excluded_by_name"], 1, counters)
+        self.assertEqual(counters["roots"],
+                         ["agent-presets", "adapters/dsh"], counters)
+
+    def test_an_excluded_fragment_leaves_one_disclosure_line(self):
+        counters = {"dirs": 0, "entries": 0, "skipped_reparse_points": 0,
+                    "skipped_errors": 0, "elapsed": 0.0, "max_depth_hit": False,
+                    "bounded_out": False, "excluded_by_name": 1,
+                    "roots": ["agent-presets", "adapters/dsh"]}
+        with mock.patch.object(dsh_compat, "_scan_declared_roots",
+                               return_value=([], counters)):
+            report = dsh_compat.check_dsh_preset_compat(
+                env={}, which=_which_map({}), install=dict(self._NO_INSTALL))
+        details = "\n".join(report["details"])
+        self.assertIn("excluded by discovery.exclude_names", details)
+        self.assertIn("overlay.cordis.yml", details)
+        # The empty face names the roots it walked, not just the package root.
+        self.assertIn("declared discovery roots agent-presets, adapters/dsh",
+                      report["reason"], report["reason"])
+
+    def test_a_default_face_overflow_aggregates_and_maps_to_not_run(self):
+        # The contract's bounds are consumed, not DEFAULT_SCAN_BUDGET: forcing
+        # the declared budget to overflow must keep the FIX-484 verdict face
+        # (NOT_RUN / SCAN_OVERFLOW, never PASS) and carry the aggregated
+        # counters plus the roots already walked. The failing root is named on
+        # the exception (the reason line keeps the FIX-484 counters-only
+        # format).
+        with mock.patch.object(
+                dsh_compat, "_declared_discovery_budget",
+                return_value=dsh_compat.ScanBudget(max_depth=0)):
+            with self.assertRaises(
+                    dsh_compat.CompositionScanOverflow) as caught:
+                dsh_compat._scan_declared_roots(_REPO_ROOT)
+        self.assertIn("'agent-presets'", str(caught.exception))
+        self.assertEqual(caught.exception.counters["roots"], ["agent-presets"],
+                         caught.exception.counters)
+        with mock.patch.object(
+                dsh_compat, "_declared_discovery_budget",
+                return_value=dsh_compat.ScanBudget(max_depth=0)):
+            report = dsh_compat.check_dsh_preset_compat(
+                env={}, which=_which_map({}), install=dict(self._NO_INSTALL))
+        self.assertEqual(report["verdict"], "NOT_RUN", report)
+        self.assertIn("SCAN_OVERFLOW", report["reason"], report["reason"])
+        self.assertTrue(report["scan"]["bounded_out"], report["scan"])
+        self.assertTrue(report["scan"]["max_depth_hit"], report["scan"])
+        self.assertGreaterEqual(report["scan"]["dirs"], 1, report["scan"])
+        self.assertEqual(report["scan"]["roots"], ["agent-presets"],
+                         report["scan"])
 
 
 if __name__ == "__main__":

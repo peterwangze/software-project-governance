@@ -6,6 +6,7 @@ returns canned executables. Nothing here touches the real ``D:\\app\\dsh``.
 """
 
 import json
+import os
 import struct
 import sys
 import unittest
@@ -146,18 +147,19 @@ class PrecedenceTests(unittest.TestCase):
     def test_every_source_contributing_produces_planes_in_contract_order(self):
         fs = _FakeFs()
         app, asar = _desktop_app(fs, root="D:/app/dsh")
-        _node_modules(fs, "D:/npm/node_modules")
+        _node_modules(fs, "synth/npm/node_modules")
         fs.add_dir("D:/home/profiles")
         _node_modules(fs, "D:/home/profiles/desktop/node_modules",
                       version="0.2.1-rc.2")
-        _node_modules(fs, "D:/shim/node_modules", version="0.2.1-rc.2")
-        fs.add_file("D:/shim/dsh.exe", b"MZ")
+        _node_modules(fs, "synth/shim/node_modules", version="0.2.1-rc.2")
+        fs.add_file("synth/shim/dsh.exe", b"MZ")
         env = {
             "DSH_INSTALL_DIR": app,
             "DSH_DESKTOP_APP_DIR": app,
-            "DSH_HARNESS_NODE_MODULES": "D:/npm/node_modules",
+            "DSH_HARNESS_NODE_MODULES": "synth/npm/node_modules",
             "DSH_HOME": "D:/home",
-            "PATH": "D:/shim",
+            # FIX-485: separator-free PATH entry (no ":" — POSIX splits on it)
+            "PATH": os.pathsep.join(["synth/shim"]),
         }
         planes = dsh_plane.resolve(env, fs=fs,
                                    processes=_FakeProcesses(
@@ -365,15 +367,19 @@ class PathShimTests(unittest.TestCase):
 
     def test_the_path_shim_is_last_and_informational(self):
         fs = _FakeFs()
-        _node_modules(fs, "D:/npm/node_modules")
-        fs.add_file("D:/npm/dsh.exe", b"MZ")
-        planes = dsh_plane.resolve({"PATH": "D:/npm"}, fs=fs)
+        # FIX-485: the fake PATH entry must carry no ":" (the POSIX path
+        # separator) — a "D:/…" fixture split into ["D", "/…"] on Linux CI
+        # and the shim vanished. Synthetic roots are separator-free.
+        _node_modules(fs, "synth/npm/node_modules")
+        fs.add_file("synth/npm/dsh.exe", b"MZ")
+        planes = dsh_plane.resolve(
+            {"PATH": os.pathsep.join(["synth/npm"])}, fs=fs)
         self.assertEqual(len(planes), 1)
         self.assertEqual(planes[0].kind, "path-shim")
         self.assertEqual(planes[0].source, "path")
         self.assertTrue(planes[planes.__len__() - 1].informational)
         self.assertEqual(planes[0].dsh_version, "0.2.1-rc.2")
-        self.assertEqual(planes[0].node_modules, "D:/npm/node_modules")
+        self.assertEqual(planes[0].node_modules, "synth/npm/node_modules")
 
     def test_no_path_means_no_shim_plane(self):
         fs = _FakeFs()
@@ -381,8 +387,10 @@ class PathShimTests(unittest.TestCase):
 
     def test_a_shim_without_an_install_anchor_is_skipped(self):
         fs = _FakeFs()
-        fs.add_file("D:/bare/dsh.exe", b"MZ")
-        self.assertEqual(dsh_plane.resolve({"PATH": "D:/bare"}, fs=fs), [])
+        fs.add_file("synth/bare/dsh.exe", b"MZ")
+        self.assertEqual(
+            dsh_plane.resolve({"PATH": os.pathsep.join(["synth/bare"])}, fs=fs),
+            [])
 
 
 class AsarIdentityTests(unittest.TestCase):

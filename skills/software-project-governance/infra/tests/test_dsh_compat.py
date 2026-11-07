@@ -77,6 +77,7 @@ if str(_HERE) not in sys.path:
 import dsh_compat  # noqa: E402
 import dsh_contract  # noqa: E402
 import dsh_fixtures  # noqa: E402
+import dsh_plane  # noqa: E402 — FEAT-113 S1: the plane resolver under wiring test
 
 # FIX-310: the composition template IS the preset payload's render source
 # (there is no second, self-locating composition any more), so the same file
@@ -4326,6 +4327,63 @@ class _RecordingProcesses:
         return list(self.executables)
 
 
+class _ScratchFs(dsh_plane.dsh_asar.FsPort):
+    """A real-directory FsPort double that normalizes platform path loss.
+
+    FIX-485: the plane resolver's posix join strips a leading root slash, so
+    the same absolute path can arrive as ``/tmp/x/app.asar`` or
+    ``tmp/x/app.asar`` depending on the platform's separators — on POSIX CI
+    every real-fs plane lookup therefore missed. This double answers both
+    spellings from the real scratch tree (on Windows it is byte-equivalent to
+    RealFs, which never mangles), keeping the wiring tests hermetic on any
+    platform while the resolver pipeline itself stays fully real.
+    """
+
+    @staticmethod
+    def _path(path):
+        text = str(path).replace("\\", "/")
+        if text.startswith("/") or (len(text) > 1 and text[1] == ":"):
+            return Path(text)
+        return Path("/" + text)  # a root-stripped POSIX path: re-absolutize
+
+    def exists(self, path):
+        return self._path(path).exists()
+
+    def is_file(self, path):
+        return self._path(path).is_file()
+
+    def is_dir(self, path):
+        return self._path(path).is_dir()
+
+    def size(self, path):
+        return self._path(path).stat().st_size
+
+    def read_head(self, path, count):
+        with open(self._path(path), "rb") as handle:
+            return handle.read(count)
+
+    def read_at(self, path, offset, count):
+        with open(self._path(path), "rb") as handle:
+            handle.seek(offset)
+            return handle.read(count)
+
+    def read_bytes(self, path):
+        with open(self._path(path), "rb") as handle:
+            return handle.read()
+
+    def list_dir(self, path):
+        try:
+            return sorted(entry.name for entry in self._path(path).iterdir())
+        except OSError:
+            return []
+
+    def mtime(self, path):
+        try:
+            return self._path(path).stat().st_mtime
+        except OSError:
+            return 0.0
+
+
 class PlaneIdentityWiringTests(unittest.TestCase):
     """FEAT-113 S1 — `locate_dsh_install` grows the plane-identity face.
 
@@ -4339,9 +4397,14 @@ class PlaneIdentityWiringTests(unittest.TestCase):
     def test_the_report_lists_plane_identities_beside_the_install(self):
         with _scratch("spg-test-planes-") as td:
             node_modules = _fake_install(Path(td) / "node_modules")
-            probe = dsh_compat.locate_dsh_install(
-                env={dsh_compat.NODE_MODULES_ENV: str(node_modules)},
-                which=_which_map({}), processes=None)
+            # FIX-485: hermetic fs — the scratch tree served through the
+            # _ScratchFs double (platform-normalizing), patched into the
+            # resolver's RealFs seam so no real install is consulted.
+            with mock.patch.object(dsh_plane.dsh_asar, "RealFs",
+                                   _ScratchFs):
+                probe = dsh_compat.locate_dsh_install(
+                    env={dsh_compat.NODE_MODULES_ENV: str(node_modules)},
+                    which=_which_map({}), processes=None)
         self.assertEqual(probe["status"], "OK")
         self.assertEqual(probe["source"], f"${dsh_compat.NODE_MODULES_ENV}")
         listing = probe["planes"]
@@ -4375,8 +4438,12 @@ class PlaneIdentityWiringTests(unittest.TestCase):
             exe = app / "DeepSeek Harness.exe"
             exe.write_bytes(b"MZ")
             port = _RecordingProcesses([str(exe)])
-            probe = dsh_compat.locate_dsh_install(
-                env={}, which=_which_map({}), processes=port)
+            # FIX-485: hermetic fs (see _ScratchFs) — the synthetic archive
+            # and exe live in the scratch tree, never in a real install.
+            with mock.patch.object(dsh_plane.dsh_asar, "RealFs",
+                                   _ScratchFs):
+                probe = dsh_compat.locate_dsh_install(
+                    env={}, which=_which_map({}), processes=port)
         self.assertEqual(probe["status"], "NOT_RUN")  # no disk install here
         self.assertEqual(probe["planes"]["verdict"], "OK")
         asar_faces = [identity for identity in

@@ -186,7 +186,13 @@ class DeliveryAcceptanceTests(unittest.TestCase):
         import verify_workflow
 
         (self.root / RECEIPT).unlink()
-        with patch.object(verify_workflow, "HOST_PROJECT_ROOT", self.root):
+        tracker = self.gov / "plan-tracker.md"
+        tracker.write_text("# Candidate delivery fixture\n", encoding="utf-8")
+        with (
+            patch.object(verify_workflow, "HOST_PROJECT_ROOT", self.root),
+            patch.object(verify_workflow, "GOVERNANCE_DIR", self.gov),
+            patch.object(verify_workflow, "SAMPLE_PATH", tracker),
+        ):
             verdict = verify_workflow.check_release_readiness(
                 version="0.1.0", run_execution_gates=False,
             )

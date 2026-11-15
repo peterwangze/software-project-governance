@@ -230,12 +230,12 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 7. **并行优先派发**：独立无依赖任务 MUST 单步批量 spawn；等待期间 Start-Sleep/轮询违规，有就绪任务 MUST 继续派发（C7）。
 8. **健康检查事件化**：全量仅会话首检/推进前/异常信号触发，禁止逐轮例行全量（C8）。
 9. **热路径单源**：热数据唯一读取路径 `governance-bootstrap --format json`，禁止直读 plan-tracker/execution-packets/evidence-log（C9）。
-10. **goal 预算必收口**：续跑每轮 MUST `goal-bridge --action record`；四维任一危险即 DRAINING→CHECKPOINTED（warning 仅披露）；DRAINING 仅 `--in-flight` 收尾，检查点 MUST AskUserQuestion 范围裁决，禁止静默续跑。BLOCKED 未授权禁止恢复；checkpoint 跨会话幂等、规则变更披露；交付契约绑定的 goal 完成前 MUST 通过 `goal-bridge --action check-completion`；阈值/映射及 off 回退见 C10。
+10. **goal 预算必收口**：续跑每轮 MUST `goal-bridge --action record`；四维任一危险即 DRAINING→CHECKPOINTED（warning 仅披露）；DRAINING 仅 `--in-flight` 收尾，检查点 MUST AskUserQuestion 范围裁决，禁止静默续跑。BLOCKED 未授权禁止恢复；checkpoint 跨会话幂等、规则变更披露；阈值/映射及 off 回退见 C10。
 11. **六边界动作级执法**：六边界动作前 MUST `enforcement-check --facts <JSON>`；非0按 remedy 处理重试，禁止造假绕行（C11）。
 
 ### 动作级执法（FEAT-095）——六边界分层阻断
 
-执行前 MUST 读 [执法完整细则](references/behavior-contract-details.md) §enforcement。六边界：dispatch-execute/dispatch-review/accept-completion/merge/release/goal-resume。exit 2 硬阻断（fail-closed），3 限流，4 重建提示（动作放行）。四类硬阻断按 task/channel scoped；fix/re-review/forensics 仅豁免相关阻塞复审。review-debt 全局准入限流仅执行派发/goal续跑，保留白名单与用户提额门；WIP checkpoint 始终放行。未知/异常不静默放行；GOVERNANCE_ENFORCEMENT=off 一切放行、零记录零副作用。逐次留机器记录，检查语义不变。执法分层：dsh 宿主级 guard 已接线（FEAT-099 PoC 证实——真实 dsh-tools 管线 in-process 拦截 subagent/subagent_fork 修订错配派发，隔离环境验证；无锚派发放行不误伤、活体模型会话面未测如实披露）；其余平台协议+CLI 级。
+执行前 MUST 读 [执法完整细则](references/behavior-contract-details.md) §enforcement。六边界：dispatch-execute/dispatch-review/accept-completion/merge/release/goal-resume。exit 2 硬阻断（fail-closed），3 限流，4 重建提示（动作放行）。四类硬阻断按 task/channel scoped；fix/re-review/forensics 仅豁免相关阻塞复审。review-debt 全局准入限流仅执行派发/goal续跑，保留白名单与用户提额门；WIP checkpoint 始终放行。未知/异常不静默放行；GOVERNANCE_ENFORCEMENT=off 一切放行、零记录零副作用。逐次留机器记录，检查语义不变。执法分层：dsh 宿主级 guard 已接线（FEAT-099 PoC 证实——真实 dsh-tools 管线 in-process 拦截 subagent/subagent_fork 修订错配派发，隔离环境验证；无锚派发放行不误伤、活体模型会话面未测如实披露）；其余平台协议+CLI 级。交付契约绑定的 goal 完成前 MUST 通过 `goal-bridge --action check-completion`（C10）。
 
 ### 产品代码 vs 治理记录边界
 

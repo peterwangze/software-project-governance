@@ -443,6 +443,35 @@ def _validate_native_dsh(scope):
         raise ValueError("invalid DSH native goal binding")
 
 
+_TREE_COUNTS = {"sessions", "open_steps", "missing_sessions", "missing_usage", "flush_failures"}
+
+
+def _validate_tree_observation(observation):
+    if (not isinstance(observation, dict) or observation.keys() != _TREE_COUNTS
+            or any(type(value) is not int or not 0 <= value < 2**53 for value in observation.values())
+            or observation["sessions"] < 1):
+        raise ValueError("invalid DSH goal tree observation")
+
+
+def _validate_tree_stop(stop):
+    if (not isinstance(stop, dict)
+            or stop.keys() not in ({"id", "revision", "status", "dimensions", "observation"},
+                                   {"id", "revision", "status", "dimensions", "observation", "resumed_revision"})
+            or not isinstance(stop["id"], str) or not re.fullmatch(r"[0-9a-f]{32}", stop["id"])
+            or not _valid_native_revision(stop["revision"])
+            or stop["status"] not in ("PENDING", "SETTLED", "INCOMPLETE")
+            or stop["dimensions"] not in (["tokens"], ["wall_clock"], ["tokens", "wall_clock"])):
+        raise ValueError("invalid DSH goal tree stop")
+    if "resumed_revision" in stop and (stop["status"] == "PENDING"
+            or not _valid_native_revision(stop["resumed_revision"]) or stop["resumed_revision"] <= stop["revision"]):
+        raise ValueError("invalid DSH goal tree resume revision")
+    _validate_tree_observation(stop["observation"])
+    unknown = any(stop["observation"][name] for name in _TREE_COUNTS - {"sessions"})
+    if ((stop["status"] == "SETTLED" and unknown)
+            or (stop["status"] == "INCOMPLETE" and not unknown)):
+        raise ValueError("tree settlement status disagrees with observation")
+
+
 def _validate_bound_artifact(artifact):
     if type(artifact["revision"]) is not int or artifact["revision"] < 0:
         raise ValueError("invalid goal revision")
@@ -519,7 +548,7 @@ def _load_artifact(path: Path, goal_id, config):
                 "unauthorized_attempts", "created_at"):
         if key in loaded:
             artifact[key] = loaded[key]
-    if "native_dsh" in loaded or any(key in loaded for key in _INTENT_FIELDS):
+    if "native_dsh" in loaded or "tree_stop" in loaded or any(key in loaded for key in _INTENT_FIELDS):
         try:
             if type(loaded.get("schema_version")) is not int or loaded["schema_version"] != ARTIFACT_SCHEMA_VERSION:
                 raise ValueError("invalid goal artifact schema version")
@@ -535,6 +564,14 @@ def _load_artifact(path: Path, goal_id, config):
             if "native_dsh" in loaded:
                 _validate_native_dsh(loaded["native_dsh"])
                 artifact["native_dsh"] = loaded["native_dsh"]
+            if "tree_stop" in loaded:
+                stop = loaded["tree_stop"]
+                _validate_tree_stop(stop)
+                if ("native_dsh" not in artifact
+                        or stop.get("resumed_revision", stop["revision"]) > artifact["native_dsh"]["revision"]
+                        or (stop["status"] == "PENDING" and artifact["state"] == "RUNNING")):
+                    raise ValueError("tree stop does not match native goal state")
+                artifact["tree_stop"] = stop
         except ValueError as exc:
             return None, _error(CODE_SCHEMA_VIOLATION, f"invalid bound goal artifact: {exc}")
         artifact.update(fields)
@@ -833,12 +870,12 @@ def write_checkpoint(goal_id, *, task_ref="", obligations=None,
 
 
 def _write_checkpoint_locked(goal, path, *, task_ref, obligations,
-                             governance_dir, config, rules_version):
+                             governance_dir, config, rules_version, artifact=None):
     """P1-1: the checkpoint body — caller holds the artifact lock."""
-    artifact, err = _load_artifact(path, goal, config
-                                   or DEFAULT_BUDGET_CONFIG)
-    if err is not None:
-        return err
+    if artifact is None:
+        artifact, err = _load_artifact(path, goal, config or DEFAULT_BUDGET_CONFIG)
+        if err is not None:
+            return err
     already = artifact["state"] == "CHECKPOINTED"
     bound = "intent_sha256" in artifact
     retry = (bound and artifact["state"] in ("CHECKPOINTED", "BLOCKED")
@@ -960,6 +997,8 @@ def _record_ruling_locked(goal, path, *, decision, authorized_by,
         rules_changed = True
 
     state = artifact["state"]
+    if decision != "abort" and artifact.get("tree_stop", {}).get("status") == "PENDING":
+        return _error(CODE_SCOPE_RULING_REQUIRED, "finish recording the stopped DSH goal tree's settled tail")
     if "intent_sha256" in artifact and decision == "reduce-scope" and str(authorized_by or "").strip():
         return _error(CODE_SCHEMA_VIOLATION, "bound intent cannot change; bind an explicitly new goal")
     if state == "CHECKPOINTED":
@@ -1118,6 +1157,8 @@ def goal_status(goal_id, *, governance_dir, state_dir=None,
                       budget_signal=signal, unmeasured_dimensions=unmeasured)
         if "native_dsh" in artifact:
             result["native_dsh"] = artifact["native_dsh"]
+        if "tree_stop" in artifact:
+            result["tree_stop"] = artifact["tree_stop"]
     return result
 
 

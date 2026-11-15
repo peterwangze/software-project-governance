@@ -155,11 +155,43 @@ def _recommendations(report, packets, active, goal, gaps, remaining_rounds, warn
     return [candidate for _, candidate in sorted(ranked, key=lambda item: item[0])], in_flight, diagnostics
 
 
-def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_n: int = 3) -> dict:
+def _recommend_work_packages(packages, packets, active, goal, gaps, remaining_rounds, warning):
+    if packets is None and active:
+        # Missing packet associations prevent a reliable overlap check.
+        return [], []
+    owned_gaps, linked_active = set(), []
+    for task_id in sorted(active):
+        try:
+            link = _goal_link(packets.get(task_id), goal["goal_id"], goal["contract_sha256"],
+                              goal["required_criteria"])
+        except ValueError:
+            continue
+        if link is not None and (covered := link[1].intersection(gaps)):
+            linked_active.append(task_id)
+            owned_gaps.update(covered)
+
+    recommended = []
+    for package in packages:
+        matched = [key for key in package["criteria"] if gaps.get(key) == package["action"]]
+        if not matched or owned_gaps.intersection(matched):
+            continue
+        if remaining_rounds is None:
+            if warning:
+                continue
+        elif package["estimated_rounds"] >= remaining_rounds:
+            continue
+        recommended.append({**package, "criteria": matched})
+    return recommended, linked_active
+
+
+def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_n: int = 3,
+                         work_packages=()) -> dict:
     """Build only a recommendation. No task, checkpoint, or snapshot is written."""
     root = Path(project_root)
     gov = root / ".governance"
     output = {"goal_id": goal_id, "recommended_top_n": [], "in_flight": [], "diagnostics": []}
+    if work_packages:
+        output["work_packages"] = []
     try:
         goal = goal_status(goal_id, governance_dir=gov)
         if goal.get("error"):
@@ -210,27 +242,55 @@ def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_
         ])
 
     output["criterion_gaps"] = gaps = _gap_report(acceptance)
+    packets = None
+    legacy_error = None
     try:
-        packets, packet_error = load_packets()
+        active = _read_locks(gov) if work_packages else None
+    except (OSError, ValueError, StoreError, RecursionError) as exc:
+        return dict(output, state="ERROR", diagnostics=[str(exc)])
+    try:
+        packet_data, packet_error = load_packets()
         if packet_error:
             raise ValueError(packet_error)
+        packets = packet_data
         tasks, demand_warnings = _resolve_row_demand_sources(
             parse_task_dependencies((gov / "plan-tracker.md").read_text(encoding="utf-8")), gov,
         )
         report = compute_unblocked_tasks(tasks, archive_completed_ids=read_archive_index_completed_ids(gov))
-        active = _read_locks(gov)
+        if active is None:
+            active = _read_locks(gov)
     except (OSError, ValueError, StoreError, RecursionError) as exc:
-        return dict(output, state="ERROR", diagnostics=[str(exc)])
+        if not work_packages:
+            return dict(output, state="ERROR", diagnostics=[str(exc)])
+        legacy_error = str(exc)
 
     rounds = zones.get("rounds")
     remaining = rounds.get("remaining_until_danger") if rounds else None
-    goal["required_criteria"] = acceptance["required_criteria"]
-    eligible, in_flight, exclusions = _recommendations(report, packets, active, goal, gaps, remaining, budget == "WARNING")
-    diagnostics = acceptance["issues"] + demand_warnings + exclusions
-    if not eligible and not in_flight:
+    warning = budget == "WARNING"
+    goal["required_criteria"] = set(acceptance["required_criteria"])
+    if legacy_error is None:
+        eligible, in_flight, exclusions = _recommendations(report, packets, active, goal, gaps, remaining, warning)
+        diagnostics = acceptance["issues"] + demand_warnings + exclusions
+    else:
+        eligible, in_flight = [], []
+        diagnostics = acceptance["issues"] + [legacy_error]
+    scoped_packages = []
+    if work_packages:
+        scoped_packages, linked_active = _recommend_work_packages(work_packages, packets, active, goal, gaps,
+                                                                   remaining, warning)
+        output["work_packages"] = scoped_packages[:max(0, top_n)]
+        in_flight = sorted(set(in_flight).union(linked_active))
+    if eligible or scoped_packages:
+        state = "READY"
+    elif in_flight:
+        state = "WAIT_ACTIVE"
+    elif legacy_error is not None:
+        state = "ERROR"
+    else:
+        state = "NO_ELIGIBLE_TASK"
         diagnostics.append("no executable task is linked to the current acceptance gaps")
     return dict(
-        output, state="READY" if eligible else "WAIT_ACTIVE" if in_flight else "NO_ELIGIBLE_TASK",
+        output, state=state,
         recommended_top_n=eligible[:max(0, top_n)], in_flight=in_flight, diagnostics=diagnostics,
     )
 

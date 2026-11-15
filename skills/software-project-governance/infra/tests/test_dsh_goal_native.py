@@ -168,6 +168,44 @@ class NativeGoalTests(unittest.TestCase):
         self.write_json(self.root / PROFILE, self.profile)
         self.native("HOLD", "PROFILE_CHANGED", revision=4, max_rounds=12)
 
+    def test_tree_stop_requires_current_proved_limit_and_tail_before_resuming(self):
+        self.native("ALLOW", "ADMITTED", usage={"rounds": 1, "tokens": 600, "seconds": 5})
+        self.bridge("checkpoint", "--obligations", "verify-before-delivery")
+        self.bridge("ruling", "--decision", "continue", "--authorized-by", "fixture user")
+        observation = {"sessions": 2, "open_steps": 1, "missing_sessions": 0,
+                       "missing_usage": 0, "flush_failures": 0}
+        tree = {"id": "ab" * 16, "observation": observation}
+        before = self.state_path.read_bytes()
+        self.native("HOLD", "TREE_BUDGET_NOT_REACHED", action="tree-stop", tree=tree,
+                    usage={"rounds": 1, "tokens": 999, "seconds": 59})
+        self.native("HOLD", "STALE_REVISION", action="tree-stop", tree=tree, revision=2,
+                    usage={"rounds": 1, "tokens": 1_025, "seconds": 59})
+        self.assertEqual(before, self.state_path.read_bytes())
+        stopped = self.native("HOLD", "TREE_BUDGET_STOPPED", action="tree-stop", tree=tree,
+                              usage={"rounds": 1, "tokens": 1_025, "seconds": 59})
+        self.assertEqual("CHECKPOINTED", stopped["goal_state"])
+        self.assertEqual("PENDING", stopped["tree_stop"]["status"])
+        self.assertEqual(["tokens"], stopped["tree_stop"]["dimensions"])
+        self.assertTrue(stopped["checkpoint_materialized"])
+        self.assertEqual(1, stopped["open_obligations"])
+        self.native("HOLD", "AUTHORIZED_RESUME_REQUIRED", revision=2)
+        self.bridge("ruling", "--decision", "extend-budget", "--authorized-by", "fixture user",
+                    "--new-limit", "tokens=1800", exit_code=2)
+        tail = {**tree, "observation": {**observation, "open_steps": 0, "missing_usage": 1}}
+        measured = {"rounds": 1, "tokens": 1_063, "seconds": 60}
+        self.native("HOLD", "TREE_STOP_MISMATCH", action="tree-settle", tree={**tail, "id": "12" * 16},
+                    usage=measured)
+        settled = self.native("HOLD", "TREE_TAIL_RECORDED", action="tree-settle", tree=tail, usage=measured)
+        self.assertEqual("INCOMPLETE", settled["tree_stop"]["status"])
+        self.assertEqual(1_063, settled["budget"]["zones"]["tokens"]["used"])
+        self.assertEqual([{"obligation_id": "verify-before-delivery"}], self.state()["obligations"])
+        before = self.state_path.read_bytes()
+        self.native("HOLD", "TREE_TAIL_RECORDED", action="tree-settle", tree=tail, usage=measured)
+        self.assertEqual(before, self.state_path.read_bytes())
+        self.bridge("ruling", "--decision", "extend-budget", "--authorized-by", "fixture user",
+                    "--new-limit", "tokens=1800,wall_clock=90")
+        self.native("ALLOW", "ADMITTED", revision=3)
+
     def test_open_obligations_and_goal_linked_locks_prevent_completion(self):
         self.native("ALLOW", "ADMITTED")
         self.receipt()

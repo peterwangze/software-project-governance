@@ -91,7 +91,13 @@ python skills/software-project-governance/infra/verify_workflow.py check-runtime
 
 已验证的 DSH rc.3 通过兼容接线在自动目标轮及同轮后续原生模型步骤前等待 Python 判定。单个步骤内的宿主请求重试共用该步骤的判定。模型上下文只投影经判定的目标、治理预算信号及少量任务建议。工具与 Web 原生完成请求共用目标实例的完成判定，采用同一 Python 策略检查交付证据。已绑定的同一会话与目标保持约束，切换预设或删除项目配置会由判定重新处理。安装或重载宿主行后，日志中的 `GOAL_ADMISSION_REGISTERED` 表示找到并接入所需能力。未接入的宿主继续使用协议和 CLI 检查。
 
-宿主从本目标已开始的轮数扣除正在执行的预约轮，得到已结束轮数。时间来自父会话有记录的目标步骤，token 来自父会话已记录用量的已结算模型响应。子代理、无用量记录的响应及外部成本需要运行侧计量。策略进程在治理包目录启动，使用宿主 `PATH` 中项目目录之外的绝对 Python 路径，忽略 `PYTHON*` 设置和用户 site-packages。策略进程出错、超时或回复不匹配时，已启用的目标调用会报告具体阻断代码。回执及验收证据的写入由独立验收者或受保护 CI 控制。
+宿主从本目标已开始的轮数扣除正在执行的预约轮，得到已结束轮数。支持原生树预算的宿主记录 `TREE_BUDGET_REGISTERED`，按目标轮中的派发目录递归计入已确认的本地子会话，排除 fork 继承前缀。token 采用已结算事件报告的 `totalTokens` 下界，时间是树内已观测执行时间区间的并集。并行在途调用、缺失用量、不可读子分支及外部代理可能使实际成本更高。
+
+达到 token 或时间阈值时，宿主拒绝关联会话的新模型请求及重试。策略先写入治理检查点，然后宿主暂停原生目标并中断关联子会话。尾部结算复核持久日志位置，缺失、尚未退出或刷新失败记录为 `INCOMPLETE`。重启后门禁读取同一 `tree_stop`，保持拒绝直到尾部结算结束、用户通过 `goal-bridge --action ruling` 作出裁决且较新原生轮通过准入。`goal-bridge --action status` 可查看 `tree_stop` 和已观测预算。
+
+策略进程在治理包目录启动，使用宿主 `PATH` 中项目目录之外的绝对 Python 路径，忽略 `PYTHON*` 设置和用户 site-packages。策略进程出错、超时或回复不匹配时，已启用的目标调用会报告具体阻断代码。回执及验收证据的写入由独立验收者或受保护 CI 控制。
+
+可选的 `.governance/dsh-goal-work.json` 记录同一目标已获授权的验证和修复工作包。使用相同的 `intent_sha256`，每个 `work_packages` 元素提供 `id`、`action`（`verify` 或 `repair`）、现有契约 `criteria`、`method`、`estimated_rounds` 和单行 `instruction`。`method` 可为 `exercise-entrypoint`、`build-release`、`inspect-evidence` 或 `repair-criterion`。侧文件在首次准入时随配置绑定。模型优先收到当前可执行的验收工作包，用户已有的授权继续适用。
 
 ## 资产
 

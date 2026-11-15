@@ -13,6 +13,7 @@ from pathlib import Path
 
 import delivery_acceptance as acceptance
 import goal_bridge as bridge
+from dsh_goal_work import read_work_packages
 from goal_planning import _read_locks, plan_goal_candidates
 from governance_store import LOCK_DIR_NAME, LOCKS_FILE_NAME, StoreError, _TargetLock
 
@@ -24,6 +25,7 @@ _MAX_NUMBER = 2**53 - 1
 _REQUEST_FIELDS = {"schema_version", "action", "session_id", "goal_id", "revision", "objective", "max_rounds", "usage"}
 _PROFILE_FIELDS = {"intent_sha256", "budget", "contract"}
 _LIMIT_FIELDS = {"rounds": "max_rounds", "tokens": "max_tokens", "wall_clock": "max_seconds"}
+_TREE_ACTIONS = ("tree-stop", "tree-settle")
 
 
 def _number(value, dimension, *, positive=False):
@@ -40,9 +42,11 @@ def _request(stream):
     if len(raw) > MAX_REQUEST:
         raise ValueError("request is too large")
     request = json.loads(raw.decode("utf-8"), object_pairs_hook=acceptance._json_object)
-    if (not isinstance(request, dict) or request.keys() != _REQUEST_FIELDS
+    action = request.get("action") if isinstance(request, dict) else None
+    tree = action in _TREE_ACTIONS
+    if (not isinstance(request, dict) or request.keys() != (_REQUEST_FIELDS | {"tree"} if tree else _REQUEST_FIELDS)
             or type(request["schema_version"]) is not int or request["schema_version"] != 1
-            or request["action"] not in ("admit", "complete")
+            or action not in ("admit", "complete", *_TREE_ACTIONS)
             or not bridge._valid_native_session_id(request["session_id"])
             or not isinstance(request["goal_id"], str)
             or not bridge._GOAL_ID_RE.fullmatch(request["goal_id"])
@@ -57,6 +61,14 @@ def _request(stream):
         raise ValueError("invalid native goal usage")
     for field, value in usage.items():
         _number(value, "wall_clock" if field == "seconds" else field)
+    if tree:
+        branch = request["tree"]
+        if (not isinstance(branch, dict) or branch.keys() != {"id", "observation"}
+                or not isinstance(branch["id"], str)
+                or len(branch["id"]) != 32 or any(c not in "0123456789abcdef" for c in branch["id"])
+                or usage.keys() != {"rounds", "tokens", "seconds"}):
+            raise ValueError("invalid DSH goal tree request")
+        bridge._validate_tree_observation(branch["observation"])
     return request
 
 
@@ -80,7 +92,8 @@ def _optional_path(path: Path, *, directory=False):
     return True
 
 
-def _profile(path, request):
+def _profile(root, request):
+    path = root / PROFILE
     record, _ = acceptance._read_record(path, _PROFILE_FIELDS, max_bytes=MAX_REQUEST)
     if (not isinstance(record["intent_sha256"], str)
             or not acceptance._SHA256.fullmatch(record["intent_sha256"])):
@@ -100,8 +113,10 @@ def _profile(path, request):
                "warn_ratio": bridge.DEFAULT_BUDGET_CONFIG["rounds"]["warn_ratio"], "danger_ratio": 1.0}
         for name, field in _LIMIT_FIELDS.items()
     }
-    profile_hash = hashlib.sha256(_encode(record)).hexdigest()
-    return record["intent_sha256"], profile_hash, contract, config
+    packages, work_hash = read_work_packages(root, record["intent_sha256"], contract["criteria"])
+    frozen = {**record, "work_sha256": work_hash} if work_hash is not None else record
+    profile_hash = hashlib.sha256(_encode(frozen)).hexdigest()
+    return record["intent_sha256"], profile_hash, contract, config, packages
 
 
 def _encode(record):
@@ -167,13 +182,15 @@ def _snapshot(artifact):
         "checkpoint_materialized": artifact["checkpoint_materialized"],
         "open_obligations": len(artifact["obligations"]),
         "budget": {"zones": zones, "unmeasured_dimensions": sorted(artifact["budget_config"].keys() - used.keys())},
+        **({"tree_stop": artifact["tree_stop"]} if "tree_stop" in artifact else {}),
     }
 
 
-def _short_plan(project_root, goal):
+def _short_plan(project_root, goal, packages):
     governance_dir = project_root / ".governance"
     try:
-        result = plan_goal_candidates(project_root, goal, load_packets=lambda: _load_packets(governance_dir))
+        result = plan_goal_candidates(project_root, goal, load_packets=lambda: _load_packets(governance_dir),
+                                      work_packages=packages)
     except (OSError, ValueError, RecursionError, StoreError):
         return {"state": "ERROR"}
     return {
@@ -186,6 +203,7 @@ def _short_plan(project_root, goal):
             for item in result["recommended_top_n"] if len(item["task_id"]) <= 128
         ],
         "in_flight_count": len(result["in_flight"]),
+        "work_packages": result.get("work_packages", [])[:3],
     }
 
 
@@ -202,6 +220,58 @@ def _checkpoint_reply(request, target, config, governance_dir, code):
     return _reply(request, "HOLD", code, **_snapshot(artifact))
 
 
+def _tree_report(request, target, artifact, governance_dir):
+    branch = request["tree"]
+    stop = artifact.get("tree_stop")
+    same_stop = stop is not None and stop["id"] == branch["id"] and stop["revision"] == request["revision"]
+    state = artifact["state"]
+    settling = request["action"] == "tree-settle"
+    if settling:
+        if not same_stop or state not in ("CHECKPOINTED", "BLOCKED"):
+            return _reply(request, "HOLD", "TREE_STOP_MISMATCH")
+        if stop["status"] != "PENDING":
+            return _reply(request, "HOLD", "TREE_TAIL_RECORDED", **_snapshot(artifact))
+    elif state not in ("RUNNING", "DRAINING", "CHECKPOINTED") or (
+        stop is not None and stop["revision"] >= request["revision"]
+    ):
+        code = "TREE_BUDGET_STOPPED" if same_stop else "TREE_STOP_MISMATCH"
+        return _reply(request, "HOLD", code, **_snapshot(artifact))
+
+    config = artifact["budget_config"]
+    used = bridge._bound_usage(artifact)
+    usage = request["usage"]
+    measured = {"rounds": usage["rounds"], "tokens": usage["tokens"], "wall_clock": usage["seconds"]}
+    zones = bridge._judge_bound_usage({key: max(used.get(key, 0), value)
+                                      for key, value in measured.items()}, config)["zones"]
+    if settling:
+        observation = dict(branch["observation"])
+        observation["sessions"] = max(observation["sessions"], stop["observation"]["sessions"])
+        if branch["observation"]["sessions"] < stop["observation"]["sessions"]:
+            observation["missing_sessions"] += stop["observation"]["sessions"] - branch["observation"]["sessions"]
+        if any(measured[key] < used.get(key, 0) for key in ("tokens", "wall_clock")):
+            observation["flush_failures"] += 1
+        stop["observation"] = observation
+        stop["status"] = ("INCOMPLETE" if any(observation[key] for key in bridge._TREE_COUNTS - {"sessions"})
+                          else "SETTLED")
+        artifact["budget_consumption"] = zones
+        bridge._save(target, artifact)
+        return _reply(request, "HOLD", "TREE_TAIL_RECORDED", **_snapshot(artifact))
+
+    dimensions = [key for key in ("tokens", "wall_clock") if measured[key] >= config[key]["limit"]]
+    if not dimensions:
+        return _reply(request, "HOLD", "TREE_BUDGET_NOT_REACHED", **_snapshot(artifact))
+    artifact["tree_stop"] = {"id": branch["id"], "revision": request["revision"], "status": "PENDING",
+                             "dimensions": dimensions, "observation": branch["observation"]}
+    artifact["budget_consumption"] = zones
+    if state == "CHECKPOINTED" and artifact["checkpoint_materialized"]:
+        bridge._save(target, artifact)
+    else:
+        bridge._write_checkpoint_locked(request["goal_id"], target, task_ref="", obligations=None,
+                                       governance_dir=governance_dir, config=config, rules_version=None,
+                                       artifact=artifact)
+    return _reply(request, "HOLD", "TREE_BUDGET_STOPPED", **_snapshot(artifact))
+
+
 def _run_locked(root, target, request):
     goal = request["goal_id"]
     governance_dir = root / ".governance"
@@ -216,14 +286,14 @@ def _run_locked(root, target, request):
                 else _reply(request, "NOT_CONFIGURED", "NO_PROFILE"))
     if bridge.bridge_disabled():
         return _reply(request, "HOLD", "BRIDGE_DISABLED")
-    intent_hash, profile_hash, contract, config = _profile(root / PROFILE, request)
+    intent_hash, profile_hash, contract, config, packages = _profile(root, request)
     intent = request["objective"]
     if hashlib.sha256(intent.encode("utf-8")).hexdigest() != intent_hash:
         return _reply(request, "HOLD", "INTENT_MISMATCH")
     if scope is not None:
         if (scope["session_id"] != request["session_id"] or artifact["original_intent"] != intent):
             return _reply(request, "HOLD", "SCOPE_MISMATCH")
-        if request["revision"] < scope["revision"]:
+        if request["revision"] < scope["revision"] and action != "tree-settle":
             return _reply(request, "HOLD", "STALE_REVISION")
         if profile_hash != scope["profile_sha256"]:
             return _reply(request, "HOLD", "PROFILE_CHANGED")
@@ -243,6 +313,11 @@ def _run_locked(root, target, request):
     if current_contract != contract or (scope is not None and digest != artifact["contract_sha256"]):
         return _reply(request, "HOLD", "CONTRACT_CHANGED")
 
+    if action in _TREE_ACTIONS:
+        if action == "tree-stop" and request["revision"] != scope["revision"]:
+            return _reply(request, "HOLD", "STALE_REVISION")
+        return _tree_report(request, target, artifact, governance_dir)
+
     if scope is None:
         artifact["budget_config"] = config
         artifact.update(bridge._intent_fields(intent, digest), checkpoint_materialized=False)
@@ -256,6 +331,11 @@ def _run_locked(root, target, request):
             bridge._save(target, artifact)
         return _reply(request, "HOLD", "AUTHORIZED_RESUME_REQUIRED", **_snapshot(artifact))
 
+    stop = artifact.get("tree_stop")
+    awaiting_native_resume = stop is not None and "resumed_revision" not in stop
+    if awaiting_native_resume and (action != "admit" or request["revision"] <= stop["revision"]):
+        return _reply(request, "HOLD", "AUTHORIZED_RESUME_REQUIRED", **_snapshot(artifact))
+
     record = bridge._record_execution_locked(goal, target, in_flight=False, task_ref="", cost=None,
                                              governance_dir=governance_dir, config=config, artifact=artifact,
                                              rounds=request["usage"]["rounds"], tokens=request["usage"].get("tokens"),
@@ -267,9 +347,12 @@ def _run_locked(root, target, request):
 
     state = _snapshot(artifact)
     if action == "admit":
-        plan = _short_plan(root, goal)
+        plan = _short_plan(root, goal, packages)
         if plan["state"] in ("AWAIT_CONTRACT", "CONTRACT_CHANGED", "HOLD"):
             return _reply(request, "HOLD", "PLAN_GATE_CHANGED", **state, plan=plan)
+        if awaiting_native_resume:
+            stop["resumed_revision"] = request["revision"]
+            bridge._save(target, artifact)
         return _reply(request, "ALLOW", "ADMITTED", **state, plan=plan)
     verdict = bridge._check_completion(goal, governance_dir)
     if not verdict["pass"]:
@@ -302,7 +385,7 @@ def run(root, request):
                 if "native_dsh" in artifact:
                     return _reply(request, "HOLD", "CONFIG_MISSING")
             return _reply(request, "NOT_CONFIGURED", "NO_PROFILE")
-        if not state_exists and request["action"] == "complete":
+        if not state_exists and request["action"] != "admit":
             return _reply(request, "HOLD", "NATIVE_BINDING_REQUIRED")
         with _TargetLock(target):
             return _run_locked(root, target, request)

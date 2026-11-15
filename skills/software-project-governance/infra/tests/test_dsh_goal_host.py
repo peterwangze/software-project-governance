@@ -132,6 +132,139 @@ assert.equal((await runStep(fake, unavailable, [reserved(unavailable)])).kind, '
 assert.match(unavailable.blocks[0].message, /POLICY_UNAVAILABLE/u)
 """, poison_python=True)
 
+    def test_native_tree_stops_before_pause_and_flushes_tail_without_fork_seed(self):
+        self.run_probe(r"""
+const { createGoalTreeBudget } = await import(pathToFileURL(join(repo, 'lib/dsh-native/goal-tree-budget.js')).href)
+const fake = host()
+const root = actor(), child = actor('child-1'), unrelated = actor('unrelated')
+const agents = new Map([root, child, unrelated].map(agent => [agent.session.id, agent]))
+const headers = new Map([...agents].map(([id, agent]) => [id, agent.session.header]))
+const disk = new Map(), interrupted = [], requests = []
+const append = (agent, type, data) => {
+  const event = { seq: agent.events.length, type, time: Date.now(), data }
+  agent.events.push(event)
+  fake.callbacks.get('session/event')?.(agent.session, event)
+}
+for (const agent of agents.values()) {
+  agent.status = 'running'
+  agent.session.header.id = agent.session.id
+  agent.session.inheritedEventCount = 0
+  Object.defineProperty(agent.session, 'seq', { get: () => agent.events.length })
+  agent.session.snapshotEvents = (start, end) => agent.events.slice(start, end)
+  agent.cancel = () => {
+    agent.status = 'idle'
+    append(agent, 'step/end', { turn: 1, step: 1 })
+    append(agent, 'turn/end', { turn: 1 })
+  }
+}
+child.session.header.origin = 'subagent'
+child.session.header.parentSession = root.session.id
+append(child, 'assistant/message', { turn: 1, usage: { totalTokens: 3000 } })
+child.session.inheritedEventCount = 1
+append(root, 'goal/change', { operation: 'create', goal: root.goal })
+append(root, 'turn/start', { turn: 1 })
+append(root, 'step/start', { turn: 1, step: 1 })
+append(root, 'user/message', { source: reserved(root).source })
+append(root, 'assistant/message', { turn: 1, usage: { totalTokens: 18 } })
+append(root, 'subagent/catalog', { childId: child.session.id })
+
+fake.ctx.agents = agents
+fake.ctx.sessions = { get: id => agents.get(id)?.session, async flush(session) {
+  disk.set(session.id, [...agents.get(session.id).events])
+  return true
+} }
+fake.ctx.sessionPersistence = { async open(id) {
+  return { header: headers.get(id), inheritedEventCount: 0, async read(start, count) {
+    return { events: disk.get(id)?.slice(start, start + count) ?? [] }
+  }, async close() {} }
+} }
+fake.ctx.subagents = { interrupt(id, authority) {
+  assert.equal(authority.agent, root)
+  interrupted.push(id)
+  append(child, 'assistant/message', { turn: 1, usage: { totalTokens: 3 } })
+  child.cancel()
+} }
+fake.ctx.goals.pause = (agent, ref) => {
+  assert.equal(requests[0].action, 'tree-stop')
+  assert.equal(agent, root)
+  agent.goal = { ...agent.goal, phase: 'paused', revision: ref.revision + 1 }
+}
+const budget = createGoalTreeBudget(fake.ctx)
+assert.ok(budget)
+let grantStop, grantTail
+const tail = new Promise(resolve => { grantTail = resolve })
+const policy = async (_, request) => {
+  requests.push(request)
+  if (request.action === 'tree-stop') await new Promise(resolve => { grantStop = resolve })
+  else grantTail()
+  return { code: request.action === 'tree-stop' ? 'TREE_BUDGET_STOPPED' : 'TREE_TAIL_RECORDED',
+    tree_stop: { id: request.tree.id } }
+}
+const request = { goal_id: root.goal.id, revision: root.goal.revision, usage: { rounds: 0 } }
+const outcome = { status: 'ALLOW', budget: { zones: { tokens: { limit: 30 }, wall_clock: { limit: 600 } } } }
+assert.equal(budget.watch({ agent: root, root: workspace, request, outcome, policy }), false)
+append(child, 'turn/start', { turn: 1 })
+append(child, 'step/start', { turn: 1, step: 1 })
+append(child, 'assistant/message', { turn: 1, usage: { totalTokens: 18 } })
+assert.equal(root.goal.phase, 'active')
+assert.equal(requests[0].usage.tokens, 36)
+assert.equal(requests[0].tree.observation.sessions, 2)
+const stream = fake.callbacks.get('llm/stream')
+assert.throws(() => stream({ sessionId: root.session.id }, () => {}), /budget stopped/u)
+assert.throws(() => stream({ sessionId: child.session.id }, () => {}), /budget stopped/u)
+assert.equal(stream({ sessionId: unrelated.session.id }, () => 'ok'), 'ok')
+grantStop()
+let deadline
+try {
+  await Promise.race([tail, new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('missing tail')), 3000) })])
+} finally { clearTimeout(deadline) }
+assert.equal(root.goal.phase, 'paused')
+assert.deepEqual(interrupted, [child.session.id])
+assert.equal(requests[1].tree.id, requests[0].tree.id)
+assert.equal(requests[1].usage.tokens, 39)
+assert.equal(requests[1].tree.observation.open_steps, 0)
+assert.equal(requests[1].tree.observation.flush_failures, 0)
+budget.dispose()
+
+// A cold root can be identified by its exact catalog event even if it later cleared the goal.
+agents.delete(root.session.id)
+disk.get(root.session.id).push({ type: 'goal/change', data: { operation: 'clear' } })
+const recovered = createGoalTreeBudget(fake.ctx)
+const owner = await recovered.coldRootFor(child)
+assert.equal(owner.sessionId, root.session.id)
+assert.equal(owner.goalId, root.goal.id)
+assert.equal(await recovered.coldRootFor(unrelated), null)
+writeFileSync(state, JSON.stringify({ goal_id: root.goal.id, native_dsh: { session_id: root.session.id },
+  tree_stop: { id: requests[0].tree.id, revision: request.revision, status: 'SETTLED' } }))
+registerGoalAdmission(fake.ctx, { tree: () => recovered })
+const manual = { id: 'human', source: { kind: 'user' } }
+assert.equal((await runStep(fake, child, [manual])).kind, 'reject')
+assert.equal((await runStep(fake, unrelated, [manual])).kind, 'enter')
+recovered.dispose()
+""")
+
+    def test_native_tree_restores_scope_before_root_and_child_manual_steps(self):
+        self.run_probe(r"""
+const fake = host()
+const root = actor(), child = actor('child-1'), other = actor('other')
+root.goal = { ...root.goal, phase: 'paused', activation: 'disarmed', revision: 6 }
+child.session.header.origin = 'subagent'
+const stop = { id: 'a'.repeat(32), revision: 3, status: 'SETTLED' }
+const saved = { goal_id: root.goal.id, native_dsh: { session_id: root.session.id }, tree_stop: stop }
+writeFileSync(state, JSON.stringify(saved))
+const tree = () => ({ isHeld: () => false, watch() {}, async coldRootFor(agent) {
+  return agent === child ? { header: root.session.header, sessionId: root.session.id, goalId: root.goal.id } : null
+} })
+registerGoalAdmission(fake.ctx, { tree })
+const manual = { id: 'human', source: { kind: 'user' } }
+assert.equal((await runStep(fake, root, [manual])).kind, 'reject')
+assert.equal((await runStep(fake, child, [manual])).kind, 'reject')
+assert.equal((await runStep(fake, other, [manual])).kind, 'enter')
+writeFileSync(state, JSON.stringify({ ...saved, tree_stop: { ...stop, resumed_revision: 7 } }))
+assert.equal((await runStep(fake, root, [manual])).kind, 'enter')
+assert.equal((await runStep(fake, child, [manual])).kind, 'enter')
+""")
+
     def test_native_round_admission_then_followup_hold_preserves_manual_messages(self):
         self.run_probe(r"""
 const fake = host()

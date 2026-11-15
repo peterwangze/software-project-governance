@@ -69,6 +69,30 @@ python skills/software-project-governance/infra/verify_workflow.py check-runtime
 
 本适配器不声明 official approval、marketplace approval、universal/full runtime support 或 1.0.0 生产就绪。
 
+### 原生目标验收（FEAT-116）
+
+使用治理预设的会话可由项目明确启用原生目标验收。在会话工作目录写入 `.governance/dsh-goal.json`，`intent_sha256` 填原生目标完整文本的 UTF-8 SHA-256，`max_rounds` 与创建目标时的原生轮次上限相同。`contract` 使用发布验收契约的字段，桥接会用原生目标 ID 补齐 `goal_id`。
+
+```json
+{
+  "schema_version": 1,
+  "intent_sha256": "<原生目标完整文本的 SHA-256>",
+  "budget": {"max_rounds": 8, "max_tokens": 2000000, "max_seconds": 600},
+  "contract": {
+    "release_version": "0.1.0",
+    "artifact": "dist",
+    "entrypoint": "/",
+    "producer": "delivery-agent",
+    "verifier": "independent-qa",
+    "criteria": {"user-journey": "从正常入口验证交付结果"}
+  }
+}
+```
+
+可用的宿主在自动目标轮及同轮后续模型请求前等待 Python 判定。模型上下文只投影经判定的目标、治理预算信号及少量任务建议。工具与 Web 原生完成请求共用目标实例的完成判定，采用同一 Python 策略检查交付证据。已绑定的同一会话与目标保持约束，切换预设或删除项目配置会由判定重新处理。安装或重载宿主行后，日志中的 `GOAL_ADMISSION_REGISTERED` 表示找到并接入所需能力。未接入的宿主继续使用协议和 CLI 检查。
+
+轮数来自本目标已结束的原生轮。时间来自本会话有记录的目标步骤，token 来自本会话已落盘且有用量的模型响应。子代理、无用量记录的响应及外部成本需要运行侧计量。策略进程出错、超时或回复不匹配时，已启用的目标调用会报告具体阻断代码。回执及验收证据的写入由独立验收者或受保护 CI 控制。
+
 ## 资产
 
 - `adapters/dsh/adapter-manifest.json`：机器可读的适配器元数据（能力声明 + E2E 证据）。

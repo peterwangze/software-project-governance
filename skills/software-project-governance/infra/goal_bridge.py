@@ -425,6 +425,24 @@ def _validate_obligations(obligations):
         raise ValueError("obligations must be a list of records with nonempty obligation IDs")
 
 
+def _valid_native_session_id(value):
+    return (isinstance(value, str) and 0 < len(value) <= 256
+            and value.isprintable() and value == value.strip())
+
+
+def _valid_native_revision(value):
+    return type(value) is int and 1 <= value < 2**53
+
+
+def _validate_native_dsh(scope):
+    if (not isinstance(scope, dict) or scope.keys() != {"session_id", "revision", "profile_sha256"}
+            or not _valid_native_session_id(scope["session_id"])
+            or not _valid_native_revision(scope["revision"])
+            or not isinstance(scope["profile_sha256"], str)
+            or not _SHA256_RE.fullmatch(scope["profile_sha256"])):
+        raise ValueError("invalid DSH native goal binding")
+
+
 def _validate_bound_artifact(artifact):
     if type(artifact["revision"]) is not int or artifact["revision"] < 0:
         raise ValueError("invalid goal revision")
@@ -501,7 +519,7 @@ def _load_artifact(path: Path, goal_id, config):
                 "unauthorized_attempts", "created_at"):
         if key in loaded:
             artifact[key] = loaded[key]
-    if any(key in loaded for key in _INTENT_FIELDS):
+    if "native_dsh" in loaded or any(key in loaded for key in _INTENT_FIELDS):
         try:
             if type(loaded.get("schema_version")) is not int or loaded["schema_version"] != ARTIFACT_SCHEMA_VERSION:
                 raise ValueError("invalid goal artifact schema version")
@@ -514,6 +532,9 @@ def _load_artifact(path: Path, goal_id, config):
             if type(saved_checkpoint) is not bool:
                 raise ValueError("invalid checkpoint_materialized flag")
             _validate_bound_artifact(artifact)
+            if "native_dsh" in loaded:
+                _validate_native_dsh(loaded["native_dsh"])
+                artifact["native_dsh"] = loaded["native_dsh"]
         except ValueError as exc:
             return None, _error(CODE_SCHEMA_VIOLATION, f"invalid bound goal artifact: {exc}")
         artifact.update(fields)
@@ -669,12 +690,12 @@ def record_execution(goal_id, *, rounds=None, tokens=None, seconds=None,
 
 
 def _record_execution_locked(goal, path, *, rounds, tokens, seconds,
-                             cost, in_flight, task_ref, governance_dir, config):
+                             cost, in_flight, task_ref, governance_dir, config, artifact=None):
     """P1-1: the record body — caller holds the artifact target lock."""
-    artifact, err = _load_artifact(path, goal, config
-                                   or DEFAULT_BUDGET_CONFIG)
-    if err is not None:
-        return err
+    if artifact is None:
+        artifact, err = _load_artifact(path, goal, config or DEFAULT_BUDGET_CONFIG)
+        if err is not None:
+            return err
     _rules_version_disclosure(artifact)  # P2-2: loud on every path
 
     def refuse(code, kind):
@@ -1095,6 +1116,8 @@ def goal_status(goal_id, *, governance_dir, state_dir=None,
                       obligations=artifact["obligations"], zones=zones,
                       checkpoint_materialized=artifact["checkpoint_materialized"],
                       budget_signal=signal, unmeasured_dimensions=unmeasured)
+        if "native_dsh" in artifact:
+            result["native_dsh"] = artifact["native_dsh"]
     return result
 
 
@@ -1164,9 +1187,11 @@ def add_goal_bridge_arguments(parser: argparse.ArgumentParser) -> None:
                              "rounds=100,wall_clock=43200)")
     parser.add_argument("--rules-version", dest="rules_version",
                         default="")
-    parser.add_argument("--obligations", default="",
-                        help="comma list of open obligation ids stamped "
-                             "into the checkpoint")
+    obligations = parser.add_mutually_exclusive_group()
+    obligations.add_argument("--obligations", default="",
+                             help="comma list of open obligation ids stamped into the checkpoint")
+    obligations.add_argument("--clear-obligations", action="store_true",
+                             help="checkpoint with an explicitly reconciled empty obligation list")
     parser.add_argument("--text", action="store_true",
                         help="grep-anchor text rendering (thresholds/"
                              "mapping/status)")
@@ -1215,6 +1240,9 @@ def cmd_goal_bridge(args, *, governance_dir) -> int:
     _configure_stdio()
     action = getattr(args, "action", "status")
     goal = getattr(args, "goal", "") or ""
+    clear_obligations = getattr(args, "clear_obligations", False)
+    if clear_obligations and action != "checkpoint":
+        return _emit(_error(CODE_SCHEMA_VIOLATION, "--clear-obligations requires --action checkpoint"))
     if action == "bind-intent":
         return _emit(bind_intent(goal, intent=getattr(args, "intent", None),
                                  governance_dir=governance_dir))
@@ -1257,7 +1285,7 @@ def cmd_goal_bridge(args, *, governance_dir) -> int:
             if item.strip()]
         payload = write_checkpoint(
             goal, task_ref=getattr(args, "task", ""),
-            obligations=obligations or None,
+            obligations=[] if clear_obligations else obligations or None,
             governance_dir=governance_dir,
             rules_version=getattr(args, "rules_version", "") or None)
         return _emit(payload, refused=bool(payload.get("error")))

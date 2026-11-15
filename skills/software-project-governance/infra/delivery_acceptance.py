@@ -13,6 +13,7 @@ from pathlib import Path, PureWindowsPath
 
 CONTRACT = ".governance/delivery-contract.json"
 RECEIPT = ".governance/delivery-receipt.json"
+CONTRACT_FIELDS = {"release_version", "goal_id", "artifact", "entrypoint", "producer", "verifier", "criteria"}
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
@@ -27,7 +28,7 @@ def _plain_stat(path: Path) -> os.stat_result:
     return info
 
 
-def _project_path(root: Path, relative: str) -> Path:
+def _project_path_parts(relative: str) -> list[str]:
     parts = relative.split("/")
     if (
         any(part in {"", ".", ".."} or part.endswith((".", " ")) for part in parts)
@@ -36,8 +37,12 @@ def _project_path(root: Path, relative: str) -> Path:
             any(PureWindowsPath(part).is_reserved() for part in parts))
     ):
         raise ValueError(f"expected a project-relative POSIX path: {relative!r}")
+    return parts
+
+
+def _project_path(root: Path, relative: str) -> Path:
     cursor = root
-    for part in parts:
+    for part in _project_path_parts(relative):
         cursor /= part
         _plain_stat(cursor)
     return cursor
@@ -105,10 +110,13 @@ def _json_object(items: list[tuple]) -> dict:
     return result
 
 
-def _read_record(path: Path, fields: set[str]) -> tuple[dict, str]:
+def _read_record(path: Path, fields: set[str], *, max_bytes: int | None = None) -> tuple[dict, str]:
     if _regular_stat(path).st_nlink != 1:
         raise ValueError(f"record must not be hard-linked: {path}")
-    raw = path.read_bytes()
+    with path.open("rb") as stream:
+        raw = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
+    if max_bytes is not None and len(raw) > max_bytes:
+        raise ValueError("record is too large")
     record = json.loads(raw.decode("utf-8"), object_pairs_hook=_json_object)
     if not isinstance(record, dict) or record.keys() != fields | {"schema_version"}:
         raise ValueError("unexpected or missing fields")
@@ -121,10 +129,7 @@ def _valid_text(value: object) -> bool:
     return isinstance(value, str) and bool(value) and value == value.strip()
 
 
-def _contract(path: Path) -> tuple[dict, str]:
-    record, digest = _read_record(path, {
-        "release_version", "goal_id", "artifact", "entrypoint", "producer", "verifier", "criteria",
-    })
+def _validate_contract(record: dict) -> None:
     for field in ("release_version", "goal_id", "artifact", "entrypoint", "producer", "verifier"):
         if not _valid_text(record[field]):
             raise ValueError(f"{field} must be nonempty text")
@@ -137,6 +142,11 @@ def _contract(path: Path) -> tuple[dict, str]:
         _ID.fullmatch(key) and _valid_text(label) for key, label in criteria.items()
     ):
         raise ValueError("criteria must be a nonempty mapping of IDs to labels")
+
+
+def _contract(path: Path, *, max_bytes: int | None = None) -> tuple[dict, str]:
+    record, digest = _read_record(path, CONTRACT_FIELDS, max_bytes=max_bytes)
+    _validate_contract(record)
     return record, digest
 
 

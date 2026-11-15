@@ -352,11 +352,18 @@ const { deriveDefinition } = await import(
 
 const persona = '@deepseek-ai/dsh-persona'
 const skills = '@deepseek-ai/dsh-skill-filesystem'
+// FIX-486: the 'expr' flavour additionally declares a loader `!!js`
+// expression node — the host composed tree's only serialized form for the
+// YAML `!!js` tag — beside the string root. The posix/native flavours keep
+// byte-identical inputs so the case-folding assertions below are unchanged.
+const withExpr = flavour === 'expr'
 const base = {
   id: 'standard',
   plugins: [
     { id: 'persona', name: persona, config: { prefix: 'HOST' } },
-    { id: 'skills', name: skills, config: { customSkillDirs: ['/A/skills'] } },
+    { id: 'skills', name: skills, config: { customSkillDirs: withExpr
+      ? ['/A/skills', { __jsExpr: "process.platform === 'linux'" }]
+      : ['/A/skills'] } },
   ],
 }
 const derived = deriveDefinition(base, {
@@ -364,7 +371,11 @@ const derived = deriveDefinition(base, {
   skillRowName: skills,
   personaBody: 'BODY',
   // '/A/skills' is already declared; '/a/skills' differs only by case.
-  skillRoots: ['/A/skills', '/a/skills'],
+  // The 'expr' flavour adds '/pkg/skills' — a root no case folding can
+  // absorb — so the append-after-the-node assertion is observable everywhere.
+  skillRoots: withExpr
+    ? ['/A/skills', '/a/skills', '/pkg/skills']
+    : ['/A/skills', '/a/skills'],
   presetId: 'governance',
   name: 'Governance',
 })
@@ -504,6 +515,19 @@ class NativeBridgeTests(unittest.TestCase):
             self.assertEqual(native["dirs"], ["/A/skills"], native["dirs"])
         else:
             self.assertIn("/a/skills", native["dirs"], native["dirs"])
+
+    def test_custom_skill_dirs_expression_node_passes_through(self):
+        """FIX-486: a loader `!!js` node stays verbatim; roots append after it."""
+        payload = self._run(_PATH_IDENTITY_PROBE, "expr")
+        self.assertTrue(payload["ok"], payload)
+        dirs = payload["dirs"]
+        self.assertEqual(dirs[0], "/A/skills")
+        self.assertEqual(dirs[1], {"__jsExpr": "process.platform === 'linux'"},
+                         "the expression node must survive verbatim in place")
+        appended = dirs[2:]
+        self.assertTrue(all(isinstance(d, str) for d in appended), dirs)
+        self.assertIn("/pkg/skills", appended,
+                      "our fold-distinct skill root must land after the node")
 
     def test_registration_lifecycle_disposes_exactly_once(self):
         """CODE R0 F8: the disposal/late-disposer/rejection branches are pinned."""

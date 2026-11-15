@@ -66,6 +66,20 @@
 
 **交付目标完成前检查（FEAT-114）**：采用交付验收契约后，Coordinator 在将契约所绑定的宿主 goal 标为 `complete` 前，MUST 对同一未变更的候选制品运行 `verify_workflow.py goal-bridge --action check-completion --goal <goal_id>`。退出码 0 且 `state=PASS` 表示交付证据通过，保留既有预算和授权判断；退出码 2 时按 `issues` 补证或报告阻断，保持目标未完成。该命令只读，宿主原生 goal 状态由调用方更新。`GOVERNANCE_GOAL_BRIDGE=off` 控制预算桥，交付证据检查仍独立执行。契约和验收回执格式见 `skills/stage-release/SKILL.md` 的「采用交付验收契约」。
 
+**按原始目标重排和恢复（FEAT-115）**
+
+1. 在交付契约就绪后，用 `verify_workflow.py goal-bridge --action bind-intent --goal <id> --intent "<用户原话>"` 冻结用户目标与该契约的摘要。重复绑定相同输入不写盘。预算裁决保留原始目标与验收范围。若经用户明确更改目标或验收范围，用新的目标 ID 及对应契约重新绑定。
+2. 在已有 `.governance/execution-packets.json` 中为明确服务该目标的工作包写入 `goal_link`。关联的准则 ID 来自交付契约，详见示例。`repair` 对应有有效证据的失败，`verify` 对应待验证或证据失效。估算是该动作需用的轮次，可省略。
+
+   ```json
+   {"goal_link":{"goal_id":"launch-preview","contract_sha256":"<绑定命令返回的契约摘要>","criteria":["menu-returns"],"action":"repair","estimated_rounds":2}}
+   ```
+
+3. 初次测得预算、验收证据或预算区间变化，以及跨会话恢复时，运行 `verify_workflow.py next-candidates --goal <id>`。命令从当前验收结论、任务表、工作包、代理锁和持久化 goal 状态重排，不写推荐快照。`--top-n` 在排序后截取。同一准则已被真实在途任务处理时，其他关联任务候选让位，独立缺口仍可并行。警戒时按剩余至收口边界的实测轮次排除未知估算和不可负担动作，其他预算维度以独立记录的当前状态判断，`unmeasured_dimensions` 明示缺项。既有优先级、需求来源和依赖约束仍适用。
+4. 恢复时用结果中的 `original_intent`、`obligations` 和 `task_ref` 对照当前契约及预算。执行确实已开始时可在原有 `goal-bridge --action record --goal <id> --task <task_id>` 中携带实测累计预算和任务 ID。`mode=resume` 指已有工作可续办的建议，`in_flight` 指有锁的在途任务。`HOLD` 按预算停止状态及 `checkpoint_materialized` 提示收尾、保存 checkpoint 或等待授权。`HOLD`、`CONTRACT_CHANGED` 和各待证状态禁止从通用推荐补选该目标的新工作。所有实际派发仍须经既有预算、范围裁决和锁检查。`CHECK_COMPLETION` 表示交付证据返回 PASS，仍须核对恢复的义务和授权，再按 FEAT-114 执行完成前检查。
+
+`next-candidates --goal` 是调用时执行的只读建议。该 CLI 不调度、不更新宿主目标、不授权续跑。未加 `--goal` 的普通推荐保留原行为。
+
 <a id="c11"></a>
 
 ### C11

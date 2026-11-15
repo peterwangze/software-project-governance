@@ -51,7 +51,9 @@ peer-leaf pattern).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -71,6 +73,7 @@ __all__ = [
     "STATES",
     "STATE_TRANSITIONS",
     "add_goal_bridge_arguments",
+    "bind_intent",
     "build_parser",
     "cmd_goal_bridge",
     "goal_status",
@@ -179,6 +182,8 @@ ERROR_DISPOSITIONS = {
 }
 
 _GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_INTENT_FIELDS = ("original_intent", "intent_sha256", "contract_sha256")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 _MAX_HISTORY = 100
 _MAX_UNAUTHORIZED = 200
@@ -363,6 +368,86 @@ def render_thresholds_text(config=None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _budget_number(value, label, *, integral=False, positive=False):
+    try:
+        valid = (type(value) in (int, float) and math.isfinite(value)
+                 and (value > 0 if positive else value >= 0)
+                 and (not integral or value == int(value)))
+    except OverflowError:
+        valid = False
+    if not valid:
+        raise ValueError(f"invalid budget value for {label}: expected a finite "
+                         "nonnegative measurement or a positive limit")
+    return value
+
+
+def _bound_usage(artifact):
+    consumption = artifact["budget_consumption"]
+    if not isinstance(consumption, dict):
+        raise ValueError("invalid budget_consumption")
+    used = {}
+    for dimension, record in consumption.items():
+        if dimension not in artifact["budget_config"] or not isinstance(record, dict):
+            raise ValueError(f"invalid budget dimension: {dimension!r}")
+        used[dimension] = _budget_number(
+            record.get("used"), dimension, integral=DIMENSION_FIELDS[dimension][1] is int)
+    return used
+
+
+def _judge_bound_usage(used, config):
+    judged = judge_budget(**{DIMENSION_FIELDS[key][0]: value for key, value in used.items()},
+                          config=config)
+    zones = {}
+    for key, value in used.items():
+        zone = judged["zones"][key]
+        _budget_number(zone["share"], f"{key} share")
+        danger_at = float(config[key]["limit"]) * float(config[key]["danger_ratio"])
+        zones[key] = {**zone, "used": value, "remaining_until_danger": max(0, danger_at - value)}
+    judged["zones"] = zones
+    return judged
+
+
+def _intent_fields(intent, contract_sha256):
+    if not isinstance(intent, str) or not intent.strip():
+        raise ValueError("original intent must be nonempty text")
+    if not isinstance(contract_sha256, str) or not _SHA256_RE.fullmatch(contract_sha256):
+        raise ValueError("invalid delivery contract SHA-256")
+    return {"original_intent": intent,
+            "intent_sha256": hashlib.sha256(intent.encode("utf-8")).hexdigest(),
+            "contract_sha256": contract_sha256}
+
+
+def _validate_obligations(obligations):
+    if not isinstance(obligations, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("obligation_id"), str)
+        or not item["obligation_id"].strip() for item in obligations
+    ):
+        raise ValueError("obligations must be a list of records with nonempty obligation IDs")
+
+
+def _validate_bound_artifact(artifact):
+    if type(artifact["revision"]) is not int or artifact["revision"] < 0:
+        raise ValueError("invalid goal revision")
+    if not isinstance(artifact["task_ref"], str) or not all(
+        isinstance(artifact[key], list) for key in ("transition_history", "unauthorized_attempts")
+    ):
+        raise ValueError("invalid goal task reference or history")
+    _validate_obligations(artifact["obligations"])
+    config = artifact["budget_config"]
+    if not isinstance(config, dict) or not config or config.keys() - DIMENSION_FIELDS.keys():
+        raise ValueError("invalid goal budget configuration")
+    _bound_usage(artifact)
+    for dimension, spec in config.items():
+        if not isinstance(spec, dict):
+            raise ValueError(f"invalid budget configuration for {dimension}")
+        limit = _budget_number(spec.get("limit"), dimension, positive=True)
+        warn = _budget_number(spec.get("warn_ratio"), f"{dimension} warn_ratio")
+        danger = _budget_number(spec.get("danger_ratio"), f"{dimension} danger_ratio")
+        if danger <= warn:
+            raise ValueError(f"danger ratio must exceed warning ratio for {dimension}")
+        _budget_number(float(limit) * float(danger), f"{dimension} danger threshold", positive=True)
+
+
 # ── artifact load/init ──────────────────────────────────────────────────────
 
 
@@ -387,11 +472,13 @@ def _new_artifact(goal_id, config) -> dict:
 
 
 def _load_artifact(path: Path, goal_id, config):
-    if not path.is_file():
-        return _new_artifact(goal_id, config), None
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    except FileNotFoundError as exc:
+        if not path.is_symlink():
+            return _new_artifact(goal_id, config), None
+        return None, _error(CODE_SCHEMA_VIOLATION, f"checkpoint artifact link is unreadable: {exc}")
+    except (OSError, ValueError, RecursionError) as exc:
         return None, _error(
             CODE_SCHEMA_VIOLATION,
             "checkpoint artifact unreadable ({0}): {1} — refusing "
@@ -414,6 +501,23 @@ def _load_artifact(path: Path, goal_id, config):
                 "unauthorized_attempts", "created_at"):
         if key in loaded:
             artifact[key] = loaded[key]
+    if any(key in loaded for key in _INTENT_FIELDS):
+        try:
+            if type(loaded.get("schema_version")) is not int or loaded["schema_version"] != ARTIFACT_SCHEMA_VERSION:
+                raise ValueError("invalid goal artifact schema version")
+            if artifact.keys() - loaded.keys():
+                raise ValueError("bound goal artifact is missing required state fields")
+            fields = _intent_fields(loaded.get("original_intent"), loaded.get("contract_sha256"))
+            if fields["intent_sha256"] != loaded.get("intent_sha256"):
+                raise ValueError("original intent SHA-256 mismatch")
+            saved_checkpoint = loaded.get("checkpoint_materialized")
+            if type(saved_checkpoint) is not bool:
+                raise ValueError("invalid checkpoint_materialized flag")
+            _validate_bound_artifact(artifact)
+        except ValueError as exc:
+            return None, _error(CODE_SCHEMA_VIOLATION, f"invalid bound goal artifact: {exc}")
+        artifact.update(fields)
+        artifact["checkpoint_materialized"] = saved_checkpoint
     return artifact, None
 
 
@@ -429,6 +533,48 @@ def _save(path: Path, artifact) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _trim(artifact)
     _write_json(path, artifact)
+
+
+def _current_contract_sha256(governance_dir, goal):
+    from delivery_acceptance import contract_for_goal
+
+    return contract_for_goal(Path(governance_dir).parent, goal)["contract_sha256"]
+
+
+def bind_intent(goal_id, *, intent, governance_dir, state_dir=None, timeout_seconds=10.0):
+    """Freeze the exact user intent and current delivery contract for this goal."""
+    if bridge_disabled():
+        return _error(CODE_SCHEMA_VIOLATION, "goal bridge is disabled; intent binding is unavailable",
+                      gate_disabled=True)
+    goal = _require_goal_id(goal_id)
+    if goal is None:
+        return _error(CODE_SCHEMA_VIOLATION, f"invalid goal_id: {goal_id!r}")
+    from governance_store import StoreError, _TargetLock
+
+    path = _artifact_path(governance_dir, goal, state_dir)
+    try:
+        with _TargetLock(path, timeout_seconds):
+            artifact, err = _load_artifact(path, goal, DEFAULT_BUDGET_CONFIG)
+            if err is not None:
+                return err
+            fields = _intent_fields(intent, _current_contract_sha256(governance_dir, goal))
+            already_bound = "intent_sha256" in artifact
+            if already_bound:
+                if any(artifact[key] != fields[key] for key in _INTENT_FIELDS):
+                    return _error(CODE_SCHEMA_VIOLATION,
+                                  "goal intent or contract changed; bind an explicitly new goal")
+            else:
+                _validate_bound_artifact(artifact)
+                artifact.update(fields)
+                artifact["checkpoint_materialized"] = artifact["state"] in ("CHECKPOINTED", "BLOCKED")
+                _save(path, artifact)
+            return {"goal_id": goal, "state": artifact["state"],
+                    "revision": artifact["revision"], "idempotent": already_bound, **fields}
+    except StoreError as exc:
+        return _error(CODE_LOCK_CONTENTION,
+                      f"goal artifact lock busy: {exc.payload.get('detail', str(exc))}")
+    except (OSError, ValueError) as exc:
+        return _error(CODE_SCHEMA_VIOLATION, f"cannot bind goal intent: {exc}")
 
 
 def _transition(artifact, trigger, *, note="") -> str:
@@ -471,8 +617,8 @@ def _rules_version_disclosure(artifact) -> bool:
     return True
 
 
-def record_execution(goal_id, *, rounds=0, tokens=0, seconds=0.0,
-                     cost=0.0, in_flight=False, governance_dir,
+def record_execution(goal_id, *, rounds=None, tokens=None, seconds=None,
+                     cost=None, in_flight=False, task_ref="", governance_dir,
                      state_dir=None, config=None,
                      timeout_seconds=10.0) -> dict:
     """Record one execution attempt + fresh usage measurements — the
@@ -513,7 +659,7 @@ def record_execution(goal_id, *, rounds=0, tokens=0, seconds=0.0,
             return _record_execution_locked(
                 goal, path, rounds=rounds, tokens=tokens,
                 seconds=seconds, cost=cost, in_flight=in_flight,
-                config=config)
+                task_ref=task_ref, governance_dir=governance_dir, config=config)
     except StoreError as exc:
         return _error(
             CODE_LOCK_CONTENTION,
@@ -523,17 +669,13 @@ def record_execution(goal_id, *, rounds=0, tokens=0, seconds=0.0,
 
 
 def _record_execution_locked(goal, path, *, rounds, tokens, seconds,
-                             cost, in_flight, config):
+                             cost, in_flight, task_ref, governance_dir, config):
     """P1-1: the record body — caller holds the artifact target lock."""
     artifact, err = _load_artifact(path, goal, config
                                    or DEFAULT_BUDGET_CONFIG)
     if err is not None:
         return err
     _rules_version_disclosure(artifact)  # P2-2: loud on every path
-
-    judged = judge_budget(rounds=rounds, tokens=tokens, seconds=seconds,
-                          cost=cost, config=artifact["budget_config"])
-    artifact["budget_consumption"] = judged["zones"]
 
     def refuse(code, kind):
         artifact["unauthorized_attempts"].append({
@@ -555,7 +697,50 @@ def _record_execution_locked(goal, path, *, rounds, tokens, seconds,
         }[code]
         return _error(code, detail)
 
+    bound = "intent_sha256" in artifact
+    if bound:
+        try:
+            if not isinstance(task_ref, str) or (task_ref and not task_ref.strip()):
+                raise ValueError("invalid task reference")
+            used = _bound_usage(artifact)
+            measurements = {"rounds": rounds, "tokens": tokens, "wall_clock": seconds, "cost": cost}
+            for dimension, value in measurements.items():
+                if value is not None:
+                    if dimension not in artifact["budget_config"]:
+                        raise ValueError(f"budget dimension is not configured: {dimension}")
+                    measure = _budget_number(
+                        value, dimension, integral=DIMENSION_FIELDS[dimension][1] is int)
+                    used[dimension] = max(used.get(dimension, 0), measure)
+            if not used:
+                raise ValueError("bound goal has no budget measurements; record current usage first")
+            judged = _judge_bound_usage(used, artifact["budget_config"])
+        except ValueError as exc:
+            return _error(CODE_SCHEMA_VIOLATION, str(exc))
+    else:
+        judged = judge_budget(rounds=rounds, tokens=tokens, seconds=seconds,
+                              cost=cost, config=artifact["budget_config"])
+
     state = artifact["state"]
+    if state == "DRAINING" and not in_flight:
+        return refuse(CODE_DRAINING, "execution")
+    if state == "CHECKPOINTED":
+        return refuse(CODE_SCOPE_RULING_REQUIRED, "execution")
+    if state == "BLOCKED":
+        return refuse(CODE_BLOCKED, "execution")
+
+    if bound and in_flight and task_ref and task_ref != artifact["task_ref"]:
+        return _error(CODE_SCHEMA_VIOLATION, "in-flight task reference differs from the accepted task")
+    if bound and state == "RUNNING":
+        try:
+            if _current_contract_sha256(governance_dir, goal) != artifact["contract_sha256"]:
+                raise ValueError("contract changed; bind an explicitly new goal")
+        except (OSError, ValueError) as exc:
+            return _error(CODE_SCHEMA_VIOLATION, f"cannot start work for bound goal: {exc}")
+
+    artifact["budget_consumption"] = judged["zones"]
+    if bound and task_ref and not in_flight:
+        artifact["task_ref"] = task_ref
+
     if state == "RUNNING":
         if judged["any_danger"]:
             danger_dims = sorted(d for d, z in judged["zones"].items()
@@ -573,29 +758,19 @@ def _record_execution_locked(goal, path, *, rounds, tokens, seconds,
         return {"goal_id": goal, "allowed": True, "state": "RUNNING",
                 "zones": judged["zones"]}
 
-    if state == "DRAINING":
-        if not in_flight:
-            return refuse(CODE_DRAINING, "execution")
-        if judged["any_danger"]:
-            danger_dims = sorted(d for d, z in judged["zones"].items()
-                                 if z["zone"] == "danger")
-            _transition(artifact, "danger_zone",
-                        note="persistent danger: {0}"
-                             .format(",".join(danger_dims)))
-            _save(path, artifact)
-            return {"goal_id": goal, "allowed": True,
-                    "state": "CHECKPOINTED", "collected": True,
-                    "danger_dimensions": danger_dims,
-                    "ask_contract": ASK_CONTRACT,
-                    "scope_ruling_options":
-                        list(SCOPE_RULING_OPTIONS)}
+    if judged["any_danger"]:
+        danger_dims = sorted(d for d, z in judged["zones"].items() if z["zone"] == "danger")
+        _transition(artifact, "danger_zone",
+                    note="persistent danger: {0}".format(",".join(danger_dims)))
+        if bound:
+            artifact["checkpoint_materialized"] = False
         _save(path, artifact)
-        return {"goal_id": goal, "allowed": True, "state": "DRAINING"}
-
-    if state == "CHECKPOINTED":
-        return refuse(CODE_SCOPE_RULING_REQUIRED, "execution")
-
-    return refuse(CODE_BLOCKED, "execution")
+        return {"goal_id": goal, "allowed": True,
+                "state": "CHECKPOINTED", "collected": True,
+                "danger_dimensions": danger_dims, "ask_contract": ASK_CONTRACT,
+                "scope_ruling_options": list(SCOPE_RULING_OPTIONS)}
+    _save(path, artifact)
+    return {"goal_id": goal, "allowed": True, "state": "DRAINING"}
 
 
 # ── ③ checkpoint ───────────────────────────────────────────────────────────
@@ -643,22 +818,39 @@ def _write_checkpoint_locked(goal, path, *, task_ref, obligations,
                                    or DEFAULT_BUDGET_CONFIG)
     if err is not None:
         return err
-    if task_ref:
-        artifact["task_ref"] = str(task_ref)
-    if obligations is not None:
-        artifact["obligations"] = list(obligations)
-    artifact["ledger"] = _ledger_summary(governance_dir)
-    if rules_version:
-        artifact["rules_version"] = str(rules_version)
-
     already = artifact["state"] == "CHECKPOINTED"
-    if artifact["state"] == "RUNNING":
-        _transition(artifact, "danger_zone", note="explicit checkpoint")
-    if artifact["state"] == "DRAINING":
-        _transition(artifact, "drained", note="explicit checkpoint")
-    if artifact["state"] == "CHECKPOINTED" and not already:
-        artifact["revision"] = int(artifact.get("revision", 0)) + 1
-    _save(path, artifact)
+    bound = "intent_sha256" in artifact
+    retry = (bound and artifact["state"] in ("CHECKPOINTED", "BLOCKED")
+             and artifact["checkpoint_materialized"])
+    if bound:
+        try:
+            if obligations is not None:
+                obligations = list(obligations)
+                _validate_obligations(obligations)
+        except (TypeError, ValueError) as exc:
+            return _error(CODE_SCHEMA_VIOLATION, str(exc))
+        if retry and ((task_ref and task_ref != artifact["task_ref"])
+                      or (obligations is not None and obligations != artifact["obligations"])):
+            return _error(CODE_SCOPE_RULING_REQUIRED,
+                          "checkpoint already saved with different task or obligations; "
+                          "obtain an authorized resume before creating a new checkpoint")
+    if not retry:
+        if task_ref:
+            artifact["task_ref"] = str(task_ref)
+        if obligations is not None:
+            artifact["obligations"] = list(obligations)
+        artifact["ledger"] = _ledger_summary(governance_dir)
+        if rules_version:
+            artifact["rules_version"] = str(rules_version)
+        if artifact["state"] == "RUNNING":
+            _transition(artifact, "danger_zone", note="explicit checkpoint")
+        if artifact["state"] == "DRAINING":
+            _transition(artifact, "drained", note="explicit checkpoint")
+        if bound or (artifact["state"] == "CHECKPOINTED" and not already):
+            artifact["revision"] = int(artifact.get("revision", 0)) + 1
+        if bound:
+            artifact["checkpoint_materialized"] = True
+        _save(path, artifact)
     return {
         "goal_id": goal,
         "state": artifact["state"],
@@ -671,6 +863,25 @@ def _write_checkpoint_locked(goal, path, *, task_ref, obligations,
 
 
 # ── ④ ruling / resume authorization ───────────────────────────────────────
+
+
+def _apply_new_limits(artifact, new_limits):
+    if not new_limits:
+        return
+    config = artifact["budget_config"]
+    bound = "intent_sha256" in artifact
+    if bound:
+        if not isinstance(new_limits, dict) or new_limits.keys() - config.keys():
+            raise ValueError("new budget limits must name configured dimensions")
+        for dimension, limit in new_limits.items():
+            _budget_number(limit, dimension,
+                           integral=DIMENSION_FIELDS[dimension][1] is int, positive=True)
+    for dimension, limit in new_limits.items():
+        if dimension in config:
+            config[dimension]["limit"] = limit
+    if bound:
+        _validate_bound_artifact(artifact)
+        artifact["budget_consumption"] = _judge_bound_usage(_bound_usage(artifact), config)["zones"]
 
 
 def record_ruling(goal_id, *, decision, authorized_by="",
@@ -728,6 +939,8 @@ def _record_ruling_locked(goal, path, *, decision, authorized_by,
         rules_changed = True
 
     state = artifact["state"]
+    if "intent_sha256" in artifact and decision == "reduce-scope" and str(authorized_by or "").strip():
+        return _error(CODE_SCHEMA_VIOLATION, "bound intent cannot change; bind an explicitly new goal")
     if state == "CHECKPOINTED":
         if (decision != "abort"
                 and not str(authorized_by or "").strip()):
@@ -744,16 +957,20 @@ def _record_ruling_locked(goal, path, *, decision, authorized_by,
                 "为空；范围裁决 MUST 经用户（AskUserQuestion 呈现四选项后"
                 "带 --authorized-by 记录——禁静默续跑，与 BLOCKED 面对称；"
                 "未授权尝试已留痕）".format(decision))
+        if ("intent_sha256" in artifact and decision != "abort"
+                and not artifact["checkpoint_materialized"]):
+            return _error(CODE_SCOPE_RULING_REQUIRED,
+                          "materialize the current checkpoint before resuming the goal")
+        try:
+            _apply_new_limits(artifact, new_limits)
+        except ValueError as exc:
+            return _error(CODE_SCHEMA_VIOLATION, str(exc))
         artifact["scope_ruling"] = {
             "decision": decision,
             "authorized_by": str(authorized_by or ""),
             "decided_at": _now_iso(),
             "new_limits": dict(new_limits or {}),
         }
-        if new_limits:
-            for dimension, limit in new_limits.items():
-                if dimension in artifact["budget_config"]:
-                    artifact["budget_config"][dimension]["limit"] = limit
         if decision == "abort":
             _transition(artifact, "block_decision",
                         note="user ruling: abort")
@@ -761,6 +978,8 @@ def _record_ruling_locked(goal, path, *, decision, authorized_by,
             _transition(artifact, "scope_ruling",
                         note="user ruling: {0}".format(decision))
             artifact["revision"] = int(artifact.get("revision", 0)) + 1
+            if "intent_sha256" in artifact:
+                artifact["checkpoint_materialized"] = False
         if rules_changed:
             artifact["transition_history"].append({
                 "from": artifact["state"], "to": artifact["state"],
@@ -791,20 +1010,25 @@ def _record_ruling_locked(goal, path, *, decision, authorized_by,
                 "authorized_by={1!r}；合法路径：--decision "
                 "reduce-scope/extend-budget --authorized-by <用户> "
                 "（未授权尝试已留痕）".format(decision, authorized_by))
+        if "intent_sha256" in artifact and not artifact["checkpoint_materialized"]:
+            return _error(CODE_SCOPE_RULING_REQUIRED,
+                          "materialize the current checkpoint before resuming the goal")
+        try:
+            _apply_new_limits(artifact, new_limits)
+        except ValueError as exc:
+            return _error(CODE_SCHEMA_VIOLATION, str(exc))
         artifact["scope_ruling"] = {
             "decision": decision,
             "authorized_by": str(authorized_by),
             "decided_at": _now_iso(),
             "new_limits": dict(new_limits or {}),
         }
-        if new_limits:
-            for dimension, limit in new_limits.items():
-                if dimension in artifact["budget_config"]:
-                    artifact["budget_config"][dimension]["limit"] = limit
         _transition(artifact, "authorized_resume",
                     note="user ruling: {0} by {1}".format(
                         decision, authorized_by))
         artifact["revision"] = int(artifact.get("revision", 0)) + 1
+        if "intent_sha256" in artifact:
+            artifact["checkpoint_materialized"] = False
         if rules_changed:
             artifact["transition_history"].append({
                 "from": "RUNNING", "to": "RUNNING",
@@ -843,7 +1067,7 @@ def goal_status(goal_id, *, governance_dir, state_dir=None,
                                    or DEFAULT_BUDGET_CONFIG)
     if err is not None:
         return err
-    return {
+    result = {
         "goal_id": goal,
         "state": artifact["state"],
         "revision": artifact["revision"],
@@ -855,6 +1079,23 @@ def goal_status(goal_id, *, governance_dir, state_dir=None,
             len(artifact["unauthorized_attempts"]),
         "generated_at": _now_iso(),
     }
+    if "intent_sha256" in artifact:
+        try:
+            used = _bound_usage(artifact)
+            zones = _judge_bound_usage(used, artifact["budget_config"])["zones"]
+        except ValueError as exc:
+            return _error(CODE_SCHEMA_VIOLATION, str(exc))
+        unmeasured = sorted(artifact["budget_config"].keys() - used.keys())
+        signals = {zone["zone"] for zone in zones.values()}
+        signal = "unknown" if unmeasured else "safe"
+        for candidate in ("warning", "danger"):
+            if candidate in signals:
+                signal = candidate
+        result.update({key: artifact[key] for key in _INTENT_FIELDS},
+                      obligations=artifact["obligations"], zones=zones,
+                      checkpoint_materialized=artifact["checkpoint_materialized"],
+                      budget_signal=signal, unmeasured_dimensions=unmeasured)
+    return result
 
 
 def render_status_text(status: dict) -> str:
@@ -897,16 +1138,17 @@ def add_goal_bridge_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--action", required=True,
                         choices=("record", "checkpoint", "ruling",
                                  "status", "judge", "thresholds",
-                                 "mapping", "check-completion"))
+                                 "mapping", "check-completion", "bind-intent"))
     parser.add_argument("--goal", default="",
                         help="goal id ([A-Za-z0-9][A-Za-z0-9._-]*)")
+    parser.add_argument("--intent", help="exact original user objective for bind-intent")
     parser.add_argument("--task", default="",
                         help="task ref stamped into the artifact")
-    parser.add_argument("--rounds", type=int, default=0)
-    parser.add_argument("--tokens", type=int, default=0)
-    parser.add_argument("--seconds", type=float, default=0.0,
+    parser.add_argument("--rounds", type=int)
+    parser.add_argument("--tokens", type=int)
+    parser.add_argument("--seconds", type=float,
                         help="wall-clock seconds consumed")
-    parser.add_argument("--cost", type=float, default=0.0)
+    parser.add_argument("--cost", type=float)
     parser.add_argument("--in-flight", dest="in_flight",
                         action="store_true",
                         help="record tags an IN-FLIGHT continuation "
@@ -951,15 +1193,33 @@ def _emit(payload, *, refused=None) -> int:
     return 0
 
 
+def _check_completion(goal_id, governance_dir):
+    from delivery_acceptance import evaluate_delivery_acceptance
+
+    verdict = evaluate_delivery_acceptance(Path(governance_dir).parent, goal_id=goal_id, required=True)
+    if verdict["pass"]:
+        goal = _require_goal_id(goal_id)
+        if goal is None:
+            return verdict  # a legacy P0 contract ID outside the bridge's bindable vocabulary
+        artifact, err = _load_artifact(_artifact_path(governance_dir, goal), goal, DEFAULT_BUDGET_CONFIG)
+        if err is not None:
+            return {**err, "pass": False, "state": "FAIL"}
+        if "contract_sha256" in artifact and artifact["contract_sha256"] != verdict["contract_sha256"]:
+            return {**_error(CODE_SCHEMA_VIOLATION, "contract changed; bind an explicitly new goal"),
+                    "pass": False, "state": "FAIL"}
+    return verdict
+
+
 def cmd_goal_bridge(args, *, governance_dir) -> int:
     """Engine dispatch face — ``goal-bridge`` (all actions)."""
     _configure_stdio()
     action = getattr(args, "action", "status")
     goal = getattr(args, "goal", "") or ""
+    if action == "bind-intent":
+        return _emit(bind_intent(goal, intent=getattr(args, "intent", None),
+                                 governance_dir=governance_dir))
     if action == "check-completion":
-        from delivery_acceptance import evaluate_delivery_acceptance
-
-        verdict = evaluate_delivery_acceptance(Path(governance_dir).parent, goal_id=goal, required=True)
+        verdict = _check_completion(goal, governance_dir)
         return _emit(verdict, refused=not verdict["pass"])
     if action == "thresholds":
         if getattr(args, "text", False):
@@ -982,11 +1242,12 @@ def cmd_goal_bridge(args, *, governance_dir) -> int:
         return _emit(judged, refused=judged.get("any_danger"))
     if action == "record":
         return _emit(record_execution(
-            goal, rounds=getattr(args, "rounds", 0),
-            tokens=getattr(args, "tokens", 0),
-            seconds=getattr(args, "seconds", 0.0),
-            cost=getattr(args, "cost", 0.0),
+            goal, rounds=getattr(args, "rounds", None),
+            tokens=getattr(args, "tokens", None),
+            seconds=getattr(args, "seconds", None),
+            cost=getattr(args, "cost", None),
             in_flight=bool(getattr(args, "in_flight", False)),
+            task_ref=getattr(args, "task", ""),
             governance_dir=governance_dir),
             refused=False)
     if action == "checkpoint":

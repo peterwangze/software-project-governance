@@ -37,8 +37,10 @@ Run:
     python -m unittest skills/software-project-governance/infra/tests/test_goal_bridge.py -v
 """
 
+import hashlib
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -716,6 +718,239 @@ class CliFaceTests(GoalBridgeTestCase):
         self.assertEqual(refused.returncode, 2)
         artifact = self.load_artifact("cli-goal")
         self.assertEqual(artifact["state"], "CHECKPOINTED")
+
+
+class BoundIntentTests(GoalBridgeTestCase):
+    INTENT = " Keep the original objective and validate it end to end.\n保留验收要求。 "
+
+    def setUp(self):
+        super().setUp()
+        self.contract_path = self.gov / "delivery-contract.json"
+        self.contract_path.write_text(json.dumps({
+            "schema_version": 1,
+            "release_version": "1.0.0",
+            "goal_id": "goal-x",
+            "artifact": "dist",
+            "entrypoint": "/",
+            "producer": "developer",
+            "verifier": "qa",
+            "criteria": {"normal-entry": "Exercise the normal entrypoint"},
+        }), encoding="utf-8")
+        self.artifact_path = self.gov / "goal-bridge" / "goal-x.json"
+
+    def bind(self, intent=INTENT):
+        return gb.bind_intent("goal-x", intent=intent, governance_dir=self.gov)
+
+    def snapshot(self):
+        return self.artifact_path.read_bytes(), self.artifact_path.stat().st_mtime_ns
+
+    def cli(self, action, *args):
+        result = subprocess.run([
+            sys.executable, str(_INFRA_DIR / "goal_bridge.py"), "--project-root", str(self.tmp),
+            "goal-bridge", "--action", action, "--goal", "goal-x", *args,
+        ], capture_output=True, encoding="utf-8", check=False)
+        self.assertEqual(0, result.returncode, result.stdout or result.stderr)
+        return json.loads(result.stdout)
+
+    def test_new_process_recovers_exact_intent_and_active_task_without_status_writes(self):
+        bound = self.cli("bind-intent", "--intent", self.INTENT)
+        self.assertEqual(self.INTENT, bound["original_intent"])
+        self.assertEqual(hashlib.sha256(self.INTENT.encode("utf-8")).hexdigest(), bound["intent_sha256"])
+        self.assertEqual(hashlib.sha256(self.contract_path.read_bytes()).hexdigest(), bound["contract_sha256"])
+        self.assertTrue(self.cli("record", "--task", "FEAT-115", "--rounds", "0")["allowed"])
+        snapshot = self.snapshot()
+        status = self.cli("status")
+        self.assertEqual(self.INTENT, status["original_intent"])
+        self.assertEqual("FEAT-115", status["task_ref"])
+        self.assertEqual("unknown", status["budget_signal"])
+        self.assertEqual({"rounds"}, status["zones"].keys())
+        self.assertEqual(0, status["zones"]["rounds"]["used"])
+        self.assertEqual(["cost", "tokens", "wall_clock"], status["unmeasured_dimensions"])
+        self.assertEqual(snapshot, self.snapshot())
+
+    def test_bind_retry_no_write_and_changed_binding_requires_new_goal(self):
+        self.record(rounds=12)
+        before = self.load_artifact()
+        self.assertFalse(self.bind()["idempotent"])
+        bound = self.load_artifact()
+        for key in ("state", "revision", "budget_consumption", "budget_config"):
+            self.assertEqual(before[key], bound[key])
+        snapshot = self.snapshot()
+        self.assertTrue(self.bind()["idempotent"])
+        self.assertRefused(self.bind(self.INTENT.strip()), gb.CODE_SCHEMA_VIOLATION)
+        self.contract_path.write_bytes(self.contract_path.read_bytes() + b"\n")
+        refused = self.bind()
+        self.assertRefused(refused, gb.CODE_SCHEMA_VIOLATION)
+        self.assertIn("new goal", refused["detail"])
+        self.assertEqual(snapshot, self.snapshot())
+
+    def test_omitted_measurements_and_stale_zero_preserve_usage(self):
+        self.bind()
+        self.assertRefused(self.record(task_ref="FEAT-115"), gb.CODE_SCHEMA_VIOLATION)
+        self.assertEqual({}, self.status()["zones"])
+        self.assertEqual("", self.status()["task_ref"])
+        self.assertEqual("unknown", self.status()["budget_signal"])
+        self.record(rounds=41, tokens=10, seconds=0, cost=0, task_ref="FEAT-115")
+        self.record(rounds=0)
+        status = self.status()
+        self.assertEqual("warning", status["budget_signal"])
+        self.assertEqual(41, status["zones"]["rounds"]["used"])
+        self.assertEqual(1, status["zones"]["rounds"]["remaining_until_danger"])
+        self.assertEqual(10, status["zones"]["tokens"]["used"])
+        self.assertEqual("FEAT-115", status["task_ref"])
+
+    def test_refused_work_keeps_previous_usage_and_active_task_but_audits_attempts(self):
+        self.bind()
+        self.assertEqual("DRAINING", self.record(rounds=42, task_ref="FEAT-115")["state"])
+        self.assertRefused(self.record(rounds=0, task_ref="FEAT-999"), gb.CODE_DRAINING)
+        self.assertRefused(self.record(rounds=60, task_ref="FEAT-998"), gb.CODE_DRAINING)
+        self.checkpoint(obligations=[{"obligation_id": "normal-entry"}])
+        self.assertRefused(self.record(rounds=0, task_ref="FEAT-999"), gb.CODE_SCOPE_RULING_REQUIRED)
+        status = self.status()
+        self.assertEqual(42, status["zones"]["rounds"]["used"])
+        self.assertEqual("FEAT-115", status["task_ref"])
+        self.assertEqual([{"obligation_id": "normal-entry"}], status["obligations"])
+        self.assertEqual(3, status["open_unauthorized_attempts"])
+
+    def test_checkpoint_retry_is_read_only_and_rejects_scope_erasure(self):
+        self.bind()
+        obligation = {"obligation_id": "normal-entry", "reason": "retest"}
+        initial = self.checkpoint(task_ref="FEAT-115", obligations=[obligation])
+        snapshot = self.snapshot()
+        self.assertEqual(initial, self.checkpoint())
+        self.assertEqual(initial, self.checkpoint(task_ref="FEAT-115", obligations=[obligation]))
+        self.assertRefused(self.checkpoint(obligations=[]), gb.CODE_SCOPE_RULING_REQUIRED)
+        self.assertRefused(self.checkpoint(task_ref="FEAT-999"), gb.CODE_SCOPE_RULING_REQUIRED)
+        self.assertEqual(snapshot, self.snapshot())
+        self.assertEqual([obligation], self.status()["obligations"])
+
+    def test_automatic_checkpoint_collection_still_allows_first_obligation_snapshot(self):
+        self.bind()
+        self.assertEqual("DRAINING", self.record(rounds=42, task_ref="FEAT-115")["state"])
+        snapshot = self.snapshot()
+        attempt = self.record(rounds=43, in_flight=True, task_ref="FEAT-999")
+        self.assertRefused(attempt, gb.CODE_SCHEMA_VIOLATION)
+        self.assertEqual(snapshot, self.snapshot())
+        self.assertEqual("CHECKPOINTED", self.record(rounds=43, in_flight=True)["state"])
+        self.assertFalse(self.status()["checkpoint_materialized"])
+        self.assertRefused(self.ruling(decision="extend-budget", authorized_by="user",
+                                      new_limits={"rounds": 100}), gb.CODE_SCOPE_RULING_REQUIRED)
+        obligations = [{"obligation_id": "normal-entry"}]
+        first = self.checkpoint(obligations=obligations)
+        self.assertEqual(1, first["revision"])
+        status = self.status()
+        self.assertTrue(status["checkpoint_materialized"])
+        self.assertEqual(obligations, status["obligations"])
+        self.assertEqual("FEAT-115", status["task_ref"])
+        snapshot = self.snapshot()
+        self.assertEqual(first, self.checkpoint(obligations=obligations))
+        self.assertEqual(snapshot, self.snapshot())
+        self.ruling(decision="extend-budget", authorized_by="user", new_limits={"rounds": 100})
+        self.assertFalse(self.status()["checkpoint_materialized"])
+
+    def test_abort_keeps_automatic_checkpoint_requirement_on_authorized_resume(self):
+        self.bind()
+        self.record(rounds=42, task_ref="FEAT-115")
+        self.record(rounds=43, in_flight=True)
+        self.assertEqual("BLOCKED", self.ruling(decision="abort")["state"])
+        self.assertRefused(self.ruling(decision="continue", authorized_by="user"),
+                           gb.CODE_SCOPE_RULING_REQUIRED)
+        obligations = [{"obligation_id": "normal-entry"}]
+        self.assertEqual("BLOCKED", self.checkpoint(obligations=obligations)["state"])
+        self.assertEqual(obligations, self.status()["obligations"])
+        self.assertEqual("RUNNING", self.ruling(decision="continue", authorized_by="user")["state"])
+
+    def test_bind_preserves_a_materialized_legacy_checkpoint(self):
+        self.checkpoint(task_ref="FEAT-115", obligations=[{"obligation_id": "normal-entry"}])
+        self.assertFalse(self.bind().get("error", False))
+        status = self.status()
+        self.assertTrue(status["checkpoint_materialized"])
+        self.assertEqual("FEAT-115", status["task_ref"])
+        self.assertEqual([{"obligation_id": "normal-entry"}], status["obligations"])
+        self.assertRefused(self.checkpoint(obligations=[]), gb.CODE_SCOPE_RULING_REQUIRED)
+
+    def test_only_authorized_extension_recomputes_danger_from_persisted_usage(self):
+        self.bind()
+        self.record(rounds=42)
+        self.checkpoint()
+        self.assertRefused(self.ruling(decision="extend-budget", new_limits={"rounds": 100}),
+                           gb.CODE_UNAUTHORIZED_RESUME)
+        self.assertRefused(self.ruling(decision="reduce-scope", authorized_by="user"),
+                           gb.CODE_SCHEMA_VIOLATION)
+        self.assertEqual("danger", self.status()["budget_signal"])
+        approved = self.ruling(decision="extend-budget", authorized_by="user", new_limits={"rounds": 100})
+        self.assertEqual("RUNNING", approved["state"])
+        zone = self.status()["zones"]["rounds"]
+        self.assertEqual({"used": 42, "limit": 100, "share": .42, "zone": "safe",
+                          "remaining_until_danger": 28}, zone)
+        self.record(rounds=0)
+        self.assertEqual(zone, self.status()["zones"]["rounds"])
+
+    def test_invalid_budget_input_and_corrupt_bound_state_refuse(self):
+        self.bind()
+        snapshot = self.snapshot()
+        for dimensions in ({"cost": float("nan")}, {"seconds": float("inf")},
+                           {"rounds": -1}, {"tokens": 2.5}, {"rounds": True}):
+            with self.subTest(dimensions=dimensions):
+                self.assertRefused(self.record(**dimensions), gb.CODE_SCHEMA_VIOLATION)
+                self.assertEqual(snapshot, self.snapshot())
+        self.checkpoint()
+        snapshot = self.snapshot()
+        self.assertRefused(self.ruling(decision="extend-budget", authorized_by="user",
+                                      new_limits={"rounds": float("nan")}), gb.CODE_SCHEMA_VIOLATION)
+        self.assertEqual(snapshot, self.snapshot())
+        damaged = self.load_artifact()
+        damaged["original_intent"] += " changed"
+        self.artifact_path.write_text(json.dumps(damaged), encoding="utf-8")
+        snapshot = self.snapshot()
+        self.assertRefused(self.status(), gb.CODE_SCHEMA_VIOLATION)
+        self.assertEqual(snapshot, self.snapshot())
+
+    def test_adoption_preserves_legacy_partial_budget_config(self):
+        self.record(rounds=10, config={"rounds": gb.DEFAULT_BUDGET_CONFIG["rounds"]})
+        self.assertFalse(self.bind().get("error", False))
+        status = self.status()
+        self.assertEqual("safe", status["budget_signal"])
+        self.assertEqual({"rounds"}, status["zones"].keys())
+        self.assertRefused(self.record(tokens=10), gb.CODE_SCHEMA_VIOLATION)
+
+    def test_disabled_bridge_refuses_binding_without_writing_an_artifact(self):
+        with mock_env(gb.DISABLE_ENV_VAR, "off"):
+            self.assertTrue(self.bind()["gate_disabled"])
+        self.assertFalse(self.artifact_path.exists())
+
+    def test_changed_contract_blocks_record_and_even_a_valid_replacement_receipt(self):
+        from delivery_acceptance import artifact_sha256, evaluate_delivery_acceptance
+
+        self.bind()
+        self.record(rounds=42)
+        self.checkpoint()
+        self.ruling(decision="extend-budget", authorized_by="user", new_limits={"rounds": 100})
+        snapshot = self.snapshot()
+        self.contract_path.write_bytes(self.contract_path.read_bytes() + b"\n")
+        (self.tmp / "dist").mkdir()
+        (self.tmp / "dist" / "app.txt").write_bytes(b"delivered bytes")
+        evidence = self.tmp / "observation.txt"
+        evidence.write_bytes(b"expected result")
+        (self.gov / "delivery-receipt.json").write_text(json.dumps({
+            "schema_version": 1,
+            "contract_sha256": hashlib.sha256(self.contract_path.read_bytes()).hexdigest(),
+            "artifact_sha256": artifact_sha256(self.tmp / "dist"),
+            "entrypoint": "/",
+            "verifier": "qa",
+            "results": {"normal-entry": {
+                "status": "PASS", "evidence": evidence.name,
+                "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+            }},
+        }), encoding="utf-8")
+        self.assertTrue(evaluate_delivery_acceptance(self.tmp, goal_id="goal-x")["pass"])
+        self.assertRefused(self.record(rounds=0, task_ref="FEAT-999"), gb.CODE_SCHEMA_VIOLATION)
+        verdict = gb._check_completion("goal-x", self.gov)
+        self.assertFalse(verdict["pass"])
+        self.assertIn("new goal", verdict["detail"])
+        self.assertEqual(snapshot, self.snapshot())
+        self.artifact_path.write_text("{", encoding="utf-8")
+        self.assertRefused(gb._check_completion("goal-x", self.gov), gb.CODE_SCHEMA_VIOLATION)
 
 
 if __name__ == "__main__":

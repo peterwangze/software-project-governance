@@ -24402,17 +24402,16 @@ def cmd_review_record(args):
 
 
 def cmd_next_candidates(args):
-    """Thin entry — next-candidates CLI (FIX-236.3 / ADR-017 §3.4, P3-5).
-
-    Read end of the loop_exit → next-unit recommendation bridge. Reads the
-    persisted candidate snapshot when present; ``--refresh`` (or a missing
-    snapshot) recomputes from plan-tracker + loop event log and persists with
-    ``--write``. Prints the candidate report as JSON.
-    """
+    """Read goal-scoped recommendations or the legacy loop_exit snapshot."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+    # Goal mode reads the live sources. The legacy path below may persist a
+    # recommendation snapshot based on loop-exit events.
+    if getattr(args, "goal", None) is not None:
+        from goal_planning import run_goal_candidates
+        return run_goal_candidates(args, project_root=HOST_PROJECT_ROOT, load_packets=_load_execution_packets)
     from loop_exit_bridge import (
         CANDIDATES_FILENAME,
         read_candidates,
@@ -27963,6 +27962,7 @@ def main(argv=None):
                       help="Recompute from plan-tracker + loop event log")
     nc_p.add_argument("--write", action="store_true",
                       help="Persist the recomputed snapshot")
+    nc_p.add_argument("--goal", help="Read current recommendations for a bound goal without writing")
 
     # change-triage (FIX-237.4 / ADR-017 §4.4 — mandatory change-control
     # triage for product-code task intake; fail-closed: no record → the task

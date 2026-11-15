@@ -140,6 +140,22 @@ def _contract(path: Path) -> tuple[dict, str]:
     return record, digest
 
 
+def _contract_facts(contract: dict, digest: str) -> dict:
+    return {"contract_sha256": digest, "required_criteria": sorted(contract["criteria"])}
+
+
+def contract_for_goal(project_root: Path, goal_id: str) -> dict:
+    """Read and bind the current contract without examining receipts or artifacts."""
+    root = Path(project_root).resolve()
+    try:
+        contract, digest = _contract(_project_path(root, CONTRACT))
+    except RecursionError as exc:
+        raise ValueError("delivery contract nesting is too deep") from exc
+    if contract["goal_id"] != goal_id:
+        raise ValueError(f"goal_id must match the delivery contract ({contract['goal_id']!r})")
+    return _contract_facts(contract, digest)
+
+
 def _result(
     state: str, issues: list[str] | None = None, *, skip_reason: str | None = None, **facts
 ) -> dict:
@@ -207,6 +223,7 @@ def evaluate_delivery_acceptance(
     except (OSError, ValueError, RecursionError) as exc:
         return _result("FAIL", [f"delivery contract: {exc}"])
 
+    contract_facts = _contract_facts(contract, contract_hash)
     try:
         receipt, _ = _read_record(_project_path(root, RECEIPT), {
             "contract_sha256", "artifact_sha256", "entrypoint", "verifier", "results",
@@ -228,7 +245,7 @@ def evaluate_delivery_acceptance(
         if fingerprint != receipt["artifact_sha256"]:
             raise ValueError("artifact SHA-256 mismatch")
     except (OSError, ValueError, RecursionError) as exc:
-        return _result("FAIL", [f"delivery receipt: {exc}"])
+        return _result("FAIL", [f"delivery receipt: {exc}"], **contract_facts)
 
     verified = {}
     issues = [f"unexpected criterion {key!r}" for key in sorted(results.keys() - contract["criteria"].keys())]
@@ -248,6 +265,6 @@ def evaluate_delivery_acceptance(
             issues.append(f"{key}: {status}" + (f" — {detail}" if detail else ""))
 
     return _result(
-        "FAIL" if issues else "PASS", issues, contract_sha256=contract_hash,
+        "FAIL" if issues else "PASS", issues, **contract_facts,
         artifact_sha256=fingerprint, entrypoint=contract["entrypoint"], criteria_results=verified,
     )

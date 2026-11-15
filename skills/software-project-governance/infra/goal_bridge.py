@@ -897,7 +897,7 @@ def add_goal_bridge_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--action", required=True,
                         choices=("record", "checkpoint", "ruling",
                                  "status", "judge", "thresholds",
-                                 "mapping"))
+                                 "mapping", "check-completion"))
     parser.add_argument("--goal", default="",
                         help="goal id ([A-Za-z0-9][A-Za-z0-9._-]*)")
     parser.add_argument("--task", default="",
@@ -956,6 +956,11 @@ def cmd_goal_bridge(args, *, governance_dir) -> int:
     _configure_stdio()
     action = getattr(args, "action", "status")
     goal = getattr(args, "goal", "") or ""
+    if action == "check-completion":
+        from delivery_acceptance import evaluate_delivery_acceptance
+
+        verdict = evaluate_delivery_acceptance(Path(governance_dir).parent, goal_id=goal, required=True)
+        return _emit(verdict, refused=not verdict["pass"])
     if action == "thresholds":
         if getattr(args, "text", False):
             print(render_thresholds_text(), end="")

@@ -62,6 +62,35 @@ description: 版本发布——发布计划、changelog、回滚方案。阶段�
 | 确认监控就绪 | 关键指标（错误率、延迟、可用性）的监控和告警已配置 | **需监控环境执行** | [Google SRE] 发布前必须确认监控覆盖 4 大黄金信号 |
 | 发布决策 | 基于 checklist 全部通过 + 回滚验证通过，做出 go/no-go 决策 | **需用户确认**：Go/No-Go | [Amazon] 发布决策有 Single-Threaded Owner |
 
+#### 采用交付验收契约（FEAT-114）
+
+项目负责人确定正常入口、必验结果、交付者和独立验收者，保存为 `.governance/delivery-contract.json`。本地制品路径以项目根为基准，使用 `/` 分隔。一个契约对应一个候选版本和一个目标 ID。例如：
+
+```json
+{
+  "schema_version": 1,
+  "release_version": "0.1.0",
+  "goal_id": "deliver-reconciliation",
+  "artifact": "dist",
+  "entrypoint": "/",
+  "producer": "delivery-agent",
+  "verifier": "independent-qa",
+  "criteria": {"user-journey": "从正常入口输入账目并下载正确的对账结果"}
+}
+```
+
+独立验收者对待发布制品执行正常用户路径，将方法、环境和观察结果保存为非空证据文件，并向 `.governance/delivery-receipt.json` 写入以下字段：
+
+- `schema_version` 为 `1`，`contract_sha256` 为契约文件原始字节的 SHA-256。
+- `artifact_sha256` 为实际验收制品的指纹，`entrypoint` 为实际使用的入口，`verifier` 为项目指定验收者的身份标识。
+- `results` 以全部必验项 ID 为键，每项记录 `status`（`PASS`、`FAIL`、`NOT_RUN` 或 `BLOCKED`）及可选 `detail`。`PASS` 和 `FAIL` 必须带独立的 `evidence` 文件路径及其原始字节的 `evidence_sha256`。证据文件放在制品目录外，路径以项目根为基准。
+
+所有摘要使用小写十六进制。`infra/delivery_acceptance.py` 提供 `artifact_sha256(Path(...))`。单文件使用原始字节摘要。目录使用 `delivery-tree-v1` 加一个 LF，然后拼接紧凑 ASCII JSON 数组并取 SHA-256。数组项按相对 POSIX 路径排序，文件项为 `[路径, "file", 文件摘要]`，目录项为 `[路径, "directory", null]`，JSON 不带尾换行。路径不接受符号链接或 reparse point。
+
+候选 `check-release` 自动检查已配置的契约，`--skip-execution-gates` 仍执行该检查。采用契约的项目应在由负责人控制的 CI 或发布步骤中固定 `--require-delivery-evidence`，以便契约缺失时也能阻断。只交付验过的同一制品，制品或契约变化后重新验收。发布后可在同一契约路径恢复已发布的实际制品，再对 `--lineage-mode released` 使用同一参数复验本地下载字节的摘要。普通历史查询继续只做原有检查。
+
+由独立 QA 或受保护 CI 控制验收回执及证据的写入。每个项目保留一份当前回执。出现反证时由验收方立即撤销或更新当前回执，并保留反证供重新验收。身份字符串和摘要用于检查声明与字节的绑定。独立性的信任来自项目的写权限。命令不会运行回执中的脚本或下载发行包。
+
 ### 3. 发布执行
 
 #### 3.1 发布策略选择

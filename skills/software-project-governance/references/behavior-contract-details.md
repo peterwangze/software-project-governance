@@ -64,6 +64,8 @@
 
 10. **goal 预算必收口（FEAT-097，RPG §3.1/§3.8 意图断层修复）**：harness goal 续跑的每一轮经 `goal-bridge --action record` 采集预算信号——四维权（轮次/token/墙钟/成本）任一入危险区即收口（RUNNING→DRAINING→CHECKPOINTED；70% 轮量为必要不充分：仅危险区触发收口，warning 仅披露）；DRAINING 只允许在途任务收尾（`--in-flight`）；CHECKPOINTED MUST AskUserQuestion 带范围裁决选项（缩范围/扩预算/继续/终止）——**禁静默续跑**；BLOCKED 后未授权续跑/执行被拒并机器留痕（恢复仅经 `--action ruling --decision reduce-scope/extend-budget --authorized-by <用户>`）；checkpoint 工件（`.governance/goal-bridge/<goal_id>.json`）携账本/义务/修订/规则版本/预算消耗跨会话恢复（幂等；规则版本变化=响亮披露不静默——DEC-330 禁 mid-session 热升级）；映射表与危险区阈值为配置面数据（`goal-bridge --action thresholds/mapping --text` 可 grep；调整不动状态机）；`GOVERNANCE_GOAL_BRIDGE=off` 回退既有 goal 行为。
 
+**交付目标完成前检查（FEAT-114）**：采用交付验收契约后，Coordinator 在将契约所绑定的宿主 goal 标为 `complete` 前，MUST 对同一未变更的候选制品运行 `verify_workflow.py goal-bridge --action check-completion --goal <goal_id>`。退出码 0 且 `state=PASS` 表示交付证据通过，保留既有预算和授权判断；退出码 2 时按 `issues` 补证或报告阻断，保持目标未完成。该命令只读，宿主原生 goal 状态由调用方更新。`GOVERNANCE_GOAL_BRIDGE=off` 控制预算桥，交付证据检查仍独立执行。契约和验收回执格式见 `skills/stage-release/SKILL.md` 的「采用交付验收契约」。
+
 <a id="c11"></a>
 
 ### C11

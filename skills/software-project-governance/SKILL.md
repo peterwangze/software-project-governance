@@ -230,7 +230,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 7. **并行优先派发**：独立无依赖任务 MUST 单步批量 spawn；等待期间 Start-Sleep/轮询违规，有就绪任务 MUST 继续派发（C7）。
 8. **健康检查事件化**：全量仅会话首检/推进前/异常信号触发，禁止逐轮例行全量（C8）。
 9. **热路径单源**：热数据唯一读取路径 `governance-bootstrap --format json`，禁止直读 plan-tracker/execution-packets/evidence-log（C9）。
-10. **goal 预算必收口**：续跑每轮 MUST `goal-bridge --action record`；四维任一危险即 DRAINING→CHECKPOINTED（warning 仅披露）；DRAINING 仅 `--in-flight` 收尾，检查点 MUST AskUserQuestion 范围裁决，禁止静默续跑。BLOCKED 未授权禁止恢复；checkpoint 跨会话幂等、规则变更披露；阈值/映射及 off 回退见 C10。
+10. **goal 预算必收口**：续跑每轮 MUST `goal-bridge --action record`；四维任一危险即 DRAINING→CHECKPOINTED（warning 仅披露）；DRAINING 仅 `--in-flight` 收尾，检查点 MUST AskUserQuestion 范围裁决，禁止静默续跑。BLOCKED 未授权禁止恢复；checkpoint 跨会话幂等、规则变更披露；交付契约绑定的 goal 完成前 MUST 通过 `goal-bridge --action check-completion`；阈值/映射及 off 回退见 C10。
 11. **六边界动作级执法**：六边界动作前 MUST `enforcement-check --facts <JSON>`；非0按 remedy 处理重试，禁止造假绕行（C11）。
 
 ### 动作级执法（FEAT-095）——六边界分层阻断

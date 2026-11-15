@@ -7441,6 +7441,7 @@ def check_release_readiness(
     lineage_remote="origin",
     gate_sequence_lineage_mode=None,
     dsh_upgrade_regression_runner=None,
+    require_delivery_evidence=False,
 ):
     """FIX-072: aggregate release gate scripts behind the stage-release check-release command."""
     issues = []
@@ -7612,12 +7613,8 @@ def check_release_readiness(
     details["release_lineage"] = lineage_result
     issues.extend(f"release lineage: {issue}" for issue in lineage_result["issues"])
 
-    # ── FIX-266 / REQ-145.4 (design §3.4): gate↔release interlock ──
-    # Embedded sub-check: a release tag must not exist while prerelease
-    # gates are pending / not yet passed. `gate_sequence_lineage_mode`
-    # defaults to the run's `lineage_mode` (candidate); cmd_check_release
-    # explicitly passes "released" for already-published version checks
-    # (BR-4 / DEC-153 ②) so historical bypasses WARN instead of FAILing.
+    # FIX-266 / REQ-145.4: pending prerelease gates block tagged candidates.
+    # BR-4 / DEC-153 ②: already-published audits warn about past bypasses.
     gate_seq_mode = gate_sequence_lineage_mode or lineage_mode
     gate_seq_result = check_gate_sequence_for_release(
         lineage_mode=gate_seq_mode,
@@ -7633,6 +7630,17 @@ def check_release_readiness(
     }
     issues.extend(f"gate sequence: {v['reason']}"
                   for v in gate_seq_result["violations"])
+
+    # Delivery acceptance also applies when broader execution gates are disabled.
+    from delivery_acceptance import evaluate_delivery_acceptance
+
+    delivery_acceptance = evaluate_delivery_acceptance(
+        HOST_PROJECT_ROOT,
+        release_version=version,
+        required=require_delivery_evidence,
+        released_history="released" in (lineage_mode, gate_seq_mode))
+    details["delivery_acceptance"] = delivery_acceptance
+    issues.extend(f"delivery acceptance: {issue}" for issue in delivery_acceptance["issues"])
 
     one_dot_zero_blocker_issues = []
     if version == "1.0.0":
@@ -22716,15 +22724,9 @@ def cmd_check_release(args):
         pass
 
     skip_execution_gates = getattr(args, "skip_execution_gates", False)
-    # BR-4 (design §3.4 / DEC-153 ③): `lineage_mode` defaults to "candidate";
-    # the embedded gate↔release interlock (FIX-266) must NOT mis-FAIL
-    # historical bypasses when the run targets an ALREADY-PUBLISHED version.
-    # When the user did NOT pass --lineage-mode explicitly (argparse default
-    # is None) AND the roadmap marks --version as published/withdrawn
-    # history, the gate-sequence interlock runs in "released" mode (WARN
-    # disclosure only, DEC-153 ②). The release-lineage check keeps the
-    # explicitly requested/effective mode — released-mode lineage requires
-    # --release-commit, so history queries are never forced down that path.
+    # BR-4 / DEC-153 ③: implicit checks for already-published versions use
+    # WARN-only historical gate sequencing. Lineage keeps its requested or
+    # default mode because "released" lineage requires --release-commit.
     requested_lineage_mode = getattr(args, "lineage_mode", None)
     lineage_mode = requested_lineage_mode or "candidate"
     gate_sequence_lineage_mode = lineage_mode
@@ -22740,18 +22742,13 @@ def cmd_check_release(args):
         release_commit=getattr(args, "release_commit", None),
         lineage_remote=getattr(args, "lineage_remote", "origin"),
         gate_sequence_lineage_mode=gate_sequence_lineage_mode,
+        require_delivery_evidence=getattr(args, "require_delivery_evidence", False),
     )
     claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("product_release"))
     claim_gate = _loop_runtime_claim_gate_detail(claim_report)
     result["details"]["loop_runtime_claim_gate"] = claim_gate
     result["issues"].extend(claim_gate["issues"])
-    # FIX-299: derive the CLI topline verdict from the merged issue list.
-    # The engine layer (check_release_readiness) already guarantees
-    # pass == (not issues) for its own components, and the claim-gate
-    # issues were merged above, so an issue-free run must read PASSED
-    # with exit 0 and any merged issue must read FAILED with exit 1 —
-    # the former unconditional False (FIX-199/200/202/213 merge, commit
-    # 4134026) made even all-green runs exit 1.
+    # FIX-299: derive the final exit verdict after merging the claim-gate issues.
     result["pass"] = not result["issues"]
     print()
     print("=== Release Readiness Check ===")
@@ -27233,6 +27230,9 @@ def main(argv=None):
                       help="Also execute local runtime version commands for supported adapters")
     cr_p.add_argument("--skip-execution-gates", action="store_true",
                       help="Diagnostic only: skip verify/check-governance/e2e/unit-test execution gates")
+    cr_p.add_argument("--require-delivery-evidence", action="store_true",
+                      help="Require the local delivery contract and accepted artifact evidence, "
+                           "including in released-mode verification")
     cr_p.add_argument("--lineage-mode", choices=("candidate", "released"), default=None,
                       help="candidate skips pre-tag validation; released requires local and remote tag lineage. "
                            "Default (unset): candidate — except that checks against an ALREADY-PUBLISHED "

@@ -1,7 +1,9 @@
 """FEAT-116 adapter behavior over fake Cordis/native goal surfaces."""
 
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -85,14 +87,50 @@ writeFileSync(profile, '{}')
 
 @unittest.skipUnless(shutil.which("node"), "Node is unavailable")
 class DshGoalHostTests(unittest.TestCase):
-    def run_probe(self, probe):
+    def run_probe(self, probe, *, poison_python=False):
         with tempfile.TemporaryDirectory() as directory:
+            env = None
+            if poison_python:
+                workspace = Path(directory)
+                shadow = workspace / ("python.exe" if os.name == "nt" else "python3")
+                if os.name == "nt":
+                    shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32" / "whoami.exe", shadow)
+                else:
+                    shadow.write_text("#!/bin/sh\nprintf 'workspace executable ran\\n'\n", encoding="utf-8")
+                    shadow.chmod(0o700)
+                executable_dir = Path(sys.executable).parent
+                if not (executable_dir / shadow.name).is_file():
+                    executable = shutil.which(shadow.name)
+                    if executable is None:
+                        self.skipTest(f"Host {shadow.name} is unavailable")
+                    executable_dir = Path(executable).parent
+                env = os.environ.copy()
+                env["PATH"] = os.pathsep.join((".", directory, str(executable_dir)))
+                env["PYTHONHOME"] = str(workspace / "invalid-python-home")
+                env.pop("GOVERNANCE_GOAL_BRIDGE", None)
             result = subprocess.run(
                 [shutil.which("node"), "--input-type=module", "-", str(_ROOT), directory],
                 input=_FAKE_HOST + probe, text=True, encoding="utf-8", capture_output=True,
-                timeout=15,
+                timeout=15, cwd=directory if poison_python else None, env=env,
             )
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_production_policy_ignores_workspace_python_and_python_home(self):
+        self.run_probe(r"""
+const fake = host()
+const agent = actor()
+registerGoalAdmission(fake.ctx)
+assert.throws(() => fake.ctx.goals.complete(agent, ref(agent)), /NATIVE_BINDING_REQUIRED/u)
+assert.equal((await runStep(fake, agent, [reserved(agent)])).kind, 'reject')
+assert.match(agent.blocks[0].message, /GOVERNANCE_RECORD_INVALID/u)
+
+// The only remaining candidates are the host CWD and entries within the consumer workspace.
+process.env.PATH = ['.', workspace].join(process.platform === 'win32' ? ';' : ':')
+const unavailable = actor()
+assert.throws(() => fake.ctx.goals.complete(unavailable, ref(unavailable)), /POLICY_UNAVAILABLE/u)
+assert.equal((await runStep(fake, unavailable, [reserved(unavailable)])).kind, 'reject')
+assert.match(unavailable.blocks[0].message, /POLICY_UNAVAILABLE/u)
+""", poison_python=True)
 
     def test_native_round_admission_then_followup_hold_preserves_manual_messages(self):
         self.run_probe(r"""

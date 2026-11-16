@@ -292,6 +292,56 @@ assert.equal(fake.context().text({ agent }), '')
 assert.ok(!fake.warnings.join(' ').includes(agent.goal.objective))
 """)
 
+    def test_direct_repair_projection_retains_only_the_exact_native_claim(self):
+        self.run_probe(r"""
+const fake = host()
+const agent = actor()
+const foreign = actor('different-session')
+agent.events.push({ type: 'goal/change', data: { operation: 'create', goal: agent.goal } })
+const configured = { workspace, sessionId: agent.session.id }
+const received = []
+const rootPolicy = async (_, request) => {
+  received.push(request)
+  if (!request.direct_repair) return pass
+  return { ...pass, direct_repair_attested: true, plan: { ...pass.plan, direct_repair: true,
+    work_packages: [{ id: 'repair-main', action: 'repair', instruction: 'Repair only the verified player result' }] } }
+}
+registerGoalAdmission(fake.ctx, { directRepair: configured, admit: rootPolicy,
+  completePolicy: (_, request) => {
+    assert.equal(request.action, 'complete')
+    assert.ok(!Object.hasOwn(request, 'direct_repair'))
+    return hold('DELIVERY_ACCEPTANCE_FAILED')
+  },
+  tree: () => ({ isHeld: () => false, watch({ request }) {
+    assert.ok(!Object.hasOwn(request, 'direct_repair'))
+    return false
+  } }),
+})
+assert.equal((await runStep(fake, agent, [reserved(agent)])).kind, 'enter')
+assert.deepEqual(received[0].direct_repair, configured)
+assert.match(fake.context().text({ agent }), /Trusted native direct repair for the single work package/u)
+assert.equal((await runStep(fake, foreign, [reserved(foreign)])).kind, 'enter')
+assert.ok(!Object.hasOwn(received[1], 'direct_repair'))
+assert.doesNotMatch(fake.context().text({ agent: foreign }), /Trusted native direct repair/u)
+assert.equal((await runStep(fake, agent)).kind, 'enter')
+assert.equal(received[2].direct_repair.contractSha256, pass.contract_sha256)
+assert.throws(() => fake.ctx.goals.complete(agent, ref(agent)), /DELIVERY_ACCEPTANCE_FAILED/u)
+agent.session.preset = 'standard'
+assert.equal((await runStep(fake, agent)).kind, 'enter')
+assert.ok(!Object.hasOwn(received[3], 'direct_repair'))
+agent.session.preset = 'governance'
+agent.goal = { ...agent.goal, id: 'other-goal' }
+assert.equal((await runStep(fake, agent, [reserved(agent)], 2)).kind, 'enter')
+assert.ok(!Object.hasOwn(received[4], 'direct_repair'))
+
+agent.events.push({ type: 'goal/change', data: { operation: 'clear' } },
+  { type: 'goal/change', data: { operation: 'create', goal: agent.goal } })
+const restarted = host()
+registerGoalAdmission(restarted.ctx, { directRepair: configured, admit: rootPolicy })
+assert.equal((await runStep(restarted, agent, [reserved(agent)], 3)).kind, 'enter')
+assert.ok(!Object.hasOwn(received[5], 'direct_repair'))
+""")
+
     def test_completion_wrapper_keeps_scope_after_restart_and_restores_ownership(self):
         self.run_probe(r"""
 const fake = host()

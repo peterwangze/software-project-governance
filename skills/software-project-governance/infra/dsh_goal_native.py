@@ -26,6 +26,9 @@ _REQUEST_FIELDS = {"schema_version", "action", "session_id", "goal_id", "revisio
 _PROFILE_FIELDS = {"intent_sha256", "budget", "contract"}
 _LIMIT_FIELDS = {"rounds": "max_rounds", "tokens": "max_tokens", "wall_clock": "max_seconds"}
 _TREE_ACTIONS = ("tree-stop", "tree-settle")
+_DIRECT_FIELDS = {"workspace", "sessionId", "intentSha256", "criterionId", "workPackageId", "receipt",
+                  "receiptSha256", "preflightWorkspace", "preflightSessionId", "recipeSha256",
+                  "sourceSha256", "sourceRoot", "reproducer", "reproducerSha256", "profileSha256"}
 
 
 def _number(value, dimension, *, positive=False):
@@ -44,7 +47,10 @@ def _request(stream):
     request = json.loads(raw.decode("utf-8"), object_pairs_hook=acceptance._json_object)
     action = request.get("action") if isinstance(request, dict) else None
     tree = action in _TREE_ACTIONS
-    if (not isinstance(request, dict) or request.keys() != (_REQUEST_FIELDS | {"tree"} if tree else _REQUEST_FIELDS)
+    fields = _REQUEST_FIELDS | {"tree"} if tree else _REQUEST_FIELDS
+    if action == "admit" and "direct_repair" in request:
+        fields |= {"direct_repair"}
+    if (not isinstance(request, dict) or request.keys() != fields
             or type(request["schema_version"]) is not int or request["schema_version"] != 1
             or action not in ("admit", "complete", *_TREE_ACTIONS)
             or not bridge._valid_native_session_id(request["session_id"])
@@ -123,6 +129,96 @@ def _encode(record):
     return (json.dumps(record, allow_nan=False, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
 
 
+def _absolute_record_path(value):
+    path = Path(value)
+    if not path.is_absolute() or path.resolve(strict=True) != path:
+        raise ValueError("expected a canonical absolute native repair path")
+    return path
+
+
+def _source_sha256(root, relative):
+    source = acceptance._project_path(root, relative)
+    if not _optional_path(source, directory=True):
+        raise ValueError("missing native repair source root")
+    rows, pending, entries, size = {}, [source], 0, 0
+    while pending:
+        for item in pending.pop().iterdir():
+            if item.parent == source and item.name in {"node_modules", "dist"}:
+                continue
+            entries += 1
+            info = acceptance._plain_stat(item)
+            size += info.st_size if stat.S_ISREG(info.st_mode) else 0
+            if entries > 4096 or size > 128 * 1024 * 1024:
+                raise ValueError("native repair source exceeds attestation bounds")
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(item)
+            elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                rows[item.relative_to(source).as_posix()] = acceptance._hash_file(item)
+            else:
+                raise ValueError("native repair source is not a plain tree")
+    if not rows:
+        raise ValueError("native repair source is empty")
+    payload = json.dumps(rows, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _direct_repair(root, request, packages, scope, contract_sha256, profile_sha256):
+    hint = request.get("direct_repair")
+    if not isinstance(hint, dict) or hint.keys() not in (_DIRECT_FIELDS, _DIRECT_FIELDS | {"contractSha256"}):
+        raise ValueError("invalid native repair entry")
+    if any(not isinstance(value, str) or not value or len(value) > 4096 for value in hint.values()):
+        raise ValueError("invalid native repair field")
+    for field in ("intentSha256", "recipeSha256", "receiptSha256", "sourceSha256", "reproducerSha256"):
+        if not acceptance._SHA256.fullmatch(hint[field]):
+            raise ValueError("invalid native repair fingerprint")
+    if (_absolute_record_path(hint["workspace"]) != root or hint["sessionId"] != request["session_id"]
+            or hint["profileSha256"] != profile_sha256
+            or hint["intentSha256"] != hashlib.sha256(request["objective"].encode("utf-8")).hexdigest()):
+        raise ValueError("native repair scope mismatch")
+    claim = hint.get("contractSha256")
+    if scope and claim is None:
+        return None  # A process restart or later opt-in cannot grant a first-admission exception.
+    if (scope and claim != contract_sha256) or (scope is None and claim is not None):
+        raise ValueError("native repair claim does not match admission")
+    criterion, package = hint["criterionId"], hint["workPackageId"]
+    if not any(item["id"] == package and item["criteria"] == [criterion]
+               and (item["action"], item["method"]) == ("repair", "repair-criterion") for item in packages):
+        raise ValueError("native repair must select one typed repair work package for one criterion")
+    receipt_path = _absolute_record_path(hint["receipt"])
+    canary = _absolute_record_path(hint["preflightWorkspace"])
+    if (root.is_relative_to(canary) or canary.is_relative_to(root)
+            or receipt_path.is_relative_to(root) or receipt_path.is_relative_to(canary)
+            or not bridge._valid_native_session_id(hint["preflightSessionId"])
+            or hint["preflightSessionId"] == request["session_id"]):
+        raise ValueError("native repair receipt is not independently hosted")
+    receipt, digest = acceptance._read_record(receipt_path, {
+        "session_id", "workspace", "recipe_sha256", "status", "browser", "build",
+    }, max_bytes=MAX_REQUEST)
+    if (digest != hint["receiptSha256"] or receipt["session_id"] != hint["preflightSessionId"]
+            or _absolute_record_path(receipt["workspace"]) != canary
+            or receipt["recipe_sha256"] != hint["recipeSha256"] or receipt["status"] != "PASS"):
+        raise ValueError("native repair receipt does not match the preflight identity")
+    browser, build = receipt["browser"], receipt["build"]
+    if (not isinstance(browser, dict) or not isinstance(build, dict)
+            or (browser.get("status"), browser.get("code"), browser.get("journey")) != ("PASS", "BROWSER_EXECUTED", "FAIL")
+            or type(browser.get("exit_code")) is not int or browser["exit_code"] != 1
+            or (build.get("status"), build.get("code")) != ("PASS", "BUILD_EXECUTED")
+            or type(build.get("exit_code")) is not int or build["exit_code"] != 0
+            or browser.get("mode") != "workspace-write" or build.get("mode") != "workspace-write"
+            or browser.get("enforcement") not in ("partial", "full")
+            or build.get("enforcement") != browser["enforcement"]
+            or not isinstance(build.get("artifact_sha256"), str)
+            or not acceptance._SHA256.fullmatch(build["artifact_sha256"])):
+        raise ValueError("native repair requires an executed browser failure and a fresh build")
+    if scope is None:
+        for workspace in {root, canary}:
+            proof = acceptance._project_path(workspace, hint["reproducer"])
+            if (acceptance._hash_file(proof, nonempty=True) != hint["reproducerSha256"]
+                    or _source_sha256(workspace, hint["sourceRoot"]) != hint["sourceSha256"]):
+                raise ValueError("native repair input differs from the frozen preflight")
+    return {"criterionId": criterion, "workPackageId": package}
+
+
 def _publish_contract(path, contract):
     """Publish the full bytes atomically and never replace an existing record."""
     descriptor, scratch = tempfile.mkstemp(prefix="delivery-contract.", suffix=".tmp", dir=path.parent)
@@ -186,11 +282,11 @@ def _snapshot(artifact):
     }
 
 
-def _short_plan(project_root, goal, packages):
+def _short_plan(project_root, goal, packages, direct_repair=None):
     governance_dir = project_root / ".governance"
     try:
         result = plan_goal_candidates(project_root, goal, load_packets=lambda: _load_packets(governance_dir),
-                                      work_packages=packages)
+                                      work_packages=packages, direct_repair=direct_repair)
     except (OSError, ValueError, RecursionError, StoreError):
         return {"state": "ERROR"}
     return {
@@ -204,6 +300,7 @@ def _short_plan(project_root, goal, packages):
         ],
         "in_flight_count": len(result["in_flight"]),
         "work_packages": result.get("work_packages", [])[:3],
+        **({"direct_repair": True} if result.get("direct_repair") else {}),
     }
 
 
@@ -303,6 +400,15 @@ def _run_locked(root, target, request):
     if request["max_rounds"] != config["rounds"]["limit"]:
         return _reply(request, "HOLD", "ROUND_LIMIT_MISMATCH")
 
+    direct_repair = None
+    direct_error = False
+    if "direct_repair" in request:
+        try:
+            direct_repair = _direct_repair(root, request, packages, scope, artifact.get("contract_sha256"),
+                                           profile_hash)
+        except (OSError, ValueError, TypeError, RecursionError):
+            direct_error = True  # An invalid optional hint cannot change ordinary native admission.
+
     contract_path = root / acceptance.CONTRACT
     if scope is None and not _optional_path(contract_path):
         _publish_contract(contract_path, contract)
@@ -347,13 +453,16 @@ def _run_locked(root, target, request):
 
     state = _snapshot(artifact)
     if action == "admit":
-        plan = _short_plan(root, goal, packages)
+        plan = _short_plan(root, goal, packages, direct_repair)
         if plan["state"] in ("AWAIT_CONTRACT", "CONTRACT_CHANGED", "HOLD"):
             return _reply(request, "HOLD", "PLAN_GATE_CHANGED", **state, plan=plan)
         if awaiting_native_resume:
             stop["resumed_revision"] = request["revision"]
             bridge._save(target, artifact)
-        return _reply(request, "ALLOW", "ADMITTED", **state, plan=plan)
+        attested = {"direct_repair_attested": True} if direct_repair else {}
+        if direct_error:
+            attested["direct_repair_code"] = "DIRECT_REPAIR_EVIDENCE_INVALID"
+        return _reply(request, "ALLOW", "ADMITTED", **state, plan=plan, **attested)
     verdict = bridge._check_completion(goal, governance_dir)
     if not verdict["pass"]:
         return _reply(request, "HOLD", "DELIVERY_ACCEPTANCE_FAILED", **state,

@@ -87,6 +87,45 @@ class NativeGoalTests(unittest.TestCase):
             }},
         })
 
+    def direct_repair(self):
+        preflight = tempfile.TemporaryDirectory()
+        self.addCleanup(preflight.cleanup)
+        protected = Path(preflight.name).resolve()
+        canary = protected / "canary"
+        package = {"id": "repair-journey", "action": "repair", "criteria": ["journey"],
+                   "method": "repair-criterion", "estimated_rounds": 1,
+                   "instruction": "Repair the witnessed journey, then rerun its player entrypoint."}
+        work = self.gov / "dsh-goal-work.json"
+        intent = self.profile["intent_sha256"]
+        self.write_json(work, {"schema_version": 1, "intent_sha256": intent, "work_packages": [package]})
+        profile_bytes = (json.dumps({**self.profile, "work_sha256": self.sha(work.read_bytes())},
+                                    sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+        product, repro = b"Original behavior\n", b"Original browser repro\n"
+        for workspace in (self.root, canary):
+            (workspace / "game").mkdir(parents=True)
+            (workspace / "game/main.txt").write_bytes(product)
+            (workspace / "repro.txt").write_bytes(repro)
+        source = json.dumps({"main.txt": self.sha(product)}, sort_keys=True,
+                            ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        receipt = protected / "preflight.json"
+        both = {"mode": "workspace-write", "status": "PASS", "enforcement": "partial"}
+        preflight_receipt = {
+            "schema_version": 1, "session_id": "test-preflight", "workspace": str(canary),
+            "recipe_sha256": "a" * 64, "status": "PASS",
+            "browser": {**both, "code": "BROWSER_EXECUTED", "journey": "FAIL", "exit_code": 1},
+            "build": {**both, "code": "BUILD_EXECUTED", "exit_code": 0, "artifact_sha256": "b" * 64},
+        }
+        self.write_json(receipt, preflight_receipt)
+        return {
+            "workspace": str(self.root.resolve()), "sessionId": self.request["session_id"],
+            "intentSha256": intent, "criterionId": "journey", "workPackageId": package["id"],
+            "receipt": str(receipt), "receiptSha256": self.sha(receipt.read_bytes()),
+            "preflightWorkspace": str(canary), "preflightSessionId": "test-preflight",
+            "recipeSha256": "a" * 64, "sourceSha256": self.sha(source), "sourceRoot": "game",
+            "reproducer": "repro.txt", "reproducerSha256": self.sha(repro),
+            "profileSha256": self.sha(profile_bytes),
+        }
+
     def test_unconfigured_is_write_free_and_completion_cannot_bootstrap(self):
         self.native("HOLD", "NATIVE_BINDING_REQUIRED", action="complete")
         (self.root / PROFILE).unlink()
@@ -257,6 +296,52 @@ class NativeGoalTests(unittest.TestCase):
         self.assertEqual("FIX-434", normal["recommendations"][0]["task_id"])
         warning = self.native("ALLOW", "ADMITTED", usage={"rounds": 8})["plan"]
         self.assertEqual(["FIX-435"], [task["task_id"] for task in warning["recommendations"]])
+
+    def test_direct_repair_binds_first_failure_and_completion_still_needs_independent_receipt(self):
+        hint = self.direct_repair()
+        (self.root / "game/dist").mkdir()
+        (self.root / "game/dist/old-output").write_text("excluded", encoding="utf-8")
+        first = self.native("ALLOW", "ADMITTED", direct_repair=hint)
+        self.assertTrue(first["direct_repair_attested"])
+        self.assertTrue(first["plan"]["direct_repair"])
+        self.assertEqual({"journey": "repair"}, first["plan"]["criterion_gaps"])
+        self.assertEqual([hint["workPackageId"]], [item["id"] for item in first["plan"]["work_packages"]])
+        self.assertFalse((self.gov / "plan-tracker.md").exists())
+
+        (self.root / "game/main.txt").write_text("Actual repair", encoding="utf-8")
+        claim = {**hint, "contractSha256": first["contract_sha256"]}
+        follow = self.native("ALLOW", "ADMITTED", direct_repair=claim)
+        self.assertTrue(follow["plan"]["direct_repair"])
+        fresh_host = self.native("ALLOW", "ADMITTED", direct_repair=hint)
+        self.assertNotIn("direct_repair", fresh_host["plan"])
+        self.assertNotIn("direct_repair_attested", fresh_host)
+
+        self.native("HOLD", "DELIVERY_ACCEPTANCE_FAILED", action="complete")
+        self.receipt()
+        plan = self.native("ALLOW", "ADMITTED", direct_repair=claim)["plan"]
+        self.assertEqual("CHECK_COMPLETION", plan["state"])
+        self.assertNotIn("direct_repair", plan)
+        self.native("ALLOW", "DELIVERY_ACCEPTED", action="complete")
+
+    def test_invalid_direct_repair_evidence_keeps_ordinary_admission(self):
+        hint = self.direct_repair()
+        for update in ({"sessionId": "wrong-session"}, {"sourceSha256": "b" * 64},
+                       {"profileSha256": "c" * 64}, {"preflightWorkspace": str(self.root.resolve())},
+                       {"receiptSha256": "d" * 64}, {"workPackageId": "wrong-package"}):
+            with self.subTest(update=update):
+                verdict = self.native("ALLOW", "ADMITTED", direct_repair={**hint, **update})
+                self.assertEqual("DIRECT_REPAIR_EVIDENCE_INVALID", verdict["direct_repair_code"])
+                self.assertNotIn("direct_repair", verdict["plan"])
+                self.state_path.unlink()
+                (self.root / CONTRACT).unlink()
+
+        path = Path(hint["receipt"])
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+        evidence["browser"]["journey"] = "PASS"
+        self.write_json(path, evidence)
+        verdict = self.native("ALLOW", "ADMITTED", direct_repair={**hint, "receiptSha256": self.sha(path.read_bytes())})
+        self.assertEqual("DIRECT_REPAIR_EVIDENCE_INVALID", verdict["direct_repair_code"])
+        self.assertNotIn("direct_repair", verdict["plan"])
 
 
 if __name__ == "__main__":

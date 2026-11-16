@@ -121,6 +121,14 @@ deliveryPreflight:
 
 浏览器脚本在确实跑过玩家路径后，以最后一行 JSON 报告 `{"status":"PASS","player_path_executed":true}` 和退出码 0，或 `{"status":"FAIL","player_path_executed":true}` 和退出码 1。已知缺陷在实测路径中重现时，执行能力可以通过，回执仍记录产品行为失败。生产构建须退出 0，在配置路径生成本轮新的非空 HTML，并留下 SHA-256。预检携带会话、工作区、执行配方指纹和两项检查结果。只有两项均通过才返回 `PASS`，缺失、截断或不匹配的回执均应停止正式轮次。正式运行使用相同输入与工具链的另一份干净副本，其成品仍需通过独立验收。
 
+#### 已复现缺陷的原生直修
+
+受信治理插件行可为一个正式会话设置 `config.directRepair`。`workspace` 和 `sessionId` 指定正式副本，`preflightWorkspace` 和 `preflightSessionId` 指定另一份独立副本。`receipt` 是两份副本之外的预检回执绝对路径，`receiptSha256` 和 `recipeSha256` 固定该回执及配方。只接纳实际运行的浏览器路径报 `FAIL` 且生产构建通过的回执。
+
+`intentSha256` 固定完整原始目标，`criterionId` 和 `workPackageId` 选择一个只覆盖该验收项的 `repair` / `repair-criterion` 工作包。`profileSha256` 对现有原生配置 JSON 添加 `work_sha256` 后计算 SHA-256，使用 ASCII 转义、递归排序的键、无空格分隔符和结尾换行。`work_sha256` 取工作包配置文件原始字节的 SHA-256。`sourceRoot` 与 `reproducer` 是项目相对路径，`sourceSha256` 取源目录下 POSIX 相对路径到文件 SHA-256 的排序紧凑 UTF-8 JSON，排除顶层 `node_modules` 和 `dist`。`reproducerSha256` 固定复现脚本原始字节。操作者应在启动前核对两边的冻结依赖和工具链。
+
+宿主在指定会话的首个原生目标首次准入时校验两份源码和复现脚本。合格后，仅同一进程中同一目标及契约的准入可继续使用该提示。恢复旧目标、重建目标或提示无效时回到普通治理流程。工作包仍受预算和活跃任务重叠约束。当前独立验收结果优先，正式交付仍由独立回执放行。
+
 Windows rc.3 的 `workspace-write` 沙箱允许直接启动项目的 esbuild，Node 的具名管道连接可能返回 `EPERM`。`toolchain/Invoke-WorkspaceNpm.ps1` 可在同一个受限 PowerShell 中，用已安装的绝对 Python 路径启用锁定版本的工具链传输。
 
 ```powershell

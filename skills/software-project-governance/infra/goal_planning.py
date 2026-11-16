@@ -185,7 +185,7 @@ def _recommend_work_packages(packages, packets, active, goal, gaps, remaining_ro
 
 
 def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_n: int = 3,
-                         work_packages=()) -> dict:
+                         work_packages=(), direct_repair=None) -> dict:
     """Build only a recommendation. No task, checkpoint, or snapshot is written."""
     root = Path(project_root)
     gov = root / ".governance"
@@ -242,12 +242,33 @@ def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_
         ])
 
     output["criterion_gaps"] = gaps = _gap_report(acceptance)
+    rounds = zones.get("rounds")
+    remaining = rounds.get("remaining_until_danger") if rounds else None
+    warning = budget == "WARNING"
+    goal["required_criteria"] = set(acceptance["required_criteria"])
     packets = None
     legacy_error = None
     try:
         active = _read_locks(gov) if work_packages else None
     except (OSError, ValueError, StoreError, RecursionError) as exc:
         return dict(output, state="ERROR", diagnostics=[str(exc)])
+    if direct_repair:
+        criterion = direct_repair["criterionId"]
+        current = acceptance.get("criteria_results", {}).get(criterion)
+        if current is None or current["status"] == "FAIL":
+            direct_gaps = {**gaps, criterion: "repair"}
+            package = next((item for item in work_packages if item["id"] == direct_repair["workPackageId"]), None)
+            try:
+                packets, error = load_packets() if active else ({}, None)
+                if error:
+                    raise ValueError(error)
+                selected, linked = _recommend_work_packages((package,) if package else (), packets, active,
+                                                             goal, direct_gaps, remaining, warning)
+            except (OSError, ValueError, StoreError, RecursionError) as exc:
+                return dict(output, state="ERROR", diagnostics=[str(exc)])
+            if selected and top_n > 0:
+                return dict(output, state="READY", criterion_gaps=direct_gaps, direct_repair=True,
+                            work_packages=selected, in_flight=linked, diagnostics=acceptance["issues"])
     try:
         packet_data, packet_error = load_packets()
         if packet_error:
@@ -264,10 +285,6 @@ def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_
             return dict(output, state="ERROR", diagnostics=[str(exc)])
         legacy_error = str(exc)
 
-    rounds = zones.get("rounds")
-    remaining = rounds.get("remaining_until_danger") if rounds else None
-    warning = budget == "WARNING"
-    goal["required_criteria"] = set(acceptance["required_criteria"])
     if legacy_error is None:
         eligible, in_flight, exclusions = _recommendations(report, packets, active, goal, gaps, remaining, warning)
         diagnostics = acceptance["issues"] + demand_warnings + exclusions

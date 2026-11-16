@@ -99,6 +99,36 @@ python skills/software-project-governance/infra/verify_workflow.py check-runtime
 
 可选的 `.governance/dsh-goal-work.json` 记录同一目标已获授权的验证和修复工作包。使用相同的 `intent_sha256`，每个 `work_packages` 元素提供 `id`、`action`（`verify` 或 `repair`）、现有契约 `criteria`、`method`、`estimated_rounds` 和单行 `instruction`。`method` 可为 `exercise-entrypoint`、`build-release`、`inspect-evidence` 或 `repair-criterion`。侧文件在首次准入时随配置绑定。模型优先收到当前可执行的验收工作包，用户已有的授权继续适用。
 
+### 交付前的零模型预检
+
+在受信 DSH 宿主配置中，为治理插件行设置 `deliveryPreflight`，使用专门的隔离副本。配置指定一个新的 `sessionId`、绝对 `workspace`、副本外的绝对 JSON `receipt`，以及两项检查。工具命令由宿主配置提供，限于该副本已有授权的工作。示例中的浏览器脚本可使用项目的普通玩家入口。
+
+```yaml
+deliveryPreflight:
+  sessionId: session-12345678-1234-4123-8123-123456789abc
+  workspace: D:/scratch/preflight
+  receipt: D:/scratch/preflight-result.json
+  browser:
+    command: python scripts/player-repro.py
+    cwd: "."
+  build:
+    command: npm.cmd run build
+    cwd: game
+    artifact: game/dist/index.html
+```
+
+从认证的 DSH Web 创建指定 ID 和工作区的治理预设会话，使用回环模型配置并关闭标题生成等辅助推理。创建事件通过该会话的原生 Shell 运行检查，沿用 `workspace-write` 和宿主执行器。该副本的会话拒绝模型步骤。对同一个回执路径，独占标记保证只触发一次。预检进程退出前等候完整回执，同一 ID 恢复会话时不会重跑。
+
+浏览器脚本在确实跑过玩家路径后，以最后一行 JSON 报告 `{"status":"PASS","player_path_executed":true}` 和退出码 0，或 `{"status":"FAIL","player_path_executed":true}` 和退出码 1。已知缺陷在实测路径中重现时，执行能力可以通过，回执仍记录产品行为失败。生产构建须退出 0，在配置路径生成本轮新的非空 HTML，并留下 SHA-256。预检携带会话、工作区、执行配方指纹和两项检查结果。只有两项均通过才返回 `PASS`，缺失、截断或不匹配的回执均应停止正式轮次。正式运行使用相同输入与工具链的另一份干净副本，其成品仍需通过独立验收。
+
+Windows rc.3 的 `workspace-write` 沙箱允许直接启动项目的 esbuild，Node 的具名管道连接可能返回 `EPERM`。`toolchain/Invoke-WorkspaceNpm.ps1` 可在同一个受限 PowerShell 中，用已安装的绝对 Python 路径启用锁定版本的工具链传输。
+
+```powershell
+& D:/workflow/adapters/dsh/toolchain/Invoke-WorkspaceNpm.ps1 -Workspace D:/scratch/preflight -ProjectRoot D:/scratch/preflight/game -PythonExecutable C:/Python314/python.exe -NpmArguments @('run', 'build')
+```
+
+传输只匹配已核对哈希的 Vite 5.4.21 和 Windows x64 esbuild 0.21.5。检测到该服务调用的 `EPERM` 时，它以一次性认证的回环连接将数据交给同一沙箱中的匿名管道，继续运行原 esbuild 二进制。Vite 可选的盘符探测收到原错误并沿用其默认路径解析。辅助脚本只对当前 PowerShell 调用设置环境变量。使用独立测试宿主时，可以把相同进程环境传给该宿主，使同一副本的普通 npm 命令使用相同传输。
+
 ## 资产
 
 - `adapters/dsh/adapter-manifest.json`：机器可读的适配器元数据（能力声明 + E2E 证据）。

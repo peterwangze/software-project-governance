@@ -362,6 +362,88 @@ class PlanTrackerMatcherTests(unittest.TestCase):
         self.assertFalse(_run_pattern(absent, plan_text))
 
 
+@unittest.skipUnless(_BASH and shutil.which("git"), "requires Git with a functional bash")
+class PostCommitQuickCheckTests(unittest.TestCase):
+    def test_installed_hook_quick_legacy_and_unavailable(self):
+        verifier = '''
+import json, os, sys
+with open(os.environ["SPG_TEST_HOOK_ARGV"], "a", encoding="utf-8") as log:
+    print(json.dumps(sys.argv[1:]), file=log)
+if sys.argv[1] == "governance-write-guard":
+    print("Result: PASS")
+else:
+    mode = os.environ["SPG_TEST_HOOK_MODE"]
+    if mode == "legacy":
+        print("Check 1: PASS (legacy)")
+    else:
+        print("[FALLBACK] fallback to full")
+        if mode != "empty":
+            print("Governance: N=unknown (quick) | 0 passed / 0 failed / 1 not-run / 0 cache-reused / 1 undetermined | inspect")
+        print("[UNDETERMINED] Check 1")
+        for i in range(16):
+            print(f"[WARN] Check {i}: bounded context")
+        if mode == "error":
+            sys.exit(9)
+'''
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            repo = base / "test-repo"
+            plugin = base / "governance-plugin"
+            source_hooks = plugin / "infra/hooks"
+            source_hooks.mkdir(parents=True)
+            (plugin / "SKILL.md").touch()
+            (repo / ".governance").mkdir(parents=True)
+            log = base / "argv.jsonl"
+            config = base / "empty-gitconfig"
+            config.touch()
+            env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+            env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(config),
+                       SOFTWARE_PROJECT_GOVERNANCE_HOME=plugin.as_posix(), SPG_TEST_HOOK_ARGV=str(log))
+
+            def git(*args, mode="quick"):
+                proc = subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture",
+                                       "-c", "user.email=fixture@example.invalid", *args],
+                                      env={**env, "SPG_TEST_HOOK_MODE": mode}, capture_output=True,
+                                      text=True, encoding="utf-8", errors="replace", timeout=30)
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                return proc.stdout + proc.stderr
+
+            git("init", "-q")
+            hook = _POST_COMMIT.read_text(encoding="utf-8")
+            for target in (source_hooks / "post-commit", repo / ".git/hooks/post-commit"):
+                target.write_text(hook, encoding="utf-8", newline="\n")
+                target.chmod(0o755)
+            (plugin / "infra/verify_workflow.py").write_text(verifier, encoding="utf-8")
+
+            for mode in ("quick", "error", "empty", "legacy"):
+                with self.subTest(mode=mode):
+                    log.write_text("", encoding="utf-8")
+                    if mode == "legacy":
+                        (repo / "scripts").mkdir()
+                        (repo / "scripts/verify_workflow.py").write_text(verifier, encoding="utf-8")
+                    output = git("commit", "--allow-empty", "-qm", "FIX-500: fixture", mode=mode)
+                    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+                    self.assertEqual(2, len(calls))
+                    self.assertEqual("governance-write-guard", calls[1][0])
+                    self.assertIn("write-guard PASS", output)
+                    self.assertEqual(["check-governance"] if mode == "legacy"
+                                     else ["check-governance", "--scope", "quick", "--project-root"],
+                                     calls[0][:4])
+                    if mode != "legacy":
+                        self.assertEqual(repo.resolve(), Path(calls[0][4]).resolve())
+                    panel = output.split("--- Governance Quick Check ---\n")[1].split("-------------------------------")[0]
+                    if mode == "quick":
+                        self.assertTrue(panel.startswith("Governance: N=unknown (quick)"), panel)
+                        self.assertIn("[FALLBACK] fallback to full", panel)
+                        self.assertIn("[UNDETERMINED] Check 1", panel)
+                        self.assertEqual(12, len(panel.splitlines()))
+                    elif mode == "legacy":
+                        self.assertIn("Check 1: PASS (legacy)", panel)
+                    else:
+                        self.assertIn("quick check UNAVAILABLE", panel)
+                        self.assertNotIn("Governance: N=unknown", panel)
+
+
 @unittest.skipUnless(_BASH, "no functional bash (git-bash/WSL/native)")
 class BashParityTests(unittest.TestCase):
     """Dual-engine parity: bash execution of the extracted function must

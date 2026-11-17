@@ -179,16 +179,37 @@ fi
 
 # --- Step 4: Quick governance summary ---
 VERIFY_WORKFLOW=""
+SPG_VERIFY_QUICK=""
 if [ -f "$REPO_ROOT/scripts/verify_workflow.py" ]; then
     VERIFY_WORKFLOW="$REPO_ROOT/scripts/verify_workflow.py"
 elif [ -n "$SPG_RESOLVED_HOME" ] && [ -f "$SPG_RESOLVED_HOME/infra/verify_workflow.py" ]; then
     VERIFY_WORKFLOW="$SPG_RESOLVED_HOME/infra/verify_workflow.py"
+    SPG_VERIFY_QUICK=1
 fi
 
 if [ -n "$VERIFY_WORKFLOW" ]; then
     echo "--- Governance Quick Check ---"
-    python "$VERIFY_WORKFLOW" check-governance 2>/dev/null | \
-        grep -E "(Check [0-9]|PASS|WARN|issued)" | head -12
+    if [ -n "$SPG_VERIFY_QUICK" ]; then
+        if SPG_QUICK_OUTPUT=$(python "$VERIFY_WORKFLOW" check-governance --scope quick --project-root "$REPO_ROOT" 2>/dev/null); then
+            # The selector can place a fallback notice before its summary.
+            if ! printf '%s\n' "$SPG_QUICK_OUTPUT" | awk '
+                /^Governance: / && !summary { summary = $0; next }
+                NF && n < 11 { details[++n] = $0 }
+                END {
+                    if (!summary) exit 1
+                    print summary
+                    for (i = 1; i <= n; i++) print details[i]
+                }'; then
+                echo "⚠️  GOVERNANCE: quick check UNAVAILABLE — no quick verdict returned."
+            fi
+        else
+            echo "⚠️  GOVERNANCE: quick check UNAVAILABLE — invocation failed (rc=$?)."
+        fi
+    else
+        # Older project-local verifiers may not accept --scope.
+        python "$VERIFY_WORKFLOW" check-governance 2>/dev/null | \
+            grep -E "(Check [0-9]|PASS|WARN|issued)" | head -12
+    fi
     echo "-------------------------------"
 fi
 

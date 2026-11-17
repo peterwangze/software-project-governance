@@ -443,6 +443,19 @@ def _validate_native_dsh(scope):
         raise ValueError("invalid DSH native goal binding")
 
 
+def _validate_direct_work(work):
+    if not isinstance(work, dict) or work.keys() != {
+        "work_package_id", "criterion_id", "preflight_receipt_sha256",
+    }:
+        raise ValueError("invalid DSH direct work reference")
+    for field in ("work_package_id", "criterion_id"):
+        if not isinstance(work[field], str) or not _GOAL_ID_RE.fullmatch(work[field]):
+            raise ValueError("invalid DSH direct work identity")
+    fingerprint = work["preflight_receipt_sha256"]
+    if not isinstance(fingerprint, str) or not _SHA256_RE.fullmatch(fingerprint):
+        raise ValueError("invalid DSH direct work receipt SHA-256")
+
+
 _TREE_COUNTS = {"sessions", "open_steps", "missing_sessions", "missing_usage", "flush_failures"}
 
 
@@ -548,7 +561,7 @@ def _load_artifact(path: Path, goal_id, config):
                 "unauthorized_attempts", "created_at"):
         if key in loaded:
             artifact[key] = loaded[key]
-    if "native_dsh" in loaded or "tree_stop" in loaded or any(key in loaded for key in _INTENT_FIELDS):
+    if any(key in loaded for key in (*_INTENT_FIELDS, "native_dsh", "tree_stop", "direct_work")):
         try:
             if type(loaded.get("schema_version")) is not int or loaded["schema_version"] != ARTIFACT_SCHEMA_VERSION:
                 raise ValueError("invalid goal artifact schema version")
@@ -564,6 +577,11 @@ def _load_artifact(path: Path, goal_id, config):
             if "native_dsh" in loaded:
                 _validate_native_dsh(loaded["native_dsh"])
                 artifact["native_dsh"] = loaded["native_dsh"]
+            if "direct_work" in loaded:
+                if "native_dsh" not in artifact:
+                    raise ValueError("direct work requires a native goal binding")
+                _validate_direct_work(loaded["direct_work"])
+                artifact["direct_work"] = loaded["direct_work"]
             if "tree_stop" in loaded:
                 stop = loaded["tree_stop"]
                 _validate_tree_stop(stop)
@@ -1127,8 +1145,13 @@ def goal_status(goal_id, *, governance_dir, state_dir=None,
                                    or DEFAULT_BUDGET_CONFIG)
     if err is not None:
         return err
+    return _status_from_artifact(artifact)
+
+
+def _status_from_artifact(artifact) -> dict:
+    """Project a loaded or just-persisted goal artifact without rereading it."""
     result = {
-        "goal_id": goal,
+        "goal_id": artifact["goal_id"],
         "state": artifact["state"],
         "revision": artifact["revision"],
         "rules_version": artifact["rules_version"],
@@ -1159,6 +1182,10 @@ def goal_status(goal_id, *, governance_dir, state_dir=None,
             result["native_dsh"] = artifact["native_dsh"]
         if "tree_stop" in artifact:
             result["tree_stop"] = artifact["tree_stop"]
+        if "direct_work" in artifact:
+            result["execution_packet"] = {"goal_id": artifact["goal_id"],
+                                          "contract_sha256": artifact["contract_sha256"],
+                                          **artifact["direct_work"]}
     return result
 
 

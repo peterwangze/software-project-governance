@@ -129,6 +129,8 @@ deliveryPreflight:
 
 宿主在指定会话的首个原生目标首次准入时校验两份源码和复现脚本。合格后，仅同一进程中同一目标及契约的准入可继续使用该提示。恢复旧目标、重建目标或提示无效时回到普通治理流程。工作包仍受预算和活跃任务重叠约束。当前独立验收结果优先，正式交付仍由独立回执放行。
 
+`goal-bridge --action status --goal <原生目标 ID>` 的 JSON 在同一条记录中显示目标状态、预算和 `execution_packet`。该引用来自目标已有的持久状态，列出原生目标、交付契约摘要、验收项、工作包和预检回执摘要。重启后仍可追溯该关联。宿主每次准入仍须取得当前的直修凭据并检查实时独立验收、活跃任务和预算。
+
 Windows rc.3 的 `workspace-write` 沙箱允许直接启动项目的 esbuild，Node 的具名管道连接可能返回 `EPERM`。`toolchain/Invoke-WorkspaceNpm.ps1` 可在同一个受限 PowerShell 中，用已安装的绝对 Python 路径启用锁定版本的工具链传输。
 
 ```powershell

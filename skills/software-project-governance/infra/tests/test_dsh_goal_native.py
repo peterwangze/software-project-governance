@@ -8,12 +8,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _INFRA = Path(__file__).resolve().parent.parent
 if str(_INFRA) not in sys.path:
     sys.path.insert(0, str(_INFRA))
 
 from delivery_acceptance import CONTRACT, RECEIPT, artifact_sha256  # noqa: E402
+import dsh_goal_native as native_policy  # noqa: E402
 from dsh_goal_native import MAX_REQUEST, PROFILE  # noqa: E402
 
 
@@ -307,6 +309,18 @@ class NativeGoalTests(unittest.TestCase):
         self.assertEqual({"journey": "repair"}, first["plan"]["criterion_gaps"])
         self.assertEqual([hint["workPackageId"]], [item["id"] for item in first["plan"]["work_packages"]])
         self.assertFalse((self.gov / "plan-tracker.md").exists())
+        self.assertFalse((self.gov / "execution-packets.json").exists())
+        direct_work = {"work_package_id": hint["workPackageId"], "criterion_id": hint["criterionId"],
+                       "preflight_receipt_sha256": hint["receiptSha256"]}
+        artifact = self.state()
+        self.assertEqual(direct_work, artifact["direct_work"])
+        self.assertEqual({"session_id", "revision", "profile_sha256"}, artifact["native_dsh"].keys())
+        stored_bytes = self.state_path.read_bytes()
+        status = self.bridge("status")
+        self.assertEqual({"goal_id": first["goal_id"], "contract_sha256": first["contract_sha256"], **direct_work},
+                         status["execution_packet"])
+        self.assertEqual(first["budget"]["zones"], status["zones"])
+        self.assertEqual(stored_bytes, self.state_path.read_bytes())
 
         (self.root / "game/main.txt").write_text("Actual repair", encoding="utf-8")
         claim = {**hint, "contractSha256": first["contract_sha256"]}
@@ -315,6 +329,16 @@ class NativeGoalTests(unittest.TestCase):
         fresh_host = self.native("ALLOW", "ADMITTED", direct_repair=hint)
         self.assertNotIn("direct_repair", fresh_host["plan"])
         self.assertNotIn("direct_repair_attested", fresh_host)
+        self.assertEqual(status["execution_packet"], self.bridge("status")["execution_packet"])
+
+        preflight = Path(hint["receipt"])
+        receipt_bytes = preflight.read_bytes()
+        preflight.write_bytes(receipt_bytes + b"\n")
+        stale_receipt = self.native("ALLOW", "ADMITTED", direct_repair=claim)
+        self.assertEqual("DIRECT_REPAIR_EVIDENCE_INVALID", stale_receipt["direct_repair_code"])
+        self.assertNotIn("direct_repair", stale_receipt["plan"])
+        self.assertEqual(direct_work, self.state()["direct_work"])
+        preflight.write_bytes(receipt_bytes)
 
         self.native("HOLD", "DELIVERY_ACCEPTANCE_FAILED", action="complete")
         self.receipt()
@@ -322,6 +346,36 @@ class NativeGoalTests(unittest.TestCase):
         self.assertEqual("CHECK_COMPLETION", plan["state"])
         self.assertNotIn("direct_repair", plan)
         self.native("ALLOW", "DELIVERY_ACCEPTED", action="complete")
+
+    def test_direct_plan_reuses_one_locked_goal_load_and_checks_live_locks_and_budget(self):
+        hint = self.direct_repair()
+        with (
+            patch.dict(os.environ, {"GOVERNANCE_GOAL_BRIDGE": "on", "GOVERNANCE_GOAL_BRIDGE_DISABLED": ""}),
+            patch.object(native_policy.bridge, "_load_artifact", wraps=native_policy.bridge._load_artifact) as load,
+        ):
+            first = native_policy.run(self.root.resolve(), {**self.request, "direct_repair": hint})
+            self.assertEqual("ADMITTED", first["code"])
+            self.assertTrue(first["plan"]["direct_repair"])
+            self.assertEqual(1, load.call_count)
+
+        claim = {**hint, "contractSha256": first["contract_sha256"]}
+        self.write_json(self.gov / "agent-locks.json", {
+            "active_tasks": {"FIX-501": {"spawned_at": "now", "coordinator_session": "other-session",
+                                        "target_files": []}}, "file_locks": {},
+        })
+        self.write_json(self.gov / "execution-packets.json", {"packets": {"FIX-501": {"goal_link": {
+            "goal_id": first["goal_id"], "contract_sha256": first["contract_sha256"],
+            "criteria": ["journey"], "action": "repair",
+        }}}})
+        overlap = self.native("ALLOW", "ADMITTED", direct_repair=claim)
+        self.assertNotIn("direct_repair", overlap["plan"])
+        self.assertEqual(1, overlap["plan"]["in_flight_count"])
+        stop = self.native("HOLD", "BUDGET_LIMIT_REACHED", direct_repair=claim, usage={"rounds": 10})
+        self.assertNotIn("plan", stop)
+        status = self.bridge("status")
+        self.assertEqual("CHECKPOINTED", status["state"])
+        self.assertEqual(10, status["zones"]["rounds"]["used"])
+        self.assertEqual(hint["workPackageId"], status["execution_packet"]["work_package_id"])
 
     def test_invalid_direct_repair_evidence_keeps_ordinary_admission(self):
         hint = self.direct_repair()
@@ -332,6 +386,7 @@ class NativeGoalTests(unittest.TestCase):
                 verdict = self.native("ALLOW", "ADMITTED", direct_repair={**hint, **update})
                 self.assertEqual("DIRECT_REPAIR_EVIDENCE_INVALID", verdict["direct_repair_code"])
                 self.assertNotIn("direct_repair", verdict["plan"])
+                self.assertNotIn("direct_work", self.state())
                 self.state_path.unlink()
                 (self.root / CONTRACT).unlink()
 

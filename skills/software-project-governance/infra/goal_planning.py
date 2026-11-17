@@ -185,7 +185,7 @@ def _recommend_work_packages(packages, packets, active, goal, gaps, remaining_ro
 
 
 def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_n: int = 3,
-                         work_packages=(), direct_repair=None) -> dict:
+                         work_packages=(), direct_repair=None, _validated_goal_status=None) -> dict:
     """Build only a recommendation. No task, checkpoint, or snapshot is written."""
     root = Path(project_root)
     gov = root / ".governance"
@@ -193,9 +193,12 @@ def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_
     if work_packages:
         output["work_packages"] = []
     try:
-        goal = goal_status(goal_id, governance_dir=gov)
+        goal = (goal_status(goal_id, governance_dir=gov) if _validated_goal_status is None
+                else dict(_validated_goal_status))
         if goal.get("error"):
             return dict(output, state="ERROR", diagnostics=[goal.get("detail", "goal state is unreadable")])
+        if _validated_goal_status is not None and goal.get("goal_id") != goal_id:
+            raise ValueError("goal status belongs to a different goal")
         zones = goal["zones"]
         budget = _budget_state(zones)
     except (ValueError, TypeError, OverflowError, OSError) as exc:
@@ -253,11 +256,11 @@ def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_
     except (OSError, ValueError, StoreError, RecursionError) as exc:
         return dict(output, state="ERROR", diagnostics=[str(exc)])
     if direct_repair:
-        criterion = direct_repair["criterionId"]
+        criterion = direct_repair["criterion_id"]
         current = acceptance.get("criteria_results", {}).get(criterion)
         if current is None or current["status"] == "FAIL":
             direct_gaps = {**gaps, criterion: "repair"}
-            package = next((item for item in work_packages if item["id"] == direct_repair["workPackageId"]), None)
+            package = next((item for item in work_packages if item["id"] == direct_repair["work_package_id"]), None)
             try:
                 packets, error = load_packets() if active else ({}, None)
                 if error:

@@ -216,7 +216,9 @@ def _direct_repair(root, request, packages, scope, contract_sha256, profile_sha2
             if (acceptance._hash_file(proof, nonempty=True) != hint["reproducerSha256"]
                     or _source_sha256(workspace, hint["sourceRoot"]) != hint["sourceSha256"]):
                 raise ValueError("native repair input differs from the frozen preflight")
-    return {"criterionId": criterion, "workPackageId": package}
+    work = {"criterion_id": criterion, "work_package_id": package, "preflight_receipt_sha256": digest}
+    bridge._validate_direct_work(work)
+    return work
 
 
 def _publish_contract(path, contract):
@@ -282,11 +284,12 @@ def _snapshot(artifact):
     }
 
 
-def _short_plan(project_root, goal, packages, direct_repair=None):
+def _short_plan(project_root, goal, packages, direct_repair=None, goal_status=None):
     governance_dir = project_root / ".governance"
     try:
         result = plan_goal_candidates(project_root, goal, load_packets=lambda: _load_packets(governance_dir),
-                                      work_packages=packages, direct_repair=direct_repair)
+                                      work_packages=packages, direct_repair=direct_repair,
+                                      _validated_goal_status=goal_status)
     except (OSError, ValueError, RecursionError, StoreError):
         return {"state": "ERROR"}
     return {
@@ -442,6 +445,9 @@ def _run_locked(root, target, request):
     if awaiting_native_resume and (action != "admit" or request["revision"] <= stop["revision"]):
         return _reply(request, "HOLD", "AUTHORIZED_RESUME_REQUIRED", **_snapshot(artifact))
 
+    if direct_repair is not None:
+        # Persist the observed association, leaving each admission to validate its live claim.
+        artifact["direct_work"] = direct_repair
     record = bridge._record_execution_locked(goal, target, in_flight=False, task_ref="", cost=None,
                                              governance_dir=governance_dir, config=config, artifact=artifact,
                                              rounds=request["usage"]["rounds"], tokens=request["usage"].get("tokens"),
@@ -453,7 +459,9 @@ def _run_locked(root, target, request):
 
     state = _snapshot(artifact)
     if action == "admit":
-        plan = _short_plan(root, goal, packages, direct_repair)
+        live_work = artifact["direct_work"] if direct_repair is not None else None
+        goal_status = bridge._status_from_artifact(artifact) if live_work is not None else None
+        plan = _short_plan(root, goal, packages, direct_repair=live_work, goal_status=goal_status)
         if plan["state"] in ("AWAIT_CONTRACT", "CONTRACT_CHANGED", "HOLD"):
             return _reply(request, "HOLD", "PLAN_GATE_CHANGED", **state, plan=plan)
         if awaiting_native_resume:

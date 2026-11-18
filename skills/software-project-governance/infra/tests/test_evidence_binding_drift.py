@@ -432,8 +432,8 @@ class TestF2MigrationPrefixBoundary(unittest.TestCase):
 class TestE6MigrationStampCompatibility(unittest.TestCase):
     """E-6 (fullchain §7): the semantic stamp may be bumped (0.65.0 →
     0.90.0). These guards pin the compatibility surface the bump relies on —
-    stamp-agnostic binding, row-shape acceptance, and rollback stamping from
-    the backup dir (not from the constant)."""
+    stamp-agnostic binding and row-shape acceptance. TestRollbackMigration
+    exercises the persisted rollback stamp across a version change."""
 
     def test_e6_c10_binding_is_stamp_agnostic(self):
         # A runtime binds the MIGRATION-<its own stamp> row, whatever the
@@ -473,14 +473,6 @@ class TestE6MigrationStampCompatibility(unittest.TestCase):
         self.assertIsNotNone(
             lm._EVIDENCE_ROW_PREFIX_RE.match(_first_cell(rollback_row)),
             rollback_row)
-
-    def test_e6_rollback_row_stamps_from_backup_dir_not_constant(self):
-        # Source-level compatibility anchor: rollback stamps ROLLBACK-<version>
-        # from the selected backup dir entry (backup_version), so pre-bump
-        # backups roll back with their original stamp even after a bump.
-        source = Path(lm.__file__).read_text(encoding="utf-8")
-        self.assertIn("ver=backup_version", source)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ADR-RB-2 — two-face goal-layer contract gate (factory WARN form)

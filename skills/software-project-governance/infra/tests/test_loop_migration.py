@@ -478,8 +478,10 @@ class TestRollbackMigration(unittest.TestCase):
             self.assertTrue(apply_result["applied"])
             self.assertTrue((root / ".governance" / "flow-unit-runtime.json").is_file())
 
-            # Rollback.
-            rollback_result = lm.rollback_migration(target_root=str(root))
+            # A newer plugin must stamp the restored backup's version in the journal.
+            backup_version = lm.MIGRATION_VERSION
+            with mock.patch.object(lm, "MIGRATION_VERSION", "99.0.0"):
+                rollback_result = lm.rollback_migration(target_root=str(root))
             self.assertTrue(rollback_result["rolled_back"], f"rollback failed: {rollback_result}")
             self.assertTrue(rollback_result["runtime_removed"])
 
@@ -495,7 +497,7 @@ class TestRollbackMigration(unittest.TestCase):
             # pre-migration content (the MIGRATION row was wiped by restore),
             # then we appended the ROLLBACK row on top.
             evidence_after = (root / ".governance" / "evidence-log.md").read_text(encoding="utf-8")
-            self.assertIn("ROLLBACK-0.65.0", evidence_after)
+            self.assertIn(f"| ROLLBACK-{backup_version} |", evidence_after)
             # The pre-apply EVD row must still be present (restore + append).
             self.assertIn("EVD-001", evidence_after)
 

@@ -1,0 +1,90 @@
+{
+  "sha256_bundle": "986a546d1d7399573a780ebd772cb9d156c77afe91a41741711134d45944e88d",
+  "font_sha256": "74b0eae014f157a8423482d9d86b3466b9e0be51989514461b54c61ade5d7dd0",
+  "bytes_font": 582516,
+  "nodes": 91,
+  "coverage": {
+    "title": {
+      "total": 43,
+      "covered": 43,
+      "missing": ""
+    },
+    "dialogs": {
+      "total": 569,
+      "covered": 568,
+      "missing": "䨼"
+    }
+  },
+  "playwright": "1.62.0",
+  "fonttools": "4.66.1",
+  "browser": "157.0.4341.46",
+  "as-built": {
+    "errors": [],
+    "counts": {},
+    "canvas": [
+      1280,
+      720
+    ],
+    "crop_rgb_unique": 2,
+    "crop_sha256": "816c367c68bda6442611ec56a2b3b23f9e0eb715d429a555e96114d3fb419b6e",
+    "render_fonts": [
+      "8px SimSun, \"Noto Sans CJK SC\", \"MS Gothic\", sans-serif"
+    ],
+    "render_chars": [
+      "契",
+      "始",
+      "山",
+      "海"
+    ],
+    "glyph_masks": {
+      "distinct_masks": 568,
+      "blank_characters": 0,
+      "collision_groups": 1,
+      "characters_sharing_masks": 2,
+      "example": [
+        [
+          "己",
+          "已"
+        ]
+      ]
+    }
+  },
+  "sample": {
+    "errors": [],
+    "counts": {
+      "sites": 6,
+      "font": 1
+    },
+    "canvas": [
+      1280,
+      720
+    ],
+    "crop_rgb_unique": 2,
+    "crop_sha256": "1fe404986e283b24e0870953df871e7be63c30d9433609d0131d7b0ab71c7030",
+    "render_fonts": [
+      "8px AuditFusion, SimSun, \"Noto Sans CJK SC\", \"MS Gothic\", sans-serif"
+    ],
+    "render_chars": [
+      "契",
+      "始",
+      "山",
+      "海"
+    ],
+    "glyph_masks": {
+      "distinct_masks": 567,
+      "blank_characters": 0,
+      "collision_groups": 2,
+      "characters_sharing_masks": 4,
+      "example": [
+        [
+          "—",
+          "一"
+        ],
+        [
+          "闲",
+          "闹"
+        ]
+      ]
+    }
+  }
+}

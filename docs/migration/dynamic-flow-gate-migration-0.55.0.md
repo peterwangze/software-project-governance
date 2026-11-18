@@ -1,61 +1,27 @@
-# Dynamic Flow-Gate Migration Guide 0.55.0
+# Dynamic lifecycle migration preview
 
-## Purpose
-
-This guide defines the verifiable preview path from `classic-phase-gate` to `dynamic-flow-gate` for 0.55.0. It is a migration planning and compatibility guide only. It does not perform migration writes, does not change the active/default lifecycle mode, and does not claim external validation or 1.0.0 readiness.
-
-## Compatibility Boundary
-
-- `classic-phase-gate remains active/default` for existing projects and new installs.
-- `dynamic-flow-gate is opt-in`; no project is migrated by default.
-- A classic-only project remains valid when it has a readable `.governance/plan-tracker.md` and `.governance/evidence-log.md`.
-- `plan-tracker is preserved`; the preview records its hash and never rewrites it.
-- `evidence-log is preserved`; the preview records its hash and never rewrites it.
-- `dry-run is read-only`; the command prints a structured preview and leaves target files untouched.
-- The preview does not close RISK-036.
-- The preview does not close RISK-037.
-- The preview does not claim 1.0.0 production-ready.
-
-## Command
-
-Run the dry-run preview against a fixture or project root:
+The preview introduced in 0.55.0 inventories a classic project's existing governance records. Run it against the project root.
 
 ```bash
-python skills/software-project-governance/infra/verify_workflow.py dynamic-lifecycle-migration --target <path> --dry-run
+python skills/software-project-governance/infra/verify_workflow.py dynamic-lifecycle-migration --target <path> --dry-run --fail-on-issues
 ```
 
-`--dry-run` is required in 0.55.0. `--apply` is blocked.
+`dynamic-flow-gate-migration` is an alias. With `--fail-on-issues`, an unusable input produces a JSON diagnostic and a nonzero exit code.
 
-## Structured Preview
+## Reading the result
 
-The command prints JSON with these top-level sections:
+- `workflow_model` reports the model inferred from the project tracker. Classic remains the default and dynamic migration requires explicit opt-in.
+- `flow_units` reports existing units recorded in the project's optional `.governance/flow-unit-runtime.json`. A project without that file has `source: "none"`, a zero count and empty lanes. A runtime containing `{"flow_units":[]}` has a zero count and identifies the file as its source.
+- Pre-schema runtime files can report unique unit IDs and project-defined lanes. Declared v1 and v2 runtimes are checked against their respective contracts. V2 units report their gate ID and can have an unassigned lane (`gate_lane: null`), which still counts as an observed unit. Unsupported versions and unreadable or invalid state block both preview and apply before any backup or repair.
+- `evidence_preservation` records the SHA-256 of the same bytes used to read the tracker and count evidence rows. Missing or unreadable files and an evidence log without a parseable row appear in `blocked_checks`. Project decisions, risk IDs and release history belong to the project.
+- `write_operations` is empty for a dry run. `READY_FOR_REVIEW` indicates that the inventory can be reviewed.
 
-- `workflow_model`: current model inferred from the target, target model `dynamic-flow-gate`, and the boundary that `classic-phase-gate` remains active/default.
-- `flow_units`: flow-unit preview from optional `.governance/flow-unit-runtime.json`; if absent, the lifecycle registry example can be used as a preview source.
-- `evidence_preservation`: readable plan/evidence paths, preservation flags, evidence row count, and SHA-256 hashes.
-- `blocked_checks`: fail-closed reasons such as missing plan/evidence, missing lifecycle registry, dynamic default overclaim, or empty evidence rows.
-- `no_overclaim_boundaries`: conservative boundaries for dry-run, opt-in, risk status, and readiness claims.
-- `migration_plan`: read-only planning steps for inventory, preservation, opt-in review, and future human-reviewed migration.
+## Proposed units, application and rollback
 
-## Evidence Preservation Rules
+For a target-derived migration plan, use the loop migration entry point. Its dry run includes `migration_plan` and `plan_hash` alongside the observed `flow_units`.
 
-Existing classic governance evidence stays authoritative. A future real migration must copy forward or reference existing evidence instead of replacing it. The preview only proves whether current files are readable and hashable.
+```bash
+python skills/software-project-governance/infra/loop_migration.py --target <path> --dry-run
+```
 
-Fail-closed cases:
-
-- Missing `.governance/plan-tracker.md`.
-- Missing `.governance/evidence-log.md`.
-- Evidence log has no parseable evidence rows.
-- Lifecycle registry is unreadable or claims `dynamic-flow-gate` active/default.
-- Target text claims dynamic default, risk closure, migration already applied, or 1.0.0 readiness.
-
-## Rollback and Real Migration Boundary
-
-There is no 0.55.0 write path to roll back because the command does not mutate target files. A future write-capable migration must ship a separate command, independent review, backup plan, and rollback proof before it can be used on a project.
-
-Until that exists:
-
-- Keep classic project gates valid.
-- Treat dynamic flow units as preview/runtime visibility only.
-- Require explicit user opt-in for any future migration.
-- Keep RISK-036 and RISK-037 open until their external validation closure criteria are met.
+A write requires a separate explicit apply. The loop migration implementation validates the payload and protects host files with backups and integrity checks. The backup records whether the runtime existed and seals its exact bytes. `--rollback` restores them or removes the migration-created file when the backup proves prior absence. Recovery stops for ambiguous or damaged backups, including older backups that lack the runtime presence record. Explicit rollback replaces subsequent edits to the tracker, evidence log, and runtime with that snapshot and appends a rollback record. Automatic recovery of an interrupted apply also requires the live runtime to match the intended bytes and the evidence log to match the pre-migration snapshot. A preview alone leaves the project's files untouched.

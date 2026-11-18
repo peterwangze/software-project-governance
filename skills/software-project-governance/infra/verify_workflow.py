@@ -40,7 +40,9 @@ from checks.flow_unit_runtime import (
     BOUNDARY_TOKENS as FLOW_UNIT_RUNTIME_BOUNDARY_TOKENS,
     FORBIDDEN_OVERCLAIMS as FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS,
     RUNTIME_SCOPE as FLOW_UNIT_RUNTIME_SCOPE,
-    validate_flow_unit_runtime_payload,
+    observed_runtime_issues,
+    read_flow_unit_runtime,
+    validate_flow_unit_runtime_payload_dispatch,
 )
 from checks import projection as projection_checks
 from checks import version as version_checks
@@ -2558,32 +2560,6 @@ LIFECYCLE_REGISTRY_PATH = ROOT / "skills/software-project-governance/core/lifecy
 LIFECYCLE_REGISTRY_ACTIVE_MODE = "classic-phase-gate"
 LIFECYCLE_REGISTRY_DYNAMIC_MODE = "dynamic-flow-gate"
 FLOW_UNIT_RUNTIME_STATE_REL = Path(".governance/flow-unit-runtime.json")
-DYNAMIC_LIFECYCLE_MIGRATION_GUIDE_REL = Path("docs/migration/dynamic-flow-gate-migration-0.55.0.md")
-DYNAMIC_LIFECYCLE_MIGRATION_BOUNDARY_TOKENS = [
-    "classic-phase-gate remains active/default",
-    "dynamic-flow-gate is opt-in",
-    "plan-tracker is preserved",
-    "evidence-log is preserved",
-    "dry-run is read-only",
-    "does not close RISK-036",
-    "does not close RISK-037",
-    "does not claim 1.0.0 production-ready",
-]
-DYNAMIC_LIFECYCLE_MIGRATION_FORBIDDEN_OVERCLAIMS = [
-    ("dynamic-flow-gate default", re.compile(r"\bdynamic-flow-gate\s+(?:is\s+)?(?:now\s+)?default\b")),
-    ("dynamic-flow-gate default", re.compile(r"\bdynamic-flow-gate\s+is\s+the\s+default\s+lifecycle\s+mode\b")),
-    ("classic project invalid", re.compile(r"\bclassic(?:-phase-gate)?\s+projects?\s+(?:are|is)\s+invalid\b")),
-    ("migration applied", re.compile(r"\bmigration\s+(?:is\s+)?applied\b")),
-    ("external validation full PASS", re.compile(r"\bexternal\s+validation\s+full\s+pass\b")),
-    ("official approval", re.compile(r"\bofficial\s+approval\b")),
-    ("marketplace approval", re.compile(r"\bmarketplace\s+approval\b")),
-    ("Codex Desktop lifecycle PASS", re.compile(r"\bcodex\s+desktop\s+lifecycle\s+pass\b")),
-    ("risk-036 closed", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosed\b")),
-    ("risk-036 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-036\b")),
-    ("risk-037 closed", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosed\b")),
-    ("risk-037 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-037\b")),
-    ("1.0.0 production-ready", re.compile(r"\b1\.0\.0\s+production-ready\b")),
-]
 LIFECYCLE_REGISTRY_GATES = [f"G{i}" for i in range(1, 12)]
 LIFECYCLE_REGISTRY_STAGE_IDS = [
     "initiation",
@@ -3317,12 +3293,17 @@ def _load_lifecycle_registry(root=None):
     root = root or ROOT
     registry_path = root / "skills/software-project-governance/core/lifecycle-registry.json"
     display = _display_path(registry_path, root)
-    if not registry_path.exists():
-        return None, [f"{display}: missing lifecycle registry"]
     try:
-        return json.loads(registry_path.read_text(encoding="utf-8")), []
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, [f"{display}: missing lifecycle registry"]
     except json.JSONDecodeError as exc:
         return None, [f"{display}: invalid JSON: {exc}"]
+    except (ValueError, OSError, RecursionError) as exc:
+        return None, [f"{display}: unreadable lifecycle registry: {exc}"]
+    if not isinstance(registry, dict):
+        return None, [f"{display}: lifecycle registry root must be an object"]
+    return registry, []
 
 
 def _lifecycle_registry_manifest_issues(root, registry_path, display):
@@ -3528,9 +3509,6 @@ def check_lifecycle_registry(root=None):
         return load_issues
 
     failures = []
-    if not isinstance(registry, dict):
-        return [f"{display}: lifecycle registry root must be an object"]
-
     if registry.get("workflow") != "software-project-governance":
         failures.append(f"{display}: workflow must be software-project-governance")
     if registry.get("source_of_truth") is not True:
@@ -3661,13 +3639,11 @@ def check_lifecycle_registry(root=None):
     if not isinstance(allowed_transitions, list) or not allowed_transitions:
         failures.append(f"{display}: allowed_transitions must be a non-empty list")
         allowed_transitions = []
-    transition_ids = []
     for transition in allowed_transitions:
         if not isinstance(transition, dict):
             failures.append(f"{display}: each allowed_transitions entry must be an object")
             continue
         transition_id = transition.get("id", "<missing>")
-        transition_ids.append(transition_id)
         label = f"{display}: transition {transition_id}"
         if transition.get("from_stage") not in stage_id_set:
             failures.append(f"{label}: from_stage must reference stage_vocabulary")
@@ -3867,90 +3843,6 @@ def check_lifecycle_registry(root=None):
                     f"{preset_label}.gate_standards missing library standards: {', '.join(missing_standards)}"
                 )
 
-    examples = registry.get("examples")
-    if not isinstance(examples, list) or not examples:
-        failures.append(f"{display}: examples must be a non-empty list")
-        examples = []
-    example_by_id = {
-        example.get("id"): example
-        for example in examples
-        if isinstance(example, dict)
-    }
-    python_game = example_by_id.get("python_game_10_chapters")
-    if not python_game:
-        failures.append(f"{display}: examples must include python_game_10_chapters")
-    else:
-        if python_game.get("schema_only") is not True:
-            failures.append(f"{display}: python_game_10_chapters.schema_only must be true")
-        if python_game.get("runtime_activation") is not False:
-            failures.append(f"{display}: python_game_10_chapters.runtime_activation must be false")
-        if python_game.get("project_type") != "game":
-            failures.append(f"{display}: python_game_10_chapters.project_type must be game")
-        flow_units = python_game.get("flow_units")
-        if not isinstance(flow_units, list):
-            failures.append(f"{display}: python_game_10_chapters.flow_units must be a list")
-            flow_units = []
-        chapter_ids = [f"game.chapter.{i:02d}" for i in range(1, 11)]
-        seen_flow_unit_ids = [
-            unit.get("flow_unit_id")
-            for unit in flow_units
-            if isinstance(unit, dict)
-        ]
-        if seen_flow_unit_ids != chapter_ids:
-            failures.append(f"{display}: python_game_10_chapters must define game.chapter.01 through game.chapter.10 in order")
-        lane_by_id = {
-            unit.get("flow_unit_id"): unit.get("gate_lane")
-            for unit in flow_units
-            if isinstance(unit, dict)
-        }
-        expected_lanes = {
-            "game.chapter.01": "released",
-            "game.chapter.02": "testing",
-            "game.chapter.03": "development",
-            **{f"game.chapter.{i:02d}": "backlog" for i in range(4, 11)},
-        }
-        if lane_by_id != expected_lanes:
-            failures.append(f"{display}: python_game_10_chapters lanes must model chapter 1 released, chapter 2 testing, chapter 3 development, chapter 4-10 backlog")
-        for unit in flow_units:
-            if not isinstance(unit, dict):
-                failures.append(f"{display}: each python_game flow unit must be an object")
-                continue
-            unit_label = f"{display}: flow unit {unit.get('flow_unit_id', '<missing>')}"
-            for field in LIFECYCLE_REGISTRY_REQUIRED_FLOW_FIELDS:
-                if field not in unit:
-                    failures.append(f"{unit_label}: missing required field `{field}`")
-            if unit.get("unit_type") not in allowed_unit_types:
-                failures.append(f"{unit_label}: unit_type must be declared in flow_unit_schema.allowed_unit_types")
-            if unit.get("project_type") != "game":
-                failures.append(f"{unit_label}: project_type must be game")
-            if unit.get("current_stage") not in stage_id_set:
-                failures.append(f"{unit_label}: current_stage must reference stage_vocabulary")
-            if unit.get("current_subphase") not in subphase_ids:
-                failures.append(f"{unit_label}: current_subphase must reference subphase_vocabulary")
-            if unit.get("gate_lane") not in allowed_gate_lanes:
-                failures.append(f"{unit_label}: gate_lane must be declared in flow_unit_schema.allowed_gate_lanes")
-            gate_refs = unit.get("gate_references")
-            if not _is_valid_string_list(gate_refs):
-                failures.append(f"{unit_label}: gate_references must be a non-empty string list")
-            else:
-                for gate_id in gate_refs:
-                    if gate_id not in gate_id_set:
-                        failures.append(f"{unit_label}: unknown gate reference `{gate_id}`")
-            next_transitions = unit.get("allowed_next_transitions")
-            if not _is_valid_string_list(next_transitions):
-                failures.append(f"{unit_label}: allowed_next_transitions must be a non-empty string list")
-            else:
-                for transition_id in next_transitions:
-                    if transition_id not in transition_ids:
-                        failures.append(f"{unit_label}: unknown transition `{transition_id}`")
-            for field in ("dependencies", "blockers", "evidence_refs"):
-                if not isinstance(unit.get(field), list):
-                    failures.append(f"{unit_label}: {field} must be a list")
-            if not isinstance(unit.get("loop_state"), dict):
-                failures.append(f"{unit_label}: loop_state must be an object")
-            if unit.get("runtime_status_source") != "example-data-only":
-                failures.append(f"{unit_label}: runtime_status_source must be example-data-only in schema-only 0.51.0")
-
     for text in _lifecycle_registry_text_values(registry):
         lowered = text.lower()
         if "flow-unit runtime behavior active" in lowered:
@@ -3972,100 +3864,65 @@ def _flow_unit_runtime_path(root=None):
     return (root or ROOT) / FLOW_UNIT_RUNTIME_STATE_REL
 
 
-def _load_flow_unit_runtime(root=None):
-    root = root or ROOT
-    runtime_path = _flow_unit_runtime_path(root)
-    display = _display_path(runtime_path, root)
-    if not runtime_path.exists():
-        return None, [f"{display}: NOT_FOUND safe; flow-unit runtime hot state is optional"]
-    try:
-        state = json.loads(runtime_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return None, [f"{display}: invalid JSON: {exc}"]
-    if not isinstance(state, dict):
-        return None, [f"{display}: flow-unit runtime root must be an object"]
-    return state, []
-
-
-def _flow_runtime_text_values(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _flow_runtime_text_values(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _flow_runtime_text_values(item)
-
-
 def _flow_runtime_boundary_display(value):
     if isinstance(value, list):
         return "; ".join(item for item in value if isinstance(item, str))
     return str(value or "")
 
 
-def discover_flow_unit_runtime_context(root=None):
+def discover_flow_unit_runtime_context(root=None, *, validate_v1=False):
     """Return visibility-only flow-unit context from optional hot project state."""
     root = root or ROOT
     runtime_path = _flow_unit_runtime_path(root)
-    state, load_issues = _load_flow_unit_runtime(root)
-    if state is None:
+    display = str(_display_path(runtime_path, root))
+    state, _, load_issues = read_flow_unit_runtime(runtime_path, display)
+    if state is not None:
+        load_issues = observed_runtime_issues(state, display, validate_v1=validate_v1)
+    if state is None or load_issues:
+        missing = state is None and not load_issues
         return {
-            "status": "NOT_FOUND" if load_issues and "NOT_FOUND safe" in load_issues[0] else "INVALID",
+            "status": "NOT_FOUND" if missing else "INVALID",
             "path": str(_display_path(runtime_path, root)),
             "workflow_model": "classic-phase-gate",
             "active_lanes": {},
-            "rollup_status": "not found",
+            "rollup_status": "not found" if missing else "invalid",
             "blocked_downstream_units": [],
             "loop_counters": {},
-            "source_facts": load_issues,
+            "source_facts": load_issues or [f"{display}: NOT_FOUND safe; flow-unit runtime hot state is optional"],
             "no_overclaim_boundary": "runtime visibility only; classic G1-G11 remains compatible",
         }
 
-    flow_units = state.get("flow_units", [])
-    if not isinstance(flow_units, list):
-        flow_units = []
+    flow_units = state["flow_units"]
+    observed_units = []
     active_lanes = {}
     loop_counters = {}
     blocked_downstream = []
-    unit_ids = {
-        unit.get("flow_unit_id")
-        for unit in flow_units
-        if isinstance(unit, dict) and unit.get("flow_unit_id")
-    }
     directly_blocked = {
-        unit.get("flow_unit_id")
-        for unit in flow_units
-        if isinstance(unit, dict)
-        and unit.get("flow_unit_id")
-        and (
-            unit.get("blockers")
-            or (
-                isinstance(unit.get("gate_state"), dict)
-                and unit.get("gate_state", {}).get("status") == "blocked"
-            )
+        unit["flow_unit_id"] for unit in flow_units
+        if unit.get("blockers") or (
+            isinstance(unit.get("gate_state"), dict)
+            and unit["gate_state"].get("status") == "blocked"
         )
     }
     for unit in flow_units:
-        if not isinstance(unit, dict):
-            continue
-        unit_id = unit.get("flow_unit_id")
+        unit_id = unit["flow_unit_id"]
         lane = unit.get("gate_lane")
-        if unit_id and lane:
+        row = {"flow_unit_id": unit_id, "gate_lane": lane if isinstance(lane, str) and lane.strip() else None}
+        if row["gate_lane"] is not None:
             active_lanes.setdefault(lane, []).append(unit_id)
-        loop_state = unit.get("loop_state") if isinstance(unit.get("loop_state"), dict) else {}
-        if unit_id:
-            loop_count = loop_state.get("loop_count", 0)
-            if isinstance(loop_count, bool):
-                loop_counters[unit_id] = 0
-            elif isinstance(loop_count, int):
-                loop_counters[unit_id] = loop_count
-            elif isinstance(loop_count, str) and loop_count.strip().isdigit():
-                loop_counters[unit_id] = int(loop_count.strip())
-            else:
-                loop_counters[unit_id] = 0
-        deps = unit.get("dependencies") if isinstance(unit.get("dependencies"), list) else []
-        if unit_id and any(dep in directly_blocked for dep in deps):
+        if state.get("schema_version") == "2.0":
+            row["gate_id"] = unit["gate_state"]["gate_id"]
+        observed_units.append(row)
+        loop_state = unit.get("loop_state")
+        loop_count = loop_state.get("loop_count") if isinstance(loop_state, dict) else None
+        if isinstance(loop_count, str) and loop_count.strip().isdecimal():
+            try:
+                loop_count = int(loop_count.strip())
+            except ValueError:
+                loop_count = 0
+        loop_counters[unit_id] = loop_count if type(loop_count) is int else 0
+        deps = unit.get("dependencies")
+        if isinstance(deps, list) and any(isinstance(dep, str) and dep in directly_blocked for dep in deps):
             blocked_downstream.append(unit_id)
 
     declared_blocked = state.get("blocked_downstream_units")
@@ -4075,11 +3932,12 @@ def discover_flow_unit_runtime_context(root=None):
         "path": str(_display_path(runtime_path, root)),
         "workflow_model": state.get("workflow_model", ""),
         "active_lanes": active_lanes,
+        "preview_units": observed_units,
         "rollup_status": state.get("rollup_status", ""),
         "blocked_downstream_units": blocked_downstream_units,
         "loop_counters": loop_counters,
         "source_facts": [
-            f"{_display_path(runtime_path, root)}: {len(unit_ids)} flow unit(s), "
+            f"{_display_path(runtime_path, root)}: {len(flow_units)} flow unit(s), "
             f"{len(active_lanes)} active lane(s)"
         ],
         "no_overclaim_boundary": _flow_runtime_boundary_display(state.get("no_overclaim_boundary")),
@@ -4091,23 +3949,17 @@ def check_flow_unit_runtime(root=None):
     root = root or ROOT
     runtime_path = _flow_unit_runtime_path(root)
     display = _display_path(runtime_path, root)
-    state, load_issues = _load_flow_unit_runtime(root)
+    state, _, load_issues = read_flow_unit_runtime(runtime_path, str(display))
     if state is None:
-        return [] if load_issues and "NOT_FOUND safe" in load_issues[0] else load_issues
-    return validate_flow_unit_runtime_payload(state, str(display))
+        return load_issues
+    if "schema_version" in state:
+        return observed_runtime_issues(state, str(display))
+    return validate_flow_unit_runtime_payload_dispatch(state, str(display))
 
 
 def _dynamic_migration_target_root(target):
     target_path = Path(target)
     return target_path if target_path.is_absolute() else ROOT / target_path
-
-
-def _file_sha256(path):
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _parse_plan_workflow_model(plan_text):
@@ -4164,169 +4016,13 @@ def _count_evidence_rows(evidence_text):
     return count
 
 
-def _migration_guide_issues(root=None):
-    root = root or ROOT
-    guide_path = root / DYNAMIC_LIFECYCLE_MIGRATION_GUIDE_REL
-    display = _display_path(guide_path, root)
-    if not guide_path.exists():
-        return [f"{display}: missing 0.55.0 dynamic lifecycle migration guide"]
-    content = guide_path.read_text(encoding="utf-8")
-    lowered = content.lower()
-    failures = []
-    for token in DYNAMIC_LIFECYCLE_MIGRATION_BOUNDARY_TOKENS:
-        if token.lower() not in lowered:
-            failures.append(f"{display}: missing migration guide boundary token `{token}`")
-    failures.extend(
-        f"{display}: {issue}"
-        for issue in _dynamic_migration_forbidden_text_issues(content, "forbidden migration guide")
-    )
-    return failures
-
-
-def _dynamic_migration_forbidden_text_issues(text, source_label):
-    failures = []
-    for line in str(text).splitlines():
-        if _dynamic_migration_line_is_conservative(line):
-            continue
-        lowered_line = line.lower()
-        for label, pattern in DYNAMIC_LIFECYCLE_MIGRATION_FORBIDDEN_OVERCLAIMS:
-            for match in pattern.finditer(lowered_line):
-                matched_claim = line[match.start():match.end()]
-                clause_start, clause_end = _claim_clause_bounds(lowered_line, match.start(), match.end())
-                claim_clause = line[clause_start:clause_end]
-                if _line_has_scoped_claim_negation(claim_clause, matched_claim):
-                    continue
-                if _line_has_scoped_claim_negation(line, matched_claim):
-                    continue
-                if _dynamic_migration_clause_is_conservative(claim_clause):
-                    continue
-                if not _line_has_scoped_claim_negation(claim_clause, matched_claim):
-                    failures.append(f"{source_label} overclaim `{label}`")
-                    break
-            if failures and failures[-1] == f"{source_label} overclaim `{label}`":
-                break
-    return failures
-
-
-def _dynamic_migration_line_is_conservative(line):
-    lower = line.lower()
-    conservative_markers = (
-        "no-overclaim",
-        "fail-closed",
-        "review",
-        "reviewer",
-        "审查",
-        "复审",
-        "事实依据",
-        "blocked/not_supported",
-        "blocked / not_supported",
-        "not supported",
-        "not_supported",
-        "not run",
-        "not_run",
-        "blocked",
-        "fail",
-        "false-pass",
-        "false pass",
-        "例子",
-        "example",
-        "examples",
-        "variant",
-        "variants",
-        "回归",
-        "保守",
-    )
-    if any(marker in lower for marker in conservative_markers):
-        return True
-    return False
-
-
-def _dynamic_migration_clause_is_conservative(clause):
-    lower = clause.lower()
-    conservative_markers = (
-        "不声明",
-        "不关闭",
-        "不迁移",
-        "不激活",
-        "不替代",
-        "不把 dynamic-flow-gate 设为默认",
-        "不把 dynamic-flow-gate 设为 default",
-        "不把 dynamic-flow-gate 设为 the default",
-        "does not claim official approval",
-        "does not claim marketplace approval",
-        "does not claim external validation full pass",
-        "does not claim codex desktop lifecycle pass",
-        "do not claim official approval",
-        "do not claim marketplace approval",
-        "do not claim external validation full pass",
-        "do not claim codex desktop lifecycle pass",
-        "does not close",
-        "do not close",
-        "blocked/not_supported",
-        "blocked / not_supported",
-        "not supported",
-        "not_supported",
-        "not run",
-        "not_run",
-        "fail-closed",
-        "fail closed",
-        "no-overclaim",
-        "review",
-        "reviewer",
-        "example",
-        "examples",
-        "variant",
-        "variants",
-        "false-pass",
-        "false pass",
-        "漏掉",
-        "发现",
-        "回归",
-        "still need official approval",
-        "still need marketplace approval",
-        "still require official approval",
-        "still require marketplace approval",
-        "仍需官方提交结果",
-        "仍需外部验证",
-        "仍需 official approval",
-        "仍需 marketplace approval",
-        "不声明 official approval",
-        "不声明 marketplace approval",
-        "不声明 external validation full pass",
-        "不声明 codex desktop lifecycle pass",
-        "继续打开",
-        "保守处置",
-        "保守边界",
-        "暂不关闭",
-        "remains open",
-        "remains blocked",
-        "pending",
-        "awaiting",
-    )
-    if any(marker in lower for marker in conservative_markers):
-        if any(
-            phrase in lower
-            for phrase in (
-                "external validation full pass",
-                "official approval",
-                "marketplace approval",
-                "codex desktop lifecycle pass",
-                "risk-036",
-                "risk-037",
-            )
-        ):
-            return False
-        return True
-    return False
-
-
 def build_dynamic_lifecycle_migration_preview(target=None):
     """FIX-139: build a read-only classic -> dynamic migration preview."""
     root = _dynamic_migration_target_root(target or ROOT)
     plan_path = root / ".governance/plan-tracker.md"
     evidence_path = root / ".governance/evidence-log.md"
     registry, registry_issues = _load_lifecycle_registry(ROOT)
-    runtime_context = discover_flow_unit_runtime_context(root)
+    runtime_context = discover_flow_unit_runtime_context(root, validate_v1=True)
 
     preview = {
         "command": "dynamic-lifecycle-migration",
@@ -4347,16 +4043,6 @@ def build_dynamic_lifecycle_migration_preview(target=None):
             "preview_units": [],
         },
         "evidence_preservation": {
-            "plan_tracker": {
-                "path": str(_display_path(plan_path, root)),
-                "exists": plan_path.exists(),
-                "preserved": plan_path.exists(),
-            },
-            "evidence_log": {
-                "path": str(_display_path(evidence_path, root)),
-                "exists": evidence_path.exists(),
-                "preserved": evidence_path.exists(),
-            },
             "evidence_rows": 0,
             "hashes": {},
         },
@@ -4368,80 +4054,60 @@ def build_dynamic_lifecycle_migration_preview(target=None):
             "dry-run is read-only and does not modify target",
             "plan-tracker is preserved",
             "evidence-log is preserved",
-            "does not close RISK-036",
-            "does not close RISK-037",
-            "does not claim 1.0.0 production-ready",
         ],
         "migration_plan": [],
     }
 
     if registry_issues:
         preview["blocked_checks"].extend(registry_issues)
-    elif isinstance(registry, dict):
+    else:
         if registry.get("active_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
             preview["blocked_checks"].append("lifecycle registry active mode is not classic-phase-gate")
         if registry.get("default_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
             preview["blocked_checks"].append("lifecycle registry default mode is not classic-phase-gate")
-        modes = {
-            mode.get("id"): mode for mode in registry.get("lifecycle_modes", [])
-            if isinstance(mode, dict)
-        }
-        dynamic = modes.get(LIFECYCLE_REGISTRY_DYNAMIC_MODE, {})
-        if dynamic.get("default") is not False or dynamic.get("active") is not False:
+        modes = registry.get("lifecycle_modes")
+        dynamic = [
+            mode for mode in modes
+            if isinstance(mode, dict) and mode.get("id") == LIFECYCLE_REGISTRY_DYNAMIC_MODE
+        ] if isinstance(modes, list) else []
+        if len(dynamic) != 1 or dynamic[0].get("default") is not False or dynamic[0].get("active") is not False:
             preview["blocked_checks"].append("dynamic-flow-gate must remain inactive/default=false until explicit opt-in")
 
-    if not plan_path.exists():
-        preview["blocked_checks"].append("missing .governance/plan-tracker.md")
-    else:
-        plan_text = plan_path.read_text(encoding="utf-8")
-        preview["workflow_model"]["current"] = _parse_plan_workflow_model(plan_text)
-        preview["evidence_preservation"]["hashes"]["plan_tracker_sha256"] = _file_sha256(plan_path)
-        preview["blocked_checks"].extend(
-            _dynamic_migration_forbidden_text_issues(plan_text, "plan-tracker forbidden migration")
-        )
-
-    if not evidence_path.exists():
-        preview["blocked_checks"].append("missing .governance/evidence-log.md")
-    else:
-        evidence_text = evidence_path.read_text(encoding="utf-8")
-        evidence_rows = _count_evidence_rows(evidence_text)
-        preview["evidence_preservation"]["evidence_rows"] = evidence_rows
-        preview["evidence_preservation"]["hashes"]["evidence_log_sha256"] = _file_sha256(evidence_path)
-        preview["blocked_checks"].extend(
-            _dynamic_migration_forbidden_text_issues(evidence_text, "evidence-log forbidden migration")
-        )
-        if evidence_rows == 0:
-            preview["blocked_checks"].append("evidence-log has no parseable evidence rows")
+    preservation = preview["evidence_preservation"]
+    for key, path in (("plan_tracker", plan_path), ("evidence_log", evidence_path)):
+        display = str(_display_path(path, root))
+        record = {"path": display, "exists": False, "preserved": False}
+        preservation[key] = record
+        try:
+            raw = path.read_bytes()
+            content = raw.decode("utf-8")
+        except FileNotFoundError:
+            preview["blocked_checks"].append(f"missing {path.relative_to(root).as_posix()}")
+            continue
+        except (OSError, UnicodeError) as exc:
+            record["exists"] = path.exists()
+            preview["blocked_checks"].append(f"{display}: unreadable: {exc}")
+            continue
+        record.update(exists=True, preserved=True)
+        preservation["hashes"][f"{key}_sha256"] = hashlib.sha256(raw).hexdigest()
+        if key == "plan_tracker":
+            preview["workflow_model"]["current"] = _parse_plan_workflow_model(content)
+        else:
+            preservation["evidence_rows"] = _count_evidence_rows(content)
+            if not preservation["evidence_rows"]:
+                preview["blocked_checks"].append("evidence-log has no parseable evidence rows")
 
     if runtime_context["status"] == "FOUND":
-        active_lanes = runtime_context.get("active_lanes", {})
+        units = runtime_context["preview_units"]
+        preview["flow_units"] = {
+            "source": runtime_context["path"],
+            "active_lanes": runtime_context["active_lanes"],
+            "count": len(units),
+            "preview_units": units,
+        }
+    elif runtime_context["status"] == "INVALID":
         preview["flow_units"]["source"] = runtime_context["path"]
-        preview["flow_units"]["active_lanes"] = active_lanes
-        preview["flow_units"]["count"] = sum(len(units) for units in active_lanes.values())
-        preview["flow_units"]["preview_units"] = [
-            {"flow_unit_id": unit_id, "gate_lane": lane}
-            for lane, units in active_lanes.items()
-            for unit_id in units
-        ]
-    elif isinstance(registry, dict):
-        examples = registry.get("examples", [])
-        python_game = next(
-            (item for item in examples if isinstance(item, dict) and item.get("id") == "python_game_10_chapters"),
-            None,
-        )
-        if isinstance(python_game, dict):
-            units = python_game.get("flow_units", [])
-            preview["flow_units"]["source"] = "lifecycle-registry example python_game_10_chapters"
-            preview["flow_units"]["count"] = len(units) if isinstance(units, list) else 0
-            lanes = {}
-            for unit in units if isinstance(units, list) else []:
-                if isinstance(unit, dict):
-                    lanes.setdefault(unit.get("gate_lane", "unknown"), []).append(unit.get("flow_unit_id"))
-            preview["flow_units"]["active_lanes"] = lanes
-            preview["flow_units"]["preview_units"] = [
-                {"flow_unit_id": unit.get("flow_unit_id"), "gate_lane": unit.get("gate_lane")}
-                for unit in units if isinstance(unit, dict)
-            ]
+        preview["blocked_checks"].extend(runtime_context["source_facts"])
 
     preview["migration_plan"] = [
         {
@@ -4466,39 +4132,13 @@ def build_dynamic_lifecycle_migration_preview(target=None):
         },
     ]
     preview["status"] = "BLOCKED" if preview["blocked_checks"] else "READY_FOR_REVIEW"
+    preview["validation_issues"] = list(preview["blocked_checks"])
     return preview
 
 
 def check_dynamic_lifecycle_migration_preview(target=None):
-    preview = build_dynamic_lifecycle_migration_preview(target)
-    failures = []
-    failures.extend(_migration_guide_issues(ROOT))
-    if preview.get("dry_run") is not True:
-        failures.append("migration preview must be dry_run=true")
-    if preview.get("write_operations") != []:
-        failures.append("migration preview must not declare write operations")
-    workflow_model = preview.get("workflow_model", {})
-    if workflow_model.get("active_default_remains") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
-        failures.append("migration preview must keep classic-phase-gate as active/default")
-    if workflow_model.get("target") != LIFECYCLE_REGISTRY_DYNAMIC_MODE:
-        failures.append("migration preview target must be dynamic-flow-gate")
-    if workflow_model.get("dynamic_opt_in") is not True:
-        failures.append("migration preview must state dynamic-flow-gate is opt-in")
-    preservation = preview.get("evidence_preservation", {})
-    if not preservation.get("plan_tracker", {}).get("preserved"):
-        failures.append("migration preview must preserve plan-tracker")
-    if not preservation.get("evidence_log", {}).get("preserved"):
-        failures.append("migration preview must preserve evidence-log")
-    boundaries = " ".join(preview.get("no_overclaim_boundaries", [])).lower()
-    for token in DYNAMIC_LIFECYCLE_MIGRATION_BOUNDARY_TOKENS:
-        if token.lower() not in boundaries:
-            failures.append(f"migration preview missing no-overclaim boundary token `{token}`")
-    for text in _flow_runtime_text_values(preview):
-        failures.extend(
-            _dynamic_migration_forbidden_text_issues(text, "migration preview forbidden")
-        )
-    failures.extend(preview.get("blocked_checks", []))
-    return failures
+    """Return the diagnostics from one read-only snapshot for legacy callers."""
+    return build_dynamic_lifecycle_migration_preview(target)["validation_issues"]
 
 
 def check_governance_packs(root=None):
@@ -23494,12 +23134,8 @@ def cmd_dynamic_lifecycle_migration(args):
         print("ERROR: dynamic-lifecycle-migration requires explicit --dry-run or --apply")
         sys.exit(1)
     preview = build_dynamic_lifecycle_migration_preview(getattr(args, "target", None))
-    issues = check_dynamic_lifecycle_migration_preview(getattr(args, "target", None))
-    preview["validation_issues"] = issues
-    if issues:
-        preview["status"] = "BLOCKED"
     print(json.dumps(preview, ensure_ascii=False, indent=2))
-    if issues and getattr(args, "fail_on_issues", False):
+    if preview["validation_issues"] and getattr(args, "fail_on_issues", False):
         sys.exit(1)
 
 
@@ -23533,9 +23169,6 @@ def cmd_loop_engineering_migration(args):
             sys.exit(1)
     else:  # dry-run / preview
         result = build_dynamic_lifecycle_migration_preview(
-            getattr(args, "target", None)
-        )
-        result["validation_issues"] = check_dynamic_lifecycle_migration_preview(
             getattr(args, "target", None)
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))

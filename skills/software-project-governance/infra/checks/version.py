@@ -388,20 +388,20 @@ STATIC_PIN_EXEMPTIONS = {
         # (rot-guard caught the stale ledger at fb56415; CI never saw it —
         # the FIX-458 hook-pin integrity FAIL killed the run before the
         # unit-test step); re-anchored to the actual token lines.
-        # pins re-anchor op-0ee7ebd2c3464fe086f468722762cb66 (FIX-462): 21836->21355 via machine writer (token unchanged)
-        (21355, "0.93.0", _REASON_FUTURE_TARGET),
-        # pins re-anchor op-07734c7850f54c0389b7e499b9a4a5cc (FIX-462): 21868->21387 via machine writer (token unchanged)
-        (21387, "0.93.0", _REASON_FUTURE_TARGET),
+        # pins re-anchor op-b7f2bc1d4c924d96b3293a32000bf463 (FIX-462): 21355->21099 via machine writer (token unchanged)
+        (21099, "0.93.0", _REASON_FUTURE_TARGET),
+        # pins re-anchor op-9a828ffbcacc4a5a9da9ff3f2e350949 (FIX-462): 21387->21131 via machine writer (token unchanged)
+        (21131, "0.93.0", _REASON_FUTURE_TARGET),
         # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
         # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
         # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
         # 目标版本 column — scenario payload written while 0.93.1 was active,
         # surfacing exactly once at this bump; the word-set judgement
         # consumes the row text, never the version cell.
-        # pins re-anchor op-df36c3b9afe54665afed20acab35d206 (FIX-462): 21335->20854 via machine writer (token unchanged)
-        (20854, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
-        # pins re-anchor op-4560bc9b2ab2486189f4f178a0278089 (FIX-462): 21338->20857 via machine writer (token unchanged)
-        (20857, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-42d4f90b95644754bcd4263e0412e84d (FIX-462): 20854->20598 via machine writer (token unchanged)
+        (20598, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-7e99d4e36eca4da688fbccf024ee5a37 (FIX-462): 20857->20601 via machine writer (token unchanged)
+        (20601, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.95.0 bump-time rows (the FIX-361 designed double signal): the
     # FEAT-076 Q6 date-window fallback fail-closed fixture (roadmap row

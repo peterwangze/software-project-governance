@@ -45,7 +45,7 @@
 | TOOL-038 | Flow Unit Runtime hot-state guard | script + optional hot state | `infra/verify_workflow.py check-flow-unit-runtime [--fixture <path>] --fail-on-issues` + optional `.governance/flow-unit-runtime.json` | 0.52.0 flow-unit runtime visibility、active lanes、per-unit gate state、loop counters、blocked downstream units 或 rollup status 变更后 | 架构/测试/发布/维护 | 是 |
 | TOOL-039 | Project-Type Gate Presets guard | script + registry presets | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `core/lifecycle-registry.json` `project_type_gate_presets` | 0.53.0 project type gate presets、profile/project-type 正交边界、默认 packs、质量预算、验收模板、release checks、gate policy 或 gate standards 变更后 | 架构/测试/发布/维护 | 是 |
 | TOOL-040 | Classic Gate Execution Registry guard | script + registry execution metadata | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `infra/verify_workflow.py gate-check <G1-G11>` + `core/lifecycle-registry.json` `gate_execution_registry` | 0.54.0 classic G1-G11 registry execution、gate checks、evidence query、automation metadata、human-confirmation policy、severity 或 project-type overrides 变更后 | 架构/测试/发布/维护 | 是 |
-| TOOL-041 | Dynamic Lifecycle Migration dry-run preview | script + migration guide | `infra/verify_workflow.py dynamic-lifecycle-migration --target <path> --dry-run` + `docs/migration/dynamic-flow-gate-migration-0.55.0.md` | 0.55.0 classic-phase-gate 到 dynamic-flow-gate 的只读迁移预览、plan/evidence 保留检查、blocked checks 和 no-overclaim boundary 验证后 | 架构/测试/发布/维护 | 是 |
+| TOOL-041 | Dynamic Lifecycle Migration dry-run preview | script + migration guide | `infra/verify_workflow.py dynamic-lifecycle-migration --target <path> --dry-run` + `docs/migration/dynamic-flow-gate-migration-0.55.0.md` | classic 项目迁移前清点现有事务、plan/evidence 文件及阻塞原因时 | 架构/测试/发布/维护 | 是 |
 | TOOL-043 | ArchGuard Architecture Health | CLI check (advisory) | `infra/verify_workflow.py check-architecture-health` + `core/architecture-health.json` | 0.58.0 模块/函数/模块常量大小阈值 + 重复常量检测（3 级 PASS/WARN/ERROR，advisory 不阻断 release） | 架构/维护 | 是 |
 | TOOL-044 | ArchGuard Duplicate Code | CLI check (advisory) | `infra/verify_workflow.py check-duplicate-code` | 0.58.0 source/projection 语义重复检测（normalize 换行符 + 忽略空白，避免 CRLF/LF 误判） | 架构/维护 | 是 |
 | TOOL-045 | ArchGuard Technical Debt | CLI check (advisory) | `infra/verify_workflow.py check-technical-debt` + `core/technical-debt-ledger.md` | 0.58.0 根目录游离脚本/历史 release 文档/hooks 内容漂移/技术债登记交叉验证 | 维护 | 是 |
@@ -433,8 +433,8 @@
 
 - **文件**：`infra/verify_workflow.py` + `core/lifecycle-registry.json`
 - **子命令**：`check-lifecycle-registry [--fail-on-issues]`
-- **输入**：canonical lifecycle registry 中的 `active_lifecycle_mode`、`default_lifecycle_mode`、classic/dynamic lifecycle modes、stage/subphase vocabulary、loop policy、allowed transitions、gate references、project type hooks、flow unit schema，以及 `python_game_10_chapters` example data
-- **输出**：active/default lifecycle mode 是否仍为 `classic-phase-gate`；dynamic-flow-gate 是否保持 schema-only inactive；flow unit schema 是否覆盖必需字段；python_game 10 章节是否以数据表达 chapter 1 released、chapter 2 testing、chapter 3 development、chapter 4-10 backlog；是否阻断 RISK-037 closure 或 1.0.0 readiness overclaim
+- **输入**：canonical lifecycle registry 中的 `active_lifecycle_mode`、`default_lifecycle_mode`、classic/dynamic lifecycle modes、stage/subphase vocabulary、loop policy、allowed transitions、gate references、project type hooks、flow unit schema
+- **输出**：active/default lifecycle mode 是否仍为 `classic-phase-gate`；dynamic-flow-gate 是否保持 schema-only inactive；flow unit schema 是否覆盖必需字段；是否阻断 RISK-037 closure 或 1.0.0 readiness overclaim
 - **触发条件**：新增或调整 lifecycle registry、flow-unit schema、project-type hooks、stage/subphase vocabulary、loop policy、allowed transitions、gate references 或 schema-only release boundary 后
 - **依赖**：`core/manifest.json`、`check-manifest-consistency`、classic G1-G11 `core/stage-gates.md`
 - **边界**：schema-only registry；不激活 flow-unit runtime；不迁移项目；不替代 classic G1-G11；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready
@@ -477,11 +477,11 @@
 
 - **文件**：`infra/verify_workflow.py` + `docs/migration/dynamic-flow-gate-migration-0.55.0.md`
 - **子命令**：`dynamic-lifecycle-migration --target <path> --dry-run [--fail-on-issues]`；别名 `dynamic-flow-gate-migration`
-- **输入**：目标项目根或 fixture；读取 `.governance/plan-tracker.md`、`.governance/evidence-log.md`、可选 `.governance/flow-unit-runtime.json` 和 canonical lifecycle registry。
-- **输出**：JSON migration preview，包含 `workflow_model`、`flow_units`、`evidence_preservation`、`blocked_checks`、`no_overclaim_boundaries` 和 read-only `migration_plan`。
-- **触发条件**：0.55.0 migration/external validation 前，需要检查 classic 项目是否可保留 plan/evidence 并形成 dynamic-flow-gate opt-in 预览。
+- **输入**：目标项目根目录或 fixture。读取 `.governance/plan-tracker.md`、`.governance/evidence-log.md`、可选 `.governance/flow-unit-runtime.json` 和 canonical lifecycle registry。
+- **输出**：JSON 预览列出当前模型、项目已记录的事务和泳道、plan/evidence 原文哈希及阻塞原因。缺少 runtime 时，`flow_units.source` 为 `none`，记录数为 0。已有但不可读或结构损坏时返回 `BLOCKED`。
+- **触发条件**：迁移前需要清点目标项目的现有状态并核对证据。
 - **依赖**：TOOL-037、TOOL-038、TOOL-040、`check-manifest-consistency`。
-- **边界**：dry-run only；必须显式传入 `--dry-run`；不修改 target；classic-phase-gate remains active/default；dynamic-flow-gate is opt-in；plan-tracker is preserved；evidence-log is preserved；不关闭 RISK-036/RISK-037；不声明 external validation full PASS、official approval、marketplace approval、Codex Desktop lifecycle PASS 或 1.0.0 production-ready。
+- **边界**：`--dry-run` 只读。现有事务由项目 runtime 提供，包括无 schema 版本的旧记录。拟迁移事务及计划哈希可从 `infra/loop_migration.py --target <path> --dry-run` 获取。
 - **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
 ### TOOL-042：Local Web Console launcher

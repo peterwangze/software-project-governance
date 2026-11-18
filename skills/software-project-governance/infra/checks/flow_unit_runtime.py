@@ -14,6 +14,7 @@ v1 validator (unchanged); ``"2.0"`` → the new v2 validator in
 installed state is broken.
 """
 
+import json
 import re
 
 
@@ -359,3 +360,57 @@ def validate_flow_unit_runtime_payload_dispatch(state, display=".governance/flow
         f"{display}: unsupported schema_version `{schema_version}` "
         f"(expected '1.0' for visibility-v1 or '2.0' for loop-runtime-contract/v2)"
     ]
+
+def optional_runtime_bytes(path):
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        if path.is_symlink():
+            raise
+        return None
+
+
+def read_flow_unit_runtime(path, display):
+    """Return observed state, its exact bytes, and diagnostics. Absence is optional."""
+    try:
+        raw = optional_runtime_bytes(path)
+        if raw is None:
+            return None, None, []
+        data = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        return None, None, [f"{display}: invalid JSON: {exc}"]
+    except (OSError, ValueError, RecursionError) as exc:
+        return None, None, [f"{display}: unreadable runtime: {exc}"]
+    if not isinstance(data, dict):
+        return None, None, [f"{display}: flow-unit runtime root must be an object"]
+    return data, raw, []
+
+
+def observed_runtime_issues(state, display, *, validate_v1=True):
+    """Validate declared contracts, or the identity/lane fields of pre-schema state."""
+    if "schema_version" in state:
+        version = state["schema_version"]
+        legacy_version = version == "1.0" or type(version) is int and version == 1
+        if not legacy_version and version != "2.0":
+            return [f"{display}: unsupported schema_version {version!r}"]
+        if validate_v1 or version == "2.0":
+            try:
+                return validate_flow_unit_runtime_payload_dispatch(state, display)
+            except (TypeError, ValueError, RecursionError) as exc:
+                # Malformed nested JSON can be unhashable in the canonical validators.
+                return [f"{display}: invalid runtime fields: {exc}"]
+
+    units = state.get("flow_units")
+    if not isinstance(units, list):
+        return [f"{display}: flow_units must be a list"]
+    seen = set()
+    for index, unit in enumerate(units):
+        if not isinstance(unit, dict) or any(
+            not isinstance(unit.get(key), str) or not unit[key].strip()
+            for key in ("flow_unit_id", "gate_lane")
+        ):
+            return [f"{display}: flow_units[{index}] requires a non-empty flow_unit_id and gate_lane"]
+        if unit["flow_unit_id"] in seen:
+            return [f"{display}: duplicate flow_unit_id {unit['flow_unit_id']!r}"]
+        seen.add(unit["flow_unit_id"])
+    return []

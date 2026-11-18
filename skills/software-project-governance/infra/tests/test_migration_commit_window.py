@@ -596,9 +596,11 @@ class TestHealFailClosedArms(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            gov = _write_host(root, runtime=json.dumps(
-                {"schema_version": "2.0", "migration_version": VERSION,
-                 "workflow_model": "loop-engineering"}))
+            gov = _write_host(root)
+            plan = confirm_decomposition(build_migration_plan(root))
+            payload = lm.plan_to_payload(plan, migration_version=VERSION,
+                                         migration_timestamp=lm._now_iso())
+            (gov / "flow-unit-runtime.json").write_text(json.dumps(payload), encoding="utf-8")
 
             result = lm.apply_migration(target_root=str(root))
 
@@ -610,39 +612,106 @@ class TestHealFailClosedArms(unittest.TestCase):
             self.assertEqual(_migration_row_count(gov / "evidence-log.md"), 0)
             self.assertFalse((gov / "archive").exists())
 
-    def test_unparseable_runtime_is_not_healed(self):
-        """A corrupt runtime is NOT an interrupted-commit artifact — the
-        heal must not touch it (existing apply-overwrite semantics govern).
-        """
+    def test_corrupt_runtime_with_pending_snapshot_is_preserved(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            _write_host(root, runtime="{ this is not valid json,,,")
+            gov = _write_host(root)
+            _seed_interrupted_commit(root, gov)
+            runtime = gov / "flow-unit-runtime.json"
+            invalid = json.loads(runtime.read_bytes())
+            invalid["flow_units"] = "bad"
+            runtime.write_text(json.dumps(invalid), encoding="utf-8")
+            before = _tree_snapshot(gov)
 
             result = lm.apply_migration(target_root=str(root))
 
-            self.assertTrue(result["applied"], f"apply failed: {result}")
+            self.assertFalse(result["applied"], result)
             self.assertNotIn("healed_interrupted_commit", result)
+            self.assertEqual(_tree_snapshot(gov), before)
+
+    def test_recovery_preserves_legacy_runtime_after_interrupted_apply(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = _write_host(root)
+            runtime = gov / "flow-unit-runtime.json"
+            original = b'{ "flow_units": [{"flow_unit_id":"legacy.1","gate_lane":"release"}] }\r\n'
+            runtime.write_bytes(original)
+            killed = _run_apply_with_fault(root, "after_runtime_replace")
+            self.assertEqual(killed.returncode, 137, killed.stderr)
+            recovered = lm.apply_migration(root)
+            self.assertTrue(recovered["applied"], recovered)
+            self.assertTrue(recovered["healed_interrupted_commit"]["prior_runtime_restored"])
+            rollback = lm.rollback_migration(root)
+            self.assertTrue(rollback["rolled_back"], rollback)
+            self.assertEqual(runtime.read_bytes(), original)
+
+    def test_recovery_refuses_unverified_runtime_preimage_before_cleaning_temps(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = _write_host(root, runtime=json.dumps({"flow_units": []}))
+            backup, _ = _seed_interrupted_commit(root, gov)
+            (backup / "runtime.before").write_bytes(b"not the original bytes")
+            before = _tree_snapshot(gov)
+            result = lm.apply_migration(root)
+            self.assertFalse(result["applied"], result)
+            self.assertTrue(result["aborted_reason"])
+            self.assertEqual(_tree_snapshot(gov), before)
+
+    def test_recovery_keeps_valid_owner_edits_after_runtime_replace(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = _write_host(root)
+            _seed_interrupted_commit(root, gov)
+            runtime = gov / "flow-unit-runtime.json"
+            edited = json.loads(runtime.read_bytes())
+            edited["flow_units"][0]["title"] = "Owner correction after interruption"
+            self.assertEqual(lm.observed_runtime_issues(edited, str(runtime)), [])
+            runtime.write_text(json.dumps(edited), encoding="utf-8")
+            before = _tree_snapshot(gov)
+            result = lm.apply_migration(root)
+            self.assertFalse(result["applied"], result)
+            self.assertTrue(result["aborted_reason"])
+            self.assertEqual(_tree_snapshot(gov), before)
+
+    def test_recovery_refuses_a_backup_already_referenced_by_history(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = _write_host(root)
+            backup, _ = _seed_interrupted_commit(root, gov)
+            evidence = gov / "evidence-log.md"
+            evidence.write_bytes(evidence.read_bytes() +
+                f"| ROLLBACK-{VERSION} | history | restored_from={backup.name} |\n".encode())
+            # Match the historical backup's evidence snapshot so matching bytes
+            # alone cannot distinguish it from the interrupted attempt's backup.
+            saved = evidence.read_bytes()
+            (backup / "evidence.before").write_bytes(saved)
+            (backup / "evidence-log.md").write_bytes(saved)
+            manifest = backup / "manifest.json"
+            data = json.loads(manifest.read_bytes())
+            data["files"]["evidence-log.md"] = _sha256_of(evidence)
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+            before = _tree_snapshot(gov)
+            result = lm.apply_migration(root)
+            self.assertFalse(result["applied"], result)
+            self.assertNotIn("healed_interrupted_commit", result)
+            self.assertEqual(_tree_snapshot(gov), before)
+
+
+def _tree_snapshot(root):
+    return {p.relative_to(root): p.read_bytes() if p.is_file() else None
+            for p in root.rglob("*")}
 
 
 # ── FEAT-071 (FIX-398-R0 P3-2): heal .tmp sweep + unlink failure arms ────────
 
 
 def _seed_interrupted_commit(root, gov, seed_temps=True):
-    """Produce the wc6d interrupted-commit state IN-PROCESS: runtime@VERSION
-    + no MIGRATION row + the commit-window snapshot backup the heal verifies
-    against. The ``evidence.before`` sentinel is written exactly the way
-    _commit_runtime_and_evidence does BEFORE its first replace (L894-895):
-    byte-identical to the live evidence-log, so the pre-state check passes.
-    Optionally seed realistic scoped .tmp leftovers of an interrupted
-    _atomic_replace_bytes."""
-    backup_dir, _hashes = lm._backup_governance_files(root, VERSION)
-    (backup_dir / "evidence.before").write_bytes(
-        (gov / "evidence-log.md").read_bytes())
-    (gov / "flow-unit-runtime.json").write_text(
-        json.dumps({"schema_version": "2.0",
-                    "migration_version": VERSION,
-                    "workflow_model": "loop-engineering"}),
-        encoding="utf-8")
+    """Stop a real apply between its two replaces, then seed optional temp leftovers."""
+    killed = _run_apply_with_fault(root, "after_runtime_replace")
+    assert killed.returncode == 137, killed.stderr
+    backups = lm._list_migration_backups(root)
+    assert len(backups) == 1, backups
+    backup_dir = backups[0][0]
     temps = []
     if seed_temps:
         for stem, suffix in (("flow-unit-runtime.json", "abc123"),

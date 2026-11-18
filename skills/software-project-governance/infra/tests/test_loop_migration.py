@@ -92,6 +92,13 @@ def _write_host(host_root, plan_text=None, evidence_text=None, runtime=None):
             )
 
 
+def _host_snapshot(root):
+    return {
+        path.relative_to(root): path.read_bytes() if path.is_file() else None
+        for path in root.rglob("*")
+    }
+
+
 def _sha256_bytes(data):
     """SHA-256 hexdigest of a bytes blob (for test-side hash comparison)."""
     if isinstance(data, str):
@@ -179,19 +186,33 @@ class TestApplyMigration(unittest.TestCase):
             _write_host(root)
 
             # First apply: succeeds, writes runtime.json + 1 backup + 1 MIGRATION row.
-            first = _apply_with_future_contract(target_root=str(root))
+            first = lm.apply_migration(target_root=str(root))
             self.assertTrue(first["applied"], f"first apply failed: {first}")
             self.assertTrue(
                 (root / ".governance" / "flow-unit-runtime.json").is_file()
             )
 
             # Second apply on the SAME target (runtime.json now present at 0.65.0).
+            before = _host_snapshot(root)
+            runtime = json.loads((root / ".governance/flow-unit-runtime.json").read_bytes())
+            preview = lm.preview_migration(target_root=str(root))
+            self.assertEqual(preview["validation_issues"], [])
+            expected_units = [
+                {"flow_unit_id": unit["flow_unit_id"], "gate_lane": None,
+                 "gate_id": unit["gate_state"]["gate_id"]}
+                for unit in runtime["flow_units"]
+            ]
+            self.assertEqual(preview["flow_units"]["preview_units"], expected_units)
+            self.assertEqual(preview["flow_units"]["count"], len(expected_units))
+            self.assertEqual(preview["flow_units"]["active_lanes"], {})
+            self.assertEqual(_host_snapshot(root), before)
             second = lm.apply_migration(target_root=str(root))
 
             # Must fail closed with the idempotency reason.
             self.assertFalse(second["applied"], f"second apply unexpectedly succeeded: {second}")
             self.assertIn("idempotency", second["aborted_reason"].lower())
             self.assertIn("0.65.0", second["aborted_reason"])
+            self.assertEqual(_host_snapshot(root), before)
 
             # Exactly ONE backup dir exists — the guard ran BEFORE the backup step.
             backups = lm._list_migration_backups(root)
@@ -326,44 +347,68 @@ class TestApplyMigration(unittest.TestCase):
             "PLUGIN_HOME/.governance/archive/ must NOT be created by a host migration",
         )
 
-    def test_kill_mid_write_recovery(self):
-        """Test 7: a corrupt/incomplete runtime.json is cleanly overwritten on re-apply.
-
-        Simulates a kill-mid-write (garbage runtime.json already on disk).
-        Re-running apply must overwrite it cleanly with valid JSON, and the
-        backup must always be restorable.
-        """
+    def test_invalid_runtime_blocks_preview_and_apply_without_writes(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            # Pre-seed a CORRUPT runtime.json (simulating a crashed prior apply).
-            _write_host(root, runtime="{ this is not valid json,,,")
-            corrupt_path = root / ".governance" / "flow-unit-runtime.json"
-            self.assertTrue(corrupt_path.is_file())
+            _write_host(root)
+            runtime = root / ".governance/flow-unit-runtime.json"
+            for bad in (b"{", b"\xff", b"null", b"[]", b'{"flow_units":"bad"}',
+                        b'{"flow_units":[{"flow_unit_id":0,"gate_lane":"build"}]}',
+                        b'{"schema_version":"3.0","flow_units":[]}'):
+                with self.subTest(payload=bad):
+                    runtime.write_bytes(bad)
+                    before = _host_snapshot(root)
+                    preview = lm.preview_migration(root)
+                    self.assertEqual(preview["status"], "BLOCKED")
+                    self.assertIn(runtime.name, " ".join(preview["validation_issues"]))
+                    self.assertEqual(_host_snapshot(root), before)
+                    result = lm.apply_migration(root)
+                    self.assertFalse(result["applied"])
+                    self.assertIn(runtime.name, result["aborted_reason"])
+                    self.assertEqual(_host_snapshot(root), before)
 
-            result = lm.apply_migration(target_root=str(root))
+    def test_unreadable_runtime_blocks_before_writes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root, runtime={"flow_units": []})
+            runtime = root / ".governance/flow-unit-runtime.json"
+            before = _host_snapshot(root)
+            open_file = Path.open
 
-            # Recovery: apply either succeeds (overwrites cleanly) or fails-closed
-            # cleanly. Either way, the backup must be restorable.
-            if result["applied"]:
-                # Overwrote cleanly → runtime.json is now valid JSON.
-                content = corrupt_path.read_text(encoding="utf-8")
-                parsed = json.loads(content)  # must parse
-                self.assertEqual(parsed["workflow_model"], "loop-engineering")
-            else:
-                # Fail-closed: the abort reason must explain, and NO further
-                # corruption should occur. The corrupt file may remain, but the
-                # backup (if created) must be restorable.
-                self.assertIn("aborted_reason", result)
-            # Backup restorability: if a backup was created, its hashes verify.
-            if result.get("backup_dir"):
-                expected = {
-                    "plan_tracker_sha256": result["hashes"]["plan_tracker_before"],
-                    "evidence_log_sha256": result["hashes"]["evidence_log_before"],
-                }
-                ok, _ = lm._verify_backup_hashes(
-                    Path(result["backup_dir"]), expected
-                )
-                self.assertTrue(ok, "backup must be hash-restorable after recovery")
+            def denied(path, *args, **kwargs):
+                if path == runtime:
+                    raise PermissionError("runtime access denied")
+                return open_file(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", denied):
+                preview = lm.preview_migration(root)
+                self.assertEqual(preview["status"], "BLOCKED")
+                self.assertIn("runtime access denied", " ".join(preview["validation_issues"]))
+                result = lm.apply_migration(root)
+                self.assertFalse(result["applied"])
+                self.assertIn("runtime access denied", result["aborted_reason"])
+            self.assertEqual(_host_snapshot(root), before)
+
+    def test_apply_clis_refuse_corrupt_host_runtime(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root, runtime="broken JSON")
+            before = _host_snapshot(root)
+            for script, subcommand in (
+                ("loop_migration.py", []),
+                ("verify_workflow.py", ["dynamic-lifecycle-migration"]),
+                ("verify_workflow.py", ["loop-engineering-migration"]),
+            ):
+                with self.subTest(script=script, subcommand=subcommand):
+                    cmd = [sys.executable, str(_INFRA_DIR / script), *subcommand,
+                           "--target", td, "--apply"]
+                    proc = subprocess.run(cmd, capture_output=True, encoding="utf-8",
+                                          timeout=60, check=False)
+                    self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+                    output = json.loads(proc.stdout)
+                    self.assertFalse(output["applied"])
+                    self.assertIn("invalid JSON", output["aborted_reason"])
+                    self.assertEqual(_host_snapshot(root), before)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -373,6 +418,48 @@ class TestApplyMigration(unittest.TestCase):
 
 class TestRollbackMigration(unittest.TestCase):
     """FX-191 rollback path (ADR §7.3)."""
+
+    def test_reversible_migration_from_pre_schema_host_runtime(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root)
+            runtime = root / ".governance/flow-unit-runtime.json"
+            original = b'{ "flow_units": [{"flow_unit_id":"area.7","gate_lane":"testing"}] }\r\n'
+            runtime.write_bytes(original)
+            before = _host_snapshot(root)
+            preview = lm.preview_migration(root)
+            self.assertEqual(preview["validation_issues"], [])
+            self.assertEqual(preview["flow_units"]["active_lanes"], {"testing": ["area.7"]})
+            self.assertEqual(_host_snapshot(root), before)
+            applied = lm.apply_migration(root)
+            self.assertTrue(applied["applied"], applied)
+            self.assertEqual((Path(applied["backup_dir"]) / "runtime.before").read_bytes(), original)
+            rollback = lm.rollback_migration(root)
+            self.assertTrue(rollback["rolled_back"], rollback)
+            self.assertEqual(runtime.read_bytes(), original)
+
+    def test_rollback_preserves_host_if_runtime_preimage_cannot_be_verified(self):
+        for damage in ("tampered", "missing", "historical-manifest"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                _write_host(root, runtime={"flow_units": []})
+                applied = lm.apply_migration(root)
+                self.assertTrue(applied["applied"], applied)
+                backup = Path(applied["backup_dir"])
+                if damage == "tampered":
+                    (backup / "runtime.before").write_bytes(b'{"flow_units":[null]}')
+                elif damage == "missing":
+                    (backup / "runtime.before").unlink()
+                else:
+                    manifest = backup / "manifest.json"
+                    data = json.loads(manifest.read_bytes())
+                    del data["runtime_before"]
+                    manifest.write_text(json.dumps(data), encoding="utf-8")
+                before = _host_snapshot(root)
+                result = lm.rollback_migration(root)
+                self.assertFalse(result["rolled_back"], result)
+                self.assertTrue(result["aborted_reason"])
+                self.assertEqual(_host_snapshot(root), before)
 
     def test_rollback_total_restore(self):
         """Test 4: apply then rollback restores files + removes runtime.json + appends ROLLBACK row."""
@@ -503,7 +590,7 @@ class TestMigrationContainment(unittest.TestCase):
         fail-closed path still preserves bytes when confirmation rejects."""
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            original = b'{"legacy":true}\r\n'
+            original = b'{"flow_units":[]}\r\n'
             _write_host(root)
             runtime = root / ".governance/flow-unit-runtime.json"
             runtime.write_bytes(original)

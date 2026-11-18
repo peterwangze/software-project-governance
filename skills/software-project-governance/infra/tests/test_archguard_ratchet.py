@@ -425,7 +425,7 @@ class BaselineArtifactTests(unittest.TestCase):
         self.assertIsInstance(data["rules_version"], int)
         self.assertRegex(data["generated"]["git_head"],
                          r"^([0-9a-f]{40}|unknown)$")
-        self.assertLessEqual(data["r1_mainfile_budget"]["anchor_loc"], 28202)
+        self.assertLessEqual(data["r1_mainfile_budget"]["anchor_loc"], 27835)
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()

@@ -19,7 +19,7 @@ risk on ``plan-tracker.md`` and ``evidence-log.md``. The safety contract is:
   2. **Fail-closed BEFORE write** — all 5 fail-closed cases abort before any
      write operation. There is no partial state.
   3. **Rollback totality** — rollback restores plan-tracker + evidence-log
-     exactly (hash-verified against the backup), removes the runtime.json,
+     exactly (hash-verified against the backup), restores the prior runtime,
      and appends a ROLLBACK evidence row.
 
 **Dual-root discipline (RISK-040 hard constraint):**
@@ -85,7 +85,9 @@ from resolve_entry import resolve_host_root, read_active_version  # noqa: E402
 
 # flow_unit_derive is also a peer (pure stdlib). Used for step 5 of apply.
 from flow_unit_derive import derive_flow_units  # noqa: E402
-from checks.flow_unit_runtime import validate_flow_unit_runtime_payload  # noqa: E402
+from checks.flow_unit_runtime import (  # noqa: E402
+    observed_runtime_issues, optional_runtime_bytes, read_flow_unit_runtime, validate_flow_unit_runtime_payload,
+)
 
 # FEAT-003 shared migration planner (ADR §4). Both dry-run (preview_migration)
 # and apply (apply_migration) call build_migration_plan — this is what makes
@@ -175,13 +177,7 @@ _EVIDENCE_ROW_PREFIX_RE = re.compile(
 
 
 def _file_sha256(path):
-    """Chunked SHA-256 hex digest of a file.
-
-    Identical algorithm to verify_workflow._file_sha256 (lines 3580-3585):
-    read in 64KiB chunks, update the hasher, return hexdigest. Defined
-    locally (5 lines) rather than importing verify_workflow, to preserve
-    the no-top-level-verify_workflow-import constraint.
-    """
+    """Compute the SHA-256 digest of the exact bytes in a backup or live file."""
     h = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(65536), b""):
@@ -387,7 +383,10 @@ def _list_migration_backups(host_root):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _backup_governance_files(host_root, version):
+_NOT_SAMPLED = object()
+
+
+def _backup_governance_files(host_root, version, runtime_before=_NOT_SAMPLED, *, runtime_after=None):
     """Create a timestamped backup of plan-tracker + evidence-log.
 
     Creates ``.governance/archive/migration-{version}-{timestamp}/`` and
@@ -413,6 +412,8 @@ def _backup_governance_files(host_root, version):
         abort — the apply algorithm runs this BEFORE any write to the live
         files, so a backup failure means nothing has been mutated yet).
     """
+    if runtime_before is _NOT_SAMPLED:
+        runtime_before = optional_runtime_bytes(_runtime_path(host_root))
     timestamp = _now_timestamp()
     backup_dir = _archive_dir(host_root, version, timestamp)
     # Collision retry: even with microsecond timestamps, a pathological fast
@@ -454,7 +455,10 @@ def _backup_governance_files(host_root, version):
     # the expected hashes, then verifies the files still match. A tampered
     # file would mismatch the manifest. (Computing expected hashes from the
     # files being verified would be tautological and catch nothing.)
+    snapshot = runtime_before if runtime_before is not None else b""
+    (backup_dir / "runtime.before").write_bytes(snapshot)
     manifest = {
+        "runtime_before": {"existed": runtime_before is not None, "sha256": hashlib.sha256(snapshot).hexdigest()},
         "migration_version": version,
         "timestamp": timestamp,
         "created_by": "loop_migration._backup_governance_files",
@@ -463,11 +467,33 @@ def _backup_governance_files(host_root, version):
             EVIDENCE_LOG_FILENAME: hashes["evidence_log_sha256"],
         },
     }
+    if runtime_after is not None:
+        manifest["runtime_after_sha256"] = hashlib.sha256(runtime_after).hexdigest()
     (backup_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     return backup_dir, hashes
+
+
+def _verified_prior_runtime(backup_dir, manifest, version):
+    """Resolve presence and exact bytes from the backup created before migration."""
+    if not isinstance(manifest, dict) or manifest.get("migration_version") != version:
+        raise ValueError("invalid backup manifest or migration version")
+    record = manifest.get("runtime_before")
+    if not isinstance(record, dict) or type(record.get("existed")) is not bool:
+        raise ValueError("backup does not establish whether a prior runtime existed")
+    raw = (backup_dir / "runtime.before").read_bytes()
+    if hashlib.sha256(raw).hexdigest() != record.get("sha256") or (not record["existed"] and raw):
+        raise ValueError("runtime.before disagrees with the backup manifest")
+    return raw if record["existed"] else None
+
+
+def _restore_prior_runtime(path, raw):
+    if raw is None:
+        path.unlink(missing_ok=True)
+    else:
+        _atomic_replace_bytes(path, raw)
 
 
 def _verify_backup_hashes(backup_dir, expected_hashes):
@@ -500,7 +526,11 @@ def _verify_backup_hashes(backup_dir, expected_hashes):
                 "{0}: missing from backup".format(filename)
             )
             continue
-        actual = _file_sha256(target)
+        try:
+            actual = _file_sha256(target)
+        except OSError as exc:
+            mismatches.append(f"{filename}: unreadable backup: {exc}")
+            continue
         if expected is None:
             mismatches.append(
                 "{0}: no expected hash recorded".format(filename)
@@ -584,23 +614,6 @@ def _referenced_backup_names(evidence_text):
     return names
 
 
-def _read_runtime_migration_version(runtime_path):
-    """Best-effort ``(parses, migration_version)`` read of the runtime face.
-
-    Never raises: an unreadable/unparseable runtime returns ``(False, None)``
-    (a runtime this module wrote via _atomic_replace_bytes is always complete
-    valid JSON, so an unparseable file is NOT an interrupted-commit artifact
-    and must not be healed/touched by this module).
-    """
-    try:
-        data = json.loads(runtime_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return (False, None)
-    if isinstance(data, dict) and isinstance(data.get("migration_version"), str):
-        return (True, data["migration_version"])
-    return (True, None)
-
-
 def _evidence_has_migration_row(evidence_text, version):
     """True iff evidence-log carries the ``| MIGRATION-<version>`` table row.
 
@@ -616,7 +629,7 @@ def _evidence_has_migration_row(evidence_text, version):
     return any(marker.match(line.strip()) for line in evidence_text.split("\n"))
 
 
-def _heal_interrupted_commit(host_root, evidence_text):
+def _heal_interrupted_commit(host_root, evidence_text, version, observed_runtime):
     """Detect + compensate an interrupted commit window (FIX-398 E-4).
 
     Detected state: flow-unit-runtime.json parses and claims
@@ -646,23 +659,17 @@ def _heal_interrupted_commit(host_root, evidence_text):
       the caller must abort with this guidance (rollback is the manual path).
     """
     runtime_path = _runtime_path(host_root)
-    if not runtime_path.is_file():
-        return {"detected": False}
-    parses, version = _read_runtime_migration_version(runtime_path)
-    if not parses or version != MIGRATION_VERSION:
-        # Not an artifact of this module's commit window (unparseable or a
-        # foreign stamp) — never touched here (existing apply semantics
-        # govern those states; DEC-257: the stamp contract is not ours to
-        # reinterpret in the heal path).
+    if version != MIGRATION_VERSION:
         return {"detected": False}
     if _evidence_has_migration_row(evidence_text, MIGRATION_VERSION):
         # runtime + row = a COMPLETED apply — the idempotency guard's domain.
         return {"detected": False}
     record = {"detected": True, "healed": False, "runtime_version": version}
 
+    referenced = _referenced_backup_names(evidence_text)
     snapshot_backups = [
-        (entry, ver) for entry, ver, _ts in _list_migration_backups(host_root)
-        if ver == MIGRATION_VERSION and (entry / "evidence.before").is_file()
+        entry for entry, ver, _ts in _list_migration_backups(host_root)
+        if ver == MIGRATION_VERSION and entry.name not in referenced and (entry / "evidence.before").is_file()
     ]
     if not snapshot_backups:
         record["guidance"] = (
@@ -671,15 +678,28 @@ def _heal_interrupted_commit(host_root, evidence_text):
             "MIGRATION-{0} row, and no commit-window backup with a pre-state "
             "snapshot (evidence.before) exists to verify compensation against. "
             "Auto-heal refused (fail-closed). Recovery: run --rollback "
-            "(restores from the newest backup), or resolve the runtime/"
+            "(requires a verifiable pre-state), or resolve the runtime/"
             "evidence state manually. No write performed.".format(MIGRATION_VERSION)
         )
         return record
 
-    backup_dir = snapshot_backups[-1][0]
+    if len(snapshot_backups) != 1:
+        record["guidance"] = "ambiguous interrupted migration: multiple unreferenced backups; no write performed"
+        return record
+    backup_dir = snapshot_backups[0]
     record["snapshot_backup"] = backup_dir.name
-    live_hash = _file_sha256(_evidence_log_path(host_root))
-    snapshot_hash = _file_sha256(backup_dir / "evidence.before")
+    try:
+        manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
+        prior_runtime = _verified_prior_runtime(backup_dir, manifest, version)
+        if hashlib.sha256(observed_runtime).hexdigest() != manifest.get("runtime_after_sha256"):
+            raise ValueError("live runtime differs from the intended migration bytes or has no recorded digest")
+        live_hash = _file_sha256(_evidence_log_path(host_root))
+        snapshot_hash = _file_sha256(backup_dir / "evidence.before")
+        if snapshot_hash != manifest.get("files", {}).get(EVIDENCE_LOG_FILENAME):
+            raise ValueError("evidence.before disagrees with the backup manifest")
+    except (OSError, ValueError, AttributeError, RecursionError) as exc:
+        record["guidance"] = f"interrupted migration backup cannot be verified: {exc}; no write performed"
+        return record
     record["evidence_matches_pre_state"] = (live_hash == snapshot_hash)
     if live_hash != snapshot_hash:
         record["guidance"] = (
@@ -709,7 +729,7 @@ def _heal_interrupted_commit(host_root, evidence_text):
                     "{0}: {1}".format(temp.name, type(exc).__name__)
                 )
     try:
-        runtime_path.unlink()
+        _restore_prior_runtime(runtime_path, prior_runtime)
     except OSError as exc:
         record["guidance"] = (
             "interrupted migration commit detected but the half-committed "
@@ -722,7 +742,8 @@ def _heal_interrupted_commit(host_root, evidence_text):
         return record
     record.update({
         "healed": True,
-        "runtime_removed": True,
+        "runtime_removed": prior_runtime is None,
+        "prior_runtime_restored": prior_runtime is not None,
         "temp_files_removed": removed_temps,
         "temp_removal_failures": temp_failures,
     })
@@ -825,8 +846,12 @@ def _sweep_orphan_migration_backups(host_root, evidence_text):
                           "evidence-log — cannot prove zero information loss",
             })
             continue
-        runtime_before = entry / "runtime.before"
-        if runtime_before.is_file() and runtime_before.stat().st_size > 0:
+        try:
+            prior_runtime = _verified_prior_runtime(entry, manifest, ver)
+        except (OSError, ValueError) as exc:
+            result["skipped"].append({"name": name, "reason": f"unverified runtime.before: {exc}"})
+            continue
+        if prior_runtime is not None:
             result["skipped"].append({
                 "name": name,
                 "reason": "non-empty runtime.before snapshot (a runtime "
@@ -847,23 +872,8 @@ def _sweep_orphan_migration_backups(host_root, evidence_text):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _append_evidence_row(host_root, row_text):
-    """Append a single line to evidence-log.md (creating the file if absent).
-
-    Ensures the row ends with exactly one newline. Does NOT validate the row
-    format — callers build the canonical row text.
-    """
-    evidence_path = _evidence_log_path(host_root)
-    line = row_text.rstrip("\n") + "\n"
-    if evidence_path.exists():
-        existing = _read_text(evidence_path) or ""
-        # Ensure exactly one blank-line separator if the file doesn't end in newline.
-        if existing and not existing.endswith("\n"):
-            existing += "\n"
-        evidence_path.write_text(existing + line, encoding="utf-8")
-    else:
-        evidence_path.parent.mkdir(parents=True, exist_ok=True)
-        evidence_path.write_text(line, encoding="utf-8")
+def _append_evidence_text(text, row):
+    return text + ("\n" if text and not text.endswith("\n") else "") + row + "\n"
 
 
 def _atomic_replace_bytes(path, content):
@@ -885,13 +895,17 @@ def _atomic_replace_bytes(path, content):
 
 
 def _commit_runtime_and_evidence(runtime_path, runtime_bytes, evidence_path,
-                                 evidence_bytes, backup_dir):
+                                 evidence_bytes, backup_dir, expected_runtime_before=_NOT_SAMPLED):
     """Commit runtime then evidence, compensating byte-exactly on failure."""
-    runtime_existed = runtime_path.is_file()
-    runtime_before = runtime_path.read_bytes() if runtime_existed else None
-    evidence_before = evidence_path.read_bytes()
     try:
-        (backup_dir / "runtime.before").write_bytes(runtime_before or b"")
+        runtime_before = optional_runtime_bytes(runtime_path)
+        runtime_existed = runtime_before is not None
+        if expected_runtime_before is not _NOT_SAMPLED and runtime_before != expected_runtime_before:
+            return {"state": "FAIL", "issues": ["runtime changed after migration preflight"]}
+        evidence_before = evidence_path.read_bytes()
+        # Normal apply has already persisted its verified snapshot.
+        if expected_runtime_before is _NOT_SAMPLED:
+            (backup_dir / "runtime.before").write_bytes(runtime_before or b"")
         (backup_dir / "evidence.before").write_bytes(evidence_before)
     except OSError as exc:
         return {
@@ -2573,7 +2587,16 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
     # resolved BEFORE the guard so re-entry converges to a fresh, fully
     # validated apply instead of a refusal deadlock. On any fail-closed arm
     # the heal returns explicit guidance and apply aborts without writing.
-    heal = _heal_interrupted_commit(host_root, evidence_text)
+    runtime_path = _runtime_path(host_root)
+    if runtime_path.is_symlink():
+        return dict(base_result, aborted_reason="migration cannot preserve a linked runtime; no write performed")
+    existing_runtime, runtime_before, runtime_issues = read_flow_unit_runtime(runtime_path, str(runtime_path))
+    if existing_runtime is not None:
+        runtime_issues = observed_runtime_issues(existing_runtime, str(runtime_path))
+    if runtime_issues:
+        return dict(base_result, aborted_reason="; ".join(runtime_issues))
+    version = existing_runtime.get("migration_version") if existing_runtime is not None else None
+    heal = _heal_interrupted_commit(host_root, evidence_text, version, runtime_before)
     if heal.get("detected") and not heal.get("healed"):
         return dict(base_result, aborted_reason=heal["guidance"],
                     interrupted_commit=heal)
@@ -2589,20 +2612,18 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
     # BEFORE the backup step so a double-apply attempt does NOT create a
     # spurious backup dir or a duplicate MIGRATION row.
     prior_model = _parse_workflow_model(plan_text)
-    runtime_path = _runtime_path(host_root)
-    if runtime_path.is_file():
-        try:
-            existing_runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            existing_runtime = None
-        if (isinstance(existing_runtime, dict)
-                and existing_runtime.get("migration_version") == MIGRATION_VERSION):
-            return dict(base_result, aborted_reason=(
-                "idempotency: target already migrated to loop-engineering "
-                "version {0}; use --rollback first if you need to re-apply".format(
-                    MIGRATION_VERSION
-                )
-            ))
+    if heal.get("healed"):
+        existing_runtime, runtime_before, runtime_issues = read_flow_unit_runtime(runtime_path, str(runtime_path))
+        if existing_runtime is not None:
+            runtime_issues = observed_runtime_issues(existing_runtime, str(runtime_path))
+        if runtime_issues:
+            return dict(base_result, aborted_reason="; ".join(runtime_issues), healed_interrupted_commit=heal)
+        version = existing_runtime.get("migration_version") if existing_runtime is not None else None
+    if version == MIGRATION_VERSION:
+        return dict(base_result, aborted_reason=(
+            "idempotency: target already migrated to loop-engineering "
+            "version {0}; use --rollback first if you need to re-apply".format(MIGRATION_VERSION)
+        ))
 
     # ── Step 4: build the migration plan via the PURE planner (FEAT-003) ──
     # ADR §4.4: apply RE-DERIVES the plan via build_migration_plan (the same
@@ -2709,11 +2730,12 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
     # attempts, so the archive never accumulates roll-back-shadowing orphans
     # (FEAT-068 scenario ⑦). Unverifiable dirs are kept and disclosed.
     orphan_sweep = _sweep_orphan_migration_backups(host_root, evidence_text)
+    proposed_runtime = (json.dumps(runtime_payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
     # ── Step 5: backup live governance facts after validation ───────────
     try:
         backup_dir, backup_hashes = _backup_governance_files(
-            host_root, MIGRATION_VERSION
+            host_root, MIGRATION_VERSION, runtime_before, runtime_after=proposed_runtime
         )
     except OSError as exc:
         return dict(base_result, aborted_reason=(
@@ -2735,16 +2757,14 @@ def apply_migration(target_root=None, project_type=None, plugin_home=None,
             backup=backup_dir.name,
         )
     )
-    evidence_after_text = evidence_text
-    if evidence_after_text and not evidence_after_text.endswith("\n"):
-        evidence_after_text += "\n"
-    evidence_after_text += migration_row.rstrip("\n") + "\n"
+    evidence_after_text = _append_evidence_text(evidence_text, migration_row)
     transaction = _commit_runtime_and_evidence(
         runtime_path,
-        (json.dumps(runtime_payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+        proposed_runtime,
         evidence_path,
         evidence_after_text.encode("utf-8"),
         backup_dir,
+        expected_runtime_before=runtime_before,
     )
     if transaction["state"] != "PASS":
         fail_result = dict(
@@ -2821,15 +2841,15 @@ def rollback_migration(target_root=None, version=None, plugin_home=None):
     """Execute the loop-engineering → classic rollback (ADR §7.3, 6 steps).
 
     Rollback is TOTAL: it restores plan-tracker.md + evidence-log.md exactly
-    (hash-verified against the backup BEFORE restore), removes the
-    runtime.json, and appends a ROLLBACK evidence row.
+    (hash-verified against the backup BEFORE restore), restores the previous
+    runtime or its absence, and appends a ROLLBACK evidence row.
 
     Steps:
       1. operator: ``loop-engineering-migration --rollback --target <path>``
       2. verify backup hashes match (fail-closed if tampered)
       3. restore plan-tracker.md + evidence-log.md from backup
       4. set workflow_model back to prior (via the restored plan-tracker)
-      5. remove ``.governance/flow-unit-runtime.json``
+      5. restore the verified prior runtime bytes or their recorded absence
       6. write rollback record to evidence-log: ``ROLLBACK-{version}``
 
     Args:
@@ -2866,23 +2886,36 @@ def rollback_migration(target_root=None, version=None, plugin_home=None):
             "back. No write performed.".format(_gov_dir(host_root))
         ))
 
+    live_evidence = _read_text(_evidence_log_path(host_root))
+    if live_evidence is None:
+        return dict(base_result, aborted_reason="cannot read live evidence to select a rollback backup")
+    matching = [entry for entry in backups if version is None or entry[1] == version]
+    if not matching:
+        return dict(base_result, aborted_reason=f"no migration backup found for version {version!r}")
+    # A completed apply identifies its backup by name. A pending apply can only
+    # use its one unreferenced commit-window backup with matching live witnesses.
+    names = _referenced_backup_names(live_evidence)
     selected = None
-    if version is not None:
-        # Pick the newest backup matching the requested version.
-        for entry in reversed(backups):
-            if entry[1] == version:
-                selected = entry
-                break
-        if selected is None:
-            return dict(base_result, aborted_reason=(
-                "no migration backup found for version {0!r} under {1}/archive/. "
-                "Available versions: {2}. No write performed.".format(
-                    version, _gov_dir(host_root),
-                    sorted({v for _, v, _ in backups}),
-                )
-            ))
-    else:
-        selected = backups[-1]  # newest
+    for line in reversed(live_evidence.splitlines()):
+        cells = line.strip().split("|")
+        if len(cells) < 3 or not _BACKUP_REF_ROW_RE.match(line.strip()):
+            continue
+        action, _, row_version = cells[1].strip().partition("-")
+        if version is not None and row_version != version:
+            continue
+        if action == "MIGRATION":
+            references = _BACKUP_REF_NAME_RE.findall(line)
+            matches = [entry for entry in matching if entry[1] == row_version and references == [entry[0].name]]
+            if len(matches) != 1:
+                return dict(base_result, aborted_reason="migration evidence does not identify one available backup")
+            selected = matches[0]
+        break
+    pending = selected is None
+    if pending:
+        candidates = [entry for entry in matching if entry[0].name not in names and (entry[0] / "evidence.before").is_file()]
+        if len(candidates) != 1:
+            return dict(base_result, aborted_reason="no unique unreferenced backup for interrupted migration")
+        selected = candidates[0]
 
     backup_dir, backup_version, backup_timestamp = selected
 
@@ -2901,28 +2934,23 @@ def rollback_migration(target_root=None, version=None, plugin_home=None):
     # hashes from the backup files themselves (that would be tautological —
     # a tampered file would hash to its own tampered value). The manifest is
     # the ground truth; the files are verified against it.
-    manifest_path = backup_dir / "manifest.json"
-    expected_hashes = {}
-    if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            manifest = None
-        if isinstance(manifest, dict):
-            files = manifest.get("files", {})
-            if isinstance(files, dict):
-                pt_hash = files.get(PLAN_TRACKER_FILENAME)
-                ev_hash = files.get(EVIDENCE_LOG_FILENAME)
-                if isinstance(pt_hash, str):
-                    expected_hashes["plan_tracker_sha256"] = pt_hash
-                if isinstance(ev_hash, str):
-                    expected_hashes["evidence_log_sha256"] = ev_hash
-    if not expected_hashes:
-        return dict(base_result, aborted_reason=(
-            "backup at {0} has no usable manifest.json (missing/corrupt/no "
-            "file hashes). Refusing to restore an unverified backup. No "
-            "write performed.".format(backup_dir)
-        ), backup_dir=str(backup_dir))
+    try:
+        manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
+        prior_runtime = _verified_prior_runtime(backup_dir, manifest, backup_version)
+        if pending:
+            current = optional_runtime_bytes(_runtime_path(host_root))
+            if current is None or hashlib.sha256(current).hexdigest() != manifest.get("runtime_after_sha256"):
+                raise ValueError("interrupted runtime does not match the intended migration bytes")
+            if _file_sha256(_evidence_log_path(host_root)) != manifest["files"][EVIDENCE_LOG_FILENAME]:
+                raise ValueError("live evidence has changed since the interrupted migration")
+        files = manifest["files"]
+        expected_hashes = {
+            "plan_tracker_sha256": files[PLAN_TRACKER_FILENAME],
+            "evidence_log_sha256": files[EVIDENCE_LOG_FILENAME],
+        }
+    except (OSError, TypeError, KeyError, ValueError, RecursionError) as exc:
+        return dict(base_result, aborted_reason=f"unverified migration backup: {exc}; no write performed",
+                    backup_dir=str(backup_dir))
 
     # ── Step 2: verify backup integrity (files vs manifest) ─────────────
     ok, mismatches = _verify_backup_hashes(backup_dir, expected_hashes)
@@ -2934,69 +2962,56 @@ def rollback_migration(target_root=None, version=None, plugin_home=None):
             )
         ), backup_dir=str(backup_dir))
 
-    # ── Step 3: restore plan-tracker + evidence-log from backup ─────────
-    # Copy the backup files over the live ones. This is the inverse of apply's
-    # step 4 — total restore. (Hashes were already verified in step 2.)
-    plan_dst = backup_dir / PLAN_TRACKER_FILENAME
-    evidence_dst = backup_dir / EVIDENCE_LOG_FILENAME
-    try:
-        gov = _gov_dir(host_root)
-        gov.mkdir(parents=True, exist_ok=True)
-        if plan_dst.is_file():
-            shutil.copy2(plan_dst, _plan_tracker_path(host_root))
-        if evidence_dst.is_file():
-            shutil.copy2(evidence_dst, _evidence_log_path(host_root))
-    except OSError as exc:
-        return dict(base_result, aborted_reason=(
-            "restore copy failed ({0}); the backup at {1} is intact. "
-            "Manual restore required. No runtime.json removal performed.".format(
-                exc, backup_dir
-            )
-        ), backup_dir=str(backup_dir))
-
-    # ── Step 5: remove the runtime.json ─────────────────────────────────
-    # (Step 4 — workflow_model reset — is achieved by the restored plan-tracker,
-    # which carries the prior model. We do not separately rewrite the tracker.)
+    # Explicit rollback restores the selected snapshot. Capture the live bytes
+    # before the first replacement so an I/O failure can be compensated.
     runtime_path = _runtime_path(host_root)
-    runtime_existed = runtime_path.is_file()
-    if runtime_existed:
-        try:
-            runtime_path.unlink()
-        except OSError as exc:
-            return dict(base_result, aborted_reason=(
-                "plan-tracker + evidence-log restored, but runtime.json removal "
-                "failed ({0}). Partial rollback — runtime.json remains at {1}. "
-                "Backup at {2} is intact.".format(exc, runtime_path, backup_dir)
-            ), backup_dir=str(backup_dir),
-               workflow_model={"prior": WORKFLOW_MODEL_NEW, "new": prior_model},
-               runtime_removed=False)
-
-    # ── Step 6: write ROLLBACK evidence row ─────────────────────────────
-    # Note: the evidence-log was just restored from backup (pre-migration
-    # state), so it does NOT yet contain the MIGRATION row. We append the
-    # ROLLBACK row to the restored log so the audit trail shows the rollback
-    # happened.
-    rollback_row = (
-        "| ROLLBACK-{ver} | FX-191 | rolled back {new_model} -> {prior} | "
-        "restored_from={backup} |".format(
-            ver=backup_version,
-            new_model=WORKFLOW_MODEL_NEW,
-            prior=prior_model,
-            backup=backup_dir.name,
-        )
-    )
+    plan_path = _plan_tracker_path(host_root)
+    evidence_path = _evidence_log_path(host_root)
     try:
-        _append_evidence_row(host_root, rollback_row)
+        if runtime_path.is_symlink():
+            raise ValueError("cannot restore a linked runtime")
+        runtime_current = optional_runtime_bytes(runtime_path)
+        current_plan = plan_path.read_bytes()
+        prior_plan = (backup_dir / PLAN_TRACKER_FILENAME).read_bytes()
+        prior_evidence = (backup_dir / EVIDENCE_LOG_FILENAME).read_bytes()
+        if hashlib.sha256(prior_plan).hexdigest() != expected_hashes["plan_tracker_sha256"]:
+            raise ValueError("backup tracker changed before restoration")
+        if hashlib.sha256(prior_evidence).hexdigest() != expected_hashes["evidence_log_sha256"]:
+            raise ValueError("backup evidence changed before restoration")
+    except (OSError, ValueError) as exc:
+        return dict(base_result, aborted_reason=f"cannot safely restore migration: {exc}", backup_dir=str(backup_dir))
+
+    rollback_row = (
+        f"| ROLLBACK-{backup_version} | FX-191 | rolled back {WORKFLOW_MODEL_NEW} -> {prior_model} | "
+        f"restored_from={backup_dir.name} |"
+    )
+    ending = b"\r\n" if b"\r\n" in prior_evidence else b"\n"
+    separator = b"" if not prior_evidence or prior_evidence.endswith((b"\r", b"\n")) else ending
+    restored_evidence = prior_evidence + separator + rollback_row.encode("utf-8") + ending
+    replaced_plan = False
+    replaced_runtime = False
+    try:
+        if prior_plan != current_plan:
+            _atomic_replace_bytes(plan_path, prior_plan)
+            replaced_plan = True
+        if prior_runtime != runtime_current:
+            _restore_prior_runtime(runtime_path, prior_runtime)
+            replaced_runtime = True
+        _atomic_replace_bytes(evidence_path, restored_evidence)
     except OSError as exc:
-        return dict(base_result, aborted_reason=(
-            "plan-tracker + evidence-log restored and runtime.json removed, "
-            "but ROLLBACK evidence row could not be appended ({0}). The "
-            "restoration is otherwise complete. Backup at {1} is intact.".format(
-                exc, backup_dir
-            )
-        ), backup_dir=str(backup_dir),
-           workflow_model={"prior": WORKFLOW_MODEL_NEW, "new": prior_model},
-           runtime_removed=True)
+        recovery_issues = []
+        if replaced_runtime:
+            try:
+                _restore_prior_runtime(runtime_path, runtime_current)
+            except OSError as recovery:
+                recovery_issues.append(str(recovery))
+        if replaced_plan:
+            try:
+                _atomic_replace_bytes(plan_path, current_plan)
+            except OSError as recovery:
+                recovery_issues.append(str(recovery))
+        return dict(base_result, aborted_reason=f"rollback write failed: {exc}", backup_dir=str(backup_dir),
+                    recovery_issues=recovery_issues)
 
     return {
         "command": "loop-engineering-migration",
@@ -3005,7 +3020,8 @@ def rollback_migration(target_root=None, version=None, plugin_home=None):
         "target": str(host_root),
         "backup_dir": str(backup_dir),
         "workflow_model": {"prior": WORKFLOW_MODEL_NEW, "new": prior_model},
-        "runtime_removed": runtime_existed,
+        "runtime_removed": runtime_current is not None and prior_runtime is None,
+        "prior_runtime_restored": prior_runtime is not None,
         "evidence_row": "ROLLBACK-{0}".format(backup_version),
         "restored_from": str(backup_dir),
     }
@@ -3049,15 +3065,9 @@ def preview_migration(target_root=None, plugin_home=None, project_type=None):
         entry — 0 means the dry-run consumes the manifest with zero
         prose-anchoring ambiguity).
     """
-    from verify_workflow import (  # deferred to keep module import acyclic
-        build_dynamic_lifecycle_migration_preview,
-        check_dynamic_lifecycle_migration_preview,
-    )
+    from verify_workflow import build_dynamic_lifecycle_migration_preview
+
     preview = build_dynamic_lifecycle_migration_preview(target_root)
-    issues = check_dynamic_lifecycle_migration_preview(target_root)
-    preview["validation_issues"] = issues
-    if issues:
-        preview["status"] = "BLOCKED"
 
     # ── FEAT-003: derive the migration plan (the SAME pure function apply uses)
     # and attach the serialized plan + plan_hash + v2 validation verdict. This

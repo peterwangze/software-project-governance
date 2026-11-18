@@ -8717,10 +8717,10 @@ def _host_context_values(value):
             yield from _host_context_values(item)
 
 
-def check_host_capability_context(root=None):
+def check_host_capability_context(root=None, *, sampled_context=None):
     """FIX-117: restricted host benchmark must degrade honestly."""
     root = _context_root(root)
-    context = discover_host_capability_context(root)
+    context = discover_host_capability_context(root) if sampled_context is None else sampled_context
     failures = []
     for field in HOST_CAPABILITY_CONTEXT_REQUIRED_FIELDS:
         if field not in context:
@@ -9281,10 +9281,10 @@ def check_governance_context(root=None):
     return failures
 
 
-def check_capability_context(root=None):
+def check_capability_context(root=None, *, sampled_context=None):
     """FIX-115: capability selection trace must be fact-backed and no-overclaim safe."""
     root = _context_root(root)
-    context = discover_capability_context(root)
+    context = discover_capability_context(root) if sampled_context is None else sampled_context
     failures = []
     for field in CAPABILITY_CONTEXT_REQUIRED_FIELDS:
         if field not in context:
@@ -11938,7 +11938,7 @@ def cmd_capability_context(args):
     for boundary in context["no_overclaim_boundary"]:
         print(f"  - {boundary}")
 
-    issues = check_capability_context(root)
+    issues = check_capability_context(root, sampled_context=context)
     if issues:
         print("\n== Capability Context Result: FAILED ==")
         for issue in issues:
@@ -23869,7 +23869,7 @@ def cmd_check_host_capability_context(args):
         root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
 
     context = discover_host_capability_context(root)
-    issues = check_host_capability_context(root)
+    issues = check_host_capability_context(root, sampled_context=context)
     print("\n=== Host Capability Context Check ===")
     print(f"  Root: {_display_path(root, ROOT)}")
     print(f"  Scenario: {context['scenario']}")

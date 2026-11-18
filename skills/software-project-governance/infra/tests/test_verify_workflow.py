@@ -4565,6 +4565,24 @@ class CapabilityContextTests(unittest.TestCase):
         issues = vw.check_capability_context(vw.ROOT)
         self.assertEqual([], issues)
 
+    def test_capability_commands_validate_the_displayed_sample(self):
+        args = argparse.Namespace(fixture=None, fail_on_issues=True)
+        for discover, command in (
+            (vw.discover_capability_context, vw.cmd_capability_context),
+            (vw.discover_host_capability_context, vw.cmd_check_host_capability_context),
+        ):
+            with self.subTest(command=command.__name__):
+                valid = discover(vw.ROOT)
+                invalid = dict(valid, validation_command="missing-validator")
+                output = io.StringIO()
+                with patch.object(vw, discover.__name__, side_effect=[invalid, valid]) as sample:
+                    with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                        command(args)
+                sample.assert_called_once_with(vw.ROOT)
+                self.assertEqual(1, raised.exception.code)
+                self.assertIn("missing-validator", output.getvalue())
+                self.assertIn("validation_command must name", output.getvalue())
+
     def test_discovers_degraded_local_fallback_when_registry_missing(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

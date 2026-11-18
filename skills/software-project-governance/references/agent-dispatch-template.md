@@ -4,7 +4,7 @@ Coordinator spawn sub-agent 时 MUST 使用本模板，**禁止**传自定义 pr
 
 ## 模板
 
-```
+````
 ## 任务：{task_id} — {task_summary}
 
 你是 {agent_role} Agent。在执行任务前，MUST 先加载两个文件：
@@ -78,9 +78,9 @@ python skills/software-project-governance/infra/verify_workflow.py review-record
 
 1. 加载角色定义和任务规范
 2. 通读目标文件，理解现有结构
-3. 执行修改
+3. 描述中如有待试用的资源，先在授权范围内用当前事务的样本验证。按任务描述和选定路径执行任务。
 4. 自检硬门槛
-5. 返回结构化结果给 Coordinator
+5. 返回结构化结果给 Coordinator。若试用了候选资源，说明采用或排除的依据，并回指对应的交付验收结果。
 
 ## 禁止事项
 
@@ -89,7 +89,7 @@ python skills/software-project-governance/infra/verify_workflow.py review-record
 - 不修改 .governance/ 治理记录（例外之一：派发 prompt 预授权 incidents 留痕文件时，可向 `.governance/incidents/{task_id}-*.log` 追加 R4 实时命令日志——仅限该路径、仅限追加，见 behavior-protocol.md M7.7 R4 例外条款；另一例外=Coordinator 自身的治理写回职责，不受本禁令约束）
 - 不做最终决策（决策型任务只出方案）
 - 不把昵称、人设、风格或口号作为执行依据
-```
+````
 
 ## Coordinator 可填充的占位符
 
@@ -100,9 +100,9 @@ python skills/software-project-governance/infra/verify_workflow.py review-record
 | `{agent_role}` | 角色名（英文） | Developer |
 | `{role_definition_path}` | 角色定义文件路径 | agents/developer.md |
 | `{task_skill_path}` | 任务 SKILL 文件路径 | skills/stage-development/SKILL.md |
-| `{task_description}` | 任务详细描述 | 修改 SKILL.md 路由表... |
+| `{task_description}` | 写明本次事务要解决的问题。按 [行为协议 M10](behavior-protocol.md) 判定需要探索时，用当前宿主可用且已授权的通道实际检索，写入候选来源、与已有路径的取舍及试用结果，已有记录可直接引用。尚未试用时写明待验证项。可跳过或受限时简述依据与可行路径。 | 比较候选校验工具和项目现有命令，标明来源、已验证的输入格式与待验证的边界样本。 |
 | `{file_list}` | 要修改的文件列表 | skills/software-project-governance/SKILL.md |
-| `{acceptance_criteria}` | 验收标准 | 路由表含后置审查列，表格格式正确 |
+| `{acceptance_criteria}` | 写明交付物及验收入口。涉及资源选择时，指明它要帮助达成的验收项和结果记录位置。 | 从正常导入入口回放边界样本，将实际结果记入任务现有证据。 |
 | `{priority}` | 优先级 | P0 |
 | `{hard_gates}` | 硬门槛列表 | verify_workflow.py PASSED, cross-reference consistency PASSED |
 | `{destructive_redlines}` | 破坏性红线段——任务涉及用户真实环境操作时 MUST 填入下方「红线捆绑包」（红线原文 + R1/R4 配套摘要）逐字文本；纯仓库内任务填「不适用——本任务无用户真实环境操作」 | 见下方「破坏性红线注入（真实环境任务）」 |

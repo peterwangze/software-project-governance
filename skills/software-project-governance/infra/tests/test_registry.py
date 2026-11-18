@@ -159,8 +159,8 @@ _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 # baseline re-anchored in the same change (DEC-320/324 rider). Segments
 # 73 -> 74: the check-governance Check 2b Decision Premise WARN face is
 # extracted as a new segment (name carries "Check 2b").
-FROZEN_CLI_KEYS = 109
-FROZEN_SEGMENTS = 74
+FROZEN_CLI_KEYS = 108
+FROZEN_SEGMENTS = 73
 
 # FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
 # the acceptance ② comparison frame for "启动 import 集合不增".

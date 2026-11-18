@@ -2814,7 +2814,6 @@ GOVERNANCE_PACK_KNOWN_CHECKS = {
     "check-flow-unit-runtime",
     "check-loop-health",
     "check-host-capability-context",
-    "check-official-submission-ecosystem",
     "check-mainstream-agent-loading",
 }
 GOVERNANCE_PACK_STATUS_DOC_PATHS = [
@@ -3022,85 +3021,6 @@ HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS = {
     "codex_cli_blocked": "restricted benchmark scenario: Codex CLI blocked",
     "gemini_auth_blocked": "restricted benchmark scenario: Gemini auth blocked",
 }
-OFFICIAL_SUBMISSION_DOC_PATHS = [
-    "docs/marketplace/official-submission-0.46.0.md",
-    "docs/marketplace/ecosystem-positioning-0.46.0.md",
-    "docs/marketplace/comparison-0.46.0.md",
-    "docs/marketplace/migration-guide-0.46.0.md",
-    "docs/marketplace/examples-0.46.0.md",
-]
-OFFICIAL_SUBMISSION_RELEASE_DOC_PATHS = [
-    "docs/release/release-checklist-0.46.0.md",
-    "docs/release/feature-flags-0.46.0.md",
-    "docs/release/rollback-plan-0.46.0.md",
-]
-OFFICIAL_SUBMISSION_REQUIRED_TOKENS = [
-    "governance trust layer",
-    "orchestrates external capabilities",
-    "Superpowers",
-    "Agent Skills",
-    "MCP",
-    "browser",
-    "host-native plugins",
-    "FIX-115",
-    "FIX-116",
-    "FIX-117",
-    "docs/requirements/capability-discovery-orchestration-0.45.0.md",
-    "docs/requirements/governance-eval-benchmark-0.45.0.md",
-    "Codex Desktop marketplace-management",
-    "BLOCKED / NOT_RUN",
-    "No official approval",
-    "No marketplace approval",
-    "No universal/full runtime support",
-    "No external first-session pilot success",
-    "No Codex Desktop marketplace-management E2E PASS",
-    "No automatic best-tool selection",
-    "No universal plugin/skill/tool availability",
-    "No catalog entry runtime PASS",
-    "No 1.0.0 production-ready",
-]
-OFFICIAL_SUBMISSION_FORBIDDEN_OVERCLAIMS = [
-    "official approval granted",
-    "officially approved",
-    "marketplace approval granted",
-    "marketplace approved",
-    "universal runtime support is verified",
-    "universal runtime support verified",
-    "full runtime support is verified",
-    "full runtime support verified",
-    "universal/full runtime support is verified",
-    "universal/full runtime support verified",
-    "external first-session pilot success",
-    "external first-session pilot pass",
-    "codex desktop marketplace-management e2e pass",
-    "codex desktop marketplace-management e2e passed",
-    "automatic best-tool selection",
-    "automatically selects the best tool",
-    "universal plugin/skill/tool availability",
-    "catalog entry runtime pass",
-    "catalog entry runtime is available",
-    "catalog entry runtime verified",
-    "1.0.0 production-ready",
-    "risk-036 closed",
-    "replaces superpowers",
-    "replaces agent skills",
-    "replaces mcp",
-    "replaces browser tools",
-    "replaces host-native plugins",
-]
-
-
-def _official_submission_line_has_safe_negation(line, phrase):
-    """FIX-118 guard: legal boundary lines must not mask a separate positive claim."""
-    lower = line.lower()
-    phrase_lower = phrase.lower()
-
-    if phrase_lower not in lower:
-        return False
-
-    return _line_has_scoped_claim_negation(line, phrase)
-
-
 GOVERNANCE_PACK_BOUNDARY_TOKENS = [
     "No official approval",
     "No marketplace approval",
@@ -6276,211 +6196,13 @@ def _release_docs_line_has_guard_context(label, line):
     )
 
 
-def check_codex_desktop_marketplace_e2e_report(root=None):
-    """REL-022: 0.45.0 Desktop marketplace lifecycle must not overclaim PASS."""
-    root = Path(root) if root is not None else ROOT
-    rel_path = "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md"
-    path = root / rel_path
-    display = _display_path(path, root)
-    issues = []
-
-    if not path.is_file():
-        return [f"{display}: missing Codex Desktop marketplace-management E2E report"]
-
-    content = path.read_text(encoding="utf-8")
-    lower_content = content.lower()
-    required_tokens = [
-        "result matrix",
-        "blocked",
-        "not_run",
-        "exact missing desktop evidence",
-        "no official approval",
-        "no marketplace approval",
-        "no universal/full runtime support",
-        "no external first-session pilot success",
-        "no codex desktop marketplace-management e2e pass",
-        "no 1.0.0 production-ready",
-    ]
-    for token in required_tokens:
-        if token not in lower_content:
-            issues.append(f"{display}: missing Codex Desktop report token `{token}`")
-
-    lifecycle_steps = [
-        ("desktop environment capture", ("codex desktop version", "environment capture")),
-        ("marketplace add", ("marketplace add", "local marketplace registration")),
-        ("plugin install", ("plugin install", "install from codex desktop")),
-        ("plugin enable", ("plugin enable", "enable from codex desktop")),
-        ("plugin visibility", ("plugin visibility", "display name", "preview")),
-        ("skill discovery", ("skill discovery", "skill invocation", "invocation")),
-        ("governance status", ("governance status", "delivery trust snapshot")),
-        ("upgrade or reinstall", ("upgrade or reinstall", "manifest version change")),
-        ("disable, uninstall, or rollback", ("disable, uninstall", "uninstall", "rollback")),
-    ]
-    for step, aliases in lifecycle_steps:
-        if not any(alias in lower_content for alias in aliases):
-            issues.append(f"{display}: missing lifecycle step `{step}`")
-
-    matrix_rows = []
-    for line in content.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("|") or not stripped.endswith("|"):
-            continue
-        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-        if len(cells) < 4:
-            continue
-        step = " ".join(cells[0].lower().split())
-        result = " ".join(cells[1].upper().split())
-        evidence_status = " ".join(cells[2].upper().split())
-        matrix_rows.append((step, result, evidence_status, stripped))
-
-    def find_matrix_row(aliases):
-        for step, result, evidence_status, row in matrix_rows:
-            if any(alias in step for alias in aliases):
-                return step, result, evidence_status, row
-        return None
-
-    for step, aliases in lifecycle_steps:
-        matrix_row = find_matrix_row(aliases)
-        if matrix_row is None:
-            continue
-        row_step, result, evidence_status, row = matrix_row
-        if result != "BLOCKED":
-            issues.append(
-                f"{display}: lifecycle row `{row_step}` must be BLOCKED until real Desktop evidence exists; got `{result}`"
-            )
-        if evidence_status != "NOT_RUN":
-            issues.append(
-                f"{display}: lifecycle row `{row_step}` evidence status must be NOT_RUN until real Desktop evidence exists; got `{evidence_status}`"
-            )
-        if re.search(r"\|\s*(pass|ready|supported)\s*\|", row, flags=re.IGNORECASE):
-            issues.append(f"{display}: Desktop marketplace lifecycle row `{row_step}` must not claim PASS/READY/SUPPORTED")
-
-    official_row = find_matrix_row(("official/public marketplace approval", "official marketplace approval", "public marketplace approval"))
-    if official_row is not None:
-        row_step, result, evidence_status, row = official_row
-        if result != "BLOCKED":
-            issues.append(
-                f"{display}: lifecycle row `{row_step}` must be BLOCKED until official/public marketplace evidence exists; got `{result}`"
-            )
-        if evidence_status not in {"NOT_SUPPORTED", "NOT_RUN"}:
-            issues.append(
-                f"{display}: lifecycle row `{row_step}` evidence status must be NOT_SUPPORTED or NOT_RUN until official/public marketplace evidence exists; got `{evidence_status}`"
-            )
-        if re.search(r"\|\s*(pass|ready|supported)\s*\|", row, flags=re.IGNORECASE):
-            issues.append(f"{display}: Desktop marketplace approval row `{row_step}` must not claim PASS/READY/SUPPORTED")
-
-    in_acceptance_criteria = False
-    for line in content.splitlines():
-        heading = re.match(r"^(#+)\s*(.+?)\s*$", line.strip())
-        if heading:
-            heading_text = heading.group(2).strip().lower()
-            in_acceptance_criteria = heading_text.startswith("acceptance criteria")
-        normalized = " ".join(line.strip().lower().split())
-        if not normalized or "pass" not in normalized:
-            continue
-        if in_acceptance_criteria:
-            continue
-        if "no codex desktop marketplace-management e2e pass" in normalized:
-            continue
-        if "not desktop marketplace e2e pass" in normalized:
-            continue
-        if "not desktop marketplace-management e2e pass" in normalized:
-            continue
-        if "no manifest/catalog/asset presence as lifecycle pass" in normalized:
-            continue
-        if re.search(r"\|\s*pass\s*\|", normalized):
-            issues.append(f"{display}: Desktop marketplace lifecycle must not be PASS without real Desktop evidence")
-            break
-        if "codex desktop marketplace-management e2e pass" in normalized and not _line_has_scoped_claim_negation(line, "codex desktop marketplace-management e2e pass"):
-            issues.append(f"{display}: forbidden Codex Desktop marketplace-management E2E PASS overclaim")
-            break
-
-    return issues
-
-
-def check_official_submission_ecosystem(root=None):
-    """FIX-118: official submission docs must position governance as ecosystem trust layer."""
-    root = Path(root) if root is not None else ROOT
-    issues = []
-    required_paths = OFFICIAL_SUBMISSION_DOC_PATHS + OFFICIAL_SUBMISSION_RELEASE_DOC_PATHS
-    tracked_files = _git_files(["ls-files", "--cached"])
-    manifest_result = check_manifest_consistency(root / "skills/software-project-governance/core/manifest.json")
-    manifest_missing = set(manifest_result.get("missing", [])) if manifest_result.get("pass") is not None else set()
-    manifest_untracked = set(manifest_result.get("untracked", [])) if manifest_result.get("pass") is not None else set()
-
-    combined_content_parts = []
-    for rel_path in required_paths:
-        path = root / rel_path
-        display = _display_path(path, root)
-        if not path.is_file():
-            issues.append(f"{display}: missing FIX-118 official submission ecosystem artifact")
-            continue
-        if tracked_files is not None and rel_path not in tracked_files:
-            issues.append(f"{display}: FIX-118 official submission artifact must be tracked by git")
-        if rel_path in manifest_missing:
-            issues.append(f"{display}: FIX-118 artifact is declared in manifest but missing from tracked files")
-        if rel_path in manifest_untracked:
-            issues.append(f"{display}: FIX-118 artifact exists but is not covered by manifest")
-        content = path.read_text(encoding="utf-8")
-        combined_content_parts.append(content)
-        if "0.46.0" not in content:
-            issues.append(f"{display}: missing version target 0.46.0")
-        lower_content = content.lower()
-        for phrase in OFFICIAL_SUBMISSION_FORBIDDEN_OVERCLAIMS:
-            for line in content.splitlines():
-                line_lower = line.lower()
-                if phrase not in line_lower:
-                    continue
-                if _official_submission_line_has_safe_negation(line, phrase):
-                    continue
-                if (
-                    rel_path == "docs/release/rollback-plan-0.46.0.md"
-                    and _release_docs_line_has_guard_context("rollback plan", line)
-                ):
-                    continue
-                issues.append(f"{display}: forbidden official submission overclaim `{phrase}`")
-                break
-        if "replaces" in lower_content:
-            allowed = (
-                "does not replace" in lower_content
-                or "does not replacing" in lower_content
-                or "instead of replacing" in lower_content
-                or "not replacing" in lower_content
-                or "not replacement" in lower_content
-            )
-            if not allowed:
-                issues.append(f"{display}: replacement wording must be explicitly complementary/non-replacement")
-
-    combined_content = "\n".join(combined_content_parts)
-    combined_lower = combined_content.lower()
-    for token in OFFICIAL_SUBMISSION_REQUIRED_TOKENS:
-        if token.lower() not in combined_lower:
-            issues.append(f"FIX-118 official submission ecosystem docs missing token `{token}`")
-
-    required_validation_commands = [
-        "capability-context --fail-on-issues",
-        "check-capability-registry --fail-on-issues",
-        "check-host-capability-context --fail-on-issues",
-        "check-release --version 0.46.0 --require-changelog --runtime-adapters",
-    ]
-    for command in required_validation_commands:
-        if command.lower() not in combined_lower:
-            issues.append(f"FIX-118 official submission ecosystem docs missing validation command `{command}`")
-
-    required_source_docs = [
-        "docs/requirements/capability-discovery-orchestration-0.45.0.md",
-        "docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md",
-        "docs/requirements/governance-eval-benchmark-0.45.0.md",
-        "capability-registry.json",
-    ]
-    for source_doc in required_source_docs:
-        if source_doc.lower() not in combined_lower:
-            issues.append(f"FIX-118 official submission ecosystem docs missing consumed source `{source_doc}`")
-
-    codex_report_issues = check_codex_desktop_marketplace_e2e_report(root=root)
-    issues.extend(f"FIX-118 consumed Codex Desktop report: {issue}" for issue in codex_report_issues)
-
-    return issues
+def _tagged_release_replay_hint(version):
+    """Release-specific acceptance lives with the source and evidence it inspected."""
+    if version in ("0.45.0", "0.46.0", "0.47.0", "0.66.2"):
+        return (f"Release v{version} uses its tagged verifier. From the repository root run:\n"
+                f"  git worktree add --detach ../replay-{version} v{version}\n"
+                "See the historical acceptance steps in skills/software-project-governance/infra/TOOLS.md.")
+    return None
 
 
 def check_release_docs_coverage(version, root=None):
@@ -6489,6 +6211,10 @@ def check_release_docs_coverage(version, root=None):
     issues = []
     if not version or not re.fullmatch(r"\d+\.\d+\.\d+", version):
         return issues
+
+    replay_hint = _tagged_release_replay_hint(version)
+    if replay_hint:
+        return [replay_hint]
 
     release_docs = [
         ("release checklist", f"docs/release/release-checklist-{version}.md"),
@@ -6584,36 +6310,6 @@ def check_release_docs_coverage(version, root=None):
                 ):
                     issues.append(f"{display}: {label} forbidden release docs overclaim `{phrase}`")
                     break
-
-    if version == "0.45.0":
-        issues.extend(check_codex_desktop_marketplace_e2e_report(root=root))
-    if version == "0.46.0":
-        issues.extend(check_official_submission_ecosystem(root=root))
-    if version == "0.47.0":
-        mainstream_issues = check_mainstream_agent_loading(root=root)
-        issues.extend(f"0.47.0 mainstream loading detail: {issue}" for issue in mainstream_issues)
-        required_tokens = [
-            "Mainstream Agent Loading Readiness",
-            "AUDIT-112",
-            "FIX-123",
-            "FIX-121",
-            "FIX-122",
-            "REL-024",
-            "Check 28n",
-            "TOOL-035",
-            "check-mainstream-agent-loading",
-            "check-release --version 0.47.0 --require-changelog --runtime-adapters",
-            "Tier 2",
-        ]
-        combined_release_docs = []
-        for _label, rel_path in release_docs:
-            path = root / rel_path
-            if path.is_file():
-                combined_release_docs.append(path.read_text(encoding="utf-8"))
-        combined_text = "\n".join(combined_release_docs)
-        for token in required_tokens:
-            if token not in combined_text:
-                issues.append(f"0.47.0 release docs missing mainstream loading token `{token}`")
 
     return issues
 
@@ -7444,6 +7140,14 @@ def check_release_readiness(
     require_delivery_evidence=False,
 ):
     """FIX-072: aggregate release gate scripts behind the stage-release check-release command."""
+    replay_hint = _tagged_release_replay_hint(version)
+    if replay_hint:
+        return {
+            "pass": False,
+            "issues": [replay_hint],
+            "details": {"release_replay": {"pass": False, "issues": [replay_hint]}},
+        }
+
     issues = []
     details = {}
 
@@ -16391,7 +16095,6 @@ _PLUGIN_PRODUCT_CHECK_IDS = frozenset({
     "Check 28h",  # README Pack Guidance
     "Check 28i",  # Governance Pack Status Boundary
     "Check 28k",  # Capability Registry（插件 core JSON）
-    "Check 28m",  # Official Submission Ecosystem（插件 docs）
     "Check 28n",  # Mainstream Agent Loading（插件 docs）
     # ArchGuard 插件树扫描
     "Check 28o",  # Architecture Health
@@ -16457,7 +16160,6 @@ _PRODUCT_GATE_LABELS = {
     "Check 28h": "README Pack Guidance",
     "Check 28i": "Governance Pack Status Boundary",
     "Check 28k": "Capability Registry",
-    "Check 28m": "Official Submission Ecosystem",
     "Check 28n": "Mainstream Agent Loading",
     "Check 28o": "Architecture Health (ArchGuard/REQ-101)",
     "Check 28p": "Duplicate Code (ArchGuard/REQ-101)",
@@ -17659,23 +17361,6 @@ def _run_full_engine_checks(args):
     else:
         print("│  [PASS] Restricted-environment capability context degrades honestly without runtime PASS overclaim.")
     print("└──────────────────────────────────────────────────────────┘")
-
-    # ── 28m. Official Submission Ecosystem Boundary Guard (FIX-118) ──
-    if _product_gate_active(args):
-        print("\n┌─ Check 28m: Official Submission Ecosystem (FIX-118) ─┐")
-        official_submission_issues = check_official_submission_ecosystem()
-        if official_submission_issues:
-            all_issues += len(official_submission_issues)
-            print(f"│  [FAIL] {len(official_submission_issues)} official submission ecosystem issue(s):")
-            for issue in official_submission_issues[:10]:
-                print(f"│    - {issue}")
-            if len(official_submission_issues) > 10:
-                print(f"│    ... and {len(official_submission_issues) - 10} more")
-        else:
-            print("│  [PASS] Official submission docs position governance as ecosystem trust layer without overclaim.")
-    else:
-        _print_product_gate_skipped("Check 28m")
-    print("└──────────────────────────────────────────────────────┘")
 
     # ── 28n. Mainstream Agent Loading Guard (FIX-122) ──
     if _product_gate_active(args):
@@ -22744,6 +22429,8 @@ def cmd_check_release(args):
         gate_sequence_lineage_mode=gate_sequence_lineage_mode,
         require_delivery_evidence=getattr(args, "require_delivery_evidence", False),
     )
+    if "release_replay" in result["details"]:
+        sys.exit(result["issues"][0])
     claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("product_release"))
     claim_gate = _loop_runtime_claim_gate_detail(claim_report)
     result["details"]["loop_runtime_claim_gate"] = claim_gate
@@ -23893,27 +23580,6 @@ def cmd_check_host_capability_context(args):
             sys.exit(1)
     else:
         print("  Result: PASSED — restricted host capability context is benchmark/diagnostic and no-overclaim safe")
-    print()
-
-
-def cmd_check_official_submission_ecosystem(args):
-    """Run FIX-118 official submission ecosystem boundary guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    issues = check_official_submission_ecosystem()
-    print("\n=== Official Submission Ecosystem Check ===")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — official submission docs are ecosystem-positioned and no-overclaim safe")
     print()
 
 
@@ -27085,6 +26751,8 @@ def main(argv=None):
         prog="verify_workflow",
         description="Software Project Governance CLI",
     )
+    if parser_argv[:1] == ["check-official-submission-ecosystem"]:
+        parser.error(_tagged_release_replay_hint("0.46.0"))
     parser.add_argument(
         "--project-root",
         help=(
@@ -27641,14 +27309,6 @@ def main(argv=None):
     )
     chc_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if restricted host capability context is incomplete or overclaims")
-
-    # check-official-submission-ecosystem (FIX-118)
-    cose_p = subparsers.add_parser(
-        "check-official-submission-ecosystem",
-        help="Check 0.46.0 official submission ecosystem positioning and no-overclaim boundary",
-    )
-    cose_p.add_argument("--fail-on-issues", action="store_true",
-                       help="Exit with non-zero code if official submission ecosystem docs are incomplete or overclaim")
 
     # check-mainstream-agent-loading (FIX-122)
     cmal_p = subparsers.add_parser(
@@ -28444,7 +28104,6 @@ def main(argv=None):
         "dynamic-flow-gate-migration": cmd_dynamic_lifecycle_migration,
         "loop-engineering-migration": cmd_loop_engineering_migration,
         "check-host-capability-context": cmd_check_host_capability_context,
-        "check-official-submission-ecosystem": cmd_check_official_submission_ecosystem,
         "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,
         "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
         "check-architecture-health": cmd_check_architecture_health,

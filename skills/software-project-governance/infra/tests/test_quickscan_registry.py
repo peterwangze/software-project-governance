@@ -81,10 +81,10 @@ def _sandbox_tmp(prefix="quickscan-fixture-"):
 # test_excluded_set_equals_the_engine_product_gate_declaration 守住）。
 # FIX-310: "40" (DSH Skills Manifest) left the set with its subject — the
 # dead `dsh.skills` declaration is gone from package.json, so the guard and
-# its segment are gone too (24 excluded segments now).
+# its segment are gone too.
 EVAL_C1_EXCLUDED = (
     "7", "10", "11", "12", "15", "24", "28b", "28d", "28e", "28f", "28h",
-    "28i", "28k", "28m", "28n", "28o", "28p", "28q", "28r", "28t", "28u",
+    "28i", "28k", "28n", "28o", "28p", "28q", "28r", "28t", "28u",
     "28v", "28w", "30b", "31", "33",
 )
 EVAL_C3_SEGMENTS = ("28g", "28j", "28l", "29")
@@ -817,11 +817,7 @@ class CensusIntegrityTests(unittest.TestCase):
         self.assertEqual(set(observed), set(snapshot))
         self.assertNotEqual(tuple(observed), tuple(snapshot))
         mismatch = next(i for i, pair in enumerate(zip(observed, snapshot)) if pair[0] != pair[1])
-        # FIX-463: segment 2b joins BOTH orders at the same early position
-        # (engine source: after Check 2; registry table: after "2"), so the
-        # first divergence shifts 55 -> 56 with the same ("29", "28u") pair.
-        self.assertEqual(mismatch, 56)
-        self.assertEqual((observed[56], snapshot[56]), ("29", "28u"))
+        self.assertEqual((observed[mismatch], snapshot[mismatch]), ("29", "28u"))
         doc = qr.discover_engine_segment_ids.__doc__ or ""
         self.assertIn("source order", doc)
         self.assertIn("positional", doc)

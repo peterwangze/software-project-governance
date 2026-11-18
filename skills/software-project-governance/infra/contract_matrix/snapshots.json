@@ -1,7 +1,7 @@
 {
   "faces": {
     "check_segments": {
-      "count": 74,
+      "count": 73,
       "ids": [
         "1",
         "2",
@@ -51,7 +51,6 @@
         "28j",
         "28k",
         "28l",
-        "28m",
         "28n",
         "28o",
         "28p",
@@ -119,7 +118,6 @@
         "28j": "Capability Context Trace (FIX-115)",
         "28k": "Capability Registry (FIX-116)",
         "28l": "Restricted Host Capability Context (FIX-117)",
-        "28m": "Official Submission Ecosystem (FIX-118)",
         "28n": "Mainstream Agent Loading (FIX-122)",
         "28o": "Architecture Health (ArchGuard/REQ-101)",
         "28p": "Duplicate Code (ArchGuard/REQ-101)",
@@ -170,8 +168,8 @@
           "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 106,
-      "key_count": 109,
+      "handler_count": 105,
+      "key_count": 108,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -216,7 +214,6 @@
         "check-loop-runtime-claims",
         "check-mainstream-agent-loading",
         "check-manifest-consistency",
-        "check-official-submission-ecosystem",
         "check-plugin-freshness",
         "check-product-success-contracts",
         "check-projection-sync",
@@ -460,14 +457,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "91962aaeb4dfff6bed82cf46094abdaac97ec9be",
+    "git_head": "7b9fd3720376549c53b06d4fc362f5fb0c96e40b",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-11-03T08:04:57+00:00"
+    "timestamp_utc": "2026-11-18T07:05:52+00:00"
   },
   "python_family_pins": [
     {

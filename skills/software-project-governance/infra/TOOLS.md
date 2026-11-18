@@ -39,7 +39,6 @@
 | TOOL-031 | Capability Context Selection Trace | script + command contract | `infra/verify_workflow.py capability-context` + `check-governance` Check 28j | 0.45.0 capability context/selection trace、受限环境能力选择诊断或 release gate 前 | 调研/架构/开发/测试/发布/维护 | 是 |
 | TOOL-032 | Capability Registry guard | script + registry | `infra/verify_workflow.py check-capability-registry` + `check-governance` Check 28k | external capability registry、plugin/skill/tool/MCP/browser/sub-agent/script/fallback catalog 或 no-overclaim boundary 变更后 | 调研/架构/测试/发布/维护 | 是 |
 | TOOL-033 | Host Capability Context benchmark | script + benchmark/diagnostic | `infra/verify_workflow.py check-host-capability-context` + `check-governance` Check 28l | FIX-117 restricted-environment fixtures、no network/no plugin install/no MCP/no browser/no sub-agent/local skill only、simulated Codex CLI blocked/Gemini auth blocked 诊断或 release gate 前 | 调研/架构/测试/发布/维护 | 是 |
-| TOOL-034 | Official Submission Ecosystem guard | script + submission docs contract | `infra/verify_workflow.py check-official-submission-ecosystem` + `check-governance` Check 28m + `check-release --version 0.46.0` release docs detail | 0.46.0 official submission docs、ecosystem positioning、comparison、migration guide、examples 或 no-overclaim boundary 变更后 | 调研/发布/维护 | 是 |
 | TOOL-035 | Mainstream Agent Loading guard | script + README/adapter docs contract | `infra/verify_workflow.py check-mainstream-agent-loading` + `check-governance` Check 28n | 0.47.0 README mainstream loading matrix、Tier 1 adapter loading guide、Tier 2 compatibility/research rows 或 no-overclaim boundary 变更后 | 调研/测试/发布/维护 | 是 |
 | TOOL-036 | External Project Validation harness | script + temporary workspace | `infra/verify_workflow.py external-project-validation --target <path> --fail-on-issues` | 1.0.0 前外部项目验证、VAL-001 复跑、真实外部 target 的完整 workflow surface 验证 | 测试/发布/维护 | 是 |
 | TOOL-037 | Dynamic Lifecycle Registry guard | script + registry | `infra/verify_workflow.py check-lifecycle-registry` + `core/lifecycle-registry.json` | 0.51.0 lifecycle registry、classic-phase-gate 兼容 preset、flow unit schema 或 schema-only/no-overclaim 边界变更后 | 架构/测试/发布/维护 | 是 |
@@ -116,7 +115,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 详情）、`gate-check <G1-G11>`（registry-backed Gate 自动判定）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`external-project-validation --target <path> --fail-on-issues`（外部项目临时验证 workspace）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-lifecycle-registry`、`check-host-capability-context`、`check-official-submission-ecosystem`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 详情）、`gate-check <G1-G11>`（registry-backed Gate 自动判定）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`external-project-validation --target <path> --fail-on-issues`（外部项目临时验证 workspace）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-lifecycle-registry`、`check-host-capability-context`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -399,16 +398,14 @@
 - **边界**：benchmark/diagnostic only；not external execution；not Desktop marketplace E2E PASS；不执行 network、plugin install、MCP call、browser action、sub-agent spawn、Codex CLI runtime 或 Gemini auth flow；blocked capability is not runtime PASS；catalog fact is not runtime PASS
 - **被以下子工作流使用**：调研（research）、架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
-### TOOL-034：Official Submission Ecosystem guard
+### 历史版本验收回放
 
-- **文件**：`infra/verify_workflow.py` + `docs/marketplace/official-submission-0.46.0.md` + `docs/marketplace/ecosystem-positioning-0.46.0.md` + `docs/marketplace/comparison-0.46.0.md` + `docs/marketplace/migration-guide-0.46.0.md` + `docs/marketplace/examples-0.46.0.md`
-- **子命令**：`check-official-submission-ecosystem [--fail-on-issues]`
-- **输入**：0.46.0 official submission ecosystem docs、ecosystem comparison、migration guide、examples、official-submission release-surface boundary docs、0.45.0 capability-context evidence、capability registry、restricted-environment benchmark 和 Codex Desktop marketplace-management BLOCKED / NOT_RUN report
-- **输出**：official submission materials 是否说明 workflow 是 governance trust layer、orchestrates external capabilities、complements Superpowers/Agent Skills/MCP/browser tools/host-native plugins；是否消费 FIX-115/FIX-116/FIX-117 与 0.45.0 Desktop BLOCKED/NOT_RUN 证据；是否阻断 official approval、marketplace approval、universal/full runtime support、external first-session pilot success、Codex Desktop marketplace-management E2E PASS、automatic best-tool selection、universal plugin/skill/tool availability、catalog entry runtime PASS、1.0.0 production-ready 和 replacement overclaim
-- **触发条件**：0.46.0 official submission materials、ecosystem positioning、migration guide、examples、release docs 或 no-overclaim boundary 变更后
-- **依赖**：`check-governance` Check 28m、`check-release --version 0.46.0` release docs detail、TOOL-031、TOOL-032、TOOL-033
-- **边界**：documentation/release guard only；not official submission approval；not marketplace approval；not Desktop marketplace-management E2E PASS；not automatic best-tool selection；not universal plugin/skill/tool availability；not catalog entry runtime PASS；not 1.0.0 production-ready
-- **被以下子工作流使用**：调研（research）、发布（release）、维护（maintenance）
+从仓库根目录运行 `git worktree add --detach ../replay-0.46.0 v0.46.0`，进入新工作树，用该 tag 的代码和材料执行以下对应步骤。回放其他版本时将工作树路径和 tag 一并换为目标版本。
+
+| Tag | 在对应工作树中执行 |
+| --- | --- |
+| `v0.45.0`、`v0.46.0`、`v0.47.0` | 查阅当版 `docs/release/release-checklist-<版本>.md`，按需执行 `python skills/software-project-governance/infra/verify_workflow.py check-release --version <版本> --require-changelog --runtime-adapters`。0.46.0 的 TOOL-034 可单独运行 `python skills/software-project-governance/infra/verify_workflow.py check-official-submission-ecosystem --fail-on-issues`。 |
+| `v0.66.2` | REL-063 的历史证据校验器与演练脚本保存在该 tag。以 `python -m unittest discover -s skills/software-project-governance/infra/tests -p test_verify_rel063_evidence.py` 运行该版证据测试。如需校验当次实际发布，按该版发布清单提供当时的签收、提交和远端证据。涉及写入 Git 引用的演练使用该版脚本的一次性仓库。 |
 
 ### TOOL-035：Mainstream Agent Loading guard
 
@@ -417,7 +414,7 @@
 - **输入**：0.47.0 mainstream agent loading requirements、README Tier 1/Tier 2 loading matrix、Claude/Codex/Gemini/opencode adapter loading guides、source citations、validation commands、runtime/readiness and no-overclaim boundary text
 - **输出**：加载说明是否覆盖 Codex、Claude Code、Gemini CLI、opencode；compatibility/research rows 是否覆盖 Cursor、GitHub Copilot coding agent、Cline、Windsurf/Cascade、Kiro；requirements row 是否带 source URL；Tier 2 是否保持 RESEARCH_ONLY / NOT_RUNTIME_VERIFIED；是否阻断 official approval、marketplace approval、universal/full runtime support、Desktop marketplace-management E2E PASS、automatic best-tool selection、catalog runtime PASS、1.0.0 production-ready 等越界声明
 - **触发条件**：0.47.0 loading/readme/adapter docs、mainstream agent compatibility matrix、validation commands 或 no-overclaim wording 变更后
-- **依赖**：`check-governance` Check 28n、`check-agent-adapters`、TOOL-024、TOOL-034、RISK-036
+- **依赖**：`check-governance` Check 28n、`check-agent-adapters`、TOOL-024、RISK-036
 - **边界**：documentation/adapter contract guard only；not official approval；not marketplace approval；not universal/full runtime support；not Codex Desktop marketplace-management E2E PASS；not automatic best-tool selection；not catalog entry runtime PASS；not 1.0.0 production-ready
 - **被以下子工作流使用**：调研（research）、测试（testing）、发布（release）、维护（maintenance）
 

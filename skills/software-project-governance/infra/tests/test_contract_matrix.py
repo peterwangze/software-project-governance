@@ -154,8 +154,8 @@ from contract_matrix import generator as cmg  # noqa: E402
 # baseline re-anchored in the same change (DEC-320/324 rider, disclosed).
 # Segments 73→74: check-governance's Check 2b Decision Premise WARN face
 # (FIX-463) is extracted as a new segment; R6 cold face 210→211.
-FROZEN_CLI_KEY_COUNT = 109
-FROZEN_CHECK_SEGMENT_COUNT = 74
+FROZEN_CLI_KEY_COUNT = 108
+FROZEN_CHECK_SEGMENT_COUNT = 73
 
 
 @lru_cache(maxsize=1)

@@ -500,15 +500,6 @@ SEGMENTS = (
         "plugin:asset:skills/software-project-governance/infra/verify_workflow.py",
         "plugin:asset:docs/requirements/capability-discovery-orchestration-0.45.0.md",
     ), _RETAIN),
-    SegmentSpec("28m", "distribution", (
-        "plugin:asset:package.json",
-        "plugin:asset:README.md",
-        "plugin:asset:.claude-plugin/**",
-        "plugin:asset:.agents/plugins/**",
-        "plugin:asset:.github/workflows/ci.yml",
-        "plugin:asset:skills/**",
-        "plugin:git:ls-files --cached",
-    ), _excluded("PLUGIN_PACKAGE_ASSET")),
     SegmentSpec("28n", "distribution", (
         "plugin:asset:README.md",
         "plugin:asset:adapters/*/README.md",

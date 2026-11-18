@@ -165,7 +165,9 @@ DISABLE_ENV_VAR = "GOVERNANCE_ISOLATION"
 _DISABLE_VALUES = {"off", "disabled", "0", "false", "no"}
 
 CAPABILITY_REPORT_REF = (
-    "docs/research/feat-095-harness-enforcement-capability-2026-10-10.md")
+    "https://github.com/peterwangze/software-project-governance/blob/"
+    "7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/research/"
+    "feat-095-harness-enforcement-capability-2026-10-10.md")
 
 DEFAULT_WRITE_SLOT_TTL_SECONDS = 600
 _STALE_LOCKFILE_SECONDS = 600

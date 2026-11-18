@@ -29,9 +29,10 @@ def resolve_commit(context: RepositoryContext, value: str) -> CheckResult:
     return CheckResult("PASS", facts={"commit": stdout})
 
 
-def commit_adding_path(context: RepositoryContext, relative_path: str) -> CheckResult:
+def commit_adding_path(context: RepositoryContext, relative_path: str, *, revision: Optional[str] = None) -> CheckResult:
     rc, stdout, stderr = context.run_git(
-        "log", "--diff-filter=A", "--format=%H", "--", relative_path
+        "--literal-pathspecs", "log", "--diff-filter=A", "--format=%H", *([revision] if revision else []),
+        "--", relative_path
     )
     if rc == 124 or rc == 125:
         return CheckResult("UNKNOWN", [stderr or "git history unavailable"])

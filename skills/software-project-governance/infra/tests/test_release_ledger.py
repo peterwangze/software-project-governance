@@ -399,6 +399,15 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
             result = validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
             self.assertEqual(result.state, "PASS", result.issues)
             self.assertEqual(result.facts["manifests"][0]["trust_level"], "HISTORICAL_ONLY")
+            git(root, "rm", "docs/release.md")
+            git(root, "commit", "-m", "archive report")
+            # Reusing the path after release cannot alter its original adding commit.
+            (root / "docs").mkdir(exist_ok=True)
+            (root / "docs/release.md").write_text("later report", encoding="utf-8")
+            git(root, "add", "docs/release.md")
+            git(root, "commit", "-m", "reuse the path for later work")
+            archived = validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
+            self.assertEqual(archived.state, "PASS", archived.issues)
 
     def test_historical_missing_tag_requires_disposition(self):
         with tempfile.TemporaryDirectory() as td:
@@ -546,6 +555,7 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
                 "artifacts": self.artifacts(), "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
                 "events": [], "effective_state": {"lifecycle_state": "candidate", "withdrawn": False, "amendments": []},
             }
+            candidate["artifacts"]["release_docs"] = ["./docs/release.md"]
             write_manifest(manifest, candidate)
             git(root, "add", "."); git(root, "commit", "-m", "candidate")
             candidate_commit = git(root, "rev-parse", "HEAD")
@@ -566,6 +576,43 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
             released = validate_release_ledger(RepositoryContext(root), manifests_dir=releases)
             self.assertEqual(released.state, "PASS", released.issues)
             self.assertEqual(released.facts["manifests"][0]["release_commit"], release_commit)
+
+            git(root, "rm", "docs/release.md")
+            git(root, "commit", "-m", "archive completed release")
+            archived = validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
+            self.assertEqual(archived.state, "PASS", archived.issues)
+            # A later worktree file cannot supply a document missing from the release.
+            (root / "docs").mkdir(exist_ok=True)
+            (root / "docs/later.md").write_text("later", encoding="utf-8")
+            candidate["artifacts"]["release_docs"] = ["docs/later.md"]
+            write_manifest(manifest, candidate)
+            invalid = validate_release_ledger(RepositoryContext(root), manifests_dir=releases, verify_remote=False)
+            self.assertEqual(invalid.state, "FAIL", invalid.issues)
+            self.assertIn(f"release document missing at {release_commit}: docs/later.md", " ".join(invalid.issues))
+
+    def test_invalid_artifact_paths_fail_before_git_or_filesystem_lookup(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            releases = root / "releases"
+            releases.mkdir()
+            for state in ("candidate", "released"):
+                for key, path in (("release_docs", "docs/bad\x00.md"),
+                                  ("review_evidence", "../outside.md"),
+                                  ("changelog", "C:/outside.md")):
+                    with self.subTest(state=state, key=key):
+                        artifacts = self.artifacts()
+                        artifacts[key] = path if key == "changelog" else [path]
+                        write_manifest(releases / "0.66.0.json", {
+                            "schema_version": 1, "version": "0.66.0", "lifecycle_state": state,
+                            "provenance": "native", "artifacts": artifacts, "events": [],
+                            "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
+                            "effective_state": {"lifecycle_state": state, "withdrawn": False, "amendments": []},
+                        })
+                        result = validate_release_ledger(RepositoryContext(root), manifests_dir=releases,
+                                                         verify_remote=False)
+                        self.assertEqual(result.state, "FAIL")
+                        self.assertIn(f"artifacts.{key} requires a valid repository-relative path",
+                                      " ".join(result.issues))
 
     def test_release_transition_rejects_non_candidate_parent(self):
         with tempfile.TemporaryDirectory() as td:

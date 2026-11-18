@@ -21,7 +21,7 @@
 
 - 0.78.1 版本规划文档引用 `router EV-066`（2026-08-23）与 `EV-071/073`（2026-08-27）作为 FIX-281 九项缺陷面的实证留痕；
 - REL-073 设计审查记录引用 `router EV-066/071/073` 与 `EV-038` 先例；
-- 审计报告（`docs/requirements/audit-148-v1-verify-alarm-validation.md`）记录 router 侧任务族：router 仓的任务 ID 另有 `EVO-{n}` 族（如 EVO-004）与自己的 `FIX-{n}` 编号——**各仓的任务编号空间同样相互独立**，本仓 `FIX-281` 与 router 仓 `FIX-006` 等同名前缀编号互不相关。
+- 审计报告（[跨仓校验调查记录](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/audit-148-v1-verify-alarm-validation.md)）记录 router 侧任务族：router 仓的任务 ID 另有 `EVO-{n}` 族（如 EVO-004）与自己的 `FIX-{n}` 编号——**各仓的任务编号空间同样相互独立**，本仓 `FIX-281` 与 router 仓 `FIX-006` 等同名前缀编号互不相关。
 
 Loop 运行时侧的关联记号：flow-unit 的 `gate_state.evidence_refs` 是自由字符串列表（`core/loop-runtime-contract.json`；infra/checks/flow_unit_runtime_v2.py 仅校验 list 类型，infra/loop_gate_processor.py 以 append 语义写入）。其元素没有强制格式，但应按下方映射规则书写，保证跨仓可读。
 

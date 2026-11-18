@@ -648,7 +648,7 @@
 - **输出**：root_residue（游离脚本）、release_docs_versions（历史文档版本数）、hooks_drift（源 vs 已安装内容漂移）、ledger_no_carrying_version（OPEN/IN_PROGRESS 项无承载版本）
 - **触发条件**：定期技术债巡检、发布前 hooks 一致性检查
 - **依赖**：`core/technical-debt-ledger.md`（manifest 登记）、`core/architecture-health.json`
-- **边界**：advisory-only；hooks 漂移检测复用既有 helper（G9 约束）不重复实现；不自动清理游离脚本；release_docs_versions 阈值经 FIX-350 校准为 80、FIX-419 重校准为 100（docs/release 全历史保留是蓄意策略——release lineage 可复现性，check-release 依赖该目录；归档评估在阈值再次触及时出槽）。
+- 资源健康检查给出提示。hooks 漂移沿用现有检测，游离脚本由维护者处理。`release_docs_versions` 统计工作树内的发布版本数（当前阈值 100）。保留现行消费者所需的文档，已发布版本的原件从对应发布或回填提交核验。
 - **被以下子工作流使用**：维护（maintenance）
 
 ### TOOL-046：ArchGuard Complexity check

@@ -145,7 +145,7 @@ Windows rc.3 的 `workspace-write` 沙箱允许直接启动项目的 esbuild，N
 - `adapters/dsh/launch.py`：预设渲染器（渲染 + 原子换入）与项目 bootstrap 写入器。
 - `agent-presets/governance/agent.cordis.yml.template`：预设组合模板（唯一组合事实源；token 由 `lib/index.js` / `launch.py` 渲染为绝对路径；**不直接挂载**，`.template` 后缀即防误挂载标记）。
 - `agent-presets/governance/preset.yml`：预设元数据（roster 显示名与描述）。
-- `lib/index.js`：bundle 插入的宿主行——开机渲染预设到用户根，失败只 warn 不抛（抛会打断 dsh 启动）。
+- `lib/index.js`：bundle 插入的宿主行。启动时通过预设注册服务登记，若服务不可用则记录告警。
 - `cordis.patch.yml`：bundle 补丁层——**只有一条 `- insert:`**（本包自己的行），不改任何宿主行（DEC-187）。
 - `adapters/dsh/skill-shims/`：`commands/*.md` 的 DSH 薄投影（扁平 skill，name+description frontmatter）。
 - `adapters/dsh/AGENTS.md.template`：DSH 项目级 bootstrap 模板（thin pointer）。

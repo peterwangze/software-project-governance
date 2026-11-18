@@ -744,7 +744,7 @@ Coordinator 在每次读取 `agent-locks.json` 时 **MUST** 检查 `file_locks` 
 
 ### M7.7 用户真实环境操作防护（AUDIT-146 / FIX-271 — R1/R4/R5）
 
-用户真实环境（`$HOME` 下任何配置目录、`$DSH_HOME`、仓库外任意路径）是最高爆炸半径面——AUDIT-146 事故（FEAT-010 执行窗口内用户 `~/.dsh` 根级删除）的防再发协议。本节固化为产品规则（源：`docs/requirements/audit-146-feat010-dsh-config-loss-rca.md` §7.2）；配套执行面：R2（triage 第五步「执行副作用声明」）由 change-triage CLI 机器执行并落 `analysis.side_effect` 字段；R3（调度契约破坏性红线）由同目录调度模板 `agent-dispatch-template.md` 的「红线捆绑包」（红线原文 + R1/R4 配套摘要，逐字注入 `{destructive_redlines}` 占位符）随派发 prompt 进入角色 agent 上下文——R4 上报义务的到达通道即该捆绑包。
+用户真实环境（`$HOME` 下任何配置目录、`$DSH_HOME`、仓库外任意路径）是最高爆炸半径面——AUDIT-146 事故（FEAT-010 执行窗口内用户 `~/.dsh` 根级删除）的防再发协议。本节固化为产品规则（源：[DSH 配置丢失事故复盘](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/audit-146-feat010-dsh-config-loss-rca.md) §7.2）；配套执行面：R2（triage 第五步「执行副作用声明」）由 change-triage CLI 机器执行并落 `analysis.side_effect` 字段；R3（调度契约破坏性红线）由同目录调度模板 `agent-dispatch-template.md` 的「红线捆绑包」（红线原文 + R1/R4 配套摘要，逐字注入 `{destructive_redlines}` 占位符）随派发 prompt 进入角色 agent 上下文——R4 上报义务的到达通道即该捆绑包。
 
 **R1（真实环境三选一强制）**：任何涉及用户真实环境的测试/验收/安装操作（包括但不限于 `$DSH_HOME`、`$HOME` 下配置目录、仓库外任意路径），**MUST** 在执行前满足以下至少一项并在任务记录中留痕：
 
@@ -833,7 +833,7 @@ Agent 自检单独不够——一个违反协议的 agent 也不会诚实地自�
 
 ## M10. 主动生态探索协议（EXP-01~05）
 
-任务级主动生态探索的行为规范（DEC-312② / REQ-146；草案与顾问原文出处：`docs/research/thin-open-evolution-proposal-2026-10-04.md` §2——触发/跳过条件明细随 M-0 细化）。**本节是 EXP-01~05 的唯一规范源**：SKILL.md「Agent 分发路由」仅携带触发入口指针（见 M10.4）；本节条款、记录 schema 与通道语义 MUST NOT 在其他文件复制（A10——不为探索建独立子系统，不改 methodology-routing.md）。
+任务级主动生态探索的行为规范（DEC-312② / REQ-146；草案与顾问原文出处：[事务探索设计草案](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/research/thin-open-evolution-proposal-2026-10-04.md) §2——触发/跳过条件明细随 M-0 细化）。**本节是 EXP-01~05 的唯一规范源**：SKILL.md「Agent 分发路由」仅携带触发入口指针（见 M10.4）；本节条款、记录 schema 与通道语义 MUST NOT 在其他文件复制（A10——不为探索建独立子系统，不改 methodology-routing.md）。
 
 ### M10.1 探索条款（EXP-01~05）
 

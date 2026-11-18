@@ -4,7 +4,7 @@
 
 本文档是七个审查 SKILL 的目标 Loop 角色映射事实源。依据 AUDIT-133、EVD-707 与 DEC-104，0.66.1 的 Loop Engineering 定位是 **experimental scaffolding**：runtime activation 为 NOT_MET，migration validity 为 NOT_MET。角色映射不表示持久化 Loop runtime 已激活。
 
-依据 ADR §3.5（`docs/requirements/loop-engineering-architecture-0.65.0-proposed.md` 的 §3.5 与 §4 是逐阶段映射的权威来源）。
+依据 ADR §3.5（[循环工程架构设计](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/loop-engineering-architecture-0.65.0-proposed.md) 的 §3.5 与 §4 是逐阶段映射的权威来源）。
 
 ## 为什么需要此映射
 

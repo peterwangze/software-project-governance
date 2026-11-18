@@ -13,23 +13,23 @@ Use this workflow when your AI coding setup needs:
 - **Reviewer separation with degraded-mode honesty**: the workflow distinguishes real independent review from degraded or environment-dependent execution, and does not present every agent as fully supported.
 - **5-minute orientation for new users**: start with `/governance`, initialize `.governance/`, then let the agent resume state, check gates, and surface only critical decisions.
 
-## 1.0.0 Readiness Boundary
+## Release and validation
 
-0.57.0 packages the 0.55.0 Dynamic Lifecycle migration preview and external validation archive, the 0.55.1 Web console CLI/client entry patch, the 0.55.2 passive Web summary entry patch, the 0.55.3 governance-entry correction, the 0.56.0 zcode plugin marketplace adapter, the FIX-151 Web console real-data dashboard patch (0.56.1), and the AUDIT-121 architecture degradation audit archive (no functional code change). It is not the 1.0.0 release. 0.57.0 is a documentation/governance-only release: it archives the full-project architecture degradation diagnosis (`docs/requirements/architecture-degradation-audit-0.57.0.md`, F1-F6 facts: the `verify_workflow.py` God Module at 20,294 lines, the missing modern engineering infrastructure, the source/projection duplication, the command-surface redundancy, the self-evolution residue, and the architecture-health stewardship gap), adds a technical-debt ledger (`skills/software-project-governance/core/technical-debt-ledger.md`, TD-001~006), cleans up root-directory residue (`nul`, `_fix_030_reconstruct.py`), and plans the subsequent refactor roadmap (0.58.0 ArchGuard as an independent capability version, 0.59.0~0.64.0 progressive per-domain split of `verify_workflow.py`). 0.57.0 does not modify `verify_workflow.py` functional code, does not implement ArchGuard, does not split any module, and does not introduce lint/type infrastructure. The release keeps the dry-run-only `dynamic-lifecycle-migration --target <path> --dry-run` preview, the migration guide, the `python_game` chapter-flow validation archive, and the `shitu` non-game validation archive from 0.55.0. 0.55.1 added `web-console --status` and `web-console --start [--install]`; 0.55.2 added `web-console --summary-link` for read-only task, phase, and session summaries; 0.55.3 restores the intended product entry so manual `/governance` starts or reuses the local Web console through `web-console --governance-entry`, then reports the URL for follow-up Web UI interaction; 0.56.0 adds the zcode native plugin surface (`.zcode-plugin/`, top-level `package.json`) and a one-shot `project/zcode-local-load.py` tool so the plugin can run in the local zcode installation; 0.56.1 fixes the Web console dashboard to read real governance data instead of hardcoded mock values, adds a `web/server.py` API server and `web/vite.config.js` proxy, makes all dashboard buttons functional, and keeps the dashboard a read-only local companion. `classic-phase-gate` remains the active/default compatibility preset, `dynamic-flow-gate` remains inactive/non-default and opt-in only, and no project is migrated by this release. The external validations remain intentionally conservative: both dry-run previews reached `READY_FOR_REVIEW`, but installed-state validation still has target-native blockers, and non-game preset generalization remains partial because `shitu` preview flow units still come from the `python_game_10_chapters` example. RISK-036, RISK-037, and RISK-039 remain open: no official approval, no marketplace approval (the zcode adapter proves local load/runtime only; it is not submitted to or approved by the zcode official marketplace), no two-real-project external validation full PASS, no Codex Desktop lifecycle PASS, no project migration, no ArchGuard implementation, no RISK-036 closure, no RISK-037 closure, no RISK-039 closure, and no 1.0.0 production-ready claim. **0.62.0 update (FIX-167, DEC-093)**: the 0.56.0 reverse-engineered `project/zcode-local-load.py` seed-hash tool has been removed — newer zcode runtimes ship a marketplace chain and the plugin now installs via the shared Claude/zcode marketplace protocol (`/plugin marketplace add peterwangze/software-project-governance`). This is protocol-conformant installability, still not zcode official curation or approval; RISK-036/RISK-037/RISK-039 remain open.
+See the [release checklist](docs/release/release-checklist-0.99.0.md) and [rollback plan](docs/release/rollback-plan-0.99.0.md) for the current release. Earlier reviews, experiment results and release checklists remain available in the [project history](https://github.com/peterwangze/software-project-governance/tree/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs).
 
 ## Mainstream Agent Loading
 
-0.47.0 makes the current loading paths explicit for mainstream AI coding agents. This is loading readiness, not official approval, marketplace approval, universal/full runtime support, or Codex Desktop marketplace-management E2E PASS. See the 0.47.0 scope note in [docs/requirements/mainstream-agent-loading-0.47.0.md](docs/requirements/mainstream-agent-loading-0.47.0.md) and the public runtime facts in [docs/requirements/runtime-readiness-matrix-0.43.0.md](docs/requirements/runtime-readiness-matrix-0.43.0.md).
+Use the adapter table to choose a loading path and verify it on your host. Earlier observations are recorded in the [agent loading report](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/mainstream-agent-loading-0.47.0.md) and [runtime readiness matrix](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/runtime-readiness-matrix-0.43.0.md).
 
 Tier 1 loading guide:
 
 | Agent | Load or install path | First verification | Current boundary |
 | --- | --- | --- | --- |
 | Claude Code | Add this repo as a Claude plugin marketplace, then install `software-project-governance@spg`. | `python adapters/claude/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters --runtime` | Claude target-cwd read use case is PASS/DEGRADED in local evidence. This is not official marketplace approval. |
-| Codex | Use `.agents/plugins/marketplace.json`, `.codex-plugin/plugin.json`, `AGENTS.md`, and `skills/software-project-governance/SKILL.md` as the Codex plugin/project guidance package. | `python -m json.tool .agents/plugins/marketplace.json`, `python -m json.tool .codex-plugin/plugin.json`, `python adapters/codex/launch.py`, and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 180` | Codex CLI headless target-cwd read E2E is PASS/DEGRADED as of 2026-06-11. This is still not Codex Desktop marketplace-management lifecycle PASS. |
+| Codex | Use `.agents/plugins/marketplace.json`, `.codex-plugin/plugin.json`, `AGENTS.md`, and `skills/software-project-governance/SKILL.md` as the Codex plugin/project guidance package. | `python -m json.tool .agents/plugins/marketplace.json`, `python -m json.tool .codex-plugin/plugin.json`, `python adapters/codex/launch.py`, and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 180` | Codex CLI headless target-cwd read E2E is PASS/DEGRADED as of 2026-06-11. This test did not establish Codex Desktop marketplace-management E2E PASS. |
 | Gemini CLI | Use a thin `GEMINI.md` project context pointer to `skills/software-project-governance/SKILL.md`; custom commands, MCP, and extensions remain separate extension points. | `python adapters/gemini/launch.py`, then `GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180` | Gemini CLI target-cwd read E2E is PASS/DEGRADED as of 2026-06-11 when headless workspace trust is enabled. No Gemini plugin marketplace claim. |
 | opencode | Use `AGENTS.md` or configured opencode instructions to point at `skills/software-project-governance/SKILL.md`. | `python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight` and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90` | opencode target-cwd runtime E2E is PASS/DEGRADED in local evidence; provider/model preflight still guards future regressions. |
-| DeepSeek Harness (dsh) | Standard plugin install (pnpm-backed; `link:` local checkout recommended — live code, see the dsh section below): `dsh plugin --profile web add link:/path/to/software-project-governance`; also `file:` (snapshot) and `github:peterwangze/software-project-governance`. Restart the profile to activate the bundle layer — on a host that declares the agent-preset registry the inserted row registers the preset natively (no directory written), and on a host without that row it only warns and writes nothing (DEC-366 ②); in either case the governance skills and `/governance` command projections load **in that preset's sessions only** (other presets such as `standard` carry no governance skills; this scoping is FIX-310's core behavioural goal and its real-machine confirmation is still pending). Coordinator persona preset: native hosts derive it at boot through the public registry; for directory-model hosts the **explicit** installer writes `agent-presets/governance/agent.cordis.yml.template` into `${DSH_HOME}/.agent-presets/governance/` (DSH_HOME redirected to an isolated directory), so the `governance` preset **appears in the preset roster** after that explicit install + restart 〔isolation: 2026-09-12 FIX-310 隔离 DSH_HOME 渲染复验，Windows-only〕 — the user preset root is the first user-trust root, so the settings page shows it as a **custom** preset (delete + open-folder available, label not 「内置」). The explicit renderer is idempotent per package version and warn-only on failure; the inserted row itself never renders a directory (DEC-366 ②). Optional manual path (preset-only install, offline, older dsh): `python adapters/dsh/launch.py --install` (add `--dry-run` first to preview) renders the byte-identical composition — write_side_refusal: the real user root is refused with exit 2; only a redirected DSH_HOME (isolated env) is written. Per-project activation: `python adapters/dsh/launch.py --bootstrap-project <dir>` writes a thin `AGENTS.md`. | `dsh --profile <name> --dump-config` shows the `@peterwangze/software-project-governance-plugin` bundle layer; `python adapters/dsh/launch.py --install --dry-run`; `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | dsh has the strongest native profile (native ask_user_question, subagent, tool_calling, git_hooks; /governance loads the command shim skill). Only browser automation and MCP remain host-dependent. The dsh plugin install is the official bundle mechanism, not a marketplace approval or universal runtime claim. `link:`/`github:` installs re-verified 2026-09-05 in an isolated `DSH_HOME` on dsh 0.1.2-rc.1 + pnpm 11.22.0. |
+| DeepSeek Harness (dsh) | Run `dsh plugin --profile web add link:/path/to/software-project-governance` and restart the profile. With a usable registry, governance appears in the preset roster through native registration; the inserted row itself never renders a directory. 〔isolation: 2026-10-20, Windows and dsh 0.2.1-rc.2〕 For older directory-model hosts, `python adapters/dsh/launch.py --install` supports an explicitly redirected `DSH_HOME`. | `dsh --profile <name> --dump-config`; `python adapters/dsh/launch.py --install --dry-run`; `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | Native `ask_user_question`, subagent, tool calling and Git hooks. See the [adapter guide](adapters/dsh/README.md) for host-dependent capabilities. |
 | zcode | Add this repo as a plugin marketplace and install: `/plugin marketplace add peterwangze/software-project-governance`, then `/plugin install software-project-governance@spg`. zcode reuses the Claude marketplace protocol (`.claude-plugin/marketplace.json` + `.zcode-plugin/plugin.json`). | `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | Protocol-conformant marketplace install. Not zcode official curation or approval. The 0.56.0 reverse-engineered local-load tool was retired in 0.62.0 (DEC-093). |
 | Pi | pi natively loads `AGENTS.md`/`CLAUDE.md` context files and implements the Agent Skills spec. Wire via three path arrays in `~/.pi/agent/settings.json` (`skills`/`prompts` -> repo `skills/`+`commands/`, optional `extensions` -> `adapters/pi/extension` for the governance bridge tools). | `python adapters/pi/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent pi --timeout 90` | Extension-bridged `ask_user_question`/`dispatch_agent` (tui/rpc interactive scope; headless fails fast with `GOV_ASK_USER_HEADLESS`); tool_calling and git_hooks native. Runtime E2E pending — capability honestly recorded as designed/degraded. |
 
@@ -84,7 +84,7 @@ python adapters/dsh/launch.py --install --dry-run   # preview: resolved DSH_HOME
 python adapters/dsh/launch.py --install             # renders only ${DSH_HOME}/.agent-presets/governance/ (4 files: composition + preset.yml + 2 markers)
 ```
 
-**Since 0.81.0 these write paths refuse a real home (behaviour B-2, `docs/release/feature-flags-0.81.0.md` section 2)**: `--install` / `--sync` / `--uninstall` exit `2` with `[REFUSED]` unless `DSH_HOME` is explicitly set to a directory outside your real home tree (`~/.dsh` (unset **or** blank counts as the real home), so a deliberate manual install MUST redirect `DSH_HOME` to a temporary directory; `--dry-run` stays a read-only preview and is still allowed. 〔static: 0.81.0 write-side guard, `adapters/dsh/launch.py` write_side_refusal + release-gate tests; refusal path not re-executed in this doc edit〕
+For the manual renderer, set `DSH_HOME` to an isolated directory outside the real user root before using `--install`, `--sync` or `--uninstall`. A real user root returns exit 2 with `[REFUSED]`. You can always preview the operation with `--dry-run`.
 
 Safe verification boundary (do not "verify" against your real `~/.dsh`): preview with `--dry-run`, then run install/upgrade checks against a redirected home —
 
@@ -93,7 +93,7 @@ DSH_HOME=$(mktemp -d) python adapters/dsh/launch.py --install        # isolated 
 DSH_HOME=$(mktemp -d) dsh plugin --profile web add link:/path/to/software-project-governance
 ```
 
-Both forms were re-verified this way (temp-dir `DSH_HOME`, zero writes to the real home) on dsh 0.1.2-rc.1 + pnpm 11.22.0, 2026-09-05 — all verification ran on Windows; non-Windows is unverified〔isolation: link:/file: 2026-09-05, Windows-only〕〔static: github: form — packaging semantics by reasoning, not install-verified (see RISK-049)〕. Note on `github:`: `v0.79.0` and `v0.80.0` are **tagged and pushed** (`v0.80.0` peels to `71f73eb`; 0.80.0 released 2026-09-12 — `docs/release/release-checklist-0.80.0.md`) and **pushed to the remote** (M-7 of 0.81.0 completed the back-push — the count of unpushed tags/commits is disclosed in `docs/release/release-checklist-0.79.0.md` and `…-0.81.0.md` §M-8 收尾义务; the M-7 push carries the `v0.79.0`/`v0.80.0` back-push obligation). GitHub's master now serves **0.81.0** (`e376ddf`) and the `github:` install form is available for `v0.79.0`/`v0.80.0`/`v0.81.0`; a local checkout (`link:`/`file:`) remains an equivalent path.
+Both forms were re-verified with a redirected `DSH_HOME` on Windows using dsh 0.1.2-rc.1 and pnpm 11.22.0. 〔isolation: 2026-09-05, link: and file: installs〕 〔static: github: installation is documented from pnpm package semantics〕
 
 Claim evidence levels (RISK-049 disclosure, FEAT-014): the dsh claims **registered in `ADAPTER_CLAIM_REGISTRY`** (4 claim classes — session projection / preset roster / `/governance` gesture / install-forms boundary) are annotated with their verification level — live-session = verified in a real user session (date cited); isolation = re-verified in an isolated/redirected environment (date cited); static = static/inspection reasoning only, explicitly labeled as not execution-verified. Check 28t (`check-governance`) machine-checks that registry mapping; statements in this dsh section outside the registry are not covered by it.
 
@@ -157,7 +157,7 @@ python skills/software-project-governance/infra/verify_workflow.py first-run-dem
 
 The snapshot is the first trust signal: it proves the workflow can show what it knows, what remains missing, and the next evidence-backed action. It is not a claim of official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready status.
 
-External first-session measurement is tracked separately from this local demo. The current 0.43.0 measured state is local_demo=PASS and external_pilot=NOT_MEASURED in the [first-session measurement evidence](docs/requirements/first-session-measurement-0.43.0.md).
+The original first-session study recorded local_demo=PASS and external_pilot=NOT_MEASURED. [First-session measurement](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/first-session-measurement-0.43.0.md).
 
 ## Optional Local Web Console
 
@@ -376,7 +376,7 @@ dsh 的标准扩展机制是 `dsh plugin`（pnpm 转发——add 的参数就是
 
 #### 方式一（推荐）：`dsh plugin` 标准命令——一条命令完整安装（bundle + 预设）
 
-前置要求：**dsh ≥ 0.1.2-rc.1**（预设随 bundle 激活的版本边界；≤0.1.1-rc.2 请用方式二）、**pnpm**（`dsh plugin` 转发依赖）、`github:` 形式另需 **git + 网络**；方式二与全部验证命令需 **Python 3**（命令名 `python`，部分 Linux/macOS 发行版为 `python3`）。Windows/macOS/Linux 的命令均同形（隔离验证片段已按 shell 标注）。
+安装需要支持 `dsh plugin` 的宿主和 pnpm。`github:` 安装另需 Git 和网络。手工预设安装和验证命令使用 Python 3。宿主是否提供预设注册服务决定加载方式。
 
 ```bash
 # 本地检出目录，符号链接（推荐——改码后重启 profile 即生效）
@@ -393,12 +393,12 @@ dsh plugin --profile web remove @peterwangze/software-project-governance-plugin
 
 安装后**重启 DSH**（`dsh web`）——bundle 层在 profile 启动时生效（boot-time，非 HMR），随后：
 
-1. **「治理协调器」预设出现在预设选择器中**〔isolation: 2026-09-12 FIX-310 隔离 DSH_HOME 渲染复验，Windows-only〕——插入的宿主行在开机时把包内模板渲染进 `${DSH_HOME}/.agent-presets/governance/`（**用户根**）：roster 按根优先级扫描，用户根即第一个 user-trust 根，因此设置页显示为**自定义预设**（可删除、可打开目录，不是「内置」）；渲染按包版本号幂等（版本未变不写），失败只 warn 不抛（抛会打断 dsh 启动）。
-2. 治理 skills 与 `/governance` 命令投影在该预设的会话中可用——**仅在治理预设的会话中**；其它预设（如 `standard`）的会话不含治理技能（这是 FIX-310 的核心行为目标）〔static: 规则级推导 —— 包内 `agent-presets/governance/agent.cordis.yml.template` 的 `customSkillDirs` 渲染为包内绝对路径 + 该预设自身的行；**无会话级执行证据**〕。⚠️ **该作用域的真机确认仍未完成**（见 `docs/release/release-checklist-0.80.0.md` §真机验收面），在用户真实 dsh 上验证前不应据此宣示。（旧文案曾称「该 profile 的每个会话中可用」——那是 FIX-310 之前宿主平面全局注册时代的语义，已随宿主行 UPDATE 一并退役。）
+1. 若当前 profile 提供预设注册服务，重启后可在选择器中选择「治理协调器」。宿主从自己的 `standard` 预设派生 `governance`，插件只追加治理 persona 和两个 skill 目录。〔isolation: 2026-10-20，Windows、dsh 0.2.1-rc.2、临时 DSH_HOME〕
+2. 在该宿主的隔离测试中，`governance` 会话加载治理 skill 和命令投影，`standard` 会话维持自身的 skill 清单。其他宿主可按适配器步骤验证。〔isolation: 2026-10-20，Windows、dsh 0.2.1-rc.2〕 [DSH 加载与验证](adapters/dsh/README.md)
 
 框架边界（DEC-187 I-1/I-2/I-3，DEC-188 ② 澄清判据）：`cordis.patch.yml` **只有一条 `- insert:`**，只命名本包自己的行，不改任何宿主行（无 UPDATE、无 `!!js` 自定位、无 `trust: system` 根、无宿主平面 provider/服务/工具注册）。机检判据 = 安装前后**既有**宿主行的存在性/config/`disabled` 与任何宿主平面注册表内容零变化、组合 entry 列表恰多一行且该行只命名本包——**不是**「与未安装时逐字节等价」（那一行正是官方 `dsh plugin add/remove/update` 的交付载体）。
 
-预设落在**用户根**：设置页显示为自定义预设，提供删除与打开目录；删除后下次启动会重新渲染（除非同时 `dsh plugin remove` 撤回 bundle 行）。`customSkillDirs` 是绝对路径，因此不存在「副本脱离包后 skill 目录为空」的旧问题。整体移除走 `dsh plugin remove`（撤回 bundle 行）+ 删除用户根目录；手工装入的副本用 `python adapters/dsh/launch.py --uninstall`。
+旧宿主缺少预设注册服务时，插件记录告警。需要目录形式的预设可使用下方显式安装命令，生成的副本由 `launch.py --install` 和 `--uninstall` 管理。
 
 #### 方式二（可选）：`launch.py` 预设直装（用户根副本 / 不依赖 bundle / 旧版 dsh 回退）
 
@@ -418,7 +418,7 @@ python adapters/dsh/launch.py
 python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters
 ```
 
-> **0.81.0 起写入守卫（行为变更 B-2）**：`--install` / `--sync` / `--uninstall` 在**真实 home 形态**下（`DSH_HOME` 未设 / 空串 / 空白，或解析为 `~/.dsh`、`~/.dsh` 的子目录）一律 `exit 2` + `[REFUSED]`——真实环境手工安装 MUST 先把 `DSH_HOME` 重定向到临时目录（拒绝面覆盖**任何解析后落在真实用户 home 之下、含其父目录**的 `DSH_HOME`）；`--dry-run` 是只读预览，仍放行。详见 `docs/release/feature-flags-0.81.0.md` §2。〔static: 0.81.0 写入守卫 `adapters/dsh/launch.py` `write_side_refusal` + 发布门禁测试；本段编辑未重跑拒绝路径〕
+> 手工预设的 `--install`、`--sync` 和 `--uninstall` 要求 `DSH_HOME` 指向真实用户根之外的隔离目录。指向真实用户根会返回 `exit 2` 和 `[REFUSED]`。`--dry-run` 可直接预览。
 
 安装后：启动 dsh 会话选择「治理协调器」预设，或在被治理项目目录内开任意预设会话（由 `AGENTS.md` 激活）。用户输入 `/governance` 即加载统一治理入口（dsh 的 `/name` 手势加载同名 skill）〔live-session: 2026-07-08 真实 dsh 会话 0.1.0-rc.6 /name skill 加载验证〕〔isolation: 2026-09-05 dsh 0.1.2-rc.1 链路复验〕。
 
@@ -445,7 +445,7 @@ dsh 侧有两个安装面，各自有**官方对称命令**：
 
 #### 安全验证边界（不要对真实 `~/.dsh` 做"安装验证"）
 
-预览用 `--dry-run`；需要真实执行安装/升级验证时，一律用重定向的临时 `DSH_HOME`（2026-09-05 在 dsh 0.1.2-rc.1 + pnpm 11.22.0 隔离复验 `link:`/`file:` 两种 plugin add 与 launch.py 预设安装，真实 home 零写入；全部验证在 Windows 上执行，非 Windows 未验证；`github:` 形式打包语义与 `file:` 同构——但 `v0.79.0`/`v0.80.0`/`v0.81.0` 三个 tag **均已推送**（`v0.80.0` 已于 2026-09-12 发布，peel `71f73eb`；补推义务见 `docs/release/release-checklist-0.81.0.md` §M-8 收尾义务），GitHub 侧 master 现为 **0.81.0**（`e376ddf`），`github:` 安装形态对三个 tag 均可用；本地 `link:`/`file:` 是等效路径）〔isolation: link:/file: 2026-09-05, Windows-only〕〔static: github: 形态——打包语义推理，未执行安装验证（RISK-049 披露）〕：
+先用 `--dry-run` 预览。需要实际验证安装或升级时，显式设置临时 `DSH_HOME`。下列 `link:`/`file:` 两种 plugin add 与 launch.py 预设安装已在 Windows 的 dsh 0.1.2-rc.1 和 pnpm 11.22.0 上验证。〔isolation: 2026-09-05，临时 DSH_HOME〕〔static: github: 依据 pnpm 的包规格〕
 
 宣示验证等级（RISK-049 披露，FEAT-014）：**登记在 `ADAPTER_CLAIM_REGISTRY` 的 dsh 宣示**（当前 4 类：会话投影 / 预设清单 / `/governance` 手势 / 安装形态边界）逐条标注验证等级——live-session = 真实用户会话活体验证（标注日期）；isolation = 隔离环境复验（重定向 home/临时目录，零真实 home 写入，标注日期）；static = 静态检查/推理验证——无执行证据，显式标注未执行验证。Check 28t（`check-governance`）对该注册表映射做机器核验；本节中注册表之外的其他表述不在该核验范围内。
 
@@ -540,7 +540,7 @@ python skills/software-project-governance/infra/verify_workflow.py first-run-dem
 
 Delivery Trust Snapshot 是第一个 trust signal：它证明工作流能把“已知事实、缺失证据、下一步动作和边界声明”摆在你面前。它不是官方批准、marketplace approval、universal/full runtime support，也不是 1.0.0 production-ready 声明。
 
-外部 first-session measurement 与这个本地 demo 分开记录。当前 0.43.0 measured state 是 local_demo=PASS、external_pilot=NOT_MEASURED，见 [first-session measurement evidence](docs/requirements/first-session-measurement-0.43.0.md)。
+首次会话试验记录了 local_demo=PASS、external_pilot=NOT_MEASURED。[查阅原始测量记录](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/first-session-measurement-0.43.0.md)。
 
 首次预设建议：
 
@@ -644,10 +644,11 @@ python skills/software-project-governance/infra/verify_workflow.py gates        
 
 以下文档供工作流开发者和贡献者参考，普通用户不需要阅读：
 
+- [从项目治理记录提炼的演进方向](docs/governance/evolution.md)
 - [协议层定义](skills/software-project-governance/core/protocol/plugin-contract.md)
 - [生命周期规则](skills/software-project-governance/core/lifecycle.md)
 - [Gate 门禁规则](skills/software-project-governance/core/stage-gates.md)
 - [Profile 配置](skills/software-project-governance/core/profiles.md)
 - [中途接入协议](skills/software-project-governance/core/onboarding.md)
-- [企业实践经验](project/workflows/software-project-governance/research/company-practices.md)
-- [产品形态设计](project/workflows/software-project-governance/research/default-product-shape.md)
+- [企业实践摘要](skills/software-project-governance/references/company-practices-summary.md)
+- [产品形态设计原始记录](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/project/workflows/software-project-governance/research/default-product-shape.md)

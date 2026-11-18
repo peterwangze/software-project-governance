@@ -101,7 +101,7 @@
     "command": "pi",
     "version_command": "pi --version",
     "verified_on": "2026-10-16",
-    "evidence": "Runtime version probe verified: pi --version returns 1.1.0 (exit 0, machine-recorded in docs/research/pi-adapter-integration-research-0.98.0.md §1). FEAT-100 acceptance E2E passed the full gate chain on 2026-10-16 (EVD-1715): L0 static check-agent-adapters 7/7, L1 isolated install smoke (PI_CODING_AGENT_DIR redirected to temp dir), L2 extension load probe, L3 agent-runtime-e2e --agent pi matrix PASS (real pi loaded the e2e-test-project governance bootstrap) plus the headless fallback criterion PASS (GOV_ASK_USER_HEADLESS fast-fail, exit 0).",
+    "evidence": "Runtime version probe verified: pi --version returns 1.1.0 (exit 0, machine-recorded in https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/research/pi-adapter-integration-research-0.98.0.md §1). FEAT-100 acceptance E2E passed the full gate chain on 2026-10-16 (EVD-1715): L0 static check-agent-adapters 7/7, L1 isolated install smoke (PI_CODING_AGENT_DIR redirected to temp dir), L2 extension load probe, L3 agent-runtime-e2e --agent pi matrix PASS (real pi loaded the e2e-test-project governance bootstrap) plus the headless fallback criterion PASS (GOV_ASK_USER_HEADLESS fast-fail, exit 0).",
     "target_cwd_e2e": {
       "status": "passed",
       "command": "python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent pi --timeout 90",

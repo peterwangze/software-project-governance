@@ -2431,7 +2431,7 @@ class RenderAndDecodeGuardTests(unittest.TestCase):
         # The half that must NOT change: a CRLF checkout still renders LF, so
         # `core.autocrlf` cannot change the preset's bytes.
         source = _REPO_ROOT / "agent-presets" / "governance" / "agent.cordis.yml.template"
-        lf_text = self.launch._read_text_with_newline_mode(source)
+        lf_text = source.read_text(encoding="utf-8")
         crlf_text = lf_text.replace("\n", "\r\n")
         self.assertEqual(self._render_text(crlf_text), self._render_text(lf_text))
         self.assertEqual(self._render_text(crlf_text).count("\r"), 0)

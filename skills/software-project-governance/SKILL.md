@@ -10,7 +10,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ## 六层架构
 
-本工作流按六层架构组织（详见 `docs/architecture/`）：
+本工作流按六层架构组织：
 
 ```
 适配层（平台投影）→ 入口层（本文件）→ 业务智能层（Agent 库）→ 能力层（SKILL 库）→ 基础设施层 → 核心层
@@ -381,7 +381,7 @@ Sub-agent 硬边界：
 | 执行审查并输出报告 | 与其他 Sub-agent 直接通信 |
 | 执行验证命令 | 拒绝 Coordinator 分配的任务 |
 
-**调度模板**：Coordinator spawn sub-agent 时 MUST 使用 `references/agent-dispatch-template.md`——禁止传自定义 prompt，只能填充模板中的占位符。
+新派发 MUST 只填 `references/agent-dispatch-template.md` 的占位符。同一事务续派时，沿用原任务与权限，在描述和验收标准里交接新发现的候选、试用结果及待复验的工件。
 
 **并行调度安全**：Coordinator spawn 多个 agent 前 MUST 校验文件修改目标无重叠。两个 agent 修改同一文件路径 -> 启用 `isolation: "worktree"`（Agent 平台原生支持）物理隔离。不可用时串行化。详见 `references/behavior-protocol.md` M7.6。
 
@@ -423,7 +423,7 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 
 **体验脊柱与成本基线（FEAT-098）**：可交互产品的 `product_success_contract.success_metrics` MUST 包含最薄 E2E 体验路径：从启动、用户可见输出、关键操作到结果持久化/恢复，逐步列出输入、可见预期、运行命令与证据；先跑通再扩展内容。RPG 的「启动→文字可见→移动→对话→旗标→战斗→存档恢复」仅为实例，CLI/API 等按用户任务裁剪。静态可达性、测试数量或文件生成不能单独作为体验成功；未运行/任一步失败标 pending/failed，禁止借用其他指标宣称完成。Coordinator 将路径写入 `acceptance_contract.scenario/command/expected_output/demo_evidence`，实际运行后回填 `last_run`。
 
-成本比较 MUST 使用同口径调用账本：角色前缀/任务增量为输入内部分解，不与缓存读写、未缓存输入、输出重复相加；记录调用 ID、来源、耗时、成功产出/重复探索/返工/等待，返工关联上游调用、原因与证据。缺 usage、角色、计价率或归因标 unknown/null 并报告覆盖率；残余时间不得猜为等待，FIX 名称不得猜为返工。`governance-cost-report` 保留旧指标，新增 `call_accounting`；`costAccounting` 可选字段与可重放基线见 `docs/diagnostics/feat-098-cost-baseline.md`。
+成本比较 MUST 使用同口径调用账本：角色前缀/任务增量为输入内部分解，不与缓存读写、未缓存输入、输出重复相加；记录调用 ID、来源、耗时、成功产出/重复探索/返工/等待，返工关联上游调用、原因与证据。缺 usage、角色、计价率或归因标 unknown/null 并报告覆盖率；残余时间不得猜为等待，FIX 名称不得猜为返工。`governance-cost-report` 保留旧指标，新增 `call_accounting`；`costAccounting` 可选字段与可重放基线见 [成本计量基线](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/diagnostics/feat-098-cost-baseline.md)。
 
 ## Coordinator 参考知识（按需读取）
 

@@ -90,7 +90,7 @@
 
 ### 动作级执法（FEAT-095）——六边界分层阻断（protocol 级契约；CLI 面 `enforcement-check` 强制）
 
-> DEC-330 arch 联合裁定「检查必须影响执行权限否则 advisory 无效」。本段是六边界执法的**协议级落地面**（Coordinator 侧 MUST 检查与阻断语义）；CLI 级落地面为 `infra/enforcement.py` + `verify_workflow.py enforcement-check`（出口码三态可区分），两面对齐由守护测试 `test_enforcement_skill_protocol_face_matches_cli_face` 机守。**降级披露（M-0 调研结论）**：六平台均无已接线宿主级拦截（`docs/research/feat-095-harness-enforcement-capability-2026-10-10.md` §5-§7 U1-U7）——本执法面 = 协议级 + CLI 级，**不做宿主级拦截能力声明**；绕过面（不调用 CLI 直接动作）由本段 MUST 纪律补位，RPG §3.4 实证即此形态衰减来源。
+> DEC-330 arch 联合裁定「检查必须影响执行权限否则 advisory 无效」。本段是六边界执法的**协议级落地面**（Coordinator 侧 MUST 检查与阻断语义）；CLI 级落地面为 `infra/enforcement.py` + `verify_workflow.py enforcement-check`（出口码三态可区分），两面对齐由守护测试 `test_enforcement_skill_protocol_face_matches_cli_face` 机守。**降级披露（M-0 调研结论）**：六平台均无已接线宿主级拦截（[宿主能力调查](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/research/feat-095-harness-enforcement-capability-2026-10-10.md) §5-§7 U1-U7）——本执法面 = 协议级 + CLI 级，**不做宿主级拦截能力声明**；绕过面（不调用 CLI 直接动作）由本段 MUST 纪律补位，RPG §3.4 实证即此形态衰减来源。
 
 **六边界 × 三层策略表**（策略表与执行器分离——新增边界改表 `enforcement.py STRATEGY` 不动执行器；`--print-strategy` 可 grep）：
 

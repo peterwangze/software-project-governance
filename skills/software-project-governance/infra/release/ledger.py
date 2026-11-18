@@ -2,7 +2,7 @@
 
 from hashlib import sha256
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Dict, Iterable, List, Optional
 import unicodedata
 
@@ -296,6 +296,19 @@ def _is_ancestor(context: RepositoryContext, ancestor: str, descendant: str) -> 
     return None
 
 
+def _archived_release_doc_issues(context, revision, paths):
+    """Verify regular files in the exact release or backfill tree."""
+    rc, output, _ = context.run_git("--literal-pathspecs", "ls-tree", "-z", revision, "--", *paths)
+    if rc:
+        return [f"cannot inspect release documents at {revision}"]
+    found = set()
+    for entry in output.split("\0"):
+        metadata, _, name = entry.partition("\t")
+        if metadata.startswith(("100644 blob ", "100755 blob ")):
+            found.add(name)
+    return [f"release document missing at {revision}: {path}" for path in paths if path not in found]
+
+
 def validate_manifest(
     path: Path,
     context: RepositoryContext,
@@ -360,16 +373,20 @@ def validate_manifest(
         facts["event_identity_digest"] = sha256(canonical_json_bytes(identities)).hexdigest()
     if manifest.get("effective_state") != effective:
         issues.append("effective_state does not match append-only events")
-    artifacts = manifest.get("artifacts")
-    if not isinstance(artifacts, dict):
-        issues.append("artifacts must be an object")
-    else:
-        for key in ("changelog", "release_docs", "review_evidence"):
-            value = artifacts.get(key)
-            paths = value if isinstance(value, list) else [value]
-            if not paths or any(not isinstance(item, str) or not (context.root / item).is_file() for item in paths):
-                issues.append(f"artifacts.{key} contains a missing or invalid path")
+    artifacts = manifest["artifacts"]  # Shape and element types were checked against the schema.
+    for key, value in artifacts.items():
+        paths = value if isinstance(value, list) else [value]
+        for item in paths:
+            portable = PureWindowsPath(item)
+            if "\x00" in item or portable.anchor or ".." in portable.parts:
+                return CheckResult("FAIL", [f"artifacts.{key} requires a valid repository-relative path"], facts)
+        if key == "release_docs" and lifecycle == "released":
+            # The release/backfill revision below owns these records.
+            continue
+        if any(not (context.root / item).is_file() for item in paths):
+            issues.append(f"artifacts.{key} contains a missing or invalid path")
 
+    release_docs = [Path(item).as_posix() for item in artifacts["release_docs"]]
     manifest_rel = path.relative_to(context.root).as_posix()
     trust = manifest.get("trust", {})
     if provenance == "historical_backfill":
@@ -387,9 +404,11 @@ def validate_manifest(
         docs = trust.get("document_contemporaneity")
         if docs not in {"contemporaneous", "backfilled_after_release"}:
             issues.append("historical manifest requires document_contemporaneity")
-        elif original_commit and isinstance(artifacts, dict):
-            for doc_path in artifacts.get("release_docs", []):
-                added = commit_adding_path(context, doc_path)
+        elif original_commit and facts["backfill_commit"] and isinstance(artifacts, dict):
+            document_revision = original_commit if docs == "contemporaneous" else facts["backfill_commit"]
+            issues.extend(_archived_release_doc_issues(context, document_revision, release_docs))
+            for doc_path in release_docs:
+                added = commit_adding_path(context, doc_path, revision=document_revision)
                 if added.state != "PASS":
                     issues.append(f"release document commit cannot be derived: {doc_path}")
                     continue
@@ -459,6 +478,7 @@ def validate_manifest(
                 if transition.facts.get("parent") != candidate_commit:
                     issues.append("release transition parent must equal the committed candidate commit")
                 facts["release_commit"] = transition.facts.get("commit")
+                issues.extend(_archived_release_doc_issues(context, facts["release_commit"], release_docs))
                 if verify_remote:
                     tag_result = tag_facts(context, f"v{version}", transition.facts["commit"], remote)
                     facts["tag_facts"] = tag_result.as_dict()

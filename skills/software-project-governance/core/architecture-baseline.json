@@ -10,7 +10,7 @@
     }
   ],
   "generated": {
-    "git_head": "5ad9c2986bd49a10db4202250b7189e0092148b3",
+    "git_head": "47cca8c9574dac1e6f61deed6fa846866ff43599",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
@@ -258,7 +258,7 @@
         "count": 1,
         "kind": "import_vw",
         "lines": [
-          52
+          51
         ],
         "owner_task": "FIX-303",
         "path": "contract_matrix/generator.py"

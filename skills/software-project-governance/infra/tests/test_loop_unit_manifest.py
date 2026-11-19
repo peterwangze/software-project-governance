@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -174,7 +175,7 @@ class TestRecordUnitApproval(unittest.TestCase):
             self.assertEqual(entry["reviewer"], "test-reviewer")
             # Digest present and consistent (reload validates it).
             self.assertTrue(manifest["entries_digest"])
-            state, _, issues = lm._load_approval_manifest(root)
+            state, _, issues = lm.load_approval_manifest(root)
             self.assertEqual(state, "valid")
             self.assertEqual(issues, [])
 
@@ -198,7 +199,7 @@ class TestRecordUnitApproval(unittest.TestCase):
                              "evidence v2 (refreshed)")
             # Revision advanced, digest still valid after the refresh.
             self.assertEqual(manifest["revision"], 2)
-            state, _, issues = lm._load_approval_manifest(root)
+            state, _, issues = lm.load_approval_manifest(root)
             self.assertEqual(state, "valid")
             self.assertEqual(issues, [])
             self.assertEqual(second["manifest_revision"], 2)
@@ -267,7 +268,7 @@ class TestRecordUnitApproval(unittest.TestCase):
                              "adjudicated approval must lift the block")
             self.assertEqual(manifest["entries"][0].get("supersedes_block_reason"),
                              "prose anchor ambiguous")
-            state, _, _ = lm._load_approval_manifest(root)
+            state, _, _ = lm.load_approval_manifest(root)
             self.assertEqual(state, "valid")
 
 
@@ -300,7 +301,7 @@ class TestRecordUnitBlock(unittest.TestCase):
             self.assertEqual(item["flow_unit_id"], unit_id)
             self.assertEqual(item["reason"], "no unique structural match")
             self.assertEqual(item["recorded_by"], "test-reviewer")
-            state, _, issues = lm._load_approval_manifest(root)
+            state, _, issues = lm.load_approval_manifest(root)
             self.assertEqual(state, "valid")
             self.assertEqual(issues, [])
 
@@ -337,7 +338,7 @@ class TestRecordUnitBlock(unittest.TestCase):
                              "re-blocking the same unit must not fork entries")
             self.assertEqual(manifest["blocked"][0]["reason"],
                              "reason v2 (adjudication pending)")
-            state, _, _ = lm._load_approval_manifest(root)
+            state, _, _ = lm.load_approval_manifest(root)
             self.assertEqual(state, "valid")
 
 
@@ -356,7 +357,7 @@ class TestManifestCorruptionDetection(unittest.TestCase):
             _write_host(root)
             _manifest_path(root).write_text("{ this is not json,,,", encoding="utf-8")
 
-            state, data, issues = lm._load_approval_manifest(root)
+            state, data, issues = lm.load_approval_manifest(root)
 
             self.assertEqual(state, "corrupt")
             self.assertIsNone(data, "a corrupt manifest must not be consumable")
@@ -377,7 +378,7 @@ class TestManifestCorruptionDetection(unittest.TestCase):
             manifest["entries"][0]["reviewer"] = "hand-editor"
             _write_manifest(root, manifest)
 
-            state, data, issues = lm._load_approval_manifest(root)
+            state, data, issues = lm.load_approval_manifest(root)
             self.assertEqual(state, "corrupt")
             self.assertIsNone(data)
             self.assertTrue(
@@ -402,7 +403,7 @@ class TestManifestCorruptionDetection(unittest.TestCase):
             )
             _write_manifest(root, manifest)
 
-            state, _, issues = lm._load_approval_manifest(root)
+            state, _, issues = lm.load_approval_manifest(root)
             self.assertEqual(state, "corrupt")
             self.assertTrue(any("schema_version" in i for i in issues))
 
@@ -424,7 +425,7 @@ class TestManifestCorruptionDetection(unittest.TestCase):
             )
             _write_manifest(root, manifest)
 
-            state, _, issues = lm._load_approval_manifest(root)
+            state, _, issues = lm.load_approval_manifest(root)
             self.assertEqual(state, "corrupt")
             self.assertTrue(
                 any("confirmation_evidence" in i for i in issues),
@@ -448,7 +449,7 @@ class TestManifestCorruptionDetection(unittest.TestCase):
             )
             _write_manifest(root, manifest)
 
-            state, _, issues = lm._load_approval_manifest(root)
+            state, _, issues = lm.load_approval_manifest(root)
             self.assertEqual(state, "corrupt")
             self.assertTrue(any("duplicate confirmed" in i for i in issues))
 
@@ -481,6 +482,20 @@ class TestManifestCorruptionDetection(unittest.TestCase):
 
 class TestDryRunManifestConsumption(unittest.TestCase):
     """FEAT-070 preview_migration manifest face (read-only consumption)."""
+
+    def test_plan_failure_with_valid_manifest_preserves_unknown_count(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root)
+            self.assertEqual(lm.load_approval_manifest(root), ("absent", None, []))
+            self.assertTrue(_approve(root, _derived_ids(root)[0])["recorded"])
+            with mock.patch.object(lm, "build_migration_plan", side_effect=ValueError("unavailable")):
+                preview = lm.preview_migration(root)
+
+            self.assertEqual(preview["unit_manifest"]["status"], "indeterminate")
+            self.assertIsNone(preview["unit_manifest"]["ambiguity_count"])
+            self.assertIsNone(preview["unit_manifest_ambiguity_count"])
+            self.assertIn("plan_derivation_error", preview)
 
     def test_preview_without_manifest_reports_all_units_missing(self):
         """Branch: manifest absent → every derived unit is §2.6 fail-closed
@@ -639,6 +654,39 @@ class TestDryRunManifestConsumption(unittest.TestCase):
 
 class TestCliRecordSurface(unittest.TestCase):
     """FEAT-070 CLI: --record-unit-approval / --record-unit-block dispatch."""
+
+    def test_conflicting_record_flags_and_retired_shadow_refuse_before_writes(self):
+        cases = [
+            (["--record-unit-block", "--record-unit-approval"], "mutually exclusive"),
+            *[(["--record-unit-approval", mode], "mutually exclusive")
+              for mode in ("--apply", "--rollback", "--dry-run")],
+            *[([flag, "value"], "only valid together with --record-unit")
+              for flag in ("--approve-task", "--approve-evidence", "--approve-reviewer",
+                           "--block-reason", "--repo-version")],
+            *[(["--shadow-derive", *other], "v0.90.0")
+              for other in ([], ["--apply"], ["--rollback"], ["--record-unit-approval"])],
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root)
+            before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            for flags, diagnostic in cases:
+                with self.subTest(flags=flags):
+                    result = subprocess.run([sys.executable, lm.__file__, "--target", td, *flags],
+                                            capture_output=True, text=True, encoding="utf-8")
+                    self.assertEqual(result.returncode, 2, result.stdout)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertEqual({p: p.read_bytes() for p in root.rglob("*") if p.is_file()}, before)
+
+    def test_existing_rollback_takes_precedence_over_apply(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_host(root)
+            result = subprocess.run([sys.executable, lm.__file__, "--target", td, "--apply", "--rollback"],
+                                    capture_output=True, text=True, encoding="utf-8")
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(json.loads(result.stdout)["mode"], "rollback")
+            self.assertFalse((root / ".governance" / "flow-unit-runtime.json").exists())
 
     def test_cli_record_approval_roundtrip(self):
         """Branch: CLI approval → exit 0, recorded true, manifest on disk."""

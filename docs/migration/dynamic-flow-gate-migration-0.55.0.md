@@ -25,3 +25,14 @@ python skills/software-project-governance/infra/loop_migration.py --target <path
 ```
 
 A write requires a separate explicit apply. The loop migration implementation validates the payload and protects host files with backups and integrity checks. The backup records whether the runtime existed and seals its exact bytes. `--rollback` restores them or removes the migration-created file when the backup proves prior absence. Recovery stops for ambiguous or damaged backups, including older backups that lack the runtime presence record. Explicit rollback replaces subsequent edits to the tracker, evidence log, and runtime with that snapshot and appends a rollback record. Automatic recovery of an interrupted apply also requires the live runtime to match the intended bytes and the evidence log to match the pre-migration snapshot. A preview alone leaves the project's files untouched.
+
+## Replaying the plugin-layout experiment
+
+The v0.90.0 `--shadow-derive` experiment compared this repository’s adapter and skill directories with its approval manifest. To reproduce that report, run the original analysis in its release checkout.
+
+```bash
+git worktree add --detach ../spg-shadow-v090 v0.90.0
+python ../spg-shadow-v090/skills/software-project-governance/infra/loop_migration.py --target <project-root> --shadow-derive
+```
+
+For current work, use the dry run above to inspect the proposed units and their approval status. The target project's `.governance/flow-unit-approval-manifest.json` holds the confirmed and blocked mappings.

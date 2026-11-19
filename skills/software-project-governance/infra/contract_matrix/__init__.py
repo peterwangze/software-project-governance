@@ -3,7 +3,7 @@
 Freezes the three public contract faces of the governance engine plus the
 governance-write-guard output pin (FEAT-017 R0 F-2 收编):
 
-  1. CLI dispatch key set       — verify_workflow.py ``main()`` commands dict
+  1. CLI dispatch key set       — engine argparse choices and registered alias groups
   2. Check ID segment list      — banner ids ∪ product-gate registry ids
   3. Result dict shapes         — representative check-function key/type
                                   signatures (actually invoked, never copied)

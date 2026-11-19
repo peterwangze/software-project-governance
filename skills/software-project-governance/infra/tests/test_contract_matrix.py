@@ -7,10 +7,8 @@ output pin. Any mismatch is a FAIL: a contract-surface change must be made
 explicitly via ``generator.py --regen`` and explained in review (the zero-
 regression proof baseline for AUDIT-150 REFACTOR-contract-matrix-freeze).
 
-The snapshot extraction is fully programmatic (AST/regex over the engine
-plus live runs); no engine inventory is hand-copied into this file. The
-task-mandated freeze counts (80 CLI keys / 70 Check segments) are asserted
-as freeze-point values — drift means a deliberate contract change.
+The snapshot is extracted from the CLI parser, source, and live checks.
+The independent counts protect deliberate contract changes.
 
 Run:
     python -m unittest discover -s skills/software-project-governance/infra/tests -p "test_contract_matrix.py" -v
@@ -31,129 +29,7 @@ if str(_INFRA_DIR) not in sys.path:
 
 from contract_matrix import generator as cmg  # noqa: E402
 
-# Freeze-point counts mandated by the FEAT-020 packet (实测值——冻结基线,
-# not hand-copied inventories: the lists themselves come from extraction).
-# FEAT-019 (2026-09-10) deliberately extended the CLI face with the
-# archguard-ratchet fatal gate: 80→81 keys / 77→78 handlers, snapshot
-# regenerated via generator.py --regen in the same change (the documented
-# contract-change path; review covers both files).
-# FEAT-013 (2026-09-10) extended the CLI face with the agent-locks-acquire
-# dispatch-lock write API (RISK-046 root fix): 81→82 keys / 78→79 handlers,
-# snapshot regenerated via generator.py --regen in the same change.
-# The DSH preset schema-compat guard extended BOTH faces in the same change
-# (the documented contract-change path): 82→83 keys / 79→80 handlers for the
-# new `check-dsh-preset-compat` subcommand, and 70→71 check segments for the
-# new Check 28v — a shipped preset composition row is now validated against
-# the INSTALLED dsh's own Config schemas; snapshot regenerated via
-# generator.py --regen in the same change (review covers both files).
-# FIX-310: deliberate contract change — the retired `dsh.skills` guard
-# (Check 40 + its CLI key) left the frozen faces; snapshot regenerated via
-# `contract_matrix/generator.py --regen`.
-# FEAT-031 (0.81.0 slice V8): 82→84 keys (`check-dsh-boundary` + `dsh-doctor`)
-# and 70→71 check segments (Check 28w / `checks.dsh_boundary`); the snapshot was
-# regenerated with `contract_matrix/generator.py --regen` in the same change —
-# the documented contract-change path, review covering both files.
-# FEAT-032 (0.84.0 slice A-1): 84→85 keys (`governance-cost-report` — cost
-# observability handler in `governance_cost.py`, engine wires dispatch only);
-# snapshot regenerated via `contract_matrix/generator.py --regen` in the same
-# change (the documented contract-change path, review covering both files).
-# FEAT-037 (0.84.0 slice A-6): 85→86 keys (`check-entry-bootstrap-sync` —
-# AGENTS/CLAUDE bootstrap projection guard, handler in `checks/projection.py`,
-# thin bare-Name wrapper in the engine); snapshot regenerated via
-# `contract_matrix/generator.py --regen` in the same change.
-# FEAT-033 (0.84.0 slice A-2): 86→87 keys (`governance-bootstrap` — read-only
-# bootstrap aggregate, handler in `bootstrap_aggregate.py`, engine wires
-# dispatch only); snapshot regenerated via `contract_matrix/generator.py
-# --regen` in the same change.
-# FEAT-039 (0.84.0 slice A-8): 87→88 keys (`check-injection-budget` — the
-# injection-size budget gate; handler in `checks/injection_budget.py` and it
-# rides INSIDE check segment 33 so the segment face is unchanged at 71);
-# snapshot regenerated via `contract_matrix/generator.py --regen` in the same
-# change (the documented contract-change path, review covering both files).
-# FEAT-055 (0.86.0 batch 2.0): 88→95 keys — the three governed writer modules
-# join the dispatch face (`task-row-update`, `locks-extend`, `locks-amend`,
-# `evidence-append`, `decision-append`, `baseline-register`,
-# `baseline-evaluate`; handlers in task_row_update.py / governance_store.py /
-# baseline_metadata.py, engine wires dispatch only — governance_cost
-# pattern); segment face unchanged at 71; snapshot + architecture baseline
-# regenerated via `contract_matrix/generator.py --regen` +
-# `archguard-ratchet --regen` in the same change.
-# FIX-370 (0.87.0 batch 2 closure): 95→96 keys (`locks-release` — the release
-# leg of the governance_store locks family, handler in governance_store.py,
-# engine wires dispatch only — governance_cost pattern); segment face
-# unchanged at 71; snapshot counts + keys re-baselined in the same change.
-# FEAT-064 (0.88.0 D1): 96→97 keys — FIX-383's `write-guard-bootstrap` shipped
-# with its engine dispatch but its registry row was omitted at the landing
-# (pre-existing R5 drift); FEAT-064's deliberate guard-output wording change
-# forced the snapshot regeneration that surfaced it, and the registry row +
-# this count were reconciled in the same change.
-# FEAT-080 (0.93.0 B3, DEC-290(5)): 97→98 keys — `demand-source-revise`
-# (ADR-021 §2.2.1 F-P1-3 revision-channel CLI regularization; snapshot
-# regenerated + registry row + this count re-baselined in the same change,
-# the F-P2-5 regen discipline); segments 71→73 — the Check 41/42 provenance
-# sections (BLOCKING / ADVISORY respectively, ADR-021 §2.2.3+§3.2.3).
-# FIX-438 (0.95.0 window, DEC-319): 98→99 keys — FEAT-088 (638509e,
-# 2026-10-05) shipped the `check-exploration-channels` subcommand without
-# its snapshot rider; this make-up regen (`generator.py --regen`) re-
-# baselines the frozen face along the documented contract-change path.
-# Segments unchanged at 73 (the guard rides Check 12 / check-cross-
-# references; no new banner); result_shapes and guard_output_pin faces
-# byte-stable (zero drift in the same regen).
-# FEAT-093 (0.98.0 window, DEC-330): 99→100 keys — the authority-ledger
-# dispatch (task identity contract + append-only event log + rebuildable
-# plan-tracker projection; handler in authority_ledger.py, engine wires
-# dispatch only — governance_cost pattern). The same regen also absorbed
-# one PRE-EXISTING live-data drift in result_shapes
-# (check_governance_write_shapes deferred_observation.skip_kind NoneType
-# vs str): the committed snapshot predated the AUDIT-159 session's
-# governance rows (EVD-1359/1360), which flipped the deferred detector's
-# fired-hit state — disclosed as a make-up rider (the FIX-438 precedent),
-# not a FEAT-093 contract change. Segments unchanged at 73.
-# FEAT-096 (0.98.0 window, DEC-330 batch): 100→105 keys — the five
-# `isolation-*` execution-isolation conservative-surface commands (write
-# concurrency limit + under-review/being-written mutex + read-only
-# review snapshots + lease reclaim with loss-of-authority verification;
-# engine thin entries in verify_workflow.py, module logic in
-# execution_isolation.py). Snapshot regenerated + registry rows + this
-# count re-baselined in the same change (the documented contract-change
-# path). Segments unchanged at 73 (no check-governance segment rides the
-# isolation surface).
-# FEAT-097 (0.98.0 window, DEC-330 batch): 105→106 keys — the
-# `goal-bridge` goal↔budget bridge (state mapping + multi-dimension
-# danger-zone collection + checkpoint artifacts + resume authorization;
-# engine thin entry in verify_workflow.py, module logic in goal_bridge.py
-# — the isolation pattern). Snapshot + counts re-baselined in the same
-# change. Segments unchanged at 73.
-# FEAT-097 (same ticket, R2-window make-up regen — the FEAT-093
-# precedent): the same regen also absorbed ONE live-data leaf flip in
-# result_shapes (check_governance_write_shapes
-# deferred_observation.skip_kind str→NoneType). The FEAT-097 regen had
-# frozen the leaf while the M2 deferred detector read zero fired hits
-# on the then-current governance rows; THIS session's own machine-
-# written rows (R1 review-record + RECHECK-FEAT-097-R2 registration,
-# verify_workflow.py _stamp_deferred_observation: fired>0 ⇒ skip_kind
-# None) flipped the detector's live fired-hit state, so the probe now
-# signs NoneType. Disclosed as a make-up rider — a live-state leaf
-# change, NOT a contract change (keys stay 106 / segments 73;
-# guard_output_pin byte-stable); the leaf remains free to flip back
-# with live governance state under the same regen discipline.
-# FIX-453: restore the FEAT-095 enforcement-check registration omitted from
-# the registry's former 106-key mirror; engine and snapshot already had 107.
-# FIX-462 (0.99.x emergency window, DEC-220/286/287): 107→108 keys — the
-# `pins` ledger machine writer (`pins register`/`pins re-anchor` over
-# checks/version.py STATIC_PIN_EXEMPTIONS; handler in pin_ledger.py, engine
-# wires dispatch only — governance_cost pattern). Snapshot + architecture
-# baseline re-anchored in the same change (DEC-320/324 sanctioned regen
-# rider, disclosed). Segments unchanged at 73 (no check-governance segment
-# rides the pins surface); the write-guard face count grows by one
-# (pin_ledger face 6 — hand-edit alarm), re-frozen by the same regen.
-# FIX-463 (0.99.x emergency window, DEC-368② class): 108→109 keys — the
-# `premise` decision-premise invalidator (count/review/status over
-# .governance/premise-events.jsonl; handler in premise_tracker.py, engine
-# wires dispatch only — governance_cost pattern). Snapshot + architecture
-# baseline re-anchored in the same change (DEC-320/324 rider, disclosed).
-# Segments 73→74: check-governance's Check 2b Decision Premise WARN face
-# (FIX-463) is extracted as a new segment; R6 cold face 210→211.
+# Independently pin the public size when the snapshot is regenerated.
 FROZEN_CLI_KEY_COUNT = 108
 FROZEN_CHECK_SEGMENT_COUNT = 73
 
@@ -246,6 +122,20 @@ class FreezePointTests(unittest.TestCase):
 
 class CliDispatchFaceTests(unittest.TestCase):
     """Face 1 — engine dispatch keys vs frozen snapshot."""
+
+    def test_rebinding_a_parser_alias_changes_the_dispatch_contract(self):
+        from unittest.mock import patch
+        import registry
+
+        alias = "check-scaffold-templates"
+        original = registry.command_spec
+        with patch.object(registry, "command_spec",
+                          side_effect=lambda key: original("status" if key == alias else key)):
+            observed = cmg.extract_cli_dispatch()
+        frozen = _stored_snapshot()["faces"]["cli_dispatch"]
+        self.assertEqual(observed["keys"], frozen["keys"])
+        self.assertNotEqual(observed, frozen)
+        self.assertEqual(observed["alias_groups"]["cmd_status"], [alias, "status"])
 
     def test_keys_match_snapshot(self):
         current = cmg.extract_cli_dispatch()

@@ -4,8 +4,8 @@ The composition-root prototype of the 0.80.0 six-layer architecture: two
 static declaration tables plus a controlled loader, so a command can be
 selected and assembled **without** importing the monolith.
 
-    COMMAND_SPECS   84 dispatch keys → handler dotted paths (§3.5 step 3)
-    CHECK_SPECS     71 CheckIDs → ``contracts.CheckSpec`` rows (§3.6 / §9.1)
+    COMMAND_SPECS   dispatch keys → handler dotted paths (§3.5 step 3)
+    CHECK_SPECS     CheckIDs → ``contracts.CheckSpec`` rows (§3.6 / §9.1)
     LOADER_WHITELIST  the closed set of modules a declaration may name
     assemble()      L6 组合根雏形: resolve ONE command's handler on demand
 
@@ -20,7 +20,7 @@ whitelist is an explicit closed tuple (never a package walk).
 Fact sources (consumed, never re-derived — the registry owns no fact twice):
 
   * **FEAT-020 frozen faces** (``infra/contract_matrix/snapshots.json``):
-    82 CLI dispatch keys / 70 Check segment ids — the R5 caliber. The live
+    CLI dispatch keys and Check segment ids — the R5 caliber. The live
     face is observed through that packet's own extractors
     (``contract_matrix.generator``), imported lazily inside the checker.
   * **FEAT-025** (``infra/quickscan_registry.py``): every segment's
@@ -40,8 +40,7 @@ Caliber decisions (each anchored to a measurement, not to preference):
   1. **Loader paths are attribute-qualified** (``verify_workflow.cmd_status``,
      ``checks.evidence_domain.check_evidence_completeness``). The L0 validator
      (``contracts._require_loader``) requires at least one dot and rejects
-     root-level names, while the engine's dispatch table holds bare handler
-     names and the 71 segments' entry points live in root-level modules
+     root-level names. Command and check entry points live in root-level modules
      (``verify_workflow``) as well as packages. A ``module.attr`` dotted path
      is the only form that is both contract-legal and truthfully resolvable in
      the engine's own import namespace (infra dir on ``sys.path``). Prefixing
@@ -275,29 +274,18 @@ class LoaderResolutionError(RegistryError):
     """A malformed loader path, or a declared entry that cannot be resolved."""
 
 
-# ── command declaration: 95 keys → handler dotted path (FEAT-020 caliber) ───
+# ── command declaration: CLI keys → handler dotted path (FEAT-020 caliber) ───
 
 _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("agent-locks-acquire", "verify_workflow.cmd_agent_locks_acquire"),
     ("agent-runtime-e2e", "verify_workflow.cmd_agent_runtime_e2e"),
-    # FEAT-093 (0.98.0): the authority-ledger dispatch — task identity
-    # contract + append-only event log + rebuildable plan-tracker
-    # projection (engine wires dispatch only — governance_cost pattern).
     ("authority-ledger", "authority_ledger.cmd_authority_ledger"),
     ("archguard-ratchet", "archguard_ratchet.cmd_archguard_ratchet"),
-    # FEAT-055 (0.86.0 batch 2.0): the BaselineMetadata provenance writer
-    # joins the dispatch face (batch-1 module, engine wires dispatch only —
-    # governance_cost pattern; FEAT-047 P2-1 add_arguments caliber).
     ("baseline-evaluate", "baseline_metadata.cmd_baseline_evaluate"),
     ("baseline-register", "baseline_metadata.cmd_baseline_register"),
     ("capability-context", "verify_workflow.cmd_capability_context"),
     ("change-triage", "verify_workflow.cmd_change_triage"),
-    # FEAT-055 (0.86.0 batch 2.0): the DEC-append writer of the
-    # governance_store family (batch-1 module, engine wires dispatch only).
     ("decision-append", "governance_store.cmd_decision_append"),
-    # FEAT-080 / ADR-021 §2.2.1: the demand_source revision channel's B3
-    # CLI regularization (append-only jsonl + evidence row; engine wires
-    # dispatch only — change_triage pattern).
     ("demand-source-revise", "verify_workflow.cmd_demand_source_revise"),
     ("check-acceptance-contracts",
      "verify_workflow.cmd_check_acceptance_contracts"),
@@ -320,11 +308,6 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("check-duplicate-code", "verify_workflow.cmd_check_duplicate_code"),
     ("check-entry-bootstrap-sync",
      "checks.projection.cmd_check_entry_bootstrap_sync"),
-    # FIX-438 (0.95.0 window, DEC-319/320): FEAT-088's exploration-channel
-    # guard subcommand — shipped 2026-10-05 (638509e) with its engine dispatch
-    # but without this _COMMANDS row (the FEAT-064 landing-omission shape,
-    # exposed by the make-up FEAT-020 snapshot regen); declared here in the
-    # same change as that regen.
     ("check-exploration-channels",
      "verify_workflow.cmd_check_exploration_channels"),
     ("check-first-session-measurement",
@@ -341,11 +324,6 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_check_host_capability_context"),
     ("check-hot-fact-source", "verify_workflow.cmd_check_hot_fact_source"),
     ("check-injection-contract", "verify_workflow.cmd_check_injection_contract"),
-    # FEAT-039 (0.84.0 slice A-8): injection-size budget gate — the resident
-    # injection set (multi-file sum, canonical templates) is priced against a
-    # token budget; the handler lives in checks/injection_budget.py (engine
-    # wires dispatch + the Check 33 sub-report only, ArchGuard R1/R4) and rides
-    # inside check-governance segment 33.
     ("check-injection-budget",
      "checks.injection_budget.cmd_check_injection_budget"),
     ("check-interruption-policy",
@@ -389,11 +367,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_dynamic_lifecycle_migration"),
     ("dsh-doctor", "dsh_doctor.main"),
     ("e2e-check", "verify_workflow.cmd_e2e_check"),
-    # FIX-453: FEAT-095 shipped this six-boundary CLI entry, but omitted
-    # its registry row; declare the real engine handler without new routing.
     ("enforcement-check", "verify_workflow.cmd_enforcement_check_engine"),
-    # FEAT-055 (0.86.0 batch 2.0): the EVD-append writer of the
-    # governance_store family (batch-1 module, engine wires dispatch only).
     ("evidence-append", "governance_store.cmd_evidence_append"),
     ("execution-packet", "verify_workflow.cmd_execution_packet"),
     ("external-project-validation",
@@ -410,20 +384,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("governance-context", "verify_workflow.cmd_governance_context"),
     ("governance-cost-report", "governance_cost.cmd_governance_cost_report"),
     ("governance-write-guard", "verify_workflow.cmd_governance_write_guard"),
-    # FEAT-097 (0.98.0): the goal↔budget bridge — state mapping
-    # (RUNNING→DRAINING→CHECKPOINTED→BLOCKED) + multi-dimension
-    # danger-zone collection + checkpoint artifacts + resume
-    # authorization (self-contained goal_bridge.py module; engine thin
-    # entry defined in verify_workflow.py — the isolation pattern).
     ("goal-bridge", "verify_workflow.cmd_goal_bridge_engine"),
-    # FEAT-096 (0.98.0): the execution-isolation conservative surface —
-    # write concurrency limit + under-review/being-written mutex +
-    # read-only review snapshots + lease reclaim with loss-of-authority
-    # verification (self-contained execution_isolation.py module; the
-    # engine thin entries inject the engine-resolved host paths — the
-    # agent-locks-acquire pattern).  Capability honesty: host-level
-    # isolation UNVERIFIED (FEAT-095 report §7 U1) — CLI-level surface,
-    # disclosed via isolation-capability.
     ("isolation-capability",
      "verify_workflow.cmd_isolation_capability_engine"),
     ("isolation-lease-reclaim",
@@ -432,13 +393,8 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_isolation_snapshot_engine"),
     ("isolation-status", "verify_workflow.cmd_isolation_status_engine"),
     ("isolation-write", "verify_workflow.cmd_isolation_write_engine"),
-    # FEAT-055 (0.86.0 batch 2.0): the lock-maintenance writers of the
-    # governance_store family (batch-1 module, engine wires dispatch only).
     ("locks-amend", "governance_store.cmd_locks_amend"),
     ("locks-extend", "governance_store.cmd_locks_extend"),
-    # FIX-370 (0.87.0 batch 2 closure): the release leg of the locks
-    # family — task-anchored true deletion (handler in governance_store.py,
-    # engine wires dispatch only).
     ("locks-release", "governance_store.cmd_locks_release"),
     ("loop-engineering-migration",
      "verify_workflow.cmd_loop_engineering_migration"),
@@ -447,13 +403,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("next-candidates", "verify_workflow.cmd_next_candidates"),
     ("opencode-provider-preflight",
      "verify_workflow.cmd_opencode_provider_preflight"),
-    # FIX-462 (0.99.x emergency window): the pins ledger machine writer
-    # (register / re-anchor over checks/version.py STATIC_PIN_EXEMPTIONS,
-    # DEC-220) — batch-module shape, engine wires dispatch only.
     ("pins", "pin_ledger.cmd_pins"),
-    # FIX-463 (0.99.x emergency window): the decision-premise invalidator
-    # (count / review / status over .governance/premise-events.jsonl,
-    # DEC-368② class) — batch-module shape, engine wires dispatch only.
     ("premise", "premise_tracker.cmd_premise"),
     ("quality-tools", "verify_workflow.cmd_quality_tools"),
     ("release-ledger", "verify_workflow.cmd_release_ledger"),
@@ -464,51 +414,12 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("stages", "verify_workflow.cmd_stages"),
     ("status", "verify_workflow.cmd_status"),
     ("task-priority-analysis", "verify_workflow.cmd_task_priority_analysis"),
-    # FEAT-055 (0.86.0 batch 2.0): the task-row state-flip writer (B-1
-    # termination surface, batch-1 module, engine wires dispatch only).
     ("task-row-update", "task_row_update.cmd_task_row_update"),
     ("verify", "verify_workflow.cmd_verify"),
-    # FIX-383 (0.88.0 B2) registered here by FEAT-064: the command shipped
-    # with its engine dispatch + registry whitelist entry but its _COMMANDS
-    # row was omitted at the landing — the live face (97 keys) and the
-    # regenerated FEAT-064 contract-matrix snapshot exposed the R5 drift.
     ("write-guard-bootstrap", "verify_workflow.cmd_write_guard_bootstrap"),
     ("web-console", "verify_workflow.cmd_web_console"),
 )
-"""107 dispatch keys from the FEAT-020 frozen face (FEAT-031 added
-``check-dsh-boundary`` and ``dsh-doctor``; FEAT-032 added
-``governance-cost-report``; FEAT-037 added ``check-entry-bootstrap-sync``;
-FEAT-033 added ``governance-bootstrap``; FEAT-055 added the three governed
-writer modules — ``task-row-update``, the four governance_store writer
-commands, and the two baseline_metadata commands; FIX-370 added
-``locks-release``, the release leg of the governance_store locks family;
-FIX-383 added ``write-guard-bootstrap`` — declared here by FEAT-064 after
-its landing omission left the R5 registration drift in place; FEAT-080
-added ``demand-source-revise``, the ADR-021 §2.2.1 revision-channel CLI
-regularization; FIX-438 declared ``check-exploration-channels`` — FEAT-088
-shipped the guard subcommand without this row, cured by the make-up regen;
-FEAT-093 added ``authority-ledger`` (99 → 100, snapshot + baseline
-re-anchored in the same change — the docstring count had shipped stale at
-99 and is re-censused here); FEAT-096 added the five ``isolation-*``
-conservative-surface commands — write concurrency limit + review/write
-mutex + read-only snapshots + lease reclaim, snapshot + frozen counts
-re-baselined in the same change, the documented contract-change path;
-FEAT-097 added ``goal-bridge`` — the goal↔budget bridge state mapping +
-danger-zone collection + checkpoint artifacts + resume authorization,
-same re-baseline path); FIX-453 reconciles FEAT-095's already-shipped
-``enforcement-check`` entry (106 -> 107),
-each with the module that
-*defines* its handler (machine-derived: the ``commands`` dict of ``main()``
-cross-referenced with the defining module of every handler name — 17 keys are
-already outside the engine, the other 90 ride the monolith).  The docstring
-count shipped stale at FEAT-039 time (said 87 with 8 outside when the table
-held 88 with 9 outside); corrected here as part of the deliberate
-re-baseline rather than silently absorbed.  The FEAT-080 window repeated the
-stale-count shape (said 17 outside / 80 monolith at 97 total); both numbers
-re-censused at this FIX-438 re-baseline: 17 outside / 82 monolith at 99 —
-and again at this FEAT-096 re-baseline: 17 outside / 88 monolith at 105 —
-and at this FEAT-097 re-baseline: 17 outside / 89 monolith at 106;
-FIX-453 restores the FEAT-095 row: 17 outside / 90 monolith at 107."""
+
 
 # ── check declaration: 71 segments → entry dotted path ──────────────────────
 
@@ -697,7 +608,7 @@ def resolve_loader(loader_path: str) -> Callable:
 
 @dataclass(frozen=True)
 class CommandSpec:
-    """One registration row of the 82-key dispatch face (§3.5 step 3)."""
+    """One CLI entry and its callable import path."""
 
     key: CommandKey
     handler: str
@@ -743,9 +654,14 @@ def handler_path(key: CommandKey) -> str:
     return command_spec(key).handler
 
 
-def load_handler(key: CommandKey) -> Callable:
-    """Import the module that hosts one command's handler (§9.1 按命令加载)."""
-    return resolve_loader(command_spec(key).handler)
+def load_handler(key: CommandKey, *, parsed_args: bool = False) -> Callable:
+    """Load one declared handler. The workflow CLI supplies a parsed Namespace."""
+    path = command_spec(key).handler
+    if parsed_args and path == "dsh_doctor.main":
+        # Standalone DSH consumers pass argv and receive an exit code. The
+        # workflow adapter accepts a Namespace and propagates refusals via SystemExit.
+        path = "verify_workflow.cmd_dsh_doctor"
+    return resolve_loader(path)
 
 
 def handler_alias_groups() -> Dict[str, Tuple[str, ...]]:

@@ -1,7 +1,7 @@
 """FEAT-020 contract-matrix generator + differential harness (design §8.1/§10).
 
 Everything in this module is extracted PROGRAMMATICALLY from the engine
-itself (AST over ``verify_workflow.py`` ``main()``, source-regex over the
+itself (live argparse choices, source-regex over the
 check banners, live invocation of representative check functions, and real
 subprocess runs of ``governance-write-guard`` against deterministic
 fixtures). No engine inventory is hand-copied here; the only literals are
@@ -86,7 +86,7 @@ REPRESENTATIVE_RESULT_CALLS = (
     "check_change_triage",             # checks/triage_domain（Check 32）
 )
 
-# ── Face 1: CLI dispatch key set (AST over main()) ───────────────────────────
+# ── Face 1: CLI dispatch key set (live argparse surface) ───────────────────────────
 
 
 def _engine_tree() -> ast.Module:
@@ -94,52 +94,22 @@ def _engine_tree() -> ast.Module:
 
 
 def extract_cli_dispatch() -> dict:
-    """Extract the ``commands`` dispatch dict from ``main()`` via AST.
+    """Observe public keys and alias groups on the engine's real argument parser and handler resolver."""
+    import registry
 
-    Keys are taken from the literal dict only; a non-literal key or value
-    (future engine change) fails loudly so the snapshot must be regenerated
-    deliberately.
-    """
-    tree = _engine_tree()
-    main_fn = next(
-        (node for node in tree.body
-         if isinstance(node, ast.FunctionDef) and node.name == "main"),
-        None,
-    )
-    if main_fn is None:
-        raise RuntimeError("verify_workflow.main() not found — engine drift")
-    commands_node = None
-    for node in ast.walk(main_fn):
-        if not isinstance(node, ast.Assign):
-            continue
-        if any(isinstance(t, ast.Name) and t.id == "commands"
-               for t in node.targets):
-            commands_node = node.value
-            break
-    if not isinstance(commands_node, ast.Dict):
-        raise RuntimeError(
-            "main().commands is no longer a literal dict — engine drift")
-    keys_by_handler: dict[str, list[str]] = {}
-    total_keys = 0
-    for key_node, value_node in zip(commands_node.keys, commands_node.values):
-        if not isinstance(key_node, ast.Constant) or not isinstance(
-                key_node.value, str):
-            raise RuntimeError(
-                f"non-literal dispatch key at line {key_node.lineno}")
-        if not isinstance(value_node, ast.Name):
-            raise RuntimeError(
-                f"non-Name handler for {key_node.value!r} — engine drift")
-        keys_by_handler.setdefault(value_node.id, []).append(key_node.value)
-        total_keys += 1
-    alias_groups = {
-        handler: sorted(keys)
-        for handler, keys in sorted(keys_by_handler.items())
-        if len(keys) > 1
-    }
+    _, commands = vw._build_cli_parser()
+    by_handler = {}
+    # Parser keys remain independent of declarations so R5 can report a
+    # missing/extra row. Group only the handlers that can actually be called.
+    for key in commands.choices.keys() & set(registry.command_keys()):
+        handler = registry.load_handler(key, parsed_args=True)
+        by_handler.setdefault(handler, []).append(key)
+    alias_groups = {handler.__name__: sorted(keys) for handler, keys in by_handler.items()
+                    if len(keys) > 1}
     return {
-        "key_count": total_keys,
-        "handler_count": len(keys_by_handler),
-        "keys": sorted(k for ks in keys_by_handler.values() for k in ks),
+        "keys": sorted(commands.choices),
+        "key_count": len(commands.choices),
+        "handler_count": len(by_handler),
         "alias_groups": alias_groups,
     }
 

@@ -4,7 +4,7 @@ Enforcement layer for the mandatory change-control triage of product-code
 task intake:
 
   - **CLI wiring**: the ``change-triage`` command MUST stay registered in
-    verify_workflow.py's argparse subparsers AND commands dispatch dict
+    the engine's argparse subparsers AND command handler declarations
     (AST scan — a regression that silently removes the gate FAILs).
   - **Record validity**: every ``.governance/change-triage/*.json`` record
     MUST carry the four-step analysis (dependency / priority / conflicts /
@@ -55,7 +55,6 @@ cells (cells[3:7]) only.
 See docs/architecture/ADR-017-loop-wiring-and-task-planning-0.73.0.md §4.4.
 """
 
-import ast
 import json
 import re
 from datetime import date
@@ -119,37 +118,19 @@ def _verify_workflow_path(root: Path) -> Path:
 
 
 def check_triage_wiring(verify_path) -> dict:
-    """AST scan: ``change-triage`` registered in argparse + commands dict.
+    """Check the target checkout's parser and dispatch binding for change-triage."""
+    from cli_registration import inspect_cli_registration
 
-    Only real AST structure counts (``add_parser("change-triage", ...)``
-    call and a ``"change-triage": cmd_*`` key in the commands dispatch
-    dict), so docstring mentions cannot cause a false positive.
-
-    Returns:
-        dict ``{"registered", "argparse", "dispatch", "reason"}``.
-    """
     path = Path(verify_path)
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (OSError, UnicodeDecodeError, SyntaxError) as exc:
+        facts = inspect_cli_registration(path, "change-triage", "cmd_change_triage")
+    except (OSError, UnicodeError, SyntaxError) as exc:
         return {
             "registered": False, "argparse": False, "dispatch": False,
             "reason": "cannot parse {0}: {1}".format(path, exc),
         }
-    argparse_registered = False
-    dispatch_registered = False
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "add_parser"):
-            for arg in node.args:
-                if isinstance(arg, ast.Constant) and arg.value == "change-triage":
-                    argparse_registered = True
-        elif isinstance(node, ast.Dict):
-            for key in node.keys:
-                if (isinstance(key, ast.Constant)
-                        and key.value == "change-triage"):
-                    dispatch_registered = True
+    argparse_registered = facts["argparse"]
+    dispatch_registered = facts["dispatch"] and facts["handler"]
     registered = argparse_registered and dispatch_registered
     return {
         "registered": registered,

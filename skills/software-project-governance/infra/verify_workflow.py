@@ -7555,60 +7555,17 @@ def _capability_cli_registration_fact(root, relative_path):
     path = _capability_context_path(root, relative_path)
     if not path.is_file():
         return False, f"{relative_path.as_posix()}: `capability-context` CLI registration missing (file not found)"
+    from cli_registration import inspect_cli_registration
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except SyntaxError as exc:
+        facts = inspect_cli_registration(path, "capability-context", "cmd_capability_context")
+    except (OSError, UnicodeError, SyntaxError) as exc:
         return False, f"{relative_path.as_posix()}: `capability-context` CLI registration unreadable ({exc})"
-
-    top_level_functions = [
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-    ]
-    has_handler = any(node.name == "cmd_capability_context" for node in top_level_functions)
-    main_functions = [node for node in top_level_functions if node.name == "main"]
-    main_node = main_functions[0] if main_functions else None
-    main_body = list(ast.walk(main_node)) if main_node is not None else []
-
-    has_parser = any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "add_parser"
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and node.args[0].value == "capability-context"
-        for node in main_body
-    )
-    has_dispatch = False
-    for node in main_body:
-        if isinstance(node, ast.Dict):
-            for key, value in zip(node.keys, node.values):
-                if (
-                    isinstance(key, ast.Constant)
-                    and key.value == "capability-context"
-                    and isinstance(value, ast.Name)
-                    and value.id == "cmd_capability_context"
-                ):
-                    has_dispatch = True
-                    break
-        elif (
-            isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "cmd_capability_context"
-        ):
-            for target in node.targets:
-                if (
-                    isinstance(target, ast.Subscript)
-                    and isinstance(target.slice, ast.Constant)
-                    and target.slice.value == "capability-context"
-                ):
-                    has_dispatch = True
-                    break
-
+    has_handler, has_parser, has_dispatch = facts["handler"], facts["argparse"], facts["dispatch"]
     registered = has_handler and has_parser and has_dispatch
     detail = (
         f"{relative_path.as_posix()}: `capability-context` CLI registration "
         f"top_level_handler={'yes' if has_handler else 'no'}, "
-        f"main={'yes' if main_node is not None else 'no'}, "
+        f"main={'yes' if facts['main'] else 'no'}, "
         f"main_subparser={'yes' if has_parser else 'no'}, "
         f"main_dispatch={'yes' if has_dispatch else 'no'}"
     )
@@ -22768,8 +22725,7 @@ def cmd_check_projection_sync(args):
         sys.exit(1)
 
 
-def cmd_check_entry_bootstrap_sync(args):  # FEAT-037; bare-Name handler (FEAT-020 contract matrix)
-    projection_checks.cmd_check_entry_bootstrap_sync(args)
+cmd_check_entry_bootstrap_sync = projection_checks.cmd_check_entry_bootstrap_sync
 
 
 def cmd_check_injection_contract(args):
@@ -22859,41 +22815,10 @@ def cmd_check_dsh_boundary(args):
 
 
 def cmd_dsh_doctor(args):
-    """The single staged dsh diagnostic entry (FEAT-031, S0–S7).
+    """Run the doctor with parsed engine arguments and propagate its exit scale."""
+    from dsh_doctor import run_cli
 
-    Thin dispatch only: the stages, the exit-code semantics and the four
-    switches live in ``dsh_doctor``. Lazy import for the same two reasons as
-    ``cmd_check_dsh_boundary`` — and because a diagnostic entry that cannot run
-    when the engine is broken is useless.
-    """
-    from dsh_doctor import main as doctor_main
-
-    argv = []
-    if getattr(args, "json", False):
-        argv.append("--json")
-    for stage in getattr(args, "stage", None) or ():
-        argv += ["--stage", stage]
-    if getattr(args, "offline", False):
-        argv.append("--offline")
-    if getattr(args, "selftest", False):
-        argv.append("--selftest")
-    if getattr(args, "record_evidence", False):
-        argv.append("--record-evidence")
-    if getattr(args, "out", None):
-        argv += ["--out", args.out]
-    if getattr(args, "rehearse", None):
-        argv += ["--rehearse", args.rehearse]
-    if getattr(args, "against", None):
-        argv += ["--against", args.against]
-    if getattr(args, "allow_host_probe", False):
-        argv.append("--allow-host-probe")
-    if getattr(args, "fail_on_issues", False):
-        argv.append("--fail-on-issues")
-    code = doctor_main(argv)
-    # The exit-code contract (design 5.1: 0 clean / 1 stage FAIL / 2 refused)
-    # belongs to `dsh-doctor`, and the engine route must not swallow it: a
-    # diagnostic entry whose non-zero code vanished behind the engine would
-    # tell CI and the user two different things about the same run.
+    code = run_cli(args)
     if code:
         sys.exit(code)
     return code
@@ -26372,14 +26297,7 @@ def cmd_resolve_entry(args):
     sys.stdout.write(completed.stdout)
 
 
-def main(argv=None):
-    raw_argv = list(sys.argv[1:] if argv is None else argv)
-    try:
-        explicit_project_root, parser_argv = _extract_project_root_arg(raw_argv)
-    except ValueError as exc:
-        print(f"verify_workflow: error: {exc}", file=sys.stderr)
-        sys.exit(2)
-
+def _build_cli_parser(parser_argv=()):
     parser = argparse.ArgumentParser(
         prog="verify_workflow",
         description="Software Project Governance CLI",
@@ -26785,29 +26703,8 @@ def main(argv=None):
         help="Single staged diagnostic entry for the dsh boundary (S0–S7): "
              "per-stage verdict + evidence + remediation, exit codes 0/1/2",
     )
-    dd_p.add_argument("--json", action="store_true",
-                      help="Emit the machine-readable report")
-    dd_p.add_argument("--stage", action="append", default=None,
-                      metavar="S0..S7", help="Run only these stages (repeatable)")
-    dd_p.add_argument("--offline", action="store_true",
-                      help="Forbid every subprocess and host-plane probe; "
-                           "the file-level judgments still run")
-    dd_p.add_argument("--selftest", action="store_true",
-                      help="Crash each stage in turn and assert the isolation rules")
-    dd_p.add_argument("--record-evidence", action="store_true",
-                      help="Probe the plane read-only and write the host-facts "
-                           "fixture (the only writing path)")
-    dd_p.add_argument("--out", default=None,
-                      help="Destination of --record-evidence")
-    dd_p.add_argument("--rehearse", default=None, metavar="CANDIDATE.json",
-                      help="Replay a recorded candidate against --against")
-    dd_p.add_argument("--against", default=None, metavar="BASELINE.json",
-                      help="The baseline record to rehearse against")
-    dd_p.add_argument("--allow-host-probe", action="store_true",
-                      help="Allow the S5 host probe (M7.7 R1 must be satisfied "
-                           "first; refused otherwise)")
-    dd_p.add_argument("--fail-on-issues", action="store_true",
-                      help="Exit 1 when a stage FAILs (the default already does)")
+    from dsh_doctor_cli import add_cli_arguments as add_doctor_arguments
+    add_doctor_arguments(dd_p, engine_entry=True)
 
     # check-hot-fact-source (FIX-087)
     chfs_p = subparsers.add_parser(
@@ -27673,6 +27570,18 @@ def main(argv=None):
     )
     enforcement.add_enforcement_check_arguments(enf_p)
 
+    return parser, subparsers
+
+
+def main(argv=None):
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        explicit_project_root, parser_argv = _extract_project_root_arg(raw_argv)
+    except ValueError as exc:
+        print(f"verify_workflow: error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    parser, _ = _build_cli_parser(parser_argv)
     args = parser.parse_args(parser_argv)
     if args.project_root and explicit_project_root is None:
         explicit_project_root = args.project_root
@@ -27680,155 +27589,8 @@ def main(argv=None):
     if explicit_project_root is not None:
         _apply_project_root_override(explicit_project_root)
 
-    commands = {
-        "verify": cmd_verify,
-        "status": cmd_status,
-        "governance-context": cmd_governance_context,
-        "capability-context": cmd_capability_context,
-        "gate": cmd_gate,
-        "gate-check": cmd_gate_check,
-        "gates": cmd_gates,
-        "stage": cmd_stage,
-        "stages": cmd_stages,
-        "check-governance": cmd_check_governance,
-        "execution-packet": cmd_execution_packet,
-        "check-manifest-consistency": cmd_check_manifest_consistency,
-        "check-exploration-channels": cmd_check_exploration_channels,
-        "check-plugin-freshness": cmd_check_plugin_freshness,
-        "check-agent-adapters": cmd_check_agent_adapters,
-        "check-release": cmd_check_release,
-        "release-ledger": cmd_release_ledger,
-        "release-projection": cmd_release_projection,
-        "quality-tools": cmd_quality_tools,
-        "e2e-check": cmd_e2e_check,
-        "external-project-validation": cmd_external_project_validation,
-        "first-run-demo": cmd_first_run_demo,
-        "web-console": cmd_web_console,
-        "resolve-entry": cmd_resolve_entry,
-        "agent-runtime-e2e": cmd_agent_runtime_e2e,
-        "gemini-auth-preflight": cmd_gemini_auth_preflight,
-        "opencode-provider-preflight": cmd_opencode_provider_preflight,
-        "check-cross-references": cmd_check_cross_references,
-        "check-loop-role-skills": cmd_check_loop_role_skills,
-        "check-sequential-ids": cmd_check_sequential_ids,
-        "check-structural-validity": cmd_check_structural_validity,
-        "check-commit-scope": cmd_check_commit_scope,
-        "check-goal-alignment": cmd_check_goal_alignment,
-        "check-user-impact": cmd_check_user_impact,
-        "check-agent-team": cmd_check_agent_team,
-        "check-review-debt": cmd_check_review_debt,
-        "check-version-consistency": cmd_check_version_consistency,
-        "check-projection-sync": cmd_check_projection_sync,
-        "check-entry-bootstrap-sync": cmd_check_entry_bootstrap_sync,
-        "check-injection-contract": cmd_check_injection_contract,
-        "check-injection-budget": cmd_check_injection_budget,
-        "check-dsh-preset-smoke": cmd_check_dsh_preset_smoke,
-        "check-dsh-preset-compat": cmd_check_dsh_preset_compat,
-        "check-dsh-boundary": cmd_check_dsh_boundary,
-        "dsh-doctor": cmd_dsh_doctor,
-        "check-hot-fact-source": cmd_check_hot_fact_source,
-        "check-runtime-readiness-matrix": cmd_check_runtime_readiness_matrix,
-        "check-first-session-measurement": cmd_check_first_session_measurement,
-        "check-governance-packs": cmd_check_governance_packs,
-        "check-capability-registry": cmd_check_capability_registry,
-        "check-lifecycle-registry": cmd_check_lifecycle_registry,
-        "check-flow-unit-runtime": cmd_check_flow_unit_runtime,
-        "dynamic-lifecycle-migration": cmd_dynamic_lifecycle_migration,
-        "dynamic-flow-gate-migration": cmd_dynamic_lifecycle_migration,
-        "loop-engineering-migration": cmd_loop_engineering_migration,
-        "check-host-capability-context": cmd_check_host_capability_context,
-        "check-mainstream-agent-loading": cmd_check_mainstream_agent_loading,
-        "check-readme-pack-guidance": cmd_check_readme_pack_guidance,
-        "check-architecture-health": cmd_check_architecture_health,
-        "archguard-ratchet": cmd_archguard_ratchet,
-        "check-loop-health": cmd_check_loop_health,
-        "check-loop-runtime-claims": cmd_check_loop_runtime_claims,
-        "loop-rollup": cmd_loop_rollup,
-        "loop-telemetry": cmd_loop_telemetry,
-        "check-duplicate-code": cmd_check_duplicate_code,
-        "check-technical-debt": cmd_check_technical_debt,
-        "check-complexity": cmd_check_complexity,
-        "check-governance-data-size": cmd_check_governance_data_size,
-        "check-governance-pack-status": cmd_check_governance_pack_status,
-        "check-product-success-contracts": cmd_check_product_success_contracts,
-        "check-acceptance-contracts": cmd_check_acceptance_contracts,
-        "check-quality-budget": cmd_check_quality_budget,
-        "check-vertical-slices": cmd_check_vertical_slices,
-        "check-deterministic-scaffolds": cmd_check_deterministic_scaffolds,
-        "check-scaffold-templates": cmd_check_deterministic_scaffolds,
-        "check-interruption-policy": cmd_check_interruption_policy,
-        "check-user-interruption-policy": cmd_check_interruption_policy,
-        "generate-deterministic-scaffold": cmd_generate_deterministic_scaffold,
-        "check-locks": cmd_check_agent_locks,
-        "check-archive-integrity": cmd_check_archive_integrity,
-        "task-priority-analysis": cmd_task_priority_analysis,
-        "review-record": cmd_review_record,
-        "next-candidates": cmd_next_candidates,
-        "change-triage": cmd_change_triage,
-        "demand-source-revise": cmd_demand_source_revise,
-        "governance-write-guard": cmd_governance_write_guard,
-        "write-guard-bootstrap": cmd_write_guard_bootstrap,
-        "governance-cost-report": cmd_governance_cost_report,
-        "governance-bootstrap": cmd_governance_bootstrap,
-        "agent-locks-acquire": cmd_agent_locks_acquire,
-        # FEAT-055 (0.86.0 batch 2.0): governed writer family dispatch
-        # (task_row_update / governance_store / baseline_metadata modules).
-        "task-row-update": cmd_task_row_update,
-        "locks-extend": cmd_locks_extend,
-        "locks-amend": cmd_locks_amend,
-        "locks-release": cmd_locks_release,
-        "evidence-append": cmd_evidence_append,
-        "decision-append": cmd_decision_append,
-        # FIX-462: pins ledger machine writer dispatch (pin_ledger module).
-        "pins": cmd_pins,
-        # FIX-463: decision-premise invalidator dispatch (premise_tracker).
-        "premise": cmd_premise,
-        "baseline-register": cmd_baseline_register,
-        "baseline-evaluate": cmd_baseline_evaluate,
-        # FEAT-093 (0.98.0): authority-ledger dispatch (identity contract +
-        # event log + projection rebuild; exit 0 ok / 1 FAIL verdict).
-        "authority-ledger": cmd_authority_ledger,
-        # FEAT-096 (0.98.0): execution-isolation dispatch (conservative
-        # surface four-piece set; exit 0 ok / 2 refusal — the module
-        # handlers resolve governance_dir from the ENGINE's resolved
-        # paths, the agent-locks-acquire thin-entry pattern).
-        "isolation-write": cmd_isolation_write_engine,
-        "isolation-snapshot": cmd_isolation_snapshot_engine,
-        "isolation-lease-reclaim": cmd_isolation_lease_reclaim_engine,
-        "isolation-status": cmd_isolation_status_engine,
-        "isolation-capability": cmd_isolation_capability_engine,
-        # FEAT-097 (0.98.0): goal-bridge dispatch (state mapping + budget
-        # collection + checkpoints + resume authorization; exit 0 ok /
-        # 2 refusal — the handler resolves governance_dir from the
-        # ENGINE's resolved paths, read at call time).
-        "goal-bridge": cmd_goal_bridge_engine,
-        # FEAT-095 (0.98.0): enforcement dispatch (six boundaries ×
-        # three layers; exit 0 allow / 2 hard block incl. fail-closed /
-        # 3 throttle / 4 stale notice).
-        "enforcement-check": cmd_enforcement_check_engine,
-    }
-
-    cmd = args.command or "verify"
-    # FIX-375 边缘① (TRIAGE-FIX-375 机录 2026-09-20; F-2/F-3 勘正 per review
-    # R0): this dispatch dropped every handler's int return code, so a
-    # refused writer command still exited 0 (假绿).  The return now
-    # propagates — per-family exit SCALES DIFFER (do not branch on a
-    # single scale):
-    #   governance_store _emit: 0 ok / 2 refusal / 3 retryable
-    #   task_row_update: 0 ok / 2 usage / 3 validation / 4 conflict /
-    #                    5 retryable / 6 manual
-    #   baseline-register: 0 ok / 3 command error
-    #   baseline-evaluate: 0 pass / 1 fail / 2 not_evaluable / 3 storage
-    # Handlers with no return value (the sys.exit-style majority) are
-    # unaffected: their return is None → exit 0, failures exit internally
-    # as before.  One disclosed non-writer face changes in the same
-    # direction (F-2): check-dsh-preset-compat --fail-on-issues + FAIL
-    # verdict now exits 1 (dsh_compat.run_cli returns 1 — previously the
-    # same 假绿 class; in-repo callers do not pass that flag).  main()
-    # itself stays a plain function — this change adds NO NEW SystemExit
-    # path (the pre-existing sys.exit(2) on a malformed --project-root
-    # stays); only the __main__ tail wraps sys.exit(main()).
-    return commands[cmd](args)
+    import registry
+    return registry.load_handler(args.command or "verify", parsed_args=True)(args)
 
 
 if __name__ == "__main__":

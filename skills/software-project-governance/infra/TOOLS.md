@@ -566,7 +566,7 @@
 
 ### TOOL-054：只读 bootstrap 聚合命令（FEAT-033 / AUDIT-154 切片 A-2）
 
-- **文件**：`infra/bootstrap_aggregate.py`（核心模块，engine-free）、`infra/tests/test_bootstrap_aggregate.py`；引擎只接线 dispatch（`verify_workflow.py` import + subparser + commands dict，governance_cost 同款模式）
+- **文件**：`infra/bootstrap_aggregate.py`（核心模块，engine-free）、`infra/tests/test_bootstrap_aggregate.py`；参数入口在 `verify_workflow.py`，命令处理函数由 `registry.py` 声明
 - **子命令**：`governance-bootstrap [--budget-ms N] [--format json|text] [--profile lite|standard|strict]`（`--project-root` 走引擎全局参数；缺省 cwd，fail-closed）
 - **输入**：`.governance/` 活数据只读（plan-tracker.md / risk-log.md / decision-log.md，UTF-8 行级解析）+ `resolve_entry.resolve()` envelope（dual-root 权威，DEC-096）+ `task_priority` 轻量依赖分析（纯 stdlib 复用，非重新推导）
 - **输出**：机读 JSON（schema `governance-bootstrap/1`，≤8KB 投影 / ≤2K token）或 ≤40 行 text 摘要。聚合面：`resolve`（envelope 子集）+ `migration`（active vs plan 版本比较**仅标志不执行**）+ `project`/`gates`（计数 + 首 pending gate）/`tasks`（tpa 口径统计：total/completed/unblocked/blocked/non_executable/p0_pending）/`risks`（open/overdue/soon + ≤3 overdue ids）/`recent`（≤3/5 决策，lite 档省略）/`candidates`（recommended_next ≤1/3/5，空推荐携带 `empty_reason`+`unblock_recommendation` 结构化原因——REQ-110，禁止机械枚举）+ `health`（**v1 恒 `deferred`**：`pending_checks` + 指向 `check-governance` 的 next_action——本命令未做健康检查，不得伪装已检查）+ `next_actions`（≤5 条派生指引）

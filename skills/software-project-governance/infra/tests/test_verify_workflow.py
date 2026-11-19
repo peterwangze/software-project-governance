@@ -4482,13 +4482,13 @@ class CapabilityContextTests(unittest.TestCase):
                 "",
                 "def cmd_capability_context(args):",
                 "    pass",
-                "",
                 "def main():",
                 "    parser = argparse.ArgumentParser()",
                 "    subparsers = parser.add_subparsers(dest='command')",
                 "    subparsers.add_parser('capability-context', help='trace')",
                 "    commands = {'capability-context': cmd_capability_context}",
-                "    return commands",
+                "    args = parser.parse_args()",
+                "    return commands[args.command](args)",
                 "",
             ])
         elif example_only:

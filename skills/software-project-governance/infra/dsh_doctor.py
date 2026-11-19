@@ -72,6 +72,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from dsh_doctor_cli import add_cli_arguments
+
 __all__ = [
     "STAGES",
     "EXIT_OK",
@@ -1920,49 +1922,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         prog=COMMAND_NAME,
         description="Single staged diagnostic entry for the dsh dependency "
                     "boundary (S0–S7).")
-    parser.add_argument("--json", action="store_true",
-                        help="emit the machine-readable report")
-    parser.add_argument("--stage", action="append", default=None,
-                        metavar="S0..S7", help="run only these stages (repeatable)")
-    parser.add_argument("--offline", action="store_true",
-                        help="forbid every subprocess and host-plane probe; "
-                             "file-level judgments still run")
-    parser.add_argument("--selftest", action="store_true",
-                        help="crash each stage in turn and assert the isolation rules")
-    parser.add_argument("--record-evidence", action="store_true",
-                        help="probe the plane (read-only) and write the "
-                             "host-facts fixture named by --out")
-    parser.add_argument("--out", default=None,
-                        help="destination of --record-evidence (default: "
-                             "adapters/dsh/fixtures/host-facts-<version>.json)")
-    parser.add_argument("--rehearse", default=None, metavar="CANDIDATE.json",
-                        help="replay a recorded candidate against --against")
-    parser.add_argument("--against", default=None, metavar="BASELINE.json",
-                        help="the baseline record to rehearse against")
-    parser.add_argument("--allow-host-probe", action="store_true",
-                        help="allow the S5 host probe (requires M7.7 R1 to be "
-                             "satisfied first; refused otherwise)")
-    parser.add_argument("--fail-on-issues", action="store_true",
-                        help="exit 1 when a stage FAILs (the default already does)")
-    args = parser.parse_args(argv)
+    add_cli_arguments(parser)
+    return run_cli(parser.parse_args(argv))
 
+
+def run_cli(args) -> int:
+    """Execute one parsed diagnostic request."""
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
     try:
-        if args.selftest:
+        if getattr(args, "selftest", False):
             report = run_self_test()
-        elif args.record_evidence:
-            report = record_evidence(out=Path(args.out) if args.out else None)
-        elif args.rehearse:
-            if not args.against:
+        elif getattr(args, "record_evidence", False):
+            report = record_evidence(out=Path(args.out) if getattr(args, "out", None) else None)
+        elif getattr(args, "rehearse", None):
+            if not getattr(args, "against", None):
                 raise Refused("--rehearse requires --against <baseline.json>")
             report = rehearse(Path(args.rehearse), Path(args.against))
         else:
-            report = run_doctor(offline=args.offline, stages=args.stage,
-                                allow_host_probe=args.allow_host_probe)
+            report = run_doctor(offline=getattr(args, "offline", False), stages=getattr(args, "stage", None),
+                                allow_host_probe=getattr(args, "allow_host_probe", False))
     except Refused as error:
         print(f"dsh-doctor refused: {error}", file=sys.stderr)
         return EXIT_REFUSED
@@ -1971,7 +1953,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"{type(error).__name__}: {error}", file=sys.stderr)
         return EXIT_REFUSED
 
-    if args.json:
+    if getattr(args, "json", False):
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         render_report(report)

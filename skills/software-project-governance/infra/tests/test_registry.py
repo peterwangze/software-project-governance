@@ -62,164 +62,7 @@ _DASH = "\u2500"
 _ENGINE_ENTRY = "def _run_full_engine_checks"
 _SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 
-# FEAT-020 frozen faces, extended once by the DSH preset schema-compat guard
-# in the same change as the regenerated snapshot: the new check segment 28v
-# (70→71) and its `check-dsh-preset-compat` subcommand (82→83) — the
-# documented contract-change path (generator.py --regen + review).
-# FIX-310: 83 -> 82 CLI keys and 71 -> 70 check segments — retiring the
-# dead `dsh.skills` declaration also retired its guard (Check 40 /
-# `check-dsh-skills-manifest`); the FEAT-020 snapshot was regenerated with
-# `contract_matrix/generator.py --regen` to record that deliberate change.
-# FEAT-031 (0.81.0 slice V8): 82 -> 84 CLI keys (`dsh-doctor` + the
-# `check-dsh-boundary` gate entry) and 70 -> 71 check segments (`28w`); the
-# snapshot was regenerated with `contract_matrix/generator.py --regen` in the
-# same change — the same deliberate-change path as FEAT-025/FIX-310, and the
-# reason the segment is declared in `quickscan_registry.py` too
-# (`registry._build_check_specs()` raises at import time when the two tables
-# disagree, E-17).
-# FEAT-032 (0.84.0 slice A-1): 84 -> 85 CLI keys (`governance-cost-report`;
-# handler lives in `governance_cost.py`, the engine wires dispatch only);
-# snapshot + architecture baseline regenerated in the same change.
-# FEAT-037 (0.84.0 slice A-6): 85 -> 86 CLI keys (`check-entry-bootstrap-sync`;
-# handler lives in `checks/projection.py`, thin bare-Name wrapper in the
-# engine); snapshot regenerated via `contract_matrix/generator.py --regen`.
-# FEAT-033 (0.84.0 slice A-2): 86 -> 87 CLI keys (`governance-bootstrap`;
-# handler lives in `bootstrap_aggregate.py`, engine wires dispatch only);
-# snapshot + architecture baseline regenerated in the same change.
-# FEAT-039 (0.84.0 slice A-8): 87 -> 88 CLI keys (`check-injection-budget`;
-# handler lives in `checks/injection_budget.py` — the engine wires dispatch and
-# the Check 33 sub-report only — and the report rides inside check segment 33,
-# so the segment face stays at 71); snapshot regenerated via
-# `contract_matrix/generator.py --regen` in the same change.
-# FEAT-055 (0.86.0 batch 2.0): 88 -> 95 CLI keys — the three governed writer
-# modules join the dispatch face (engine wires dispatch only, governance_cost
-# pattern; FEAT-047 P2-1 add_arguments caliber): `task-row-update`
-# (task_row_update.py, FEAT-051), `locks-extend`/`locks-amend`/
-# `evidence-append`/`decision-append` (governance_store.py, FEAT-046), and
-# `baseline-register`/`baseline-evaluate` (baseline_metadata.py, FEAT-047).
-# Snapshot + architecture baseline regenerated in the same change
-# (`contract_matrix/generator.py --regen` + `archguard_ratchet.py --regen`).
-# FIX-370 (0.87.0 batch 2 closure): 95 -> 96 CLI keys — `locks-release`, the
-# release leg of the governance_store locks family (same governance_cost
-# pattern; snapshot counts + keys re-baselined in the same change).
-# FEAT-064 (0.88.0 D1): 96 -> 97 CLI keys — FIX-383's `write-guard-bootstrap`
-# shipped with its engine dispatch but the _COMMANDS row was omitted at the
-# landing; the R5 drift surfaced when FEAT-064's deliberate guard-output
-# wording change forced the contract-matrix snapshot regeneration
-# (`generator.py --regen` in the same change — the snapshot now names 97
-# keys and the registry must agree with the live face and the snapshot).
-# FEAT-080 (0.93.0 B3, DEC-290(5)): 97 -> 98 CLI keys — the demand_source
-# revision channel's CLI regularization `demand-source-revise` (ADR-021
-# §2.2.1 F-P1-3; registry row + snapshot + this count re-baselined in the
-# same change, the F-P2-5 regen discipline).
-# FEAT-080 segments: 71 -> 73 — the Check 41 (Priority Inversion Guard,
-# BLOCKING) and Check 42 (Discovery Closure Rate, ADVISORY_SEGMENTS — the
-# ADR-021 §3.2.3 observation-window WARN posture) sections; SegmentSpec +
-# _SEGMENT_LOADERS + snapshot re-baselined in the same change.
-# FIX-438 (0.95.0 window, DEC-319/320): 98 -> 99 CLI keys — FEAT-088's
-# `check-exploration-channels` (638509e, 2026-10-05) shipped with its engine
-# dispatch but without its registry row and without the snapshot rider; the
-# make-up regen (snapshot + this count + the registry._COMMANDS row + the
-# architecture-baseline re-anchor under DEC-320 path A) re-baselines all
-# four faces in the same change. Segments stay at 73 (the guard rides
-# Check 12 / check-cross-references).
-# FEAT-093 (0.98.0 window, DEC-330): 99 -> 100 CLI keys — the
-# `authority-ledger` dispatch (task identity contract + append-only event
-# log + rebuildable plan-tracker projection; handler in
-# authority_ledger.py, engine wires dispatch only — governance_cost
-# pattern). Snapshot + architecture-baseline re-anchored in the same
-# change (the documented contract-change path). Segments stay at 73.
-# FEAT-096 (0.98.0 window, DEC-330 batch): 100 -> 105 CLI keys — the five
-# `isolation-*` execution-isolation conservative-surface commands (write
-# concurrency limit + under-review/being-written mutex + read-only review
-# snapshots + lease reclaim with loss-of-authority verification; handlers
-# = engine thin entries defined in verify_workflow.py, module logic in
-# execution_isolation.py — the agent-locks-acquire pattern). Snapshot +
-# frozen counts re-baselined in the same change (the documented
-# contract-change path). Segments stay at 73 (no check-governance segment
-# rides the isolation surface).
-# FEAT-097 (0.98.0 window, DEC-330 batch): 105 -> 106 CLI keys — the
-# `goal-bridge` goal↔budget bridge (state mapping + multi-dimension
-# danger-zone collection + checkpoint artifacts + resume authorization;
-# engine thin entry in verify_workflow.py, module logic in goal_bridge.py
-# — the isolation pattern). Snapshot + frozen counts re-baselined in the
-# same change. Segments stay at 73.
-# FIX-453: FEAT-095's enforcement-check is already in the engine/snapshot;
-# restore its missing registry row and freeze the real 107-key surface.
-# FIX-462 (0.99.x emergency window, DEC-220/286/287): 107 -> 108 CLI keys —
-# the `pins` ledger machine writer (`pins register` / `pins re-anchor` over
-# checks/version.py STATIC_PIN_EXEMPTIONS; handler in pin_ledger.py, engine
-# wires dispatch only — governance_cost pattern). Snapshot + architecture
-# baseline re-anchored in the same change (DEC-320/324 sanctioned regen
-# rider, +N mainfile lines disclosed). Segments stay at 73.
-# FIX-463 (0.99.x emergency window, DEC-368② class): 108 -> 109 CLI keys —
-# the `premise` decision-premise invalidator (count / review / status over
-# .governance/premise-events.jsonl; handler in premise_tracker.py, engine
-# wires dispatch only — governance_cost pattern). Snapshot + architecture
-# baseline re-anchored in the same change (DEC-320/324 rider). Segments
-# 73 -> 74: the check-governance Check 2b Decision Premise WARN face is
-# extracted as a new segment (name carries "Check 2b").
-FROZEN_CLI_KEYS = 108
-FROZEN_SEGMENTS = 73
-
-# FEAT-018 R6 frozen startup budget (``core/architecture-baseline.json`` r6):
-# the acceptance ② comparison frame for "启动 import 集合不增".
-# FEAT-032: 196 -> 197 — the engine imports the self-contained
-# ``governance_cost`` module (stdlib-only at import time; zstandard is lazy,
-# so the face grows by exactly this one module).
-# FEAT-033: 197 -> 198 — the engine imports the self-contained
-# ``bootstrap_aggregate`` module (import face = stdlib + the engine-free
-# leaves resolve_entry / task_priority; grows the face by exactly this one
-# module).
-# FEAT-039: 198 -> 199 — the engine imports the self-contained
-# ``checks.injection_budget`` leaf (stdlib-only: json/re/sys/pathlib) and
-# re-exports its public surface; the ArchGuard R6 cold-import face grows by
-# exactly this one module (baseline regenerated in the same change, see
-# ``core/architecture-baseline.json`` r6).
-# FEAT-055: 199 -> 205 — the engine imports the three self-contained
-# governed writer modules (``task_row_update`` / ``governance_store`` /
-# ``baseline_metadata``) plus exactly the three leaves their import-time
-# faces pull in and the engine never had: the L0 ``contracts`` leaf (all
-# three writers consume the m0-r1 frozen contract read-only), ``uuid``
-# (contracts' operation-id generator) and ``_uuid`` (uuid's C companion
-# module in the measured sys.modules face — git-archive dual-face diff,
-# review-FEAT-055 F-1; ``threading`` was already in the HEAD face).
-# Baseline regenerated in the same change, see
-# ``core/architecture-baseline.json``.
-# FEAT-093: 205 -> 206 — the engine imports the self-contained
-# ``authority_ledger`` module (stdlib-only at import time; the peer-leaf
-# calibers bootstrap_aggregate reaches are function-local imports, so the
-# cold face grows by exactly this one module). Baseline regenerated in
-# the same change.
-# FEAT-096: 206 -> 207 — the engine imports the self-contained
-# ``execution_isolation`` module (stdlib-only at import time: argparse /
-# hashlib / json / os / re / stat / sys / tempfile / threading / time /
-# datetime / pathlib — all already in the cold face, so the face grows by
-# exactly this one module; measured 207 live). Baseline regenerated in
-# the same change.
-# FEAT-097: 207 -> 208 — the engine imports the self-contained
-# ``goal_bridge`` module (stdlib-only at import time: argparse / json /
-# os / re / sys / tempfile / time / pathlib — all already in the cold
-# face, so the face grows by exactly this one module; authority_ledger
-# is function-local for the checkpoint ledger face, the peer-leaf
-# pattern; measured 208 live). Baseline regenerated in the same change.
-# FIX-453: FEAT-095 imports the stdlib-only enforcement peer at engine
-# startup; the already-committed cold-import baseline is 209, not 208.
-# FIX-462: 209 -> 210 — the engine imports the self-contained
-# ``pin_ledger`` module (stdlib-only at import time: ast / importlib.util /
-# json / os / re / tempfile / uuid / pathlib — all already in the cold
-# face, so the face grows by exactly this one module; measured 210 live).
-# Baseline regenerated in the same change.
-# FIX-463: 210 -> 211 — the engine imports the self-contained
-# ``premise_tracker`` module (stdlib-only at import time: argparse / json /
-# re / uuid / datetime / pathlib — all already in the cold face, so the
-# face grows by exactly this one module; measured 211 live). Baseline
-# regenerated in the same change.
-# FIX-480: 211 -> 212 — bookkeeping catch-up in the same baseline regen,
-# NOT a new module: the FIX-480 rider's module-set diff vs HEAD is empty
-# (cold-face probe identical), but the committed r6 face still carried the
-# FIX-463-era 211 while the live face measured 212; the regen re-records
-# the measured truth and this count follows it.
+# Independent import budget measured by the isolated R6 probe.
 FROZEN_ENGINE_IMPORT_COUNT = 212
 
 # Mechanism red lines (§9.1): no discovery scan, no third-party plugin loader.
@@ -307,6 +150,7 @@ def _engine_modules():
     return modules
 
 
+@functools.lru_cache(maxsize=1)
 def _frozen_faces():
     return json.loads(SNAPSHOT.read_text(encoding="utf-8"))["faces"]
 
@@ -413,15 +257,15 @@ class ContractShapeTests(unittest.TestCase):
         self.assertIn("contracts", modules)
 
 
-# ── ① command registry (82 keys) ────────────────────────────────────────────
+# ── ① command registry ────────────────────────────────────────────
 
 
 class CommandRegistryTests(unittest.TestCase):
 
     def test_declares_the_frozen_key_count(self):
-        self.assertEqual(len(reg.COMMAND_SPECS), FROZEN_CLI_KEYS)
-        self.assertEqual(len(reg.command_keys()), FROZEN_CLI_KEYS)
-        self.assertEqual(len(set(reg.command_keys())), FROZEN_CLI_KEYS)
+        self.assertEqual(len(reg.COMMAND_SPECS), _frozen_faces()["cli_dispatch"]["key_count"])
+        self.assertEqual(len(reg.command_keys()), _frozen_faces()["cli_dispatch"]["key_count"])
+        self.assertEqual(len(set(reg.command_keys())), _frozen_faces()["cli_dispatch"]["key_count"])
 
     def test_key_set_matches_the_frozen_snapshot(self):
         frozen = set(_frozen_faces()["cli_dispatch"]["keys"])
@@ -457,56 +301,87 @@ class CommandRegistryTests(unittest.TestCase):
                           if reg.loader_module(spec.handler)
                           != reg.ENGINE_MODULE)
         self.assertEqual(migrated, [
-            # FEAT-093 (0.98.0): the authority-ledger handler lives in
-            # authority_ledger.py; the engine wires dispatch only
-            # (governance_cost pattern). Sorted position follows the key.
             "archguard-ratchet",
             "authority-ledger",
-            # FEAT-055 (0.86.0 batch 2.0): the BaselineMetadata provenance
-            # writer's two dispatch keys; handlers live in
-            # baseline_metadata.py, the engine wires dispatch only
-            # (governance_cost pattern, FEAT-047 P2-1 add_arguments caliber).
             "baseline-evaluate", "baseline-register",
             "check-capability-registry",
-            # FEAT-037 (0.84.0 slice A-6): entry-bootstrap guard handler lives
-            # in checks/projection.py; the engine wires a thin wrapper only.
             "check-entry-bootstrap-sync",
-            # FEAT-039 (0.84.0 slice A-8): injection-size budget handler lives
-            # in checks/injection_budget.py; the engine wires dispatch + the
-            # Check 33 sub-report only (this engine's LOC/print counts are
-            # only-down under the ArchGuard ratchet). Sorted position follows
-            # the key string, not the task age.
             "check-injection-budget",
             "check-manifest-consistency", "check-review-debt",
-            # FEAT-055 (0.86.0 batch 2.0): the DEC-append writer of the
-            # governance_store family (handlers in governance_store.py).
             "decision-append", "dsh-doctor",
-            # FEAT-055 (0.86.0 batch 2.0): the EVD-append writer of the
-            # governance_store family.
             "evidence-append",
-            # FEAT-033 (0.84.0 slice A-2): read-only bootstrap aggregate
-            # handler lives in bootstrap_aggregate.py; the engine wires
-            # dispatch only (governance_cost pattern).
             "governance-bootstrap",
-            # FEAT-032 (0.84.0 slice A-1): cost observability handler lives
-            # in governance_cost.py; the engine wires dispatch only.
             "governance-cost-report",
-            # FEAT-055 (0.86.0 batch 2.0): the lock-maintenance writers of
-            # the governance_store family; FIX-370 added the release leg.
             "locks-amend", "locks-extend", "locks-release",
-            # FIX-462 (0.99.x emergency window): the pins ledger machine
-            # writer (register / re-anchor over checks/version.py
-            # STATIC_PIN_EXEMPTIONS; handler in pin_ledger.py, the engine
-            # wires dispatch only — governance_cost pattern).
             "pins",
-            # FIX-463 (0.99.x emergency window): the decision-premise
-            # invalidator (count / review / status; handler in
-            # premise_tracker.py, the engine wires dispatch only).
             "premise",
-            # FEAT-055 (0.86.0 batch 2.0): the task-row state-flip writer
-            # (B-1 termination surface; handler in task_row_update.py).
             "task-row-update",
         ])
+
+    def test_foreign_checkout_wiring_reads_only_its_own_declarations(self):
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "verify_workflow.py"
+            engine.write_text(
+                "def cmd_status(args): pass\n"
+                "def _build_cli_parser(): subparsers.add_parser('status')\n"
+                "def main():\n"
+                "    parser, _ = _build_cli_parser()\n"
+                "    args = parser.parse_args()\n"
+                "    return registry.load_handler(args.command or 'verify', parsed_args=True)(args)\n", encoding="utf-8")
+            table = engine.with_name("registry.py")
+            for source, expected in (
+                    (None, False),
+                    ("# ('status', 'verify_workflow.cmd_status')", False),
+                    ("_COMMANDS: tuple = (", False),
+                    ("_COMMANDS: tuple = (('status', 'verify_workflow.cmd_wrong'),)", False),
+                    ("raise RuntimeError()\n_COMMANDS: tuple = (('status', 'verify_workflow.cmd_status'),)", True)):
+                with self.subTest(source=source):
+                    if source is not None:
+                        table.write_text(source, encoding="utf-8")
+                    facts = inspect_cli_registration(engine, "status", "cmd_status")
+                    self.assertEqual(facts, {"main": True, "argparse": True,
+                                             "handler": True, "dispatch": expected})
+
+    def test_unused_table_and_unused_loader_do_not_register_a_command(self):
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        parser = "    subparsers.add_parser('status')\n    args = parser.parse_args()\n"
+        unused = ("    decoy = {'status': cmd_status}\n",
+                  "    unused = registry.load_handler('verify')\n",
+                  "    unused = registry.load_handler(args.command or 'verify')\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "verify_workflow.py"
+            engine.with_name("registry.py").write_text(
+                "_COMMANDS: tuple = (('status', 'verify_workflow.cmd_status'),)", encoding="utf-8")
+            for line in unused:
+                with self.subTest(line=line):
+                    engine.write_text("def cmd_status(args): pass\ndef main():\n" +
+                                      parser + line + "    return 7\n", encoding="utf-8")
+                    facts = inspect_cli_registration(engine, "status", "cmd_status")
+                    self.assertTrue(facts["argparse"])
+                    self.assertFalse(facts["dispatch"])
+
+    def test_mutated_legacy_dispatch_table_is_not_proof_of_registration(self):
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        source = ("def cmd_status(args): pass\ndef main():\n"
+                  "    subparsers.add_parser('status')\n"
+                  "    args = parser.parse_args()\n"
+                  "    commands = {'status': cmd_status}\n")
+        final_call = "    cmd = args.command or 'verify'\n    return commands[cmd](args)\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "verify_workflow.py"
+            for mutation in ("", "    commands['status'] = cmd_wrong\n",
+                             "    other = commands\n    other.clear()\n"):
+                with self.subTest(mutation=mutation):
+                    engine.write_text(source + mutation + final_call, encoding="utf-8")
+                    facts = inspect_cli_registration(engine, "status", "cmd_status")
+                    self.assertEqual(facts["dispatch"], not mutation)
 
     def test_declared_keys_resolve_to_callables(self):
         modules = {}
@@ -518,15 +393,15 @@ class CommandRegistryTests(unittest.TestCase):
         self.assertGreaterEqual(len(modules), 3)
 
 
-# ── ① check registry (70 segments) ──────────────────────────────────────────
+# ── ① check registry ──────────────────────────────────────────
 
 
 class CheckRegistryTests(unittest.TestCase):
 
     def test_declares_the_frozen_segment_count(self):
-        self.assertEqual(len(reg.CHECK_SPECS), FROZEN_SEGMENTS)
-        self.assertEqual(len(reg.segment_ids()), FROZEN_SEGMENTS)
-        self.assertEqual(len(set(reg.segment_ids())), FROZEN_SEGMENTS)
+        self.assertEqual(len(reg.CHECK_SPECS), _frozen_faces()["check_segments"]["count"])
+        self.assertEqual(len(reg.segment_ids()), _frozen_faces()["check_segments"]["count"])
+        self.assertEqual(len(set(reg.segment_ids())), _frozen_faces()["check_segments"]["count"])
 
     def test_segment_set_matches_the_frozen_snapshot(self):
         frozen = tuple(_frozen_faces()["check_segments"]["ids"])
@@ -591,7 +466,7 @@ class CheckRegistryTests(unittest.TestCase):
                          len([spec for spec in reg.CHECK_SPECS
                               if reg.loader_module(spec.loader)
                               == reg.ENGINE_MODULE]))
-        self.assertLess(len(hosted), FROZEN_SEGMENTS)
+        self.assertLess(len(hosted), _frozen_faces()["check_segments"]["count"])
         for check_id in hosted:
             self.assertTrue(check_id.startswith("check-"))
 
@@ -903,8 +778,8 @@ class RegistrationIntegrityTests(unittest.TestCase):
         # Derived from the frozen faces rather than re-spelled: the assertion
         # is "both faces are rendered", not a hard-coded caliber that has to
         # be edited alongside every deliberate contract change.
-        self.assertIn(str(FROZEN_CLI_KEYS), joined)
-        self.assertIn(str(FROZEN_SEGMENTS), joined)
+        self.assertIn(str(_frozen_faces()["cli_dispatch"]["key_count"]), joined)
+        self.assertIn(str(_frozen_faces()["check_segments"]["count"]), joined)
 
     def test_failed_report_discloses_drift_on_both_axes(self):
         """A registered face that drifted is disclosed, never a silent FAIL."""
@@ -1063,10 +938,10 @@ class RegistrationIntegrityTests(unittest.TestCase):
         self.assertTrue(report.ok, "\n".join(report.lines()))
         self.assertEqual(report.observed_axes,
                          (reg.CLI_KEYS_AXIS, reg.SEGMENTS_AXIS))
-        self.assertEqual(len(report.declared_keys), FROZEN_CLI_KEYS)
-        self.assertEqual(len(report.declared_segments), FROZEN_SEGMENTS)
-        self.assertEqual(len(report.observed_keys), FROZEN_CLI_KEYS)
-        self.assertEqual(len(report.observed_segments), FROZEN_SEGMENTS)
+        self.assertEqual(len(report.declared_keys), _frozen_faces()["cli_dispatch"]["key_count"])
+        self.assertEqual(len(report.declared_segments), _frozen_faces()["check_segments"]["count"])
+        self.assertEqual(len(report.observed_keys), _frozen_faces()["cli_dispatch"]["key_count"])
+        self.assertEqual(len(report.observed_segments), _frozen_faces()["check_segments"]["count"])
 
     def test_an_explicit_live_label_on_the_live_branch_is_accepted(self):
         """F-1 negative control: the honest label is not refused."""
@@ -1143,33 +1018,45 @@ class StartupImportTests(unittest.TestCase):
         self.assertTrue(probe["callable"])
         self.assertEqual(probe["module"], "checks.evidence_domain")
 
-    def test_engines_own_startup_face_is_reachable_without_the_registry(self):
-        """The registry is an additive seam: the engine does not import it.
+    def test_parser_defaults_cannot_override_registered_handlers(self):
+        from unittest.mock import Mock, patch
+        import verify_workflow as vw
 
-        FEAT-080 (d): the assertion is now a REAL import-statement match
-        (``^\\s*(?:from|import)\\s+registry\\b``) — the old bare substring
-        ``"import registry"`` false-positived on FEAT-075's
-        ``from exception_registry import registry_error_note`` (the
-        substring spans ``..._registry import registry_...``). The judged
-        semantics never change: the engine must not import the
-        ``registry`` MODULE itself.
-        """
-        source = _engine_source()
-        self.assertIsNone(
-            re.search(r"(?m)^\s*(?:from|import)\s+registry\b", source))
+        parser, commands = vw._build_cli_parser()
+        unrelated = Mock()
+        commands.choices["status"].set_defaults(_cli_handler=unrelated)
+        with patch.object(vw, "_build_cli_parser", return_value=(parser, commands)), \
+             patch.object(reg, "load_handler") as load:
+            vw.main(["status"])
+        load.assert_called_once_with("status", parsed_args=True)
+        load.return_value.assert_called_once()
+        unrelated.assert_not_called()
+
+    def test_unrelated_cli_help_leaves_the_doctor_implementation_unloaded(self):
+        loaded = _probe(
+            "from contextlib import redirect_stdout\n"
+            "from io import StringIO\n"
+            "import verify_workflow as vw\n"
+            "try:\n"
+            "    with redirect_stdout(StringIO()): vw.main(['status', '--help'])\n"
+            "except SystemExit as stop:\n"
+            "    assert stop.code == 0\n"
+            "print(json.dumps('dsh_doctor' in sys.modules))\n")
+        self.assertFalse(loaded)
+
+    def test_cli_resolves_only_the_selected_handler(self):
+        from unittest.mock import patch
+        import verify_workflow as vw
+
+        for argv, key in (([], "verify"), (["status", "--json"], "status")):
+            with self.subTest(key=key), patch.object(reg, "load_handler") as load:
+                self.assertIs(vw.main(argv), load.return_value.return_value)
+                load.assert_called_once_with(key, parsed_args=True)
+                args, = load.return_value.call_args.args
+                self.assertEqual(args.command, argv[0] if argv else None)
 
     def test_the_engine_frozen_face_is_not_grown_by_the_registry(self):
-        """② "启动 import 集合不增": the engine's own R6 face is untouched
-        by the registry seam.
-
-        Adding ``registry.py`` to the tree cannot grow the engine's startup
-        import set, because the engine never imports the registry (module
-        axis) and the live count stays inside the frozen budget.  FEAT-055
-        deliberately moved ``contracts`` INTO the engine face: the three
-        governed writers consume the m0-r1 frozen contract leaf at import
-        time, so the negative control narrows to the registry's own modules
-        (``registry`` / ``quickscan_registry`` stay out).
-        """
+        """Loading the engine alone stays within the measured cold import budget."""
         face = _engine_startup_face()
         modules = set(face["modules"])
         self.assertNotIn("registry", modules)

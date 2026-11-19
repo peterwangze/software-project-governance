@@ -481,6 +481,7 @@ SEGMENTS = (
         "plugin:asset:skills/software-project-governance/core/capability-registry.json",
         "plugin:asset:skills/software-project-governance/infra/TOOLS.md",
         "plugin:asset:skills/software-project-governance/infra/verify_workflow.py",
+        "plugin:asset:skills/software-project-governance/infra/registry.py",
         "plugin:asset:docs/requirements/capability-discovery-orchestration-0.45.0.md",
         "plugin:asset:docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md",
         "plugin:asset:docs/requirements/runtime-readiness-matrix-0.43.0.md",
@@ -586,6 +587,8 @@ SEGMENTS = (
         "host:governance:.governance/plan-tracker.md",
         "host:governance:.governance/evidence-log.md",
         "host:governance:.governance/change-triage/**",
+        "plugin:asset:skills/software-project-governance/infra/verify_workflow.py",
+        "plugin:asset:skills/software-project-governance/infra/registry.py",
         "plugin:asset:skills/software-project-governance/infra/change_triage.py",
     ), _RETAIN),
     SegmentSpec("33", "injection", (
@@ -668,7 +671,8 @@ C3_ADJUDICATION = {
         "basis": (
             "check_capability_context() → discover_capability_context()：全部事实取自插件包本体——"
             "skills/software-project-governance/infra/verify_workflow.py（_capability_cli_registration_fact "
-            "AST 解析 capability-context CLI 注册）、skills/software-project-governance/infra/TOOLS.md、"
+            "及 skills/software-project-governance/infra/registry.py 的 capability-context 派发声明）、"
+            "skills/software-project-governance/infra/TOOLS.md、"
             "skills/software-project-governance/core/governance-packs.json、"
             "skills/software-project-governance/core/capability-registry.json、"
             "docs/requirements/capability-discovery-orchestration-0.45.0.md、"

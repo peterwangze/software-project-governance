@@ -80,7 +80,6 @@ _SKILL_ROOT = _HERE.parent                        # .../software-project-governa
 ENGINE_REL = "infra/verify_workflow.py"
 BASELINE_REL = "core/architecture-baseline.json"
 CONTRACT_SNAPSHOT_REL = "infra/contract_matrix/snapshots.json"
-SKILL_MD_REL = "SKILL.md"
 
 # ── R3 layer matrix (evolution doc §3.2 — enumeration set is authoritative) ──
 
@@ -184,22 +183,8 @@ def _parse_semver(text: Optional[str]) -> Optional[Tuple[int, int, int]]:
 
 def read_skill_version(skill_root: Path) -> Optional[str]:
     """Plugin version from SKILL.md frontmatter (DEC-096 authority)."""
-    path = skill_root / SKILL_MD_REL
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    in_front = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped == "---":
-            if in_front:
-                break
-            in_front = True
-            continue
-        if in_front and stripped.startswith("version:"):
-            return stripped.split(":", 1)[1].strip()
-    return None
+    from resolve_entry import read_active_version
+    return read_active_version(skill_root)
 
 
 def _git_head(skill_root: Path) -> str:

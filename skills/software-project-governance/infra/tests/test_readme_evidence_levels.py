@@ -18,6 +18,7 @@ Run:
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -131,6 +132,20 @@ class RealReadmeBaselineTests(unittest.TestCase):
     关闭标准的基线输入；标注落地后锁定 PASS（后续新增 dsh claim 未标注
     即回归红）。
     """
+
+    def test_default_checks_both_public_readmes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            guide = root / "adapters" / "dsh" / "README.md"
+            guide.parent.mkdir(parents=True)
+            (root / "README.md").write_text("appears in the preset roster", encoding="utf-8")
+            guide.write_text("即加载统一治理入口 〔isolation: 2026-09-05〕", encoding="utf-8")
+            with patch.object(vw, "ROOT", root):
+                result = vw.check_readme_claim_evidence_levels()
+        self.assertEqual(result["verdict"], "WARN")
+        self.assertEqual(result["stats"]["claims_checked"], 2)
+        self.assertEqual(result["stats"]["claims_annotated"], 1)
+        self.assertEqual(result["warnings"][0]["claim_id"], "dsh-preset-roster")
 
     def test_real_repo_readme_claims_all_annotated(self):
         r = vw.check_readme_claim_evidence_levels()

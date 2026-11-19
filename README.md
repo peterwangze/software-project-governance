@@ -29,7 +29,7 @@ Tier 1 loading guide:
 | Codex | Use `.agents/plugins/marketplace.json`, `.codex-plugin/plugin.json`, `AGENTS.md`, and `skills/software-project-governance/SKILL.md` as the Codex plugin/project guidance package. | `python -m json.tool .agents/plugins/marketplace.json`, `python -m json.tool .codex-plugin/plugin.json`, `python adapters/codex/launch.py`, and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent codex --timeout 180` | Codex CLI headless target-cwd read E2E is PASS/DEGRADED as of 2026-06-11. This test did not establish Codex Desktop marketplace-management E2E PASS. |
 | Gemini CLI | Use a thin `GEMINI.md` project context pointer to `skills/software-project-governance/SKILL.md`; custom commands, MCP, and extensions remain separate extension points. | `python adapters/gemini/launch.py`, then `GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180` | Gemini CLI target-cwd read E2E is PASS/DEGRADED as of 2026-06-11 when headless workspace trust is enabled. No Gemini plugin marketplace claim. |
 | opencode | Use `AGENTS.md` or configured opencode instructions to point at `skills/software-project-governance/SKILL.md`. | `python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight` and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent opencode --timeout 90` | opencode target-cwd runtime E2E is PASS/DEGRADED in local evidence; provider/model preflight still guards future regressions. |
-| DeepSeek Harness (dsh) | Run `dsh plugin --profile web add link:/path/to/software-project-governance` and restart the profile. With a usable registry, governance appears in the preset roster through native registration; the inserted row itself never renders a directory. 〔isolation: 2026-10-20, Windows and dsh 0.2.1-rc.2〕 For older directory-model hosts, `python adapters/dsh/launch.py --install` supports an explicitly redirected `DSH_HOME`. | `dsh --profile <name> --dump-config`; `python adapters/dsh/launch.py --install --dry-run`; `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | Native `ask_user_question`, subagent, tool calling and Git hooks. See the [adapter guide](adapters/dsh/README.md) for host-dependent capabilities. |
+| DeepSeek Harness (dsh) | [DSH setup and upgrades](adapters/dsh/README.md#使用) | `python adapters/dsh/launch.py --check` | Governance preset, native user interaction and subagents. |
 | zcode | Add this repo as a plugin marketplace and install: `/plugin marketplace add peterwangze/software-project-governance`, then `/plugin install software-project-governance@spg`. zcode reuses the Claude marketplace protocol (`.claude-plugin/marketplace.json` + `.zcode-plugin/plugin.json`). | `python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters` | Protocol-conformant marketplace install. Not zcode official curation or approval. The 0.56.0 reverse-engineered local-load tool was retired in 0.62.0 (DEC-093). |
 | Pi | pi natively loads `AGENTS.md`/`CLAUDE.md` context files and implements the Agent Skills spec. Wire via three path arrays in `~/.pi/agent/settings.json` (`skills`/`prompts` -> repo `skills/`+`commands/`, optional `extensions` -> `adapters/pi/extension` for the governance bridge tools). | `python adapters/pi/launch.py` and `python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent pi --timeout 90` | Extension-bridged `ask_user_question`/`dispatch_agent` (tui/rpc interactive scope; headless fails fast with `GOV_ASK_USER_HEADLESS`); tool_calling and git_hooks native. Runtime E2E pending — capability honestly recorded as designed/degraded. |
 
@@ -56,63 +56,6 @@ To install from a local checkout:
 /plugin marketplace add /path/to/software-project-governance
 /plugin install software-project-governance@spg
 ```
-
-DeepSeek Harness (dsh) plugin install — `dsh plugin` is a thin pnpm forwarder, so the add spec is a pnpm package spec (same style as the dsh-novel-writing plugin). Prerequisites: **dsh ≥ 0.1.2-rc.1** (the version boundary where the preset activates with the bundle; on ≤0.1.1-rc.2 use the optional launch.py path below), **pnpm**, and for the `github:` form **git + network**; the launch.py path and all verification commands need **Python 3** (`python`; some Linux/macOS distributions use `python3`).
-
-```bash
-# local checkout, live link (recommended for contributors — code edits apply on profile restart)
-dsh plugin --profile web add link:/path/to/software-project-governance
-# local snapshot alternative (content-addressed; upgrading needs remove + add)
-dsh plugin --profile web add file:/path/to/software-project-governance
-# from GitHub (needs git + network)
-dsh plugin --profile web add github:peterwangze/software-project-governance
-
-# upgrade / uninstall
-dsh plugin --profile web update @peterwangze/software-project-governance-plugin
-dsh plugin --profile web remove @peterwangze/software-project-governance-plugin
-```
-
-**dsh 0.2+ (native derivation, FEAT-102)**: when the composed profile declares the host's agent-preset registry, the inserted row renders **no directory**. At boot it locates the host's own current `standard` declaration on the public loader tree, appends exactly two content deltas (the governance persona body and this package's two skill roots), and registers the result through the public `agentPresets.register` service. Host tool additions, renames and disabled flags therefore propagate on their own — upgrading dsh no longer invalidates the preset — and nothing is written under `${DSH_HOME}`; uninstall only releases this package's own registration. **The inserted row never renders a preset directory** (DEC-366 ②): native registration is its only delivery face. Four unavailable states are each reported as one warning and write nothing — **absent** (no registry row in the composed tree: a directory-model host needs an explicit `launch.py --install` with `DSH_HOME` redirected to an isolated directory), **disabled** (the registry row is composed but disabled), **unreadable** (the loader entry tree could not be enumerated), and **ambiguous** (no unique mergeable base declaration: missing, duplicate, or an unsafe shape). 〔runtime: 2026-10-20, isolated `DSH_HOME` (redirected temp profile, real `link:` bundle, dsh 0.2.1-rc.2): roster shows 治理协调器, `resolve` reports no broken row, a session composes `governance`, the governance skill catalog contains `software-project-governance` + the command shims while a `standard` session does not, `${DSH_HOME}/.agent-presets` stays absent; Windows-only, single-host evidence〕 The paragraphs below describe the **explicit** renderer (`launch.py --install`) that remains for operators and tests.
-
-Restart the dsh web profile after installing — the bundle layer applies at profile boot (boot-time, not HMR). The **explicit** renderer (`python adapters/dsh/launch.py --install`, run with `DSH_HOME` redirected to an isolated directory) writes the packaged preset into `${DSH_HOME}/.agent-presets/governance/`, so the `governance` preset (「治理协调器」) appears in the preset roster〔isolation: 2026-09-12 FIX-310 隔离 DSH_HOME 渲染复验，Windows-only〕, and the governance skills + `/governance` command projections load **in that preset's sessions only** — sessions on other presets (e.g. `standard`) carry no governance skills (this scoping is FIX-310's core behavioural goal; its real-machine confirmation is still pending — see the release checklist's acceptance face). Delivery is a pure insert: `cordis.patch.yml` adds ONE row naming this package only, so `dsh --profile web --dump-config` differs from the unpatched composition by that row alone — every dsh / dsh-web-app row keeps its config and `disabled` state (DEC-187 I-1/I-2/I-3 as clarified by DEC-188 ②; no host row is patched, no `!!js` self-location, no `trust: system` root). The explicit renderer writes `agent-presets/governance/agent.cordis.yml.template` into `${DSH_HOME}/.agent-presets/governance/`, i.e. the **user** preset root: the settings page therefore shows a custom preset with delete and open-folder available, and the composition's `customSkillDirs` are absolute paths into the package, so no copy re-anchoring can empty the skill catalog. Removal: `dsh plugin remove` withdraws the bundle row; delete the user-root preset directory to remove the last rendered copy (an explicit re-install recreates it — see the note below).
-
-Optional manual preset-side path (`adapters/dsh/launch.py`) — same rendered result without the bundle row (preset-only install, offline checkout, or scripted installs):
-
-```bash
-python adapters/dsh/launch.py --install --dry-run   # preview: resolved DSH_HOME + planned writes, zero side effects
-python adapters/dsh/launch.py --install             # renders only ${DSH_HOME}/.agent-presets/governance/ (4 files: composition + preset.yml + 2 markers)
-```
-
-For the manual renderer, set `DSH_HOME` to an isolated directory outside the real user root before using `--install`, `--sync` or `--uninstall`. A real user root returns exit 2 with `[REFUSED]`. You can always preview the operation with `--dry-run`.
-
-Safe verification boundary (do not "verify" against your real `~/.dsh`): preview with `--dry-run`, then run install/upgrade checks against a redirected home —
-
-```bash
-DSH_HOME=$(mktemp -d) python adapters/dsh/launch.py --install        # isolated preset install
-DSH_HOME=$(mktemp -d) dsh plugin --profile web add link:/path/to/software-project-governance
-```
-
-Both forms were re-verified with a redirected `DSH_HOME` on Windows using dsh 0.1.2-rc.1 and pnpm 11.22.0. 〔isolation: 2026-09-05, link: and file: installs〕 〔static: github: installation is documented from pnpm package semantics〕
-
-Claim evidence levels (RISK-049 disclosure, FEAT-014): the dsh claims **registered in `ADAPTER_CLAIM_REGISTRY`** (4 claim classes — session projection / preset roster / `/governance` gesture / install-forms boundary) are annotated with their verification level — live-session = verified in a real user session (date cited); isolation = re-verified in an isolated/redirected environment (date cited); static = static/inspection reasoning only, explicitly labeled as not execution-verified. Check 28t (`check-governance`) machine-checks that registry mapping; statements in this dsh section outside the registry are not covered by it.
-
-Symmetric lifecycle management (install / upgrade / downgrade / uninstall — official commands per surface):
-
-```bash
-# bundle layer (dsh plugin, the profile's pnpm registry)
-dsh plugin --profile web add link:/path/to/software-project-governance          # install (+ restart)
-dsh plugin --profile web update @peterwangze/software-project-governance-plugin # upgrade (+ restart; link: → git pull + restart; file: → remove + add)
-dsh plugin --profile web remove @peterwangze/software-project-governance-plugin # uninstall (+ restart)
-# downgrade: remove, then add an older ref — add github:peterwangze/software-project-governance#v<old-tag> (pnpm git-ref semantics); link: → git checkout v<old-tag> + restart
-
-# governance preset (launch.py, the user preset root)
-python adapters/dsh/launch.py --install          # install (add --dry-run to preview) — write_side_refusal: the real user root is refused with exit 2; only a redirected DSH_HOME (isolated env) is written
-# upgrade: git pull, then restart dsh for native registration; the inserted row never re-renders a directory — a directory-model install is refreshed explicitly with `launch.py --install` under a redirected DSH_HOME (`--sync` is isolated-env only; the real user root is refused with exit 2)
-python adapters/dsh/launch.py --uninstall        # uninstall — deletes exactly .agent-presets/governance/ (--dry-run to preview); same write-side guard: the real user root is refused with exit 2 (redirected DSH_HOME only)
-# downgrade: git checkout v<old-tag> + --install under a redirected DSH_HOME (the real user root is refused with exit 2); the row never renders and an explicit re-install just overwrites in place
-```
-
-Key boundary: `dsh plugin remove` manages the profile's pnpm bundle layer — on dsh ≥ 0.1.2-rc.1 that removes the whole package including the bundle-provided preset (the symmetric uninstall for a `dsh plugin add` install). It still never touches `${DSH_HOME}/.agent-presets/`: a preset installed there via `launch.py --install` is uninstalled by `launch.py --uninstall` (or manual directory deletion), and `dsh plugin remove` on a preset that was never a pnpm dependency reports `ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS`.
 
 Codex personal marketplace package:
 
@@ -368,92 +311,15 @@ python skills/software-project-governance/infra/verify_workflow.py agent-runtime
 
 ### DeepSeek Harness (dsh)
 
-dsh 的标准扩展机制是 `dsh plugin`（pnpm 转发——add 的参数就是 pnpm 包规格），另有 agent preset 机制（roster 按优先级扫描已配置根 + `${DSH_HOME}/.agent-presets/` 用户根，先命中的根优先）。本仓库提供 **dsh 插件包**（`package.json` + `cordis.patch.yml` bundle 层，包内预设负载 `agent-presets/governance/` = 组合模板 + `preset.yml`）+ **可选的 launch.py 预设渲染** + **薄项目指针**，不维护第二套 workflow 规则，也不复制共享核心（`skills/`、`commands/`、`agents/` 始终是包内唯一事实源，渲染为绝对路径引用）。
+预设安装、升级、项目接入和能力验证见 [DSH 适配器指南](adapters/dsh/README.md)。
 
-#### 方式一（推荐）：`dsh plugin` 标准命令——一条命令完整安装（bundle + 预设）
-
-安装需要支持 `dsh plugin` 的宿主和 pnpm。`github:` 安装另需 Git 和网络。手工预设安装和验证命令使用 Python 3。宿主是否提供预设注册服务决定加载方式。
-
-```bash
-# 本地检出目录，符号链接（推荐——改码后重启 profile 即生效）
-dsh plugin --profile web add link:/path/to/software-project-governance
-# 本地快照备选（内容寻址，升级需 remove + add）
-dsh plugin --profile web add file:/path/to/software-project-governance
-# 从 GitHub 安装（需要 git + 网络）
-dsh plugin --profile web add github:peterwangze/software-project-governance
-
-# 升级 / 卸载
-dsh plugin --profile web update @peterwangze/software-project-governance-plugin
-dsh plugin --profile web remove @peterwangze/software-project-governance-plugin
-```
-
-安装后**重启 DSH**（`dsh web`）——bundle 层在 profile 启动时生效（boot-time，非 HMR），随后：
-
-1. 若当前 profile 提供预设注册服务，重启后可在选择器中选择「治理协调器」。宿主从自己的 `standard` 预设派生 `governance`，插件只追加治理 persona 和两个 skill 目录。〔isolation: 2026-10-20，Windows、dsh 0.2.1-rc.2、临时 DSH_HOME〕
-2. 在该宿主的隔离测试中，`governance` 会话加载治理 skill 和命令投影，`standard` 会话维持自身的 skill 清单。其他宿主可按适配器步骤验证。〔isolation: 2026-10-20，Windows、dsh 0.2.1-rc.2〕 [DSH 加载与验证](adapters/dsh/README.md)
-
-框架边界（DEC-187 I-1/I-2/I-3，DEC-188 ② 澄清判据）：`cordis.patch.yml` **只有一条 `- insert:`**，只命名本包自己的行，不改任何宿主行（无 UPDATE、无 `!!js` 自定位、无 `trust: system` 根、无宿主平面 provider/服务/工具注册）。机检判据 = 安装前后**既有**宿主行的存在性/config/`disabled` 与任何宿主平面注册表内容零变化、组合 entry 列表恰多一行且该行只命名本包——**不是**「与未安装时逐字节等价」（那一行正是官方 `dsh plugin add/remove/update` 的交付载体）。
-
-旧宿主缺少预设注册服务时，插件记录告警。需要目录形式的预设可使用下方显式安装命令，生成的副本由 `launch.py --install` 和 `--uninstall` 管理。
-
-#### 方式二（可选）：`launch.py` 预设直装（用户根副本 / 不依赖 bundle / 旧版 dsh 回退）
-
-```bash
-# 1. 预览（解析出的 DSH_HOME + 计划写入清单，零副作用——先跑这个）
-python adapters/dsh/launch.py --install --dry-run
-
-# 2. 渲染 governance 预设（persona = Coordinator bootstrap；注册仓库 skills/ + adapters/dsh/skill-shims/ 为绝对路径 skill 根；
-#    仅写 4 个文件到 ${DSH_HOME}/.agent-presets/governance/（agent.cordis.yml + preset.yml + 两个标记），不删除、不触碰其他任何配置）
-python adapters/dsh/launch.py --install
-
-# 3. 项目级激活（写入薄 AGENTS.md，dsh 自动注入工作区会话）
-python adapters/dsh/launch.py --bootstrap-project <项目目录>
-
-# 4. 验证
-python adapters/dsh/launch.py
-python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters
-```
-
-> 手工预设的 `--install`、`--sync` 和 `--uninstall` 要求 `DSH_HOME` 指向真实用户根之外的隔离目录。指向真实用户根会返回 `exit 2` 和 `[REFUSED]`。`--dry-run` 可直接预览。
-
-安装后：启动 dsh 会话选择「治理协调器」预设，或在被治理项目目录内开任意预设会话（由 `AGENTS.md` 激活）。用户输入 `/governance` 即加载统一治理入口（dsh 的 `/name` 手势加载同名 skill）〔live-session: 2026-07-08 真实 dsh 会话 0.1.0-rc.6 /name skill 加载验证〕〔isolation: 2026-09-05 dsh 0.1.2-rc.1 链路复验〕。
-
-#### 管理动作对称表（安装 / 升级 / 降级 / 卸载）
-
-dsh 侧有两个安装面，各自有**官方对称命令**：
-
-| 动作 | bundle 层（`dsh plugin` 官方命令） | governance 预设（`launch.py`） |
-|------|-----------------------------------|-------------------------------|
-| 安装 | `dsh plugin --profile web add link:<仓库>`（或 `file:<仓库>` / `github:peterwangze/software-project-governance`）+ 重启 | `python adapters/dsh/launch.py --install`（先加 `--dry-run` 预览；写侧守卫同 `--sync`：对真实用户根必拒 `exit 2`，仅限显式重定向 `DSH_HOME` 的隔离环境） |
-| 升级 | `dsh plugin --profile web update @peterwangze/software-project-governance-plugin` + 重启；`link:` 形式直接 `git pull` + 重启；`file:` 形式为 remove + add | `git pull` 后：native 宿主重启即生效（row 只做登记/warn，**不自动渲染**）；目录模型安装用**显式** `launch.py --install`（隔离 `DSH_HOME`，`--sync` 同守卫）覆盖重渲染 |
-| 降级 | `dsh plugin remove` 后 `add github:peterwangze/software-project-governance#v<旧tag>`（pnpm git ref 语义）；`link:` 直接 `git checkout v<旧tag>` + 重启 | `git checkout v<旧tag>` 后 `launch.py --install`（覆盖式重装；同写侧守卫：真实用户根必拒 `exit 2`——在显式重定向 `DSH_HOME` 的隔离环境执行）。row 不再自动渲染，降级重装也没有「重启即重渲染」路径 |
-| 卸载 | `dsh plugin --profile web remove @peterwangze/software-project-governance-plugin` + 重启 | `python adapters/dsh/launch.py --uninstall`（可先 `--dry-run` 预览；写侧守卫同 `--sync`：对真实用户根必拒 `exit 2`，仅限显式重定向 `DSH_HOME` 的隔离环境） |
-
-> **关键边界**：`dsh plugin remove` 管理 profile 的 pnpm 包/bundle 层——在 dsh ≥ 0.1.2-rc.1 上它会连包内预设一起移除（与 `dsh plugin add` 对称）。但它**永远不触碰 `${DSH_HOME}/.agent-presets/` 用户预设根**：经 `launch.py --install` 装入用户根的预设，其卸载路径是 `launch.py --uninstall`；对一个从来不是 pnpm 依赖的预设执行 `dsh plugin remove @peterwangze/...` 会报 `ERR_PNPM_CANNOT_REMOVE_MISSING_DEPS`。
-
-其他 agent 侧的管理动作对称性（有官方命令的用官方命令；无包管理器的平台按投影指针模型对称）：
+### 其他平台的安装与维护
 
 | Agent | 安装 | 升级 | 降级 | 卸载 |
 |-------|------|------|------|------|
 | Claude Code | `/plugin marketplace add` + `/plugin install software-project-governance@spg` | `/plugin marketplace update` 后更新插件 | 从所需 tag 的本地检出目录添加市场，按插件名重装 | 宿主 `/plugin` 命令面卸载（以 `/plugin` 帮助为准） |
 | zcode | 同 Claude 协议（`/plugin marketplace add` + `/plugin install`） | 同上 | 同上 | 同上 |
 | Codex / Gemini CLI / opencode | 无官方包管理器——克隆仓库 + 平台投影指针（`AGENTS.md` / `GEMINI.md` 等） | `git pull`（指针不变） | `git checkout v<tag>` | 删除投影指针（可选删除克隆目录） |
-
-#### 安全验证边界（不要对真实 `~/.dsh` 做"安装验证"）
-
-先用 `--dry-run` 预览。需要实际验证安装或升级时，显式设置临时 `DSH_HOME`。下列 `link:`/`file:` 两种 plugin add 与 launch.py 预设安装已在 Windows 的 dsh 0.1.2-rc.1 和 pnpm 11.22.0 上验证。〔isolation: 2026-09-05，临时 DSH_HOME〕〔static: github: 依据 pnpm 的包规格〕
-
-宣示验证等级（RISK-049 披露，FEAT-014）：**登记在 `ADAPTER_CLAIM_REGISTRY` 的 dsh 宣示**（当前 4 类：会话投影 / 预设清单 / `/governance` 手势 / 安装形态边界）逐条标注验证等级——live-session = 真实用户会话活体验证（标注日期）；isolation = 隔离环境复验（重定向 home/临时目录，零真实 home 写入，标注日期）；static = 静态检查/推理验证——无执行证据，显式标注未执行验证。Check 28t（`check-governance`）对该注册表映射做机器核验；本节中注册表之外的其他表述不在该核验范围内。
-
-```bash
-# PowerShell（DSH_HOME 必须与后续命令同进程内联设置，防止宿主环境变量泄漏回真实 home）
-$env:DSH_HOME = Join-Path $env:TEMP "dsh-verify-<rand>"; New-Item -ItemType Directory $env:DSH_HOME | Out-Null
-python adapters/dsh/launch.py --install
-dsh plugin --profile web add link:/path/to/software-project-governance
-Remove-Item Env:\DSH_HOME   # 用完清理临时目录
-```
-
-当前边界：本适配器于 2026-07-08 在真实 dsh 会话（`dsh --version` = `0.1.0-rc.6`）中完成编写与验证——原生 skill/subagent/ask_user_question/tool_calling/git_hooks 全部可用，生成的预设通过 `agentPresets.standingKeyFor` 挂载校验；2026-09-05 在 dsh `0.1.2-rc.1` + pnpm 11.22.0 隔离环境复验插件安装与预设生成链路。browser 自动化与 MCP 仍是 host-dependent（degraded）。这是 runtime-verified 适配，不是 dsh 官方收录、marketplace approval 或 universal/full runtime support。
 
 ### zcode
 

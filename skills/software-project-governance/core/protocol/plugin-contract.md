@@ -263,7 +263,7 @@ README 和对外文档必须显式说明当前各项能力处于哪一级，禁�
 - ❌ 不得用 `!!js` 解析 `process.argv` 或扫描宿主私有目录（如 `$DSH_HOME/profiles`）做自定位；
 - ❌ 不得声明 `system`-trust 的预设根。
 
-**已交付形态（0.80.0 / FIX-310 / commit `5a259e2`，作为合规参照）**：`cordis.patch.yml` = **恰一行自有 `- insert:`**；该行模块 `lib/index.js` 的唯一动作是 `ensurePreset()`（把包内模板渲染为绝对路径写入 `$DSH_HOME/.agent-presets/<id>/`，warn-only、无运行时依赖、staging+rename 幂等）；技能经预设 `customSkillDirs` 渲染包内绝对路径（**单源，不复制 `skills/`**）。反面参照 = 0.80.0 之前的形态（两条 `UPDATE` 打 dsh 内部行 + 三处 `!!js` 自定位），即 RISK-050 的根因。
+当前 DSH 适配器通过一条自有 `insert` 行接入；共享技能来自包内 `skills/`。宿主能力探测与预设交付见 [DSH 适配器指南](../../../../adapters/dsh/README.md)。
 
 ## 当前建议目录布局
 

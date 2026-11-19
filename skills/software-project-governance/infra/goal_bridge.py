@@ -256,19 +256,12 @@ def _default_rules_version() -> str:
     """The plugin's own skill version (checkpoint 规则版本 face).
 
     Read from the SKILL.md frontmatter next to this module (the live
-    key is ``version``; ``active_version`` is tolerated for forward
-    compatibility); unreadable → ``"unknown"`` (disclosed, never
+    key is ``metadata.version``; historical ``version`` and checkpoint-only
+    ``active_version`` are supported); unreadable → ``"unknown"`` (disclosed, never
     fabricated)."""
     skill = Path(__file__).resolve().parents[1] / "SKILL.md"
-    try:
-        text = skill.read_text(encoding="utf-8")
-    except OSError:
-        return "unknown"
-    for key in ("version", "active_version"):
-        match = re.search(r"(?m)^{0}:\s*(\S+)".format(key), text)
-        if match:
-            return match.group(1)
-    return "unknown"
+    from resolve_entry import read_skill_version
+    return read_skill_version(skill, allow_active_version=True) or "unknown"
 
 
 def _ledger_summary(governance_dir):

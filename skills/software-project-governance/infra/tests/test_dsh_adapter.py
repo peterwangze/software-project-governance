@@ -13,8 +13,7 @@ Covers:
     substitution — no hidden drift.
   - Render parity: the Python renderer (``launch.render_composition``) and the
     JavaScript renderer (``lib/index.js`` ``renderComposition``) produce the
-    SAME text for the same package root, so ``dsh plugin add`` and
-    ``--install`` cannot write different presets.
+    SAME text for the same package root when called explicitly.
   - Structural row contract: persona + skill-filesystem customSkillDirs
     (repo skills/ + adapters/dsh/skill-shims/) + tool-skill + delegation rows
     are present so the rendered preset remains a full coding agent.
@@ -1908,11 +1907,7 @@ class DshAdapterTests(unittest.TestCase):
             )
 
     def test_js_and_python_renderers_agree(self):
-        # Two renderers write the same user-root composition: `lib/index.js`
-        # `ensurePreset()` on bundle boot and `launch.py --install` on the
-        # manual path. They share a token contract but no code, so parity is a
-        # machine fact, not an intention: a divergence would install a
-        # different preset depending on which path ran.
+        # Both explicit directory renderers must honor the same token contract.
         node = shutil.which("node")
         if not node:
             self.skipTest("node unavailable (JS renderer cannot be exercised)")
@@ -1946,8 +1941,8 @@ class DshAdapterTests(unittest.TestCase):
         # is invisible to it (inventory D-67: the parity test "不注入 `\r` ⇒
         # 抓不到 D-66"). This fixture injects exactly one isolated CR and
         # requires the two delivery paths — `launch.render_composition()`
-        # (the `--install` path) and `renderComposition()` (the bundle-boot
-        # path), both against the same package root — to produce the
+        # (the `--install` path) and `renderComposition()` (the JS directory
+        # renderer), both against the same package root — to produce the
         # identical byte string, with the CR SURVIVING on both sides (the
         # direction FIX-316 pinned when it closed D-66). Either regression
         # direction is caught: a renderer that folds the lone CR alone breaks
@@ -2446,6 +2441,8 @@ class BootstrapSpliceFIX439Tests(unittest.TestCase):
                           self.rendered)
         assert match is not None, "bootstrap template carries no version"
         old_section = self.rendered.replace(match.group(1), "0.88.0")
+        # Historical entries put a now-retired auto-render instruction under this H2.
+        old_section = old_section.rstrip() + "\n\n升级后 ensurePreset() 自动渲染用户预设。\n"
         (project / "AGENTS.md").write_text(
             old_section + "\n---\n\n# 项目工程原则与编程要求（用户固化）\n\n"
             "> 宿主引用块\n\n## 基本原则\n\n1. 原则一\n" + tail_extra,
@@ -2493,6 +2490,7 @@ class BootstrapSpliceFIX439Tests(unittest.TestCase):
             project = self._host_project(td)
             self.assertEqual(self.launch.write_bootstrap(project, force=False), 0)
             updated = (project / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertNotIn("ensurePreset()", updated)
             # ① the rendered template is the file prefix
             self.assertTrue(updated.startswith(self.rendered))
             # ② every template H2 appears exactly once (no stale duplicate,

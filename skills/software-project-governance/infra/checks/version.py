@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 from typing import Dict, List, Optional
 
+from resolve_entry import read_release_version
+
 
 VERSION_PATHS = {
     "SKILL.md (source of truth)": ("skills/software-project-governance/SKILL.md", "frontmatter"),
@@ -18,8 +20,7 @@ VERSION_PATHS = {
 
 
 def extract_skill_version(path: Path) -> str:
-    match = re.search(r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$", path.read_text(encoding="utf-8"), re.MULTILINE)
-    return match.group(1) if match else ""
+    return read_release_version(path) or ""
 
 
 def _pointer(payload: object, pointer: str) -> object:

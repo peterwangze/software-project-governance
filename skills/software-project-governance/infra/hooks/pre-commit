@@ -179,8 +179,20 @@ is_claude_bootstrap_self_upgrade() {
         skill_md="$SPG_RESOLVED_HOME/SKILL.md"
     fi
 
-    local source_ver
-    source_ver=$(grep -E '^version:' "$skill_md" 2>/dev/null | head -1 | sed 's/version:[[:space:]]*//')
+    # An installed hook lives in .git/hooks; a source hook can use its sibling infra.
+    local reader_dir="$(dirname "$SELF_HOOK")/.." source_ver python_cmd=python
+    if [ ! -f "$reader_dir/resolve_entry.py" ]; then
+        reader_dir="$SPG_RESOLVED_HOME/infra"
+    fi
+    [ -f "$reader_dir/resolve_entry.py" ] || return 1
+    command -v "$python_cmd" >/dev/null || python_cmd=python3
+    source_ver=$("$python_cmd" -I -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from resolve_entry import read_active_version
+print(read_active_version(Path(sys.argv[2]).parent) or "")
+' "$reader_dir" "$skill_md") || return 1
     [ -z "$source_ver" ] && return 1
 
     if ! git show ":CLAUDE.md" 2>/dev/null | grep -q "## Governance Bootstrap"; then

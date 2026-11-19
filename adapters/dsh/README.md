@@ -1,51 +1,53 @@
 # DeepSeek Harness Adapter
 
-本目录定义 `software-project-governance` workflow 在 DeepSeek Harness（dsh）上的加载投影、运行时验证状态与边界约束。
-
-DeepSeek Harness is a Tier 1 loading target in 0.73.0. The loading model is a **generated agent preset** plus a thin `AGENTS.md` project pointer — the workflow rules themselves stay in the shared skill entry (`skills/software-project-governance/SKILL.md`) and are never duplicated per platform.
-
-## 加载模型
-
-dsh 的扩展单位是 **agent preset**。本适配器有两条交付路径，按**宿主能力**选择，绝不按版本号比较（FEAT-102）：
-
-1. **原生派生（native，唯一默认；宿主声明 `@deepseek-ai/dsh-agent-preset-registry` 时）**：`lib/index.js` 在自己激活时读取公开的 loader 组合树，定位宿主当前已组合的 `standard` 预设声明，只做两个内容差量——把治理 persona 正文追加到基础 persona 的 prefix、把本包两个 skill 根追加到 `skill-filesystem.customSkillDirs`——其余每一行（工具、group、isolate、`!!js`、顺序、禁用位）原样继承，再通过公开的 `agentPresets.register` 登记为 `governance`。**升级解耦**：宿主新增/改名/禁用工具时派生结果自动跟随，本包不持有工具行副本、不写 `$DSH_HOME`；卸载只撤回自己的登记。
-2. **宿主行的四种不可用态（DEC-366 ②）——一律只 warn、绝不写目录、不自动渲染**：① **absent**（组合树里没有 registry row；目录模型旧宿主需要**显式** `launch.py --install`，且 `DSH_HOME` 必须重定向到隔离目录）；② **disabled**（声明了该 row 但被禁用）；③ **unreadable**（loader 组合树无法枚举）；④ **ambiguous**（没有唯一可合并的 base 声明：缺失 / 重复 / 形态不可安全合并）。四种态各产生一条 warn 和结构化 code，row 在任何情况下都不调用 `ensurePreset()`。
-3. **静态目录投影（legacy；仅显式安装面）**：`launch.py --install` 渲染 `agent-presets/governance/agent.cordis.yml.template` 到 `${DSH_HOME}/.agent-presets/governance/`。这份组合是**一次性快照**，不可能跨宿主代际保持正确——这正是原生路径移除的耦合；它只服务于仍是目录模型的旧宿主，且必须由操作者显式触发。
-
-共享约定：`agent-presets/governance/` 的负载是组合模板、`preset.yml` 元数据与 `persona.md.template`（治理 persona 正文的单一事实源；原生路径直接读它，legacy 组合里的同文段由 `test_dsh_native_bridge.py` 保持同步）。skill 内容始终只有一份（仓库 `skills/` + `adapters/dsh/skill-shims/`），不复制进预设，也没有第二份工具清单需要维护。
-
-**项目投影（project projection）**：`launch.py --bootstrap-project <dir>` 写入项目根 `AGENTS.md`（thin pointer）。dsh 会自动把工作区的 `AGENTS.md` 注入会话，因此治理在任意预设下都能激活；文件只做指针与 SELF-CHECK，不重复 workflow 规则。
-
-命令入口映射：dsh 的 `/name` 用户手势直接加载同名 skill。`commands/*.md` 是跨平台共享资产（其内容被其它平台的斜杠命令与测试直接消费），因此 DSH 不修改它们，而是用 `adapters/dsh/skill-shims/` 下的同名薄投影把它们暴露为 skill——`/governance`、`/governance-status` 等九条命令在 dsh 中成为一等 skill 入口。
-
-Git hooks 发现（仅 legacy 目录形态）：旧路径会额外写入预设目录内的 `skill-root.txt`（包根路径标记），`infra/hooks/` 的 `find_spg_home` 据此发现包检出。native 路径不写该文件；hooks 仍可用既有的 `SOFTWARE_PROJECT_GOVERNANCE_HOME` / 仓库本地检出定位。
+DSH 是 Tier 1 加载平台。治理预设加载[共享治理技能](../../skills/software-project-governance/SKILL.md)与角色。安装、升级和项目接入由本适配器维护。
 
 ## 使用
 
+在 DSH 和 pnpm 可用的环境中，选一种包来源加入实际使用的 profile，随后重启该 profile。以下以 `web` 为例。GitHub 来源需要 Git 和网络，运行 Python 启动器需要 Python 3。
+
 ```powershell
-python adapters/dsh/launch.py                 # 查看 adapter manifest
-python adapters/dsh/launch.py --install       # 手工/离线路径：渲染 ${DSH_HOME}/.agent-presets/governance/（4 个文件）——写侧守卫：真实用户根必拒 exit 2（write_side_refusal），仅限显式重定向 DSH_HOME 的隔离环境
-python adapters/dsh/launch.py --install --dry-run   # 只打印将要写入的路径与 token 渲染映射，不落盘
-python adapters/dsh/launch.py --smoke         # 隔离 DSH_HOME 下的预设加载冒烟闸门（0 PASS / 1 FAIL / 2 REFUSED）
-python adapters/dsh/launch.py --bootstrap-project <项目目录>   # 写入项目级 AGENTS.md
-git -C <仓库> pull    # 升级后：native 宿主重启即生效；用户根目录模型安装需**显式** launch.py --install（隔离 DSH_HOME；宿主行不自动渲染）
+dsh plugin --profile web add "link:<仓库绝对路径>"     # 使用本地检出
+dsh plugin --profile web add "file:<仓库绝对路径>"     # 或使用本地快照
+dsh plugin --profile web add github:peterwangze/software-project-governance
 ```
 
-常用路径不需要 `--install`：`dsh plugin --profile web add "link:<本仓库绝对路径>"` + **重启**。在声明了 agent-preset registry 的宿主（0.2+）上，包内宿主行按能力检测走**原生派生**——不写用户根、不依赖包版本号、宿主工具变化自动跟随；未声明 registry row 的旧宿主（连同 disabled/unreadable/ambiguous 四种不可用态）一律只 warn、**不渲染用户根目录**（DEC-366 ②），目录模型需要显式 `launch.py --install`。
+`link:` / `file:` 两种 plugin add 与 launch.py 预设安装已在 Windows 验证。〔isolation: 2026-09-05，临时 DSH_HOME，dsh 0.1.2-rc.1，pnpm 11.22.0〕〔static: github: 依据 pnpm 的包规格〕
 
-然后：启动 dsh 会话并选择「治理协调器」预设（或在被治理项目目录里直接开任意预设会话，由 `AGENTS.md` 激活）。原生宿主上该预设由宿主 registry 在启动时登记，选择器显示 `preset.yml` 的名称，不再依赖 `${DSH_HOME}/.agent-presets/` 目录是否存在。
+### 加载模型与会话入口
+
+包的 `cordis.patch.yml` 插入一条自有行。启动时，该行读取宿主公开的 loader 组合树，找到可用的 agent-preset registry 和唯一可合并的 `standard` 声明。它向基础 persona 追加治理正文，向 `customSkillDirs` 追加包内 `skills/` 与 `adapters/dsh/skill-shims/`，其余宿主工具、顺序和禁用状态随当前基础预设继承。它经 `agentPresets.register` 登记 `governance`，卸载时释放登记，整个原生过程无需写预设目录。
+
+宿主行遇到以下四种状态只告警并返回结构化原因，绝不写目录。**absent** 表示组合树中没有 registry 行，**disabled** 表示该行被禁用，**unreadable** 表示组合树无法枚举，**ambiguous** 表示基础声明缺失、重复或结构无法安全合并。按实际宿主能力选择入口；只有确需目录预设的旧宿主采用下文的显式安装。
+
+- 原生登记完成后，「治理协调器」直接出现在预设选择器中。〔isolation: 2026-10-20，Windows，dsh 0.2.1-rc.2，隔离 profile〕
+- 治理技能在治理预设的每个会话中可用。隔离验证同时检查了普通 `standard` 会话的技能目录。〔isolation: 2026-10-20，Windows，治理技能与命令投影只在 governance 会话内出现〕
+- 选用治理预设后，用户输入 `/governance` 即加载统一治理入口。同名 skill 投影指向共享的 `commands/*.md`。〔live-session: 2026-07-08，dsh 0.1.0-rc.6 的 /name 手势〕
+
+`python adapters/dsh/launch.py --bootstrap-project <项目目录>` 将治理指针写入项目的 `AGENTS.md`。DSH 会自动注入该文件；技能由所选预设提供。原生 `skill` 返回的 `resourceBase` 指向 `skills/software-project-governance/`。`ask_user_question` 负责用户交互，读写使用 `read`、`write`、`edit`、`grep`、`glob` 和 `pwsh`。派发时把角色定义、任务和调度模板交给 `subagent`；它没有 `isolation: "worktree"` 参数，会修改同一文件的任务需串行执行或使用独立工作树。
+
+项目治理 hooks 缺失时提示一次；按需从 `skills/software-project-governance/infra/hooks/` 安装。hooks 可从仓库检出或 `SOFTWARE_PROJECT_GOVERNANCE_HOME` 定位包根，旧版显式安装还提供 `skill-root.txt`。
 
 ### dsh 升级 / 重装后恢复接入
 
-native 路径下预设是**运行时派生**：升级 dsh 后只需确保 bundle 注册仍在（下面的命令）并重启，无需重新渲染任何预设目录。
+| 包来源 | 更新或回退方式 |
+|---|---|
+| 本地 `link:` | 在检出目录执行 `git pull`，或切换至所需版本。 |
+| 本地 `file:` | 移除快照，再从所需版本的本地目录添加。 |
+| GitHub | `dsh plugin --profile web update @peterwangze/software-project-governance-plugin`；回退时移除再添加 `github:peterwangze/software-project-governance#<tag>`。 |
 
-dsh 升级或 profile 清单重置/重装后，插件的 `dsh.profile.bundles` 注册可能丢失（profile 的 package.json 恢复模板态），bundle 层（`cordis.patch.yml`）不再应用——表现为非治理预设会话中 `/governance` 手势失效；bundle-only 安装时治理预设亦从预设选择器消失（经 `launch.py --install` 写入的用户根 `governance` 预设不受影响，其会话仍保有目录）。恢复方法（bundle 路径）：
+移除 bundle 使用 `dsh plugin --profile web remove @peterwangze/software-project-governance-plugin`。以上更改在 profile 重启后生效。若重装 DSH 或重置 profile 后预设消失，检查该 profile 的 `package.json` 中 `dsh.profile.bundles` 是否含本包，缺失则重新添加并重启。
+
+### 旧目录模型的显式安装
+
+先运行 `python adapters/dsh/launch.py --install --dry-run` 查看解析出的目录与写入计划。实际安装请在独立 PowerShell 会话中将 `DSH_HOME` 明确指向隔离目录。例如：
 
 ```powershell
-dsh plugin --profile web add "link:<本仓库绝对路径>"
+$env:DSH_HOME = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
+python adapters/dsh/launch.py --install
 ```
 
-然后重启 dsh——bundle 层是 boot-time 应用，非 HMR，不重启不生效。注意用户根预设（`${DSH_HOME}/.agent-presets/governance`）**不再由宿主行渲染**：bundle 宿主行只做 native 登记或 warn（DEC-366 ②），目录模型下刷新/重装一律走**显式** `launch.py --install`（`link:` 安装下 `git pull` 已更新 Junction 目标，显式重装后重启即生效）；`launch.py --sync` 不适用真实用户根（write_side_refusal 设计性拒绝，exit 2），仅限显式重定向 `DSH_HOME` 的隔离环境（冒烟/测试/离线渲染），且不恢复 bundle 注册。验证：重启后 profile 的 package.json 中 `dsh.profile.bundles` 应含 `@peterwangze/software-project-governance-plugin`；预设选择器应出现「治理协调器」（用户根 ⇒ 自定义预设，可删除、可打开目录）。
+启动器把包内组合模板渲染到该隔离根的 `.agent-presets/governance/`。更新或回退时选好包版本，再执行 `--install` 或 `--sync`。移除时用同一个隔离根执行 `--uninstall`。这些写操作指向真实用户根时退出码为 2；移除 bundle 只撤回 profile 登记，显式渲染的目录由启动器管理。`--smoke` 可在隔离根验证加载，`--check` 只打印适配器清单。
 
 ## 验证
 

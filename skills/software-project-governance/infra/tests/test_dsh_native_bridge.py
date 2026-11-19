@@ -131,24 +131,27 @@ const baseConfig = {
     { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
   ],
 }
-const rows = (native) => {
+const mode = process.argv[2]
+const loader = { entries: () => {
   const list = [
     { id: 'include:preset-standard', options: { name: '@deepseek-ai/dsh-agent-preset', config: baseConfig }, disabled: false },
   ]
-  if (native) list.unshift({ id: 'include:agent-preset-registry', options: { name: '@deepseek-ai/dsh-agent-preset-registry' }, disabled: false })
+  if (mode !== 'legacy') list.unshift({
+    id: 'include:agent-preset-registry',
+    options: { name: '@deepseek-ai/dsh-agent-preset-registry' },
+    disabled: mode === 'disabled',
+  })
   return list
-}
-const loaderFor = (native) => ({ entries: () => rows(native) })
+} }
 const registered = []
 const warnings = []
-let native = process.argv[2] === 'native'
 const ctx = {
-  get: (name) => (name === 'loader' ? loaderFor(native) : undefined),
+  get: (name) => (name === 'loader' ? loader : undefined),
   logger: { info: () => {}, warn: (m) => warnings.push(String(m)) },
   effect: () => {},
   inject: (deps, callback) => callback({
     agentPresets: { register: (definition) => { registered.push(definition); return Promise.resolve(async () => {}) } },
-    get: (name) => (name === 'loader' ? loaderFor(native) : undefined),
+    get: (name) => (name === 'loader' ? loader : undefined),
     effect: () => {},
   }),
 }
@@ -464,23 +467,14 @@ class NativeBridgeTests(unittest.TestCase):
             self.assertEqual(payload["noLoaderCode"], "HOST_NO_LOADER_TREE")
 
     def test_apply_never_renders_a_legacy_host(self):
-        """DEC-366 ②: a readable tree without the registry row renders nothing.
-
-        The "absent" state is a warning, not a render: the old expectation that
-        this row delivers a user-root preset for an old host is retired (the
-        explicit `launch.py --install` is the only renderer).
-        """
-        with tempfile.TemporaryDirectory() as td:
-            payload = self._run(_APPLY_PROBE, "legacy", env={"DSH_HOME": td})
-            self.assertEqual(payload["registered"], 0)
-            self.assertEqual(len(payload["warnings"]), 1,
-                             "the absent-registry state reports exactly one warning")
-            self.assertTrue(
-                any("HOST_WITHOUT_REGISTRY" in warning
-                    for warning in payload["warnings"]), payload["warnings"])
-            self.assertFalse(
-                (Path(td) / ".agent-presets").exists(),
-                "the row must never render a legacy preset directory")
+        """Absent and disabled registry rows each warn once and write nothing."""
+        for mode, code in (("legacy", "HOST_WITHOUT_REGISTRY"), ("disabled", "REGISTRY_ROW_DISABLED")):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as td:
+                payload = self._run(_APPLY_PROBE, mode, env={"DSH_HOME": td})
+                self.assertEqual(payload["registered"], 0)
+                self.assertEqual(len(payload["warnings"]), 1)
+                self.assertIn(code, payload["warnings"][0])
+                self.assertEqual(list(Path(td).iterdir()), [])
 
     def test_declaration_based_refusals_never_write(self):
         """D-R6-3: missing/duplicate/unmergeable base → warn, no write."""
@@ -568,15 +562,7 @@ class PersonaAndContractTests(unittest.TestCase):
     )
 
     def test_contract_input_describes_the_behaviour_the_row_implements(self):
-        """DEC-366 ② / D-R6-7 / R1-F1: docs must describe the row that ships.
-
-        Three facts are pinned across the contract, both READMEs, the adapter
-        manifest and the launcher docstring: the four unavailable states are
-        named; every one of them writes nothing; and the row never renders a
-        preset directory. Positive wording is required AND the retired wording
-        is forbidden, so this test cannot go green while a doc says the
-        opposite of the code.
-        """
+        """The adapter owns setup policy and shared entry points link to it."""
         contract = json.loads(_CONTRACT.read_text(encoding="utf-8"))
         policy = contract["own"]["native"]["legacy_policy"]
         self.assertNotIn("legacyAutoRender", policy)
@@ -586,10 +572,6 @@ class PersonaAndContractTests(unittest.TestCase):
         self.assertIn("never renders a directory", policy)
         self.assertNotIn("automatic legacy user-root render", policy)
         root_readme = (_REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertNotIn("does not fall back to writing a preset directory", root_readme)
-        for state in ("absent", "disabled", "unreadable", "ambiguous"):
-            self.assertIn(state, root_readme, state)
-        self.assertIn("never renders a preset directory", root_readme)
         adapter_readme = (_REPO_ROOT / "adapters" / "dsh" / "README.md").read_text(encoding="utf-8")
         for state in ("absent", "disabled", "unreadable", "ambiguous"):
             self.assertIn(state, adapter_readme, state)
@@ -600,24 +582,19 @@ class PersonaAndContractTests(unittest.TestCase):
         self.assertIn("never renders the legacy user-root directory", lib_source)
         self.assertIn("Explicit install face only", lib_source)
 
-        # R1-F1: positive half — the new operational wording must be present in
-        # every surface that used to promise the auto-render.
-        new_wording = {
-            "README.md": (
-                "the inserted row never re-renders a directory",
-                "the inserted row itself never renders a directory",
-                "row 只做登记/warn，**不自动渲染**",
-            ),
-            "adapters/dsh/README.md": (
-                "宿主行不自动渲染",
-                "不渲染用户根目录",
-                "不再由宿主行渲染",
-            ),
-        }
-        for name, text in (("README.md", root_readme),
-                           ("adapters/dsh/README.md", adapter_readme)):
-            for phrase in new_wording[name]:
-                self.assertIn(phrase, text, f"{name}: missing new wording {phrase!r}")
+        shared_entries = [
+            _REPO_ROOT / "README.md",
+            _REPO_ROOT / "skills/software-project-governance/SKILL.md",
+            _REPO_ROOT / "adapters/dsh/AGENTS.md.template",
+            *(_REPO_ROOT / "adapters/dsh/skill-shims").glob("*.md"),
+        ]
+        for entry in shared_entries:
+            with self.subTest(entry=entry):
+                contents = entry.read_text(encoding="utf-8")
+                self.assertIn("adapters/dsh/README.md", contents)
+                self.assertNotIn("launch.py --install", contents)
+                self.assertNotIn("ensurePreset()", contents)
+
         manifest = json.loads(
             (_REPO_ROOT / "adapters" / "dsh" / "adapter-manifest.json")
             .read_text(encoding="utf-8"))

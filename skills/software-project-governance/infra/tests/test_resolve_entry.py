@@ -418,6 +418,40 @@ class ResolveEntryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             self.assertIsNone(re_.read_active_version(Path(td)))
 
+    def test_metadata_version_and_historical_block_mapping(self):
+        value = "1.2.3"
+        cases = [
+            ("metadata:\n  author: release\n  version: '1.2.3'  # published", value),
+            ('"metadata":\n    "version": "1.2.3"', value),
+            ("description: |\n  version: 7.7.7\nmetadata:\n  version: 1.2.3", value),
+            ("version: 1.2", "1.2"),
+            ("metadata:\n  version: 1.2.3.4", "1.2.3.4"),
+            ("version: 1.2.3\nmetadata: # transition\n  version: 1.2.3", value),
+            ("metadata:\n  version: 2.3.4\nversion: 1.2.3", None),
+            ("version: 1.2.3\nmetadata: {version: 2.0.0}", None),
+            ("version: 1.2.3\nmetadata:{version: 2.0.0}", None),
+            ("metadata:\n  comment: |\n    version: 1.2.3", None),
+            ("metadata:\n  version: 1.2.3\n  version: 2.0.0", None),
+            ("version: 1.2.3\nmetadata:\n  version:", None),
+            ("metadata:\n  version:0.98.0", None),
+            ("metadata:\n  version:0.98.0\nversion: 1.2.3", None),
+            ("metadata:\n  - version: 1.2.3\nversion: 1.2.3", None),
+            ("metadata:\n  version: 1.2.3\n    continued", None),
+            ("\tversion: 1.2.3", None),
+            ("version:0.98.0", None),
+            ("name: example", None),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "SKILL.md"
+            for header, expected in cases:
+                with self.subTest(header=header):
+                    document = f"---\n{header}\n---\n```yaml\nversion: 9.9.9\n```\n"
+                    path.write_bytes(document.replace("\n", "\r\n").encode("utf-8-sig"))
+                    self.assertEqual(re_.read_active_version(path.parent), expected)
+            for unfenced in ("version: 9.9.9\n", "---\nversion: 9.9.9\n"):
+                path.write_text(unfenced, encoding="utf-8")
+                self.assertIsNone(re_.read_active_version(path.parent))
+
     def test_scenario_C_not_triggered_when_host_version_equal(self):
         """Equal versions -> NOT C (no false upgrade hint)."""
         with tempfile.TemporaryDirectory() as plugin_td, \

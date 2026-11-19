@@ -125,11 +125,11 @@ def _active_version(root: Path):
     skill = _repo_root(root) / SKILL_MD_REL
     if not skill.is_file():
         return None, "SKILL.md not found under the project root"
-    match = re.search(r"^version:\s*(\d+\.\d+\.\d+)\s*$",
-                      skill.read_text(encoding="utf-8"), re.MULTILINE)
-    if not match:
+    from resolve_entry import read_release_version
+    version = read_release_version(skill)
+    if not version:
         return None, "SKILL.md frontmatter carries no active version"
-    return match.group(1), None
+    return version, None
 
 
 def _normalized_rel(file_arg: str):

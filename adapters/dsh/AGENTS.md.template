@@ -10,7 +10,7 @@
 2. 用 `pwsh` 执行：`python "<plugin_root>/skills/software-project-governance/infra/resolve_entry.py" --json`
 3. `resolved_root_ok == false` → MUST STOP，展示 `diagnostic`，不呈现治理状态（DEC-080 / RISK-038 fail-closed）。
 4. `resolved_root_ok == true` → `governance-bootstrap --format json` 取热数据，立即呈现最小状态行 + `ask_user_question` 首次交互（FEAT-034）；深检后置为按需执行，推进类动作前 MUST 补齐。
-5. 无该 skill → 提醒用户安装治理预设（`python "<plugin_root>/adapters/dsh/launch.py" --install`），本会话降级为普通任务执行，不宣称治理生效。
+5. 无该 skill → 提示本会话未加载治理技能，按普通任务执行。恢复接入见本页末尾的适配器指南。
 
 ## 行为灰度开关（FEAT-040——legacy 回退通道）
 
@@ -34,4 +34,4 @@
 
 ## Git hooks / 版本升级（DSH 无 /plugin update 概念）
 
-`.git/hooks/{pre-commit,commit-msg,post-commit}` 缺失 → 提醒一次性安装：`Copy-Item "<plugin_root>/skills/software-project-governance/infra/hooks/*" .git/hooks/`。升级：`git -C "<plugin_root>" pull` 后**重启 dsh**——bundle 宿主行 `ensurePreset()` 按包版本幂等重渲染用户根预设（DSH 无 `/plugin update`；`launch.py --sync` 仅限显式重定向 `DSH_HOME` 的隔离环境，对真实用户根设计性拒绝 exit 2），下次会话自动完成其余。
+治理 hooks 缺失时提醒一次。加载、安装与升级见 `<plugin_root>/adapters/dsh/README.md`。

@@ -11,7 +11,7 @@ envelope. The LLM only consumes the result for semantic routing.
   PLUGIN_HOME       = Path(__file__).resolve().parent.parent
                       (= skills/software-project-governance/, where SKILL.md lives)
                       Used ONLY to: locate executables + read SKILL.md frontmatter
-                      `version` — the AUTHORITATIVE active version source.
+                      `metadata.version` (historically `version`).
 
   HOST_PROJECT_ROOT = resolved from --project-root -> os.getcwd().
                       Used to read `.governance/` facts.
@@ -50,10 +50,8 @@ SNAPSHOT_FRESH_HOURS = 24
 # Regexes mirror the proven patterns in verify_workflow.py
 # (FIX_105_SNAPSHOT_VERSION_RE / FIX_105_SNAPSHOT_DATE_RE / plan-tracker
 # workflow version) so the two scripts agree on what a version/date is.
-_FRONTMATTER_VERSION_RE = re.compile(
-    r"^version:\s*([0-9]+(?:\.[0-9]+){1,3})\s*$",
-    re.MULTILINE,
-)
+_FRONTMATTER = re.compile(r"\A---[ \t]*\n(.*?)^---[ \t]*(?:\n|\Z)", re.MULTILINE | re.DOTALL)
+_VERSION_VALUE = re.compile(r"""(["']?)([0-9]+(?:\.[0-9]+){1,3})\1(?:[ \t]+\#.*)?""")
 _PLAN_TRACKER_VERSION_RE = re.compile(
     r"工作流版本[**:\s]+(\d+\.\d+\.\d+)"
 )
@@ -79,33 +77,80 @@ def _read_text_safe(path):
         return ""
 
 
-def read_active_version(plugin_home=None):
-    """Return active_version from PLUGIN_HOME/SKILL.md frontmatter.
+def read_skill_version(path, *, allow_active_version=False):
+    """Read metadata.version or the historical top-level version from a SKILL.md.
 
-    Returns None if SKILL.md is missing or has no parseable ``version:``
-    field in its YAML frontmatter. This is the AUTHORITATIVE active
-    version source — replaces installed_plugins.json archaeology.
-
-    Reads PLUGIN_HOME (module attribute) at call time when no arg is
-    passed, so tests can patch it. Binds the default lazily instead of
-    capturing the import-time object (avoids the default-arg footgun
-    where a post-patch call with no arg would read the pre-patch path).
+    The shipped header uses unindented top-level keys and block mappings.
+    The dotted numeric value may be plain, single- or double-quoted.
+    Metadata siblings, comments, BOM and CRLF are supported. A flow-style
+    metadata mapping cannot corroborate a legacy value.
     """
-    if plugin_home is None:
-        plugin_home = PLUGIN_HOME
-    skill_md = plugin_home / "SKILL.md"
-    if not skill_md.is_file():
+    try:
+        header = _FRONTMATTER.match(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError):
         return None
-    text = _read_text_safe(skill_md)
-    # Restrict to the leading YAML frontmatter block (between the first
-    # two `---` fences) so a stray `version:` in prose can't win.
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        frontmatter = text[: end] if end != -1 else text[:400]
-    else:
-        frontmatter = text[:400]
-    m = _FRONTMATTER_VERSION_RE.search(frontmatter)
-    return m.group(1) if m else None
+    if not header:
+        return None
+    versions = {}
+    in_metadata = seen_metadata = False
+    child_indent = None
+    version_indent = None
+    for line in header[1].splitlines():
+        stripped = line.lstrip(" ")
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(stripped)
+        if stripped.startswith("\t") or (version_indent is not None and indent > version_indent):
+            return None
+        version_indent = None
+        key, sep, raw = stripped.partition(":")
+        if sep and raw and not raw.startswith((" ", "\t")):
+            sep = ""  # YAML requires a separator after a block mapping key.
+        key = key.strip()
+        if len(key) >= 2 and key[0] == key[-1] and key[0] in "\"'":
+            key = key[1:-1]
+        if indent == 0:
+            if key in ("metadata", "version") and not sep:
+                return None
+            in_metadata = key == "metadata"
+            if in_metadata:
+                if seen_metadata or (raw.strip() and not raw.lstrip().startswith("#")):
+                    return None
+                seen_metadata = True
+                child_indent = None
+                continue
+        elif in_metadata:
+            if child_indent is None:
+                child_indent = indent
+            if indent < child_indent:
+                return None
+            if indent > child_indent:
+                continue
+            if not sep or key.startswith(("- ", "? ")):
+                return None
+        else:
+            continue
+        if not sep or not (key == "version" or (allow_active_version and not indent and key == "active_version")):
+            continue
+        field = "metadata.version" if indent else key
+        value = _VERSION_VALUE.fullmatch(raw.strip())
+        if not value or field in versions:
+            return None
+        versions[field] = value[2]
+        version_indent = indent
+    values = set(versions.values())
+    return values.pop() if len(values) == 1 else None
+
+
+def read_active_version(plugin_home=None):
+    """Read the installed skill's version, resolving PLUGIN_HOME at call time."""
+    return read_skill_version((PLUGIN_HOME if plugin_home is None else plugin_home) / "SKILL.md")
+
+
+def read_release_version(path):
+    """Release projections, pins and archives require an X.Y.Z version."""
+    version = read_skill_version(path)
+    return version if version and version.count(".") == 2 else None
 
 
 def _parse_snapshot_date(snapshot_path):

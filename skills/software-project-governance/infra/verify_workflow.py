@@ -6261,12 +6261,7 @@ INJECTION_CONTRACT_STAGED_ANCHORS = {
 }
 
 
-def _extract_skill_version(path):
-    if not path.is_file():
-        return ""
-    content = path.read_text(encoding="utf-8")
-    match = re.search(r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$", content, re.MULTILINE)
-    return match.group(1) if match else ""
+_extract_skill_version = version_checks.extract_skill_version
 
 
 def _extract_json_version(path):
@@ -12452,11 +12447,13 @@ def check_structural_validity():
         fm_match = re.match(r"^\s*---\s*\n(.*?)\n\s*---", content, re.DOTALL)
         if fm_match:
             fm_text = fm_match.group(1)
-            required_frontmatter = ["name:", "version:", "description:"]
+            required_frontmatter = ["name:", "description:"]
             missing = []
             for fm_field in required_frontmatter:
                 if fm_field not in fm_text:
                     missing.append(fm_field.rstrip(":"))
+            if not _extract_skill_version(skill_path):
+                missing.append("version")
             if missing:
                 issues.append({
                     "type": "skill_frontmatter_missing",
@@ -18251,11 +18248,9 @@ def _check_version_consistency_heuristic():
     and verify_workflow.py hardcoded snippets.
     """
     try:
-        skill_content = (ROOT / "skills/software-project-governance/SKILL.md").read_text(encoding="utf-8")
-        m = re.search(r'version[:\*]+\s*([\d.]+)', skill_content)
-        if not m:
+        skill_version = _extract_skill_version(ROOT / "skills/software-project-governance/SKILL.md")
+        if not skill_version:
             return "NEEDS_HUMAN", "无法从 SKILL.md 提取版本号"
-        skill_version = m.group(1)
 
         # Version declaration files
         version_files = [
@@ -19471,7 +19466,8 @@ def _e2e_target_fixture_checks(e2e_dir):
         {
             "label": "target workflow skill version",
             "path": target_skill_path,
-            "needles": [f"version: {target_version}", "Coordinator", "Agent Team"],
+            "expected_skill_version": target_version,
+            "needles": ["Coordinator", "Agent Team"],
         },
         {
             "label": "target /governance route contract (router layer)",
@@ -19929,6 +19925,10 @@ def _evaluate_e2e_target_fixture_check(entry):
         }
 
     missing = [needle for needle in entry["needles"] if needle not in text]
+    if "expected_skill_version" in entry:
+        version = _extract_skill_version(path)
+        if not version or version != entry["expected_skill_version"]:
+            missing.append(f"skill version {entry['expected_skill_version']}")
     return {
         "label": entry["label"],
         "status": "PASS" if not missing else "FAIL",
@@ -21141,8 +21141,7 @@ ADAPTER_CLAIM_REGISTRY = (
 def check_readme_claim_evidence_levels(readme_path=None):
     """FEAT-014 / RISK-049 ①: README adapter claim→evidence level check.
 
-    Two machine judgments over the plugin README (shipped in the package —
-    manifest.json L69 — so the annotated README travels to users):
+    Two machine judgments over the public README and packaged DSH adapter guide:
 
     1. UNANNOTATED — every line matching a registry claim pattern MUST
        carry ≥1 valid evidence-level marker 〔level: detail〕 on the same
@@ -21160,7 +21159,8 @@ def check_readme_claim_evidence_levels(readme_path=None):
     Returns {"verdict": "PASS"|"WARN"|"no-verdict", "reason", "warnings",
     "stats"} — never raises; a missing README is no-verdict.
     """
-    path = Path(readme_path) if readme_path is not None else ROOT / "README.md"
+    paths = ([Path(readme_path)] if readme_path is not None else
+             [ROOT / "README.md", ROOT / "adapters" / "dsh" / "README.md"])
     result = {
         "verdict": "no-verdict",
         "reason": "",
@@ -21171,49 +21171,48 @@ def check_readme_claim_evidence_levels(readme_path=None):
             "levels": {"live-session": 0, "isolation": 0, "static": 0},
         },
     }
-    if not path.is_file():
-        result["reason"] = (
-            "README.md not found — Check 28t has nothing to judge")
-        return result
-    content = path.read_text(encoding="utf-8")
     warnings = result["warnings"]
     stats = result["stats"]
-
-    # 1. Marker integrity (every marker anywhere in the README).
-    for marker_match in EVIDENCE_LEVEL_MARKER_RE.finditer(content):
-        level, detail = marker_match.group(1), marker_match.group(2)
-        stats["markers_found"] += 1
-        stats["levels"][level] += 1
-        if level in ("live-session", "isolation") \
-                and not re.search(r"\d{4}-\d{2}-\d{2}", detail):
-            stats["markers_invalid"] += 1
-            warnings.append({
-                "rule": "INTEGRITY",
-                "claim_id": None,
-                "reason": "evidence-level marker 〔{0}: {1}〕 lacks the "
-                          "required ISO verification date ({0} claims MUST "
-                          "cite their verification date)".format(
-                              level, detail),
-            })
-
-    # 2. Registry claims must carry a marker on the claim line.
-    for lineno, line in enumerate(content.splitlines(), 1):
-        for claim_id, pattern, description in ADAPTER_CLAIM_REGISTRY:
-            if not pattern.search(line):
-                continue
-            stats["claims_checked"] += 1
-            if EVIDENCE_LEVEL_MARKER_RE.search(line):
-                stats["claims_annotated"] += 1
-            else:
+    for path in paths:
+        if not path.is_file():
+            result["reason"] = f"{path} not found — Check 28t has nothing to judge"
+            return result
+        content = path.read_text(encoding="utf-8")
+        # 1. Marker integrity (every marker anywhere in the README).
+        for marker_match in EVIDENCE_LEVEL_MARKER_RE.finditer(content):
+            level, detail = marker_match.group(1), marker_match.group(2)
+            stats["markers_found"] += 1
+            stats["levels"][level] += 1
+            if level in ("live-session", "isolation") \
+                    and not re.search(r"\d{4}-\d{2}-\d{2}", detail):
+                stats["markers_invalid"] += 1
                 warnings.append({
-                    "rule": "UNANNOTATED",
-                    "claim_id": claim_id,
-                    "reason": "README L{0}: adapter claim `{1}` ({2}) lacks "
-                              "an evidence-level marker "
-                              "〔live-session|isolation|static: …〕 — the "
-                              "RISK-049 ① claim→evidence mapping".format(
-                                  lineno, claim_id, description),
+                    "rule": "INTEGRITY",
+                    "claim_id": None,
+                    "reason": "evidence-level marker 〔{0}: {1}〕 lacks the "
+                              "required ISO verification date ({0} claims MUST "
+                              "cite their verification date)".format(
+                                  level, detail),
                 })
+
+        # 2. Registry claims must carry a marker on the claim line.
+        for lineno, line in enumerate(content.splitlines(), 1):
+            for claim_id, pattern, description in ADAPTER_CLAIM_REGISTRY:
+                if not pattern.search(line):
+                    continue
+                stats["claims_checked"] += 1
+                if EVIDENCE_LEVEL_MARKER_RE.search(line):
+                    stats["claims_annotated"] += 1
+                else:
+                    warnings.append({
+                        "rule": "UNANNOTATED",
+                        "claim_id": claim_id,
+                        "reason": "{3} L{0}: adapter claim `{1}` ({2}) lacks "
+                                  "an evidence-level marker "
+                                  "〔live-session|isolation|static: …〕 — the "
+                                  "RISK-049 ① claim→evidence mapping".format(
+                                      lineno, claim_id, description, path),
+                    })
 
     if warnings:
         result["verdict"] = "WARN"

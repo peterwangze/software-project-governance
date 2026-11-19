@@ -1,26 +1,11 @@
 #!/usr/bin/env python3
 """DeepSeek Harness adapter launcher for software-project-governance.
 
-Unlike the other adapters, whose launchers only print the manifest,
-dsh has a real install surface: an agent preset is a plain directory under
-``${DSH_HOME}/.agent-presets/<id>/`` holding ``agent.cordis.yml`` +
-``preset.yml``. This launcher RENDERS the composition template (substituting
-the ``__GOVERNANCE_*__`` tokens with absolute paths) into that directory, and,
-optionally, writes the DSH project bootstrap (``AGENTS.md``) into a governed
-project root.
-
-Single source (FIX-310 / DEC-187, 2026-09-12): the package's preset payload is
-``agent-presets/governance/`` and holds exactly two files — the composition
-template ``agent.cordis.yml.template`` (the ONE composition source) and
-``preset.yml``. Nothing is duplicated: ``skills/``, ``commands/`` and
-``agents/`` stay the repository's shared core, referenced ABSOLUTELY from the
-rendered file. ``lib/index.js`` registers the same preset natively through the
-host's public agent-presets registry and never renders a directory (DEC-366 2:
-only warn when native delivery is unavailable); this launcher is the explicit /
-offline renderer (the reference bundle ships ``install.ps1`` / ``install.sh``
-for the same purpose). Both renderers share the same declared token contract, so
-they cannot disagree; ``adapters/dsh/agent.cordis.yml.template`` used to carry
-that template and now lives inside the preset payload it renders.
+DSH registers the governance preset through the host registry when available;
+this launcher is the explicit / offline renderer for directory-model hosts. It
+substitutes absolute package paths in the packaged composition template and
+can write a thin project bootstrap to AGENTS.md. See adapters/dsh/README.md for
+host capability detection, setup and upgrades.
 
 Modes:
   --check              Print the adapter manifest summary (default action).

@@ -13,6 +13,7 @@ from typing import Dict, Iterable, List, Optional
 import uuid
 
 from .model import CheckResult
+from resolve_entry import read_release_version
 
 
 @dataclass(frozen=True)
@@ -142,10 +143,10 @@ def _safe_repo_path(root: Path, raw: object, *, must_exist: bool = False) -> Pat
 
 
 def _skill_version(path: Path) -> str:
-    match = re.search(r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$", path.read_text(encoding="utf-8"), re.MULTILINE)
-    if not match:
-        raise ValueError("authoritative SKILL.md frontmatter version is missing")
-    return match.group(1)
+    version = read_release_version(path)
+    if not version:
+        raise ValueError("authoritative SKILL.md frontmatter version is missing or invalid")
+    return version
 
 
 def _json_pointer_set(payload: object, pointer: str, value: object) -> object:

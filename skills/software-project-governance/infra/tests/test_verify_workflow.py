@@ -15357,7 +15357,7 @@ class PreCommitClaudeBootstrapUpgradeHookTests(unittest.TestCase):
 
             skill = root / "skills" / "software-project-governance" / "SKILL.md"
             skill.parent.mkdir(parents=True, exist_ok=True)
-            skill.write_text("---\nversion: 0.37.0\n---\n", encoding="utf-8")
+            skill.write_text('---\nmetadata:\n  version: "0.37.0"\n---\n', encoding="utf-8")
 
             claude = root / "CLAUDE.md"
             claude.write_text(
@@ -20180,7 +20180,7 @@ class InjectionContractPresetVersionLineTests(unittest.TestCase):
             self._copy_injection_surfaces(root)
             skill = root / "skills/software-project-governance/SKILL.md"
             masked = re.sub(
-                r"(?m)^version:\s*[0-9.]+\s*$", "# version masked",
+                r"(?m)^  version:.*$", "  # version masked",
                 skill.read_text(encoding="utf-8"))
             skill.write_text(masked, encoding="utf-8")
             result = vw.check_injection_contract(root)

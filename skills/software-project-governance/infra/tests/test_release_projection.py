@@ -110,6 +110,21 @@ class ProjectionPlanOverlapTests(unittest.TestCase):
                 "MUST mirror the resolved content, not the stale disk bytes "
                 "(FIX-366)")
 
+    def test_invalid_authority_cannot_write_either_projection(self):
+        with _sandbox_tmp_dir() as td:
+            root = Path(td)
+            self.fixture(root)
+            skill = root / "skills/software-project-governance/SKILL.md"
+            targets = [root / name for name in ("report.txt", "mirror.bin")]
+            originals = [path.read_bytes() for path in targets]
+            for header in ("version: 1.2", "metadata:\n  version: 1.2.3.4",
+                           "version: 1.2.3\nmetadata:\n  version: 2.3.4", "name: demo"):
+                with self.subTest(header=header):
+                    skill.write_text(f"---\n{header}\n---\nversion: 9.9.9\n", encoding="utf-8")
+                    result = write_projections(root, root / "config.json")
+                    self.assertEqual(result.state, "BLOCKED", result.issues)
+                    self.assertEqual([path.read_bytes() for path in targets], originals)
+
     def test_write_converges_instead_of_rolling_back(self):
         with _sandbox_tmp_dir() as td:
             root = Path(td)

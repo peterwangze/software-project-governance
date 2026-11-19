@@ -1164,17 +1164,8 @@ def _latest_released_version():
     from the host root — the host project does not ship the plugin's
     SKILL.md. Returns None when unreadable.
     """
-    skill = PLUGIN_ROOT / "skills/software-project-governance/SKILL.md"
-    try:
-        content = skill.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    match = re.search(
-        r"^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$",
-        content,
-        re.MULTILINE,
-    )
-    return match.group(1) if match else None
+    from resolve_entry import read_release_version
+    return read_release_version(PLUGIN_ROOT / "skills/software-project-governance/SKILL.md")
 
 
 def _release_ledger_released_versions():

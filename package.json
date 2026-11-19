@@ -4,7 +4,7 @@
   "version": "0.99.0",
   "private": true,
   "license": "MIT",
-  "description": "AI coding delivery trust layer for governance-aware coding agents — agent-neutral npm package identity (owner scope, not agent affiliation) consumed by the zcode plugin host and the dsh plugin (pnpm) carrier. The plugin surface lives in skills/, commands/ and agents/ (the single shared core, never duplicated per adapter); the dsh host row lives in lib/index.js and only renders the preset payload in agent-presets/governance/ (composition template + preset.yml) into the user preset root, with adapters/dsh/launch.py --install as the identical manual/offline path.",
+  "description": "AI coding delivery trust layer with shared governance skills, commands and agent roles, packaged for zcode and DeepSeek Harness.",
   "keywords": [
     "dsh",
     "dsh-plugin",

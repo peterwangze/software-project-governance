@@ -144,6 +144,18 @@ _VERDICT_BOLD_RE = re.compile(
 _VERDICT_LINE_RE = re.compile(
     r"审查结论[：:]\s*\**\s*"
     r"(APPROVED_WITH_NOTES|APPROVED|NEEDS_CHANGE|BLOCKED)")
+# A source report can quote fields from another round. Only independent
+# declarations outside Markdown examples contradict the requested pass.
+_REPORT_LIST_MARKER = r"(?:[-+*]|[0-9]{1,9}[.)])[ \t]+"
+_REPORT_EXAMPLES_RE = re.compile(
+    r"^ {0,3}<!--[\s\S]*?(?:-->|\Z)|"
+    rf"^ {{0,3}}(?P<item>{_REPORT_LIST_MARKER})?"
+    r"(?P<fence>(?P<mark>[`~])(?P=mark){2,})[^\n]*\n"
+    r"[\s\S]*?(?:^(?(item)[ \t]*| {0,3})(?P=fence)(?P=mark)*[ \t]*\r?$|\Z)", re.MULTILINE)
+_SOURCE_BLOCKER_FIELD_RE = re.compile(
+    rf"^ {{0,3}}(?:{_REPORT_LIST_MARKER})?(?P<cell>\|[ \t]*)?"
+    r"(?P<key>unresolved_block(?:er)?s)(?:[ \t]*[=:：][ \t]*(?P<value>[^|\r\n]*))?"
+    r"[ \t]*(?(cell)\|[ \t]*)\r?$", re.MULTILINE | re.IGNORECASE)
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 _HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 # FEAT-094 ③: conflict-check exemptions — BLOCKED is the T2 round≥3
@@ -249,6 +261,30 @@ def _report_verdict_tokens(text):
     tokens = set(_VERDICT_BOLD_RE.findall(text or ""))
     tokens.update(_VERDICT_LINE_RE.findall(text or ""))
     return tokens
+
+
+def _conflicting_blocker_fields(text):
+    """Check standalone fields, list items and single-cell report rows.
+
+    Human-authored Markdown also uses colon-delimited metadata. Normalize
+    that spelling before applying the same count rules as the machine record.
+    """
+    from checks.review_domain import _parse_unresolved_blockers_fields
+
+    prose = _REPORT_EXAMPLES_RE.sub("\n", text.lstrip("\ufeff"))
+    prose = re.sub(r"(\*\*|__|`)([^\n]+?)\1", r"\2", prose)
+    fields = [f"{match['key']}={match['value'] or ''}"
+              for match in _SOURCE_BLOCKER_FIELD_RE.finditer(prose)]
+    if not fields:
+        return []  # Older free-form reports can omit the structured field.
+    try:
+        facts = _parse_unresolved_blockers_fields(fields)
+    except ValueError:  # Python limits conversion of arbitrarily long decimal counts.
+        return fields
+    if (facts["status"] in ("valid", "missing") and facts["value"] in (0, None)
+            and not any(facts["legacy_values"]) and not facts["legacy_invalid_tokens"]):
+        return []
+    return fields
 
 
 def _git_output(repo_root, *argv):
@@ -828,7 +864,6 @@ def write_review_record(
             return {"error": "root or evidence_dir is required"}
         evidence_dir = Path(root) / ".governance"
     evidence_dir = Path(evidence_dir)
-    evidence_dir.mkdir(parents=True, exist_ok=True)
 
     # FIX-314 key-face resolution: the record key is (task, round, reviewer).
     # The canonical name stays the FIRST reviewer's slot — backward
@@ -914,8 +949,18 @@ def write_review_record(
             "conflict": {"report_verdicts": sorted(report_verdicts),
                          "claimed": result_norm},
         }
+    if result_norm == "APPROVED_WITH_NOTES":
+        fields = _conflicting_blocker_fields(report_text)
+        if fields:
+            return {
+                "error": "CONFLICT: report {0} declares {1}; {2} requires zero "
+                         "unresolved blockers".format(report_path, fields, result_norm),
+                "code": "conflict_report_vs_record",
+                "conflict": {"report_fields": fields, "claimed": result_norm},
+            }
     repo_root = root if root is not None else evidence_dir.parent
     binding = snapshot_binding(repo_root, bind_files)
+    evidence_dir.mkdir(parents=True, exist_ok=True)
 
     # ── FEAT-094 steps 3+4 — the atomic ledger core (登记发现 event +
     # 自动生成后续义务, one transact batch; anti-evaporation ordering:

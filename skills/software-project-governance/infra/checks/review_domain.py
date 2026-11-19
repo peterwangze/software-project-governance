@@ -1800,7 +1800,6 @@ def _parse_unresolved_blockers_fields(fields):
     without weakening the fail-closed default for current records (a legacy
     key carrying a nonzero/unparseable value stays a real blocker).
     """
-    _resolve_shared()
     values = []
     invalid_tokens = []
     for raw_field in fields or []:

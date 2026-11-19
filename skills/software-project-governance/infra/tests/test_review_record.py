@@ -111,11 +111,54 @@ class ReviewRecordPersistenceTests(unittest.TestCase):
             review_file, repo_root=self.root)["verdict"], "CLEAN")
 
     def test_approved_with_notes_writes_blocker_token(self):
+        # Legacy source reports with no field can still be recorded.
         summary = self._write(result="APPROVED_WITH_NOTES")
         self.assertFalse(summary.get("error"))
         ev = (self.root / ".governance" / "evidence-log.md").read_text(encoding="utf-8")
         self.assertIn("unresolved_blockers=0", ev)
         self.assertEqual(summary["review_id"], "REVIEW-FIX-236-R0")
+
+    def test_notes_accept_zero_and_ignore_markdown_examples(self):
+        report = self.root / "report.md"
+        report.write_text(
+            "**APPROVED_WITH_NOTES**\n\nThe guide illustrates `unresolved_blockers=8`.\n"
+            "> unresolved_blockers=7\n    unresolved_blockers=6\n"
+            "````markdown\n```\nunresolved_blockers=5\n```\n````\n"
+            "- ~~~text\n  unresolved_blockers=4\n  ~~~\n"
+            "1. ```yaml\n   unresolved_blockers=2\n   ```\n"
+            "<!-- Previous round\nunresolved_blockers=3\n-->\n"
+            "\n- **unresolved_blockers=0**\n1. unresolved_blocks=0\n"
+            "- **unresolved_blockers**: 0\n- unresolved_blockers：0\n", encoding="utf-8")
+        summary = self._write(result="APPROVED_WITH_NOTES")
+        self.assertFalse(summary.get("error"), summary)
+
+    def test_notes_refuse_invalid_declared_fields_before_any_record_is_written(self):
+        report = self.root / "report.md"
+        gov = self.root / ".governance"
+        for field in ("unresolved_blockers=1", "- **unresolved_blockers = 12**",
+                      "`unresolved_blockers=001`", "unresolved_blockers=0\nunresolved_blockers=2",
+                      "unresolved_blockers=0\nunresolved_blockers=pending", "unresolved_blockers=-1",
+                      "1. UNRESOLVED_BLOCKERS=2", "| unresolved_blockers=2 |", "unresolved_blockers=",
+                      "- **unresolved_blockers**: 2", "unresolved_blockers：pending",
+                      "unresolved_blockers=2 (pending sign-off)", "unresolved_blockers=not yet measured",
+                      "12. ```yaml\n    unresolved_blockers=0\n    ```\n\nunresolved_blockers=2",
+                      "The markup guide uses `<!--` for comments.\nunresolved_blockers=3",
+                      "unresolved_blocks=2", "unresolved_blockers=" + "1" * 4500):
+            with self.subTest(field=field):
+                report.write_text("**APPROVED_WITH_NOTES**\n" + field + "\n", encoding="utf-8")
+                summary = self._write(result="APPROVED_WITH_NOTES")
+                self.assertEqual(summary["code"], "conflict_report_vs_record")
+                self.assertTrue(summary["conflict"]["report_fields"])
+                self.assertEqual(list(gov.iterdir()), [])
+
+    def test_refused_notes_do_not_initialize_governance(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report = root / "report.md"
+            report.write_text("unresolved_blockers=1\n", encoding="utf-8")
+            result = self._write(result="APPROVED_WITH_NOTES", report_path=str(report), root=root)
+            self.assertEqual(result["code"], "conflict_report_vs_record")
+            self.assertEqual(list(root.iterdir()), [report])
 
     def test_needs_change_emits_revisit_required_fields(self):
         summary = self._write(result="NEEDS_CHANGE")

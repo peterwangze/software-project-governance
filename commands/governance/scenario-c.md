@@ -24,10 +24,10 @@
    - A. 替换 平台原生入口文件 bootstrap 段为最新模板（保留 profile 差异化）
    - B. 补全 plan-tracker 缺失结构（permission_mode、版本规划、需求跟踪矩阵、变更控制含快速通道）
    - C. Hook 存活检测——缺失则提示安装命令（hook 路径用 `<plugin_home>/infra/hooks/*`）
-    - C-2. 插件残留清理删除面（与模板 C-2 同序同措辞——dry-run 先行 + 确认后执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（基于 manifest.json 的结构 diff），AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤）
+   - C-2. 插件残留清理删除面。仅对从本次安装信息确认的插件独占根运行 `python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>" --dry-run` 并展示清单。用户用 AskUserQuestion 确认该清单后才执行 `python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>"`。归属不明、共享技能目录或未获确认时跳过清理，继续其余步骤。
    - D. 更新 `工作流版本` 为 `active_version`
    - E. 持续归档触发检测与执行（`<plugin_home>` 来自 resolve_entry.py，取代 `$WORKFLOW_HOME` 路径考古；归档写操作同 ask-确认前置——dry-run 报告先行呈现，用户确认后才执行迁移）：
-     - 运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器：
+     - 在已确认的宿主根运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器：
        1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
        2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
        3. task 增量：热文件中可归档 completed task 达到阈值

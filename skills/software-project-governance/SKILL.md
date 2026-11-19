@@ -109,27 +109,18 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 - 快路径输出缺某个热数据面（候选为空/字段缺失/解析失败）时，用 read 工具按需展开对应段落；以下段落按需读取（不在 bootstrap 阶段强制读取）：g. `## 需求跟踪矩阵`；h. `## 变更控制`；i. `## 版本规划` 中的"规划纪律"部分；j. 版本规划中的"里程碑"和"版本路线图"。
 - 首次交互前置完整语义：Step 2 交叉验证等深检后置为用户选择后按需执行，深检结果不作为首次 ask 的前置条件；用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）前 MUST 补齐对应深检。
 
-**2. AI Execution Packet（0.38.0+）**：
-- IF `.governance/execution-packets.json` 存在：读取当前 `TASK_ID` 对应短包，优先使用短包中的 `goal`、`allowed_change_scope`、`required_evidence`、`next_commands`、`done_definition`；短包用于约束本次执行边界，长篇 plan-tracker 和规则文件只作事实源补充。
-- IF 当前任务为活跃 P0/P1 且短包缺失：运行 `python <plugin_home>/infra/verify_workflow.py execution-packet --write`（`<plugin_home>` 取本次定位结果），再读取生成后的短包继续执行。
-- `check-governance` Check 18c 会阻断缺包或字段无效的活跃 P0/P1 任务。
+**2. 任务短包**。按本文件「AI Execution Packet」读取当前任务的范围、证据和完成条件。
 
-**3. 归档感知**：IF `.governance/archive/index.md` 存在——读取 `.governance/archive/index.md` 了解已归档条目的位置；交叉验证时 evidence-log.md 中找不到某 task 的证据 → 先查 index.md 定位归档文件；**归档文件中的证据 = 有效证据——不可误判为缺失**。已归档 entry 标准查询路径：Read `.governance/archive/index.md` → grep 目标 ID → 按索引路径 Read 归档文件定位条目（总开销 2 次 Read call）。
+**3. 归档证据**。热账缺少某条证据时，按 `.governance/archive/index.md` 中的 ID 和路径核对原件。归档证据同样有效。
 
-**4. 跨会话恢复与检测**：
-- 读取 `.governance/session-snapshot.md`（如存在）对照 plan-tracker：快照中的进行中任务 → 确认为 carry-over 任务继续执行；待确认决策 → 检查是否已过期或仍需确认；风险 escalation deadline ≤ 今天 → 立即升级。
-- 工作流脱轨检测：检查 plan-tracker 的 `最近复盘日期`——距今 > 7 天 AND 有若干新 commit 但 plan-tracker 无更新 → ⚠️ 工作流可能已被忽略，提醒用户是否需要更新治理状态。
-- Hook 存活检测（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在；缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。用本次 `resolve.plugin_home` 提示重装：`cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
+**4. 会话恢复**。快照须含 `session_date` 与 `carry_over_tasks`。24 小时内可继续，超过 24 小时但在 7 天内先标注快照年龄，与计划核对后仍可继续，超过 7 天或缺必要字段则展示当前状态。首次交互呈现恢复选项，实际修改前按 §B2 核对遗留任务、待确认决策和 Gate，到期风险立即升级。完整安装的[会话恢复规程](../../commands/governance/scenario-d.md)提供面板。上次复盘超过七天、有新提交且计划未更新时提醒检查。根据同次 `resolve.hooks_installed` 提示缺失的 hook 和 `<plugin_home>/infra/hooks/` 安装位置，由用户安装。
 
-**5. 版本变化检测 + bootstrap 升级序列 A~E（FEAT-035 全文——提示 + 确认后执行）**：
-1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）。
-2. **IF** 当前版本 > 记录版本 → **呈现升级待处理**（AskUserQuestion 升级摘要：版本跨度 + CHANGELOG 要点 + 将执行的写操作清单（显式列出目标文件）+ 回滚方式；选项默认「执行升级（推荐）」），**用户确认后才执行**以下序列——确认前不执行任何写操作：
-   - **A. 呈现更新摘要**（并入升级确认 AskUserQuestion——确认前零写操作）：版本跨度 + 从 CHANGELOG.md 提取的新增/修复要点。
-   - **B. 升级平台原生入口文件 bootstrap 段**（用户确认升级后执行——agent 执行）：读取当前入口文件，找到 `## Governance Bootstrap` 段落（FIX-238.2 陈旧标记：段落内 `@bootstrap-version` 头 < SKILL frontmatter `active_version` 即陈旧；无法确定新版本 → 不升级，输出 `/plugin update` 指引）；替换为**与最新模板完全一致**的内容（按 profile 选精简/完整版）；**保留入口文件其余所有内容不变**；输出：`Bootstrap 已升级：v{old} → v{new}。` **深检前置（MUST——DEC-207② P2-1 / M5.5 条 3）**：版本升级写序列属推进类动作——执行 B~E 写操作前 MUST 先完成健康摘要（full 面深检：`check-governance --summary-only`，缺省 scope=full；FEAT-084 起 quick 面不替代推进类深检）+ 交叉验证等深检；用户确认升级不免除深检。
-   - **C. 自动补全 plan-tracker 缺失结构**（用户确认升级后直接执行）：项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）；缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）；缺少 `## 需求跟踪矩阵` 节？→ 自动添加；缺少 `## 变更控制` 节？→ 自动添加（含快速通道）；变更控制流程是旧版（无快速通道）？→ 自动更新为含快速通道的版本；`.git/hooks/post-commit` / `.git/hooks/commit-msg` 不存在？→ 提示一次性安装命令（agent 不能自动写 .git/hooks/——安全问题）；**插件残留清理删除面**（cleanup.py——dry-run 先行 + 确认后执行；每版本更新时执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留；`.governance/`、`.git/` 硬编码保护不触碰），通过 AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤），输出 `✅ 已清理 {N} 个过期文件/目录`。
-   - **D. 更新 plan-tracker `工作流版本`** 为当前版本。
-   - **E. 持续归档触发检测与执行**（用户确认升级后执行；归档写操作同 ask-确认前置——dry-run 报告先行呈现，AskUserQuestion 确认后才执行迁移）：运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（`<plugin_home>` 取本次定位结果）：1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2；2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task；3. task 增量：热文件中可归档 completed task 达到阈值；4. 90 天兜底：长期未归档但仍有可归档历史数据。dry-run 报告需要归档 → 呈现 dry-run 报告并通过 AskUserQuestion 确认后执行：a. `python <plugin_home>/infra/archive.py migrate --auto`；b. `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`；c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）。归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成。无可归档数据 → 跳过归档（不修改文件）。
-3. **用户要做的仍然只有：/plugin update → 下次会话。** 升级不再静默写文件——确认后其余步骤自动完成。
+**5. 工作流升级**。按本次 `resolve.active_version` 与项目记录版本判断。确认安装版本较高时，首次用 AskUserQuestion 列出版本跨度、CHANGELOG 要点、写入目标和回滚方式。用户选择暂缓或尚未确认时保持待升级状态，零写入。获准后先完成 full 深检及 §B2 交叉验证，再执行：
+- 仅将平台入口的受管段更新为所选 profile 的新模板，保留用户正文。版本或模板无法核实时停止迁移并展示诊断。
+- 补全计划中缺少的权限、版本规划、需求和变更控制字段。仅对本插件独占的安装根运行 `python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>" --dry-run`，单独确认该清单后才清理同一目标。从本次安装信息确认 `<plugin_root>`，勿从宿主工作目录或共享技能父目录推定。无法确认归属、拒绝或跳过清理，均可继续其余步骤。
+- 更新计划中的工作流版本。在已确认的宿主根运行 `python "<plugin_home>/infra/archive.py" migrate --auto --dry-run` 取得实际归档清单。仅在有候选且用户确认该清单后执行同一命令去掉 `--dry-run`，再运行 `python "<plugin_home>/infra/verify_workflow.py" check-archive-integrity`。校验失败记录风险并阻断发布或版本收尾。
+
+完整安装的[升级规程](../../commands/governance/scenario-c.md)列出模板字段、归档触发条件和交付摘要。以上路径相对于当前安装的技能，项目事实从已确认的宿主根读取。
 
 ### B2 交叉验证与优先级（entry 模板 Step 2 / Step 4 承接）
 
@@ -143,36 +134,9 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ### B3 提问规则三清单（entry 模板「提问规则」承接）
 
-**AskUserQuestion 是唯一合法的用户提问方式。** 禁止用内联文字问"要不要继续""是否如何如何"——所有需要用户判断的问题必须通过 AskUserQuestion 工具。默认模式：**仅在关键决策停下来**。非关键决策自动执行不中断。
+范围、架构、发布、风险接受、外部依赖、Profile/模式变更或跳 Gate，无论权限模式都用 AskUserQuestion 确认。已确认范围内的实现、测试和记录自动推进。附件或长文本按 M5.1c 提供聊天框回退选项。
 
-**附件输入通道（FIX-396）**：问题需用户以图片/附件/长自由文本作答（选项无法承载）时，仍 MUST 经 AskUserQuestion 呈现并附固定回退选项（如「📷 通过聊天框发送图片/材料」，不设 recommended/首位默认）；用户选后在对话框发送的图片/消息为合法应答回合——明细见 behavior-protocol.md M5.1c 与 references/interaction-boundary.md。
-
-**关键决策** — 无论何种 permission_mode，**永远**停下来用 AskUserQuestion：
-- 范围变更（新增/删除功能、改变项目边界）
-- 架构决策（技术栈选择、模块拆分、接口设计）
-- 发布决策（go/no-go、版本号升级、breaking change）
-- 风险接受（接受已知风险、绕过 Gate）
-- 外部依赖变更（引入新库、新服务、API 变更）
-- Profile/触发模式/操作权限模式变更
-- 阶段跳跃（跳过 Gate）
-
-**危险操作确认** — 仅 default-confirm 模式下停下来：
-- 破坏性 git：push --force、reset --hard、branch -D、删除远程分支
-- 文件系统破坏：rm -rf、批量删除文件、覆盖重要配置
-- 外部副作用：API 调用（非只读）、package 安装/卸载、数据库变更、环境变量修改
-- 不可逆操作：squash 合并、rebase 变基、修改已推送的 commit
-- **maximum-autonomy 模式下以上操作自动执行不确认。**
-
-**非关键决策** — 自动执行，不提问：
-- 已确认方向内的任务排序
-- 证据格式和详细程度
-- git commit（不带 --force）/ git push（maximum-autonomy 下自动）
-- 治理记录更新
-- 微小实现选择（文件命名、变量名、代码风格）
-- Gate 自评结果（仅在失败时告知）
-- 文件编辑 / 运行测试 / 创建文件
-
-**判断标准**：决策是否改变项目方向、范围、架构或接受风险？是 → 关键决策，永远必须问。决策是否涉及破坏性/不可逆操作？是 + default-confirm → 必须确认。否 → 自动执行。
+破坏性 Git 或文件操作、外部副作用及不可逆操作按 `permission_mode` 处理。default-confirm 先取得确认。maximum-autonomy 在已授权范围内自动执行，仍受上述关键决策和升级确认门约束。具体适用条件见[交互边界](references/interaction-boundary.md)和[行为协议](references/behavior-protocol.md) M5。
 
 ### B4 干活前 / 收工检查（entry 模板承接）
 
@@ -182,41 +146,13 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ### B5 故障排除四步（Agent 行为异常时）
 
-如果 agent 不遵守协议（跳过 Gate、忽略 AskUserQuestion、选择性执行规则），按以下顺序排查：
-1. agent 加载了 skill 吗？ → 检查 agent 是否知道当前阶段和 Gate 状态
-2. agent 读了 plan-tracker 吗？ → 检查 agent 是否提到当前 Tier 和待执行任务
-3. agent 的证据可信吗？ → 运行 `python <plugin_home>/infra/verify_workflow.py check-governance`（`<plugin_home>` 取本次定位结果）
-4. agent 的完成是真的吗？ → 读 agent 声称创建/修改的文件
-完整的 8 种失败模式、检测方法和应急动作见 `skills/software-project-governance/references/agent-failure-modes.md`。
+遇到跳 Gate、忽略 AskUserQuestion 或完成声明与实物不符时，按[故障手册](references/agent-failure-modes.md)的「应急响应矩阵」核查技能、计划、协议、证据和实际工件。
 
 ### 行为灰度开关（FEAT-040——legacy 回退通道；边界机检见 `infra/behavior_profile.py`）
 
-切片 A（AUDIT-154，0.84.0）一次落地四个热路径行为变更（FEAT-034/035/036/038）。本开关是它们的**回退通道**——**一个总开关**，不是逐 FEAT 矩阵。
+以本次聚合的 `behavior.profile` 和 `source` 确定生效配置。`GOVERNANCE_LEGACY_BEHAVIOR=1` 优先于项目的 `behavior_profile: legacy`，默认 modern。非法值按 `behavior.invalid` 提示。legacy 按 `reverted` 回退热面读取、首次交互时序、快照视图、场景加载和会话摘要。推进类动作仍须 full 深检。
 
-| 臂 | 形态 | 优先级 |
-|----|------|--------|
-| 会话级 | 环境变量 `GOVERNANCE_LEGACY_BEHAVIOR=1` | 高 |
-| 项目级 | plan-tracker `## 项目配置` 的 `- **behavior_profile**: legacy` | 中 |
-| 默认 | `modern`（新协议） | 低 |
-
-- 取值词表封闭：legacy = `1/true/yes/on/legacy`；modern = `0/false/no/off/modern`。**非法值不猜**——非空但不在词表内时既不按 legacy 也不静默按 modern 执行，而是在 `governance-bootstrap` 的 `behavior.invalid` 显式报告后落到下一臂。
-- **生效形态的唯一事实源**：`governance-bootstrap --format json` 的 `behavior` 面（`profile`/`source`/`reverted`/`invariants`/`invalid`）。legacy 生效时回退提示置于 `next_actions` **首位**。
-
-**回退范围（只回退性能/编排行为）**：快路径→六段读取；首次交互前置→深检先行；≤8 字段默认视图→完整快照契约；Scenario 按需→预加载；会话健康摘要 `--scope quick` 四态摘要→无 scope 全量引擎（FEAT-084）。推进类深检固定 full 面属安全语义，不随 legacy 回退。
-
-**安全语义硬边界（legacy 模式一律不回退——无豁免）**：
-
-| 不变量 | 出处 | 内容 |
-|--------|------|------|
-| 升级确认门 | FEAT-035 | 版本升级写序列 MUST 先呈现摘要并经用户确认；**确认前零写操作** |
-| 异常不隐藏 | M9 / 设计原则 3 | 异常先于状态展示；`deferred` 显示「待检查」而非通过 |
-| fail-closed | DEC-080 / RISK-038 | `resolved_root_ok == false` → MUST STOP，不呈现治理状态 |
-| 真实环境防护 | M7.7 | 三选一（隔离/备份+校验/逐项授权），三者皆缺即禁止执行 |
-| 复审必达 | M7.4 | `NEEDS_CHANGE` 且 round<3 → MUST 立即复审，不得跳过 |
-
-> **边界为何如此划**：legacy 是性能/编排回退，不是安全回退。升级确认门（FEAT-035）的代价是一次交互确认，收益是"展示状态不再隐含修改项目的授权"（DEC-209）——把它做成可回退等于把知情同意做成可选项。`behavior_profile.revert_contract_issues()` 是该边界的**机检**：回退表只允许 `performance` 类别、且不得与安全不变量共享 FEAT——任何试图把安全语义塞进 `LEGACY_REVERTS` 的改动会让守护测试翻红，而不是靠注释自律。
-
-**一键验证**：`governance-bootstrap --format json | --format text`（`behavior` 面 + 文本行）；守护测试 `infra/tests/test_behavior_profile.py`；协议面守护（六个注入面必须携带 `行为灰度开关` 标记）同文件。
+`behavior.invariants` 在两种模式均生效：升级确认门要求确认前零写入。异常不隐藏，根定位失败即停（fail-closed）。真实环境防护须隔离、备份校验或逐项授权。独立审查返回 NEEDS_CHANGE 且轮次小于 3 时，按 M7.4 复审必达。
 
 ### 关键行为契约（MUST；完整规则：references/behavior-protocol.md M7.4/M7.7/M7.8）
 
@@ -377,12 +313,12 @@ Coordinator 执行行为约束，详见 `references/behavior-protocol.md`（M0-M
 
 ## AI Execution Packet（0.38.0+）
 
-进入具体任务前，Coordinator MUST 优先读取 `.governance/execution-packets.json` 中当前 `TASK_ID` 的短执行包。短包优先级高于长篇背景材料，用于约束本任务的目标、允许改动范围、必需证据、下一命令和完成定义。
+进入具体任务前，Coordinator MUST 优先读取 `.governance/execution-packets.json` 中当前 `TASK_ID` 的短执行包。按包内的 `goal`、`allowed_change_scope`、`required_evidence`、`next_commands` 和 `done_definition` 执行。
 
 如果活跃 P0/P1 任务缺少短包，先运行：
 
 ```bash
-python skills/software-project-governance/infra/verify_workflow.py execution-packet --write
+python "<plugin_home>/infra/verify_workflow.py" execution-packet --write
 ```
 
 `check-governance` Check 18c 会阻断缺包、空包、范围过宽、缺少 `事实依据` / `结构化事实` / review 完成定义的执行包。Coordinator 不得把缺少短包的产品代码任务标记为闭环。

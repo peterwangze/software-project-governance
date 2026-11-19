@@ -1527,6 +1527,34 @@ class M0WriterIoContractTests(unittest.TestCase):
         self.assertEqual(c.WriterResult(**json.loads(payload)), result)
 
 
+def _pinned_source_text(source, text):
+    """Locate the SKILL's ATX section, or replay a historical inclusive line range."""
+    lines = text.splitlines()
+    if "heading" not in source:
+        start, end = source["line_span"]
+        return "\n".join(lines[start - 1:end])
+
+    try:
+        from markdown_it import MarkdownIt
+    except ImportError as exc:
+        raise RuntimeError("M0 heading pins require markdown-it-py. Run the 'Install test "
+                           "dependencies' command from .github/workflows/ci.yml.") from exc
+    if lines[:1] == ["---"]:
+        lines = lines[lines.index("---", 1) + 1:]
+    tokens = MarkdownIt("commonmark").parse("\n".join(lines))
+    headings = [(token.map[0], int(token.tag[1:]), f"{token.markup} {tokens[i + 1].content}")
+                for i, token in enumerate(tokens) if token.type == "heading_open" and token.level == 0]
+
+    matches = [(i, depth) for i, depth, title in headings if title == source["heading"]]
+    if len(matches) != 1:
+        raise ValueError(f"expected one {source['heading']!r} section, found {len(matches)}")
+    start, level = matches[0]
+    end = next((i for i, depth, _ in headings if i > start and depth <= level), len(lines))
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return "\n".join(lines[start:end])
+
+
 class M0FixtureManifestTests(unittest.TestCase):
     """Fixture integrity + pin-revision wellformedness (frozen revision)."""
 
@@ -1569,25 +1597,12 @@ class M0FixtureManifestTests(unittest.TestCase):
                                  f"{source['path']} {key} must be sha256 hex")
 
     def test_pin_revision_hashes_still_resolve(self):
-        """The span recipe re-derives the pinned content hashes.
-
-        NOTE (honest scope): this pins THIS suite to the contract sources at
-        M0 time — a deliberate maintenance edit to a pinned span breaks this
-        test ON PURPOSE and MUST be resolved by re-baselining the pin (the
-        change_rule in the manifest), which keeps 批 2.0 复跑对照 meaningful.
-        """
-        pin = self.manifest["pin_revision"]
-        recipe = pin["span_hash_recipe"]
-        self.assertIn("splitlines", recipe)
-        for source in pin["sources"]:
-            path = _REPO_ROOT / source["path"]
-            lines = path.read_text(encoding="utf-8").splitlines()
-            start, end = source["line_span"]
-            digest = hashlib.sha256(
-                "\n".join(lines[start - 1:end]).encode("utf-8")).hexdigest()
-            self.assertEqual(digest, source["content_sha256"],
-                             f"pinned span changed since M0 freeze: "
-                             f"{source['path']} {source['line_span']}")
+        for source in self.manifest["pin_revision"]["sources"]:
+            with self.subTest(path=source["path"]):
+                text = (_REPO_ROOT / source["path"]).read_text(encoding="utf-8")
+                section = _pinned_source_text(source, text)
+                self.assertEqual(hashlib.sha256(section.encode("utf-8")).hexdigest(),
+                                 source["content_sha256"])
 
     def test_batch1_consumers_declared(self):
         consumers = self.manifest["consumers"]
@@ -1598,22 +1613,36 @@ class M0FixtureManifestTests(unittest.TestCase):
             self.assertEqual(record["access"], "read-only", task_id)
             self.assertTrue(record["consumes"], task_id)
 
+    def test_heading_pin_moves_but_still_covers_added_or_removed_clauses(self):
+        heading = "### Contract"
+        pin = {"heading": heading, "line_span": [1, 2]}
+        section = heading + "\nfirst\n\n#### Rule\nlast"
+        following = "\n\n### Next\n"
+        for example in ("~~~~md\n" + section + "\n~~~\n" + heading + "\n~~~~\n\n",
+                        "<pre>\n" + section + following + "</pre>\n\n",
+                        "---\nname: skill\n" + heading + "\n---\n",
+                        "> " + heading + "\n\n"):
+            with self.subTest(example=example):
+                self.assertEqual(_pinned_source_text(pin, example + section + following), section)
+                with self.assertRaises(ValueError):
+                    _pinned_source_text(pin, example + following)
+        for changed in (section + "\nextra", section.removesuffix("\nlast")):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(_pinned_source_text(pin, changed + following), section)
+        with self.assertRaises(ValueError):
+            _pinned_source_text(pin, section + following + section + following)
+
     def test_skill_pin_covers_the_complete_behavior_contract_section(self):
-        """Moving or trimming the safety section must break the source pin."""
+        """The current pin covers the complete safety contract."""
         source = next(item for item in self.manifest["pin_revision"]["sources"]
                       if item["path"].endswith("/SKILL.md"))
-        lines = (_REPO_ROOT / source["path"]).read_text(
-            encoding="utf-8").splitlines()
-        start, end = source["line_span"]
-        section = lines[start - 1:end]
-        self.assertTrue(section[0].startswith("### 关键行为契约"))
+        self.assertTrue(source["heading"].startswith("### 关键行为契约"))
+        section = _pinned_source_text(source, (_REPO_ROOT / source["path"]).read_text(encoding="utf-8"))
         self.assertEqual(
-            [int(match.group(1)) for line in section
+            [int(match.group(1)) for line in section.splitlines()
              if (match := re.match(r"^(\d+)\. \*\*", line))],
             list(range(1, 12)))
-        self.assertIn("细则不可读即停止", "\n".join(section))
-        following = next(line for line in lines[end:] if line.strip())
-        self.assertTrue(following.startswith("### "), following)
+        self.assertIn("细则不可读即停止", section)
         last = self.manifest["pin_revision"]["rebaseline"]["last"]
         self.assertEqual(source["source_revision"], last["source_revision"])
         self.assertTrue(last["prior"], "rebaseline must preserve old source pins")

@@ -38,7 +38,7 @@
   },
   "pin_revision": {
     "purpose": "M0 契约源 pin revision（FEAT-049 交付物⑥）——批 2.0 复跑对照锚：契约源被改即可检测；检测发生在批 2.0 复跑对照，非法人 gate（契约源正常维护演进时按契约变更流程重置本 pin）",
-    "span_hash_recipe": "sha256 of '\\n'.join(path.read_text(encoding='utf-8').splitlines()[start-1:end]) — 1-based inclusive line span, LF-normalized",
+    "span_hash_recipe": "SHA-256 of UTF-8 lines joined with LF (splitlines). For heading pins, select the unique Markdown section through its last nonblank line; line_span records the original coordinates. Historical pins without a heading use the inclusive 1-based line_span.",
     "sources": [
       {
         "path": "skills/software-project-governance/references/behavior-protocol.md",
@@ -54,6 +54,7 @@
       {
         "path": "skills/software-project-governance/SKILL.md",
         "section": "关键行为契约完整注入节（C1–C11）——含完整细则必读与不可读停止边界；FIX-450 已审正文迁移",
+        "heading": "### 关键行为契约（MUST；完整规则：references/behavior-protocol.md M7.4/M7.7/M7.8）",
         "line_span": [
           221,
           235

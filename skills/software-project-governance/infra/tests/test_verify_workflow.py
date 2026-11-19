@@ -9658,8 +9658,8 @@ class GovernanceStatusContractTests(unittest.TestCase):
         cleanup = (vw.ROOT / "commands" / "governance-cleanup.md").read_text(encoding="utf-8")
         for text in (governance, init):
             self.assertIn("插件残留清理删除面", text)
-            self.assertIn("cleanup.py --dry-run", text)
-            self.assertIn("确认后再执行 `python <plugin_home>/infra/cleanup.py`", text)
+            self.assertIn('python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>" --dry-run', text)
+            self.assertRegex(text.split('--target "<plugin_root>" --dry-run', 1)[1].splitlines()[0], r'确认.*(?:同一目标|--target "<plugin_root>")')
         # FEAT-041 rebase: the file carries the shared base once (strict is
         # composed from it), so the dual-template guarantee moves to the
         # composed templates: each injected profile carries the deletion
@@ -23166,9 +23166,9 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # ticket.
     # Bootstrap reads the root and hot fields together; these sizes bind the new template bytes.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
-        "lightweight": 5282,
-        "standard": 10191,
-        "strict": 11079,
+        "lightweight": 5266,
+        "standard": 10177,
+        "strict": 11065,
         "secondary-thin": 2614,
     }
 

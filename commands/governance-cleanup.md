@@ -27,10 +27,10 @@ canonical manifest 是**单一事实源**：声明"当前版本应该有哪些�
 
 ### Step 1: 检测（dry-run）
 
-运行声明式清理脚本进行检测：
+从本次安装信息确认工作流独占的 `<plugin_root>`。宿主工作目录或共享技能父目录不能用来推定目标。归属不明时跳过清理。用同一显式目标预演并展示清单：
 
 ```bash
-python skills/software-project-governance/infra/cleanup.py --dry-run
+python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>" --dry-run
 ```
 
 脚本自动完成：
@@ -61,15 +61,9 @@ python skills/software-project-governance/infra/cleanup.py --dry-run
 
 ### Step 4: 执行清理
 
+只对已确认清单中的类别执行。默认包括 P0、P1、P2；仅清理 P0 或 P0、P1 时，分别追加 `--categories P0` 或 `--categories P0,P1`。
 ```bash
-# 全部清理
-python skills/software-project-governance/infra/cleanup.py --target <plugin_cache_dir>
-
-# 仅清理 P0
-python skills/software-project-governance/infra/cleanup.py --target <plugin_cache_dir> --categories P0
-
-# 仅清理 P0 + P1
-python skills/software-project-governance/infra/cleanup.py --target <plugin_cache_dir> --categories P0,P1
+python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>"
 ```
 
 清理顺序：先删文件，后删空目录。`.git/` 和 `.governance/` 在任何情况下都不会被删除（硬编码保护 + manifest exclude 双保险）。

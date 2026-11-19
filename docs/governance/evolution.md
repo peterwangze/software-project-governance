@@ -34,6 +34,10 @@ FEAT-124 用 FIX-502 的修复及逆向变更、AUDIT-165 的两组归档数据�
 
 ## 下一轮的判断依据
 
+FEAT-125 把 DSH 安装说明收回适配器，让影响证据直接引用已审查的 Git 内容，让普通启动复用一次根定位。三次调整都保留了用户原来的操作入口。继续精简时，可以从一笔事务反向追踪事实由谁产生、谁要据此作决定，以及哪种失败需要停止。日常技能保留这些判断，恢复、升级、清理的操作细则在触发时读取。单独分发 `skills/` 的宿主也必须能完成承诺的操作。[宿主分发契约](../../skills/software-project-governance/core/protocol/plugin-contract.md) · [FEAT-125 变更](https://github.com/peterwangze/software-project-governance/compare/411a4b3...2a4e696)
+
+技能前言曾多出一行，十一条关键契约正文未变，同一份内容却需要重新登记行号才能通过 CI。维护检查现在用 Markdown 章节定位，再对原始正文验摘要。无关段落可以移动。同名章节、已审条款的删改或把整段藏进代码示例都会触发复核。历史清单仍能按当时的行段还原。[原行号修正](https://github.com/peterwangze/software-project-governance/commit/a4b1aa421ee449f55c24fc2889acc832a0b21ba2) · [Markdown 解析器的源行映射](https://markdown-it-py.readthedocs.io/en/latest/using.html)
+
 在 Codex 和 DSH 接到合适的真实事务时，分别观察新资源获用、试用后淘汰、探索受限和成熟直修。每组对照保持输入、权限、预算和验收标准相同。从派发开始计时，直到执行者第一次直接查询、复现或试用与验收缺口有关的资源。未到达这一步的任务也计入受理总数，记下暂停原因。比较两条路径时先看成品和通过率，再在同质量的结果间比较耗时与成本。普通 Codex 交接和 DSH 本地入口已有回执，DSH 同条件模型成品仍待补样。
 
 同一缺口在多个项目重复出现，才考虑上移到治理核心。退出一项责任前，找出当前读取者、独有保障与承接点，分别验证正常入口、错误输入和旧版回放。当前承诺和独立签收证据继续按原索引查阅。历史材料按原路径执行 `git show 7f49227:<路径>`，更早一批可使用 `7b9fd37`。[本轮清理前的版本树](https://github.com/peterwangze/software-project-governance/tree/7f49227a973955502dea67b7880eb501810eb391)

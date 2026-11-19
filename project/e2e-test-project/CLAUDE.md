@@ -27,7 +27,7 @@
 2. **首次交互前置（FEAT-034）**：热数据就绪 → MUST AskUserQuestion 首次交互（最小状态行：模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数；deferred 健康位显示「待检查」）；深检后置 ≠ 可选——推进类动作前 MUST 补齐；升级待处理确认随本次首次交互 ask 一并呈现（Scenario C 同口径）。
 3. **Execution Packet**：读 `.governance/execution-packets.json` 当前 TASK_ID 短包约束执行边界；活跃 P0/P1 缺包 → `execution-packet --write` 后再读（Check 18c 阻断缺包）。
 4. **恢复与感知**：session-snapshot 进行中→carry-over；待确认决策→查时效；风险 escalation deadline ≤ 今天→立即升级；`archive/index.md` 存在→归档证据 = 有效证据；脱轨（复盘 >7 天 + 新 commit 无更新）→提醒；`.git/hooks/` 三 hook 缺失→提示重装（命令 §B1）。
-5. **版本变化检测 + bootstrap 升级（FEAT-035 确认门）**：安装版本 > 记录版本 → **呈现升级待处理**（AskUserQuestion 升级摘要：版本跨度 + CHANGELOG 要点 + 写操作清单 + 回滚方式；默认「执行升级（推荐）」）——**用户未响应前零写操作**；确认后执行 A~E 序列（§B1 全文：B 升级入口段——深检前置，版本升级写序列属推进类动作（DEC-207② P2-1 / M5.5 条 3）；C 结构补全（`.git/hooks/post-commit` 不存在→提示安装；插件残留清理删除面——cleanup.py --dry-run 先行，确认后再执行 `python <plugin_home>/infra/cleanup.py`）→ **D. 更新 plan-tracker `工作流版本`** → E 持续归档触发检测与执行（dry-run 先行；归档完整性失败 → 发布/版本 bump 收尾场景 MUST 阻断完成；无可归档数据 → 跳过））。
+5. **版本变化检测 + bootstrap 升级**。安装版高于项目记录时**呈现升级待处理**。AskUserQuestion 列出版本跨度、CHANGELOG 要点、写入清单和回滚方式，默认「执行升级（推荐）」。**用户未响应前零写操作**。版本升级写序列属推进类动作（DEC-207② P2-1 / M5.5 条 3），先深检再按 §B1 更新受管段、补计划结构。`.git/hooks/post-commit` 不存在时只提示安装。插件残留清理删除面仅对已确认的独占安装根预演 `python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>" --dry-run`，另获确认才清理同一目标，归属不明则跳过。**D. 更新 plan-tracker `工作流版本`**。持续归档触发检测与执行按 §B1 在宿主根进行。无可归档数据则跳过，完整性失败时发布/版本 bump 收尾场景 MUST 阻断完成。
 
 **用户要做的仍然只有：/plugin update → 下次会话。** 检测到版本差 → 呈现升级待处理（默认执行升级（推荐）），用户未响应前零写操作。
 

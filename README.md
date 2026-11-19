@@ -498,6 +498,8 @@ python skills/software-project-governance/infra/verify_workflow.py status       
 python skills/software-project-governance/infra/verify_workflow.py gates        # 所有 Gate
 ```
 
+CI 使用 Python 3.11。维护者运行全量单测时，先执行 CI 中的 `Install test dependencies`，再运行 `python -m unittest discover -s skills/software-project-governance/infra/tests`。[CI 配置](.github/workflows/ci.yml)
+
 ## 内部文档
 
 以下文档供工作流开发者和贡献者参考，普通用户不需要阅读：

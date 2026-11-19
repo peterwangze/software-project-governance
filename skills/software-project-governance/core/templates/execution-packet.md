@@ -128,8 +128,7 @@
         "independent review evidence or explicit degraded review evidence"
       ],
       "next_commands": [
-        "python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v",
-        "python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues"
+        "Use acceptance_contract.command once it specifies the host project's runnable check."
       ],
       "done_definition": [
         "Plan-tracker closure path is satisfied.",
@@ -145,8 +144,12 @@
 ## 生成命令
 
 ```bash
-python skills/software-project-governance/infra/verify_workflow.py execution-packet --write
+python "<plugin_home>/infra/verify_workflow.py" --project-root "<项目目录>" execution-packet --write
 ```
+
+生成器从当前项目 `.governance/` 下的 `intake.record` 读取申报的文件范围和验收原文。工单内的需求依据可能是用户引文、决议或会话引用。当前来源按 `task-priority-analysis` 裁决，`intake.demand_revisions` 指向变更依据。旧包可用 `execution-packet --task <ID>` 预览最新定位。旧工单缺少验收原文时，明确标为“验收要求”的计划列可以提供预期结果。重跑保留人工契约，只有从计划自动填入且尚未编辑的预期结果才随计划修订。
+
+默认的 `next_commands` 指向 `acceptance_contract.command`。在该字段填写一次项目自身可运行的命令即可。验收原文用于核对预期结果，实际运行后填写 `last_run`。
 
 ## 门禁
 

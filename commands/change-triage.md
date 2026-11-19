@@ -2,15 +2,17 @@
 
 > **FIX-237.4 / ADR-017 §4.4**：产品代码新任务（涉及 `skills/**`、`agents/**`、`infra/**`、`commands/**`、`adapters/**` 等）**MUST** 先运行本命令完成五步 triage 并产出机器 triage 记录，之后才允许创建 task。快速通道仅限 `.governance/` 治理记录（FIX-228 边界）。
 >
-> **FEAT-111 / DEC-377④（prior-art 入账门禁）**：设计/研究类任务族（`FEAT`/`DESIGN`/`RESEARCH`/`AUDIT`——从仓库任务族词汇派生的语义子集）triage 时 **MUST** 附外部输入面（`--prior-art`：先例/竞品/外部证据引用，如 Rust RFC Prior art 节、专利审查 prior-art 检索指南、竞品文档链接）；缺失或占位串（空/`TO_BE_DEFINED`/`待定` 族）→ **拒收**（fail-closed，退出码 2 零写入）。执行/修复类（`FIX`/`REL`/`MAINT` 等族）豁免，记录以 `prior_art_required=false` 披露。Check 32 对生效日（2026-10-29）起的设计/研究类记录强制校验同一面（此前入账的不可变记录与执行族豁免）。
+> 设计与研究类任务（`FEAT`、`DESIGN`、`RESEARCH`、`AUDIT`）须引用外部先例或证据。执行与修复类可按需提供来源（FEAT-111 / DEC-377④）。
 
 ## 命令
 
+以下以可复现的 CLI 缺陷为例。按本次事务替换任务编号、路径和验收条件。
+
 ```powershell
 python skills/software-project-governance/infra/verify_workflow.py change-triage `
-  --task FIX-241 --title "..." --priority P2 --version 0.73.0 `
-  --depends-on "FIX-237" --files "skills/software-project-governance/infra/x.py" `
-  --reason "triage 理由"
+  --task FIX-241 --title "保留重复传入的候选来源" --priority P2 `
+  --files "skills/software-project-governance/infra/verify_workflow.py" `
+  --demand-source active-defect --acceptance "传入两次 --prior-art，记录按输入顺序保留两条"
 ```
 
 ## 输入参数
@@ -20,7 +22,10 @@ python skills/software-project-governance/infra/verify_workflow.py change-triage
 | `--task` | ✅ | 新任务 ID（`PREFIX-NNN`，如 `FIX-241`） |
 | `--priority` | ✅ | 提议优先级 `P0`/`P1`/`P2`（结合 in-flight + 版本链判定） |
 | `--files` | ✅ | 新任务将修改的产品文件（逗号分隔；`.governance/` 快速通道不适用本命令） |
-| `--prior-art` | 设计/研究类 ✅ | 外部输入面引用（逗号/分号分隔）。**设计/研究类族（`FEAT`/`DESIGN`/`RESEARCH`/`AUDIT`）必填**：引用先例/竞品/外部证据（如 Rust RFC Prior art 节、专利审查 prior-art 检索指南）；缺失或占位串拒收（FEAT-111 / DEC-377④）；执行/修复族豁免（可自愿携带） |
+| `--demand-source` | ✅ | 需求来源，取 `user-named`、`active-defect` 或 `machine-signal`。 |
+| `--demand-basis` | 用户点名时 ✅ | 用户原话或可回查的会话、决策记录。 |
+| `--acceptance` | 否 | 事务的具体通过条件，供执行包沿用。 |
+| `--prior-art` | 设计/研究类 ✅ | 每个来源可各传一次，也可用逗号或分号分隔多个来源。按输入顺序入账，试用结论由事务样本验证。 |
 | `--version` | 否 | 目标版本（semver `X.Y.Z` 或 `未规划版本`，默认 `未规划版本`） |
 | `--depends-on` | 否 | 任务族依赖 ID（逗号分隔；`RISK-`/`DEC-`/`REVIEW-` 等跨实体引用自动忽略） |
 | `--title` | 否 | 一句话任务标题 |

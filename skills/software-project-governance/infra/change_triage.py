@@ -214,6 +214,13 @@ def normalize_prior_art_entries(entries) -> list:
     return [str(e).strip() for e in (entries or []) if str(e).strip()]
 
 
+def split_cli_items(raw) -> list:
+    """Read comma/semicolon lists from one or more CLI option values in order."""
+    groups = [raw] if isinstance(raw, str) else (raw or [])
+    return [item.strip() for group in groups for item in re.split(r"[,;]", group)
+            if item.strip()]
+
+
 def split_dep_ids(raw: str) -> list:
     """Extract task-family dependency IDs from a raw ``--depends-on`` cell.
 
@@ -1305,14 +1312,10 @@ def agent_locks_acquire_cli(args, *, governance_dir, repo_root,
     except Exception:
         pass
 
-    def _split(raw):
-        return [f for f in str(raw or "").replace(";", ",").split(",")
-                if f.strip()]
-
     summary = acquire_dispatch_locks(
         task_id=getattr(args, "task", ""),
-        files=_split(getattr(args, "files", "")),
-        expected_new=_split(getattr(args, "expected_new", "")),
+        files=split_cli_items(getattr(args, "files", "")),
+        expected_new=split_cli_items(getattr(args, "expected_new", "")),
         agent_role=getattr(args, "role", "") or "Developer",
         coordinator_session=getattr(args, "session", "") or "",
         description=getattr(args, "description", "") or "",
@@ -1418,7 +1421,7 @@ def _intake_demand_source(task_id, priority, demand_source, demand_basis):
 def _build_triage_record(task_id, title, priority_context, version_result,
                          depends_on, files, reason, demand_source,
                          demand_basis, dependency, conflicts, side_effect,
-                         prior_art_entries, prior_art_required):
+                         prior_art_entries, prior_art_required, acceptance=""):
     """FIX-417 (moved verbatim from run_triage): assemble the immutable
     machine record (TRIAGE_SCHEMA_VERSION 1 — additive keys only).
 
@@ -1473,6 +1476,8 @@ def _build_triage_record(task_id, title, priority_context, version_result,
     }
     record["demand_source"] = demand_source
     record["demand_basis"] = demand_basis
+    if isinstance(acceptance, str) and acceptance.strip():
+        record["acceptance"] = acceptance
     # FEAT-111 / DEC-377④ — prior-art external-input face（additive，schema
     # 保持 1——FIX-271 先例）：设计/研究类 required=true 且 entries 非空占位；
     # 执行/修复类 required=false 披露豁免（entries 可自愿携带）。
@@ -1693,7 +1698,7 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     record = _build_triage_record(
         task_id, title, priority_context, version_result, depends_on,
         files, reason, demand_source, demand_basis, dependency, conflicts,
-        side_effect, prior_art_entries, prior_art_required)
+        side_effect, prior_art_entries, prior_art_required, acceptance)
 
     # Machine-write the triage record + evidence row.
     if evidence_path is None:
@@ -1730,6 +1735,7 @@ __all__ = [
     "PRIORITIES",
     "LOCK_FILE_NAME",
     "DEFAULT_LOCK_TTL_SECONDS",
+    "split_cli_items",
     "split_dep_ids",
     "run_dependency_analysis",
     "parse_version_chain",

@@ -1,13 +1,13 @@
 # Agent 调度模板
 
-Coordinator 负责派发前的并发预检、取锁和收尾。派发使用宿主的子代理入口，只发送填好的下方工单。锁与隔离见[行为协议 M7.6、M7.6a](behavior-protocol.md)，审查结论由 Coordinator 按 M7.4 用 `review-record` 记入。
+需要派发子代理时，Coordinator 按[行为协议 M7.6、M7.6a](behavior-protocol.md) 预检并发、取锁和收尾，通过宿主仅发送填好的工单。审查结论按 M7.4 用 `review-record` 记入。
 
 ## 模板
 
 ````
 ## {task_id} — {task_summary}
 
-你是 {agent_role} Agent。执行前依据角色定义 `{role_definition_path}` 和任务规范 `{task_skill_path}` 工作。宿主已注入全文的部分直接使用，其余从相应路径读取。
+你是 {agent_role} Agent，按角色定义 `{role_definition_path}` 和任务规范 `{task_skill_path}` 执行，只补读宿主尚未注入的部分。
 
 - 任务与原意：{task_description}
 - 可修改范围：{file_list}
@@ -16,7 +16,7 @@ Coordinator 负责派发前的并发预检、取锁和收尾。派发使用宿�
 - 执行约束：{hard_gates}
 - 真实环境约束：{destructive_redlines}
 
-按任务描述执行；如有待试用的资源，先在授权范围内用本事务样本验证。按约定入口验收，返回工件、观察和待解决项；采用或排除候选时交回理由与验收证据。
+有待试资源时，在授权与预算内用事务样本验证并交代取舍。候选未达标，用原验收条件复测可行备选。交回工件和验收结果，仍受阻时附失败样本和待决项。
 
 只修改授权范围内的文件。用户交互、最终决策、跨代理协调及治理状态写回由 Coordinator 负责。仅在工单已预授权时，可向指定 incidents 日志追加真实环境操作记录。
 ````
@@ -25,12 +25,12 @@ Coordinator 负责派发前的并发预检、取锁和收尾。派发使用宿�
 
 | 占位符 | 填入内容 |
 | --- | --- |
-| `{task_id}`、`{task_summary}`、`{priority}` | 沿用现有任务编号、摘要、优先级。 |
-| `{agent_role}`、`{role_definition_path}`、`{task_skill_path}` | 角色名及本次实际使用的角色定义和任务 SKILL 路径。 |
-| `{task_description}` | 用户原意、本次要解决的具体缺口。依[行为协议 M10](behavior-protocol.md) 判断，需探索时先用宿主已授权的渠道检索，交接候选来源、取舍和试用结果，或说明待试项。可跳过或受限时写明依据和可行路径。已有回执可直接引用。 |
-| `{file_list}` | 获准修改的路径。只读任务注明只读。 |
-| `{acceptance_criteria}` | 要交回的工件、正常验收入口、可观察的完成条件及结果记录位置。 |
-| `{hard_gates}` | 此事务的硬门槛。执行包有建议步数预算时在此标明建议值。 |
+| `{task_id}`、`{task_summary}`、`{priority}` | 现有任务编号、摘要和优先级。 |
+| `{agent_role}`、`{role_definition_path}`、`{task_skill_path}` | 角色名、角色定义和绑定的 SKILL 路径。 |
+| `{task_description}` | 用户原意与本次缺口。宿主 `.governance/<intake.record>` 给出受理依据和候选资源 `prior_art`。当前来源沿用 `task-priority-analysis` 的裁决；有修订时从 `intake.demand_revisions` 取依据，旧包缺少定位可用 `execution-packet --task <ID>` 刷新预览。按[行为协议 M10](behavior-protocol.md) 从宿主授权渠道补缺，引用试用回执或标明待试项。跳过或受限时注明依据和可行路径。 |
+| `{file_list}` | 获准路径。沿用已明确的 `allowed_change_scope`，只读任务标明只读。 |
+| `{acceptance_criteria}` | 沿用已明确的 `acceptance_contract`，给出工件、正常验收入口、可观察的完成条件和结果位置。 |
+| `{hard_gates}` | 本事务的硬门槛。有建议步数预算时注明建议值。 |
 | `{destructive_redlines}` | 按下节填写。 |
 
 ## 真实环境任务

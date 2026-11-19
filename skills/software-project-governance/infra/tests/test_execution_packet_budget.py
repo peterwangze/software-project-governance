@@ -230,6 +230,99 @@ class ExecutionPacketWriteTests(unittest.TestCase):
              mock.patch.object(vw, "_active_execution_packet_tasks", _fake_tasks):
             vw.cmd_execution_packet(args)
 
+    def packet(self, task_id="FIX-201"):
+        return json.loads(self.path.read_text(encoding="utf-8"))["packets"][task_id]
+
+    def test_host_intake_seeds_existing_scaffold_and_preserves_manual_contract(self):
+        run = lambda args: subprocess.run(args, cwd=self.root, check=True, capture_output=True)
+        run(self.command + ["--task", "FIX-201"])
+        self.assertTrue(self.packet()["acceptance_contract"]["expected_output"].startswith("TO_BE_DEFINED"))
+        criteria = '保存「引号」及分号；\n重开时仍逐字相同。 $(Get-Item .)'
+        basis = "DEC-150；会话记录"
+        run(self.command[:-2] + ["change-triage", "--task", "FIX-201", "--priority", "P1",
+                                 "--demand-source", "user-named", "--demand-basis", basis,
+                                 "--files", "src/export.py,tests/test_export.py", "--acceptance", criteria])
+        run(self.command + ["--task", "FIX-201"])
+        packet = self.packet()
+        record = self.path.parent / packet["intake"]["record"]
+        original = json.loads(record.read_text(encoding="utf-8"))
+        self.assertEqual(original["acceptance"], criteria)
+        self.assertEqual(original["demand_source"], "user-named")
+        self.assertEqual(original["demand_basis"], basis)
+        self.assertNotEqual(packet["goal"], basis)
+        self.assertEqual(packet["allowed_change_scope"], ["src/export.py", "tests/test_export.py"])
+        self.assertEqual(packet["acceptance_contract"]["expected_output"], criteria)
+        self.assertIsNone(packet["acceptance_contract"]["last_run"]["exit_code"])
+        self.assertNotIn(criteria, packet["next_commands"])
+        self.assertIn("acceptance_contract.command", packet["next_commands"][0])
+
+        packet["allowed_change_scope"] = ["tests/test_export.py"]
+        packet["acceptance_contract"].update(expected_output="人工约定", command="python check_export.py")
+        packet["next_commands"] = ["python check_export.py", "python verify_report.py"]
+        self.path.write_text(json.dumps({"FIX-201": packet}), encoding="utf-8")
+        run(self.command)
+        self.assertEqual(self.packet(), packet)
+        run(self.command[:-2] + ["demand-source-revise", "--task", "FIX-201", "--to", "machine-signal",
+                                 "--basis", "复核后归入自动诊断建议"])
+        run(self.command)
+        intake = self.packet()["intake"]
+        events = (self.path.parent / intake["demand_revisions"]).read_text(encoding="utf-8").splitlines()
+        from task_priority import resolve_demand_source
+        self.assertEqual(resolve_demand_source("FIX-201", "", [original], list(map(json.loads, events))),
+                         "machine-signal")
+        self.assertEqual(set(intake), {"record", "demand_revisions"})
+        self.assertEqual(self.packet()["next_commands"], packet["next_commands"])
+        record.unlink()
+        before = self.path.read_bytes()
+        result = subprocess.run(self.command, cwd=self.root, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_legacy_record_and_named_plan_criteria_follow_only_unedited_values(self):
+        gov = self.path.parent
+        records = gov / "change-triage"
+        records.mkdir()
+        (records / "FIX-201.json").write_text(json.dumps({
+            "task_id": "FIX-201", "schema_version": 1, "files": ["a.py"],
+        }), encoding="utf-8")
+        plan = gov / "plan-tracker.md"
+        text = plan.read_text(encoding="utf-8")
+        run = lambda: subprocess.run(self.command, cwd=self.root, check=True, capture_output=True)
+        run()
+        self.assertEqual(self.packet()["intake"], {"record": "change-triage/FIX-201.json"})
+        self.assertTrue(self.packet()["acceptance_contract"]["expected_output"].startswith("TO_BE_DEFINED"))
+        plan.write_text(text.replace("闭环路径", "验收要求"), encoding="utf-8")
+        run()
+        self.assertEqual(self.packet()["acceptance_contract"]["expected_output"], "one")
+        plan.write_text(plan.read_text(encoding="utf-8").replace("| one |", "| revised |"), encoding="utf-8")
+        run()
+        self.assertEqual(self.packet()["acceptance_contract"]["expected_output"], "revised")
+        self.assertNotIn("intake", self.packet("FIX-202"))
+        doc = json.loads(self.path.read_text(encoding="utf-8"))
+        contract = doc["packets"]["FIX-201"]["acceptance_contract"]
+        contract["expected_output"] = "人工验收条件"
+        self.path.write_text(json.dumps(doc), encoding="utf-8")
+        plan.write_text(text, encoding="utf-8")
+        run()
+        self.assertEqual(self.packet()["acceptance_contract"]["expected_output"], "人工验收条件")
+        self.assertNotIn("expected_output_from_plan", self.packet()["acceptance_contract"])
+        self.assertTrue(self.packet("FIX-202")["acceptance_contract"]["expected_output"].startswith("TO_BE_DEFINED"))
+
+    def test_malformed_or_wrong_task_intake_never_overwrites_packet_document(self):
+        records = self.path.parent / "change-triage"
+        records.mkdir()
+        path = records / "FIX-202.json"
+        path.write_text("{", encoding="utf-8")
+        subprocess.run(self.command + ["--task", "FIX-201"], check=True, capture_output=True)
+        original = self.path.read_bytes()
+        for bad in ("{", "null", json.dumps({"task_id": "FIX-303", "schema_version": 1, "files": []})):
+            with self.subTest(bad=bad):
+                path.write_text(bad, encoding="utf-8")
+                result = subprocess.run(self.command, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(path.name.encode(), result.stderr)
+                self.assertEqual(self.path.read_bytes(), original)
+
     def test_selected_build_reads_one_locked_snapshot_and_converts_legacy_map(self):
         untouched = {"manual": "旧契约"}
         self.path.write_text(json.dumps({"FIX-202": untouched}), encoding="utf-8")

@@ -2225,7 +2225,8 @@ class PriorArtGateCliTests(unittest.TestCase):
             "--version", self.planned, "--depends-on", "FIX-100",
             "--files", "skills/software-project-governance/infra/x.py",
             "--reason", "r",
-            "--prior-art", "Rust RFC 2333 prior_art 节;WIPO TISC 检索指南",
+            "--prior-art", "https://agentskills.io/specification",
+            "--prior-art", "https://spec.commonmark.org/0.31.2/;Rust RFC 2333,WIPO TISC",
         )
         self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
         record = json.loads(
@@ -2233,7 +2234,8 @@ class PriorArtGateCliTests(unittest.TestCase):
             .read_text(encoding="utf-8"))
         self.assertEqual(
             record["prior_art"],
-            ["Rust RFC 2333 prior_art 节", "WIPO TISC 检索指南"])
+            ["https://agentskills.io/specification", "https://spec.commonmark.org/0.31.2/",
+             "Rust RFC 2333", "WIPO TISC"])
         self.assertTrue(record["prior_art_required"])
 
     def test_cli_execution_family_without_prior_art_still_passes(self):

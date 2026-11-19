@@ -187,6 +187,7 @@ from bootstrap_aggregate import cmd_governance_bootstrap
 import task_row_update
 from task_row_update import cmd_task_row_update
 import governance_store
+from execution_packet import QUALITY_BUDGET_DIMENSIONS, build_execution_packet, merge_intake_contract
 from governance_store import (cmd_decision_append, cmd_evidence_append,
                               cmd_locks_amend, cmd_locks_extend,
                               cmd_locks_release)
@@ -12930,6 +12931,8 @@ def parse_current_active_tasks():
         )
         if task_idx is None:
             continue
+        acceptance = next((value for header, value in zip(table_header_cells, cells)
+                           if header == "验收要求"), "")
         if table_header_cells and table_header_cells[0] in {"任务ID", "ID"}:
             # FIX-481 header-semantic path — single source: the row is
             # parsed by the same public mapping dependency analysis uses.
@@ -12960,6 +12963,7 @@ def parse_current_active_tasks():
                 "target_version": dep.target_version,
                 "closure_path": "",
                 "status": dep.status,
+                **({"acceptance": acceptance} if acceptance else {}),
                 "raw_line": stripped,
             })
             continue
@@ -12983,6 +12987,7 @@ def parse_current_active_tasks():
             "target_version": target_version,
             "closure_path": closure_path,
             "status": status,
+            **({"acceptance": acceptance} if acceptance else {}),
             "raw_line": stripped,
         })
     return tasks
@@ -13786,14 +13791,6 @@ def check_acceptance_contracts(packet_path=None):
     return result
 
 
-QUALITY_BUDGET_DIMENSIONS = (
-    "performance",
-    "reliability",
-    "security",
-    "accessibility",
-    "ux",
-    "maintainability",
-)
 QUALITY_BUDGET_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
 QUALITY_BUDGET_PENDING_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
 QUALITY_BUDGET_EXEMPT_STATUSES = {"exempt", "exception", "waived", "not_applicable", "n/a", "豁免", "不适用"}
@@ -14544,105 +14541,7 @@ def check_interruption_policy(
     return result
 
 
-def build_execution_packet(task):
-    scope = task.get("closure_path") or task.get("title") or task["task_id"]
-    task_label = f"{task['task_id']} {task.get('title', '').strip()}".strip()
-    return {
-        "task_id": task["task_id"],
-        "priority": task.get("priority", ""),
-        "status": task.get("status", ""),
-        "goal": task_label,
-        "product_success_contract": {
-            "user": f"TO_BE_DEFINED: impacted persona for {task_label}",
-            "job_to_be_done": f"TO_BE_DEFINED: user job and desired outcome for {task_label}",
-            "non_goals": [
-                "TO_BE_DEFINED: explicit non-goal that protects the task from scope drift.",
-                "TO_BE_DEFINED: explicit non-goal that prevents process evidence from replacing product value.",
-            ],
-            "success_metrics": [
-                "TO_BE_DEFINED: user-visible outcome or acceptance scenario for this task.",
-                "TO_BE_DEFINED: runnable E2E, test, or command that proves the outcome.",
-            ],
-            "competitive_baseline": "TO_BE_DEFINED: mature-team or competing-product baseline this task must match.",
-            "done_definition": [
-                "TO_BE_DEFINED: product success evidence is recorded with concrete facts.",
-                "TO_BE_DEFINED: independent review confirms the user outcome is not replaced by process completion.",
-            ],
-        },
-        "acceptance_contract": {
-            "scenario": f"TO_BE_DEFINED: user-visible acceptance scenario for {task_label}",
-            "command": "TO_BE_DEFINED: runnable E2E, smoke, unit, or validation command",
-            "expected_output": "TO_BE_DEFINED: concrete pass output, assertion, or observable demo result",
-            "last_run": {
-                "status": "TO_BE_DEFINED",
-                "exit_code": None,
-                "summary": "TO_BE_DEFINED: last run output summary with evidence location",
-            },
-            "demo_evidence": "TO_BE_DEFINED: demo, CLI output, or artifact proving the scenario",
-        },
-        "quality_budget": {
-            "dimensions": {
-                dimension: {
-                    "threshold": f"TO_BE_DEFINED: minimum acceptable {dimension} threshold for {task_label}",
-                    "validation": f"TO_BE_DEFINED: command, check, metric source, or quality signal for {dimension}",
-                    "status": "TO_BE_DEFINED",
-                    "evidence": f"TO_BE_DEFINED: latest {dimension} result or planned evidence location",
-                    "exception": "",
-                }
-                for dimension in QUALITY_BUDGET_DIMENSIONS
-            }
-        },
-        "vertical_slice": {
-            "user_visible_slice": f"TO_BE_DEFINED: smallest user-visible slice for {task_label}",
-            "demo_path": "TO_BE_DEFINED: runnable demo, smoke test, URL, screenshot, or command proving the slice",
-            "scope_guard": f"TO_BE_DEFINED: files and behavior in scope for this slice only ({scope})",
-            "rollback_plan": "TO_BE_DEFINED: how to revert or disable the slice if validation fails",
-            "status": "TO_BE_DEFINED",
-            "evidence": "TO_BE_DEFINED: latest demo proof or planned evidence location",
-        },
-        "interruption_policy": {
-            "mode": "critical-only: default execute routine reversible work and record assumptions when needed",
-            "critical_triggers": [
-                "Ask the user when product intent is unclear.",
-                "Ask the user when acceptance standard or done criteria are unclear.",
-                "Ask the user before irreversible, release, risk acceptance, external dependency, or mode change decisions.",
-            ],
-            "auto_execute": [
-                "Run routine execution, local validation, focused code edits, and governance record updates when scope is known and reversible.",
-                "Commit and push normal single-task changes when validation, evidence, and review gates are satisfied.",
-            ],
-            "assumption_record": {
-                "assumption": "TO_BE_DEFINED: default choice used for a reversible non-critical ambiguity",
-                "basis": "TO_BE_DEFINED: fact source or repository pattern supporting the default",
-                "reversibility": "TO_BE_DEFINED: why the choice can be changed without product damage",
-                "validation": "TO_BE_DEFINED: command or demo that will verify the assumption",
-                "rollback": "TO_BE_DEFINED: how to revert if the assumption is wrong",
-            },
-            "interruption_budget": "At most one user interruption per work unit unless a new critical trigger appears.",
-        },
-        "allowed_change_scope": [
-            f"Only change files required by this task row: {scope}",
-            "Keep unrelated refactors, release version bumps, and fixture sync out of this task unless listed in the task scope.",
-        ],
-        "required_evidence": [
-            "evidence-log entry with 事实依据, 目标对齐, 用户影响, and 结构化事实 JSON",
-            "validation commands with exit_code and concise output summary",
-            "independent review evidence or explicit degraded review evidence that does not claim full separation",
-        ],
-        "next_commands": [
-            "python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v",
-            "python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues",
-        ],
-        "done_definition": [
-            task.get("closure_path") or "Task closure path from plan-tracker is satisfied.",
-            "Code Reviewer or matching Reviewer has APPROVED the product-code change.",
-            "Commit and push are completed for this single task.",
-        ],
-        "source": "plan-tracker.md##当前活跃事项",
-    }
-
-
-def generate_execution_packets(existing=None, *, task_ids=None):
+def generate_execution_packets(existing=None, *, task_ids=None, governance_dir=None):
     generated = {}
     existing = existing or {}
     if any(not isinstance(packet, dict) for packet in existing.values()):
@@ -14650,8 +14549,8 @@ def generate_execution_packets(existing=None, *, task_ids=None):
     for task in _active_execution_packet_tasks():
         if task_ids is not None and task["task_id"] not in task_ids:
             continue
-        base = build_execution_packet(task)
-        base.update(existing.get(task["task_id"], {}))
+        base = merge_intake_contract(build_execution_packet(task), existing.get(task["task_id"], {}),
+                                     task.get("acceptance", ""), governance_dir or SAMPLE_PATH.parent)
         base["task_id"] = task["task_id"]
         base["priority"] = task.get("priority", base.get("priority", ""))
         base["status"] = task.get("status", base.get("status", ""))
@@ -14717,7 +14616,7 @@ def cmd_execution_packet(args):
         path = EXECUTION_PACKET_PATH.resolve()
         with governance_store._TargetLock(path) if args.write else nullcontext():
             packets, metadata = _read_execution_packet_document(path, missing_ok=True)
-            payload = generate_execution_packets(existing=packets, task_ids=wanted)
+            payload = generate_execution_packets(existing=packets, task_ids=wanted, governance_dir=path.parent)
             generated = payload["packets"]
             if budget is not None:
                 for packet in generated.values():
@@ -24846,7 +24745,7 @@ def cmd_change_triage(args):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    from change_triage import derive_project_current_version, run_triage
+    from change_triage import derive_project_current_version, run_triage, split_cli_items
     if not SAMPLE_PATH.is_file():
         print(
             "change-triage: plan-tracker.md not found at {0}".format(SAMPLE_PATH),
@@ -24857,30 +24756,19 @@ def cmd_change_triage(args):
     # FIX-288 ⑨: project current version from the host roadmap — two-layer
     # version semantics (workflow version ≠ project version).
     current_version = derive_project_current_version(plan_tracker_text)
-    files = [
-        f.strip() for f in str(args.files or "").replace(";", ",").split(",")
-        if f.strip()
-    ]
     summary = run_triage(
         task_id=args.task,
         title=getattr(args, "title", "") or "",
         priority=args.priority,
         target_version=getattr(args, "version", "未规划版本") or "未规划版本",
         depends_on=getattr(args, "depends_on", "") or "",
-        files=files,
+        files=split_cli_items(args.files),
         reason=getattr(args, "reason", "") or "",
         acceptance=getattr(args, "acceptance", "") or "",
         declared_side_effects=getattr(args, "side_effects", "") or "",
         demand_source=getattr(args, "demand_source", "") or "",
         demand_basis=getattr(args, "demand_basis", "") or "",
-        # FEAT-111 / DEC-377④: prior-art intake gate — comma/semicolon
-        # split mirrors --files; design/research families without valid
-        # entries are rejected fail-closed inside run_triage (zero write).
-        prior_art=[
-            e.strip()
-            for e in str(getattr(args, "prior_art", "") or "")
-            .replace(";", ",").split(",") if e.strip()
-        ],
+        prior_art=split_cli_items(getattr(args, "prior_art", None)),
         plan_tracker_text=plan_tracker_text,
         current_version=current_version,
         governance_dir=GOVERNANCE_DIR,
@@ -26996,15 +26884,10 @@ def _build_cli_parser(parser_argv=()):
                         help="Traceability basis REQUIRED for user-named "
                              "(user quote / DEC ref / session-record anchor; "
                              "BC-4 防 出身洗白)")
-    ctri_p.add_argument("--prior-art", default="", dest="prior_art",
-                        help="Prior-art external-input references (comma/"
-                             "semicolon-separated) — REQUIRED for design/"
-                             "research task families (FEAT/DESIGN/RESEARCH/"
-                             "AUDIT): cite precedent/competitor/external "
-                             "evidence (e.g. Rust RFC Prior art 节、专利审查 "
-                             "prior-art 检索、竞品文档); missing or placeholder "
-                             "values are rejected fail-closed (FEAT-111 / "
-                             "DEC-377④; execution/repair families exempt)")
+    ctri_p.add_argument("--prior-art", action="append", metavar="REF",
+                        help="Precedent or external source. Repeat for each reference or "
+                             "separate with commas/semicolons. Required for FEAT, DESIGN, "
+                             "RESEARCH and AUDIT.")
     ctri_p.add_argument("--version", default="未规划版本",
                         help="Target version (semver X.Y.Z or 未规划版本)")
     ctri_p.add_argument("--depends-on", default="",
@@ -27016,7 +26899,7 @@ def _build_cli_parser(parser_argv=()):
     ctri_p.add_argument("--reason", default="",
                         help="Triage rationale (priority determination)")
     ctri_p.add_argument("--acceptance", default="",
-                        help="Acceptance-criteria text — step-e input: R5 "
+                        help="Acceptance criteria copied verbatim into triage and execution packets. R5 "
                              "banned real-env wording (真实安装/真实环境) "
                              "auto-attaches the R1 review condition "
                              "(FIX-271 / AUDIT-146)")

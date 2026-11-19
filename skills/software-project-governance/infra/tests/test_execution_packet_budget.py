@@ -273,6 +273,17 @@ class ExecutionPacketWriteTests(unittest.TestCase):
         self.assertIn("unsupported execution packet version", error)
         self.assertEqual(self.path.read_bytes(), raw)
 
+    def test_preview_of_other_task_refuses_malformed_packet_without_hiding_diagnostics(self):
+        raw = b'{"packets":{"FIX-202":"broken"}}'
+        self.path.write_bytes(raw)
+        with mock.patch.object(vw, "_active_execution_packet_tasks", _fake_tasks):
+            report = vw.check_execution_packets(self.path)
+        self.assertEqual(report["entries"][1],
+                         {"task_id": "FIX-202", "status": "FAIL", "issues": ["packet must be object"]})
+        with self.assertRaises(SystemExit):
+            self.write("FIX-201", write=False)
+        self.assertEqual(self.path.read_bytes(), raw)
+
     def test_failed_io_releases_lock_and_preserves_original(self):
         original = b'{ "packets": {} }'
         self.path.write_bytes(original)

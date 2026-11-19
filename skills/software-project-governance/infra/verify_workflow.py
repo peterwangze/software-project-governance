@@ -13612,8 +13612,6 @@ def _read_execution_packet_document(path, *, missing_ok=False):
         raise ValueError("packets must be object")
     if any(not governance_store._TASK_ID_RE.fullmatch(key) for key in packets):
         raise ValueError("execution packet map must be keyed by task ID")
-    if any(not isinstance(packet, dict) for packet in packets.values()):
-        raise ValueError("each execution packet must be object")
     metadata = {k: v for k, v in data.items() if k != "packets"} if "packets" in data else {}
     return packets, metadata
 
@@ -14830,12 +14828,13 @@ def build_execution_packet(task):
 def generate_execution_packets(existing=None, *, task_ids=None):
     generated = {}
     existing = existing or {}
+    if any(not isinstance(packet, dict) for packet in existing.values()):
+        raise ValueError("each execution packet must be object")
     for task in _active_execution_packet_tasks():
         if task_ids is not None and task["task_id"] not in task_ids:
             continue
-        packet = dict(existing.get(task["task_id"], {})) if isinstance(existing.get(task["task_id"]), dict) else {}
         base = build_execution_packet(task)
-        base.update(packet)
+        base.update(existing.get(task["task_id"], {}))
         base["task_id"] = task["task_id"]
         base["priority"] = task.get("priority", base.get("priority", ""))
         base["status"] = task.get("status", base.get("status", ""))

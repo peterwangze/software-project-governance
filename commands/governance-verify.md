@@ -21,6 +21,7 @@
 ## 执行流程
 
 ### Step 1: 检查是否已初始化
+- 复用同次启动、同一项目已确认的 `resolve`。独立调用时运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`；仅当退出码为 0、JSON 有效且 `resolve.resolved_root_ok == true` 时继续。仅旧 CLI 明确报告未知子命令时按 `commands/governance/bootstrap.md` 回退；其余失败 MUST STOP 并展示诊断。
 - **IF** `.governance/` 目录不存在 OR `.governance/plan-tracker.md` 不存在 → 返回错误 `VERIFY-ERR-001`（未初始化）
 - **ELSE** → 继续 Step 2
 
@@ -50,7 +51,7 @@
 - **IF** 最后更新日期距今 ≤ 7 天 → PASS
 
 ### Step 6: workflow 仓库专属检查（类别 E — 仅当适用时）
-- 沿用当前项目已确认的 `resolve.plugin_home`；独立调用时依 `commands/governance.md` 第一动作定位。根解析失败时 MUST STOP 并展示 diagnostic。
+- 沿用 Step 1 已确认的 `resolve.plugin_home`。
 - **IF** `<plugin_home>/infra/verify_workflow.py` 存在 → 执行 `python <plugin_home>/infra/verify_workflow.py`，捕获输出和退出码
   - **IF** 退出码 = 0 → PASS
   - **ELSE** → 记录为 `workflow_verify_failed`，附带脚本输出

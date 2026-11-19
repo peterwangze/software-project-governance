@@ -11,7 +11,7 @@
 ## 执行流程
 
 ### Step 1: 检查是否已初始化
-- 复用同次、同项目的 `resolve`；若尚未定位，先按 `commands/governance.md` 第一动作运行聚合入口。根未确认须停止。若 `resolve.governance_initialized == false` → 返回 `STATUS-ERR-001`（未初始化）。
+- 复用同次启动、同一项目已确认的 `resolve`。独立调用时运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`；仅当退出码为 0、JSON 有效且 `resolve.resolved_root_ok == true` 时继续。仅旧 CLI 明确报告未知子命令时按 `commands/governance/bootstrap.md` 回退；其余失败 MUST STOP 并展示诊断。若 `resolve.governance_initialized == false`，返回 `STATUS-ERR-001`（未初始化）。
 - **ELSE** → 继续 Step 2
 
 ### Step 2: 运行确定性状态命令（FIX-270 秒级快路径）

@@ -21,6 +21,17 @@
 - **让旧实验随证据退出。** 迁移工具曾从治理仓目录结构猜测其他项目的工作单元。在两个真实项目上，旧推断均未给出可用候选。按项目已有记录和人工确认迁移，坏数据保留原件。历史实验可在固定版本回放。[迁移与回放](../migration/dynamic-flow-gate-migration-0.55.0.md)
 - **同一次验收应能一次写完，日后能打开当时的原件。** 在两条写命令之间中断，会留下证据而任务仍在原状态。一次事务写入通过了同样的中断试验。按编号找历史的五道题，现行归档指针已全部命中；同号记录与勘误需要各自的原文位置。先在真实事务比较填写和找回的成本，再决定是否引入新的存储。[治理记录写入与检索实验](../research/process-records-storage-retrieval-2026-11-19.md)
 
+## 怎样判断一条角色指令值得留下
+
+SkillsBench 在 87 个任务、18 组模型与宿主配置上，加入针对任务编写的技能后，平均通过率从 33.9% 升到 50.5%。SWE-Skills-Bench 把 98 个公开技能分别放入真实软件仓库做配对验证，其中 92 个没有显著效果。两项研究的任务和技能来源不同。维护本项目的提示词时，先选一个真实失败和一个本来正确的对照，在相同输入、权限下看交付结果。[SkillsBench v4](https://arxiv.org/abs/2602.12670v4) · [SWE-Skills-Bench v2](https://arxiv.org/abs/2603.15401v2) · [Agent Skills 的评测方法](https://agentskills.io/skill-creation/evaluating-skills)
+
+| 事务 | 本项目采用的做法 |
+| --- | --- |
+| 代码评审 | 借鉴 Claude Code 审查插件对候选发现的二次核验。沿真实调用方比较改动前后的行为，用输入、位置、影响和能推翻初判的证据解释结论。评审者只读，复用原有审查和返工入口。[上游审查命令](https://github.com/anthropics/claude-plugins-official/blob/c905cd8fec340e465dd66990b82b95b6e45db212/plugins/code-review/commands/code-review.md) · [本项目审查技能](../../skills/code-review/SKILL.md) |
+| QA 与测试审查 | 借鉴 Aider 复用项目测试命令、把失败回交给执行者的方式，以及 k6 按指标定义阈值的做法。测用户入口和最终状态，保留每项指标的单位、方向与适用范围。单项验收可以独立完成，正式 G7 仍核对完整材料。[Aider 测试反馈](https://aider.chat/docs/usage/lint-test.html) · [k6 阈值](https://grafana.com/docs/k6/latest/using-k6/thresholds/) · [本项目测试技能](../../skills/stage-testing/SKILL.md) |
+
+FEAT-124 用 FIX-502 的修复及逆向变更、AUDIT-165 的两组归档数据做了四题匿名配对。新旧指令均满足预先冻结的 12 项判据。用 k6 回放既有观测，延迟上限、命中下限和阈值相等的四次判定都符合预期。另用上游 `skills-ref` 校验三份技能并生成全库 26 项发现清单，独立执行者仅凭名称和说明就为五个请求选对了入口，包括一次无需技能的请求。这些结果支持保留精简后的指令。整体成功率和交付耗时仍需用更多真实任务测量。[Agent Skills 参考实现](https://github.com/agentskills/agentskills/tree/83021e2be457a9b6679148719c1f6074f0ad975e/skills-ref)
+
 ## 下一轮的判断依据
 
 在 Codex 和 DSH 接到合适的真实事务时，分别观察新资源获用、试用后淘汰、探索受限和成熟直修。每组对照保持输入、权限、预算和验收标准相同。从派发开始计时，直到执行者第一次直接查询、复现或试用与验收缺口有关的资源。未到达这一步的任务也计入受理总数，记下暂停原因。比较两条路径时先看成品和通过率，再在同质量的结果间比较耗时与成本。普通 Codex 交接和 DSH 本地入口已有回执，DSH 同条件模型成品仍待补样。

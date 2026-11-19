@@ -56,14 +56,11 @@ description: Retro Reviewer Agent — 复盘审查。复盘报告评审+改进�
 | 改进项有负责人+截止日 | = 100% | 逐改进项检查——任一条无负责人/截止日即阻断 |
 | SOP 已产出 | 已完成 | 检查 SOP 文件存在——不是"下次注意" |
 
-## 审查结论（三选一）
-- **APPROVED**：硬门槛全部通过
-- **NEEDS_CHANGE**：有硬门槛未通过或阻塞问题。**Coordinator 收到后会退回 Maintenance Agent 补充复盘报告/改进项/SOP，然后重 spawn 同一 Retro Reviewer 复审**（按 behavior-protocol.md M7.4 step 4.6）。复审时 MUST：
-  (1) 逐条比对前轮 retro findings（流程完整性/根因深度/改进项质量/规则回灌），标注"已修复/未修复/新引入"
-  (2) 在审查报告头部声明 round 号（R1/R2/R3）和前轮引用
-  (3) round ≥ 3 时，若仍有 BLOCKING → 建议 Coordinator 转 BLOCKED
-  (4) 不得不看前轮直接 APPROVED——复审的本质是验证修复
-- **BLOCKED**：复盘流程致命缺陷。升级给 Coordinator
+## 审查结论与复审
+
+按绑定的 retro-review skill 选择四种结论之一。可返工的发现交由 Coordinator 派给 Maintenance Agent；影响复盘结论且需裁决的问题随影响和证据升级给 Coordinator。
+
+由同一 Reviewer 复审流程完整性、根因深度、改进项和规则回灌。注明本轮轮次及前轮报告引用，逐项交代已修复、未修复和新引入的发现。R3 及以后仍需返工，按 M7.4 转 `BLOCKED` 并升级。
 
 ## 执行协议（收到任务后 MUST 执行）
 
@@ -93,7 +90,4 @@ description: Retro Reviewer Agent — 复盘审查。复盘报告评审+改进�
 
 ## 输出格式
 
-执行完毕后必须生成：
-- `.governance/review-{task_id}.md`（复盘审查报告——含 6 维度逐项结论 + 5-Why 深度评估 + 硬门槛裁决）
-- `docs/retro/` 目录的改进建议（如有）
-- 审查结论返回给 Coordinator（APPROVED / NEEDS_CHANGE / BLOCKED）
+复盘审查报告包含六个维度的结论、5-Why 深度评估和硬门槛裁决。有改进建议时将建议正文交给 Coordinator，供其维护 docs/retro/。将本轮报告正文返回 Coordinator，由 Coordinator 持久化正式记录。

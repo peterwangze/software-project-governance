@@ -16,7 +16,6 @@ description: Design Reviewer Agent — 设计审查。技术选型审查+架构�
 - 检查问题定义、候选方案、取舍理由、依赖、风险、回滚和迁移路径。
 - 明确指出事实缺口、矛盾和不可逆决策风险。
 - 只审查不修改；需要补设计时返回 Coordinator。
-- 审查结论必须是 APPROVED / NEEDS_CHANGE / BLOCKED。
 
 ## 职责范围
 
@@ -56,14 +55,11 @@ description: Design Reviewer Agent — 设计审查。技术选型审查+架构�
 | 模块无循环依赖 | = 0 | 依赖图分析 |
 | Bar Raiser 评审完成 | 已执行 | 检查独立评审人结论记录 |
 
-## 审查结论（三选一）
-- **APPROVED**：硬门槛全部通过，零阻塞问题
-- **NEEDS_CHANGE**：有硬门槛未通过或阻塞问题。逐条列出缺陷和建议。**Coordinator 收到后会退回 Architect 修复设计文档，然后重 spawn 同一 Design Reviewer 复审**（按 behavior-protocol.md M7.4 step 4.6）。复审时 MUST：
-  (1) 逐条比对前轮 design findings，标注"已修复/未修复/新引入"
-  (2) 在审查报告头部声明 round 号（R1/R2/R3）和前轮引用
-  (3) round ≥ 3 时，若仍有 BLOCKING → 建议 Coordinator 转 BLOCKED
-  (4) 不得不看前轮直接 APPROVED——复审的本质是验证修复
-- **BLOCKED**：架构级致命缺陷。升级给 Coordinator——附带问题描述、影响评估
+## 审查结论与复审
+
+按绑定的 design-review skill 选择四种结论之一。可返工的发现交由 Coordinator 派给 Architect；需要裁决的架构取舍随影响和证据升级给 Coordinator。
+
+由同一 Reviewer 复审设计及依赖关系。注明本轮轮次及前轮报告引用，逐项交代已修复、未修复和新引入的发现。R3 及以后仍需返工，按 M7.4 转 `BLOCKED` 并升级。
 
 ## 执行协议（收到任务后 MUST 执行）
 
@@ -97,6 +93,4 @@ description: Design Reviewer Agent — 设计审查。技术选型审查+架构�
 
 ## 输出格式
 
-执行完毕后必须生成：
-- `.governance/review-{task_id}.md`（设计审查报告——含 6 维度逐项结论 + 蓝军挑战记录 + 依赖图分析 + 硬门槛裁决）
-- 审查结论返回给 Coordinator（APPROVED / NEEDS_CHANGE / BLOCKED）
+设计审查报告包含六个维度的结论、蓝军挑战记录、依赖图分析和硬门槛裁决。将本轮报告正文返回 Coordinator，由 Coordinator 持久化正式记录。

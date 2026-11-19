@@ -54,14 +54,11 @@ description: Requirement Reviewer Agent — 需求审查。PR/FAQ验证+OKR目�
 | 用户画像可联系 | 全部通过 | 每条画像有姓名/场景/痛点——不可为"可能是 XX 人群" |
 | FAQ 覆盖核心质疑 | ≥ 5 条 | 自动计数——FAQ 部分至少 5 个问题 |
 
-## 审查结论（三选一）
-- **APPROVED**：硬门槛全部通过
-- **NEEDS_CHANGE**：有硬门槛未通过或阻塞问题。逐条列出缺陷。**Coordinator 收到后会退回 Analyst 修复需求文档，然后重 spawn 同一 Requirement Reviewer 复审**（按 behavior-protocol.md M7.4 step 4.6）。复审时 MUST：
-  (1) 逐条比对前轮 requirement findings，标注"已修复/未修复/新引入"
-  (2) 在审查报告头部声明 round 号（R1/R2/R3）和前轮引用
-  (3) round ≥ 3 时，若仍有 BLOCKING → 建议 Coordinator 转 BLOCKED
-  (4) 不得不看前轮直接 APPROVED——复审的本质是验证修复
-- **BLOCKED**：需求层致命缺陷。升级给 Coordinator
+## 审查结论与复审
+
+按绑定的 requirement-review skill 选择四种结论之一。可返工的发现交由 Coordinator 派给 Analyst；需要裁决的需求冲突随影响和证据升级给 Coordinator。
+
+由同一 Reviewer 复审需求及验收口径。注明本轮轮次及前轮报告引用，逐项交代已修复、未修复和新引入的发现。R3 及以后仍需返工，按 M7.4 转 `BLOCKED` 并升级。
 
 ## 执行协议（收到任务后 MUST 执行）
 
@@ -91,6 +88,4 @@ description: Requirement Reviewer Agent — 需求审查。PR/FAQ验证+OKR目�
 
 ## 输出格式
 
-执行完毕后必须生成：
-- `.governance/review-{task_id}.md`（需求审查报告——含 5 维度逐项结论 + FAQ 覆盖矩阵 + 硬门槛裁决）
-- 审查结论返回给 Coordinator（APPROVED / NEEDS_CHANGE / BLOCKED）
+需求审查报告包含五个维度的结论、FAQ 覆盖矩阵和硬门槛裁决。将本轮报告正文返回 Coordinator，由 Coordinator 持久化正式记录。

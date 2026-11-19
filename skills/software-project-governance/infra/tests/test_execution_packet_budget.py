@@ -25,9 +25,12 @@ Run:
 """
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -118,7 +121,6 @@ class ExecutionPacketBudgetTests(unittest.TestCase):
     def test_cli_parser_accepts_budget_flag(self):
         """Subprocess smoke on the real parser wiring (read-only preview —
         no --write, so nothing touches .governance)."""
-        import subprocess
         engine = _INFRA_DIR / "verify_workflow.py"
         run = lambda *extra: subprocess.run(  # noqa: E731
             [sys.executable, str(engine), "execution-packet", *extra],
@@ -200,6 +202,148 @@ class ExecutionPacketBudgetTests(unittest.TestCase):
         issues = vw._execution_packet_field_issues(
             dict(base, budget={"max_steps": 120}))
         self.assertFalse([i for i in issues if "budget" in i])
+
+
+class ExecutionPacketWriteTests(unittest.TestCase):
+    def setUp(self):
+        workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        self.root = Path(workspace.name)
+        gov = self.root / ".governance"
+        gov.mkdir()
+        self.path = gov / "execution-packets.json"
+        (gov / "plan-tracker.md").write_text("\n".join([
+            "# 计划跟踪", "## 当前活跃事项",
+            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
+            "|--------|----|------|------|---------|---------|------|",
+            "| **P1** | FIX-201 | first | | | one | 🔄 进行中 |",
+            "| **P1** | FIX-202 | second | | | two | 🔄 进行中 |",
+        ]), encoding="utf-8")
+        self.command = [
+            sys.executable, "-X", "utf8", str(_INFRA_DIR / "verify_workflow.py"),
+            "--project-root", str(self.root), "execution-packet", "--write",
+        ]
+
+    def write(self, *tasks, write=True):
+        args = SimpleNamespace(write=write, task=tasks)
+        with mock.patch.object(vw, "EXECUTION_PACKET_PATH", self.path), \
+             mock.patch.object(vw, "_active_execution_packet_tasks", _fake_tasks):
+            vw.cmd_execution_packet(args)
+
+    def test_selected_build_reads_one_locked_snapshot_and_converts_legacy_map(self):
+        untouched = {"manual": "旧契约"}
+        self.path.write_text(json.dumps({"FIX-202": untouched}), encoding="utf-8")
+        read_text = Path.read_text
+        lockfile = self.path.parent / vw.governance_store.LOCK_DIR_NAME / (self.path.name + ".lock")
+
+        def read_locked(path, **kwargs):
+            self.assertEqual(path, self.path)
+            self.assertTrue(lockfile.is_file())
+            return read_text(path, **kwargs)
+
+        with mock.patch.object(Path, "read_text", autospec=True, side_effect=read_locked) as read, \
+             mock.patch.object(vw, "build_execution_packet", wraps=vw.build_execution_packet) as build:
+            self.write("FIX-201", "FIX-404")
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual([c.args[0]["task_id"] for c in build.call_args_list], ["FIX-201"])
+        stored = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(set(stored), {"version", "generated_at", "packets"})
+        self.assertEqual(stored["packets"]["FIX-202"], untouched)
+        self.assertEqual(set(stored["packets"]), {"FIX-201", "FIX-202"})
+
+    def test_invalid_documents_refused_without_changing_bytes(self):
+        for raw in (b"{", b"\xff", b"[]", b'{"packets":[]}', b'{"FIX-201":42}',
+                    b'{"notes":{}}', b'{"packets":{"notes":{}}}', b'{"**FIX-201**":{}}',
+                    b'{"packets":{"**FIX-201**":{}}}', b'{"packets":{"FIX-201":null}}',
+                    b'{"version":2,"packets":{}}'):
+            with self.subTest(raw=raw):
+                self.path.write_bytes(raw)
+                with self.assertRaises(SystemExit) as refusal:
+                    self.write("FIX-201")
+                self.assertEqual(refusal.exception.code, 1)
+                self.assertEqual(self.path.read_bytes(), raw)
+
+    def test_future_version_is_visible_to_readers_and_preview(self):
+        raw = b'{"version":2,"packets":{}}'
+        self.path.write_bytes(raw)
+        with self.assertRaises(SystemExit):
+            self.write("FIX-201", write=False)
+        packets, error = vw._load_execution_packets(self.path)
+        self.assertEqual(packets, {})
+        self.assertIn("unsupported execution packet version", error)
+        self.assertEqual(self.path.read_bytes(), raw)
+
+    def test_failed_io_releases_lock_and_preserves_original(self):
+        original = b'{ "packets": {} }'
+        self.path.write_bytes(original)
+        for failure in (
+            mock.patch.object(Path, "read_text", side_effect=PermissionError("read denied")),
+            mock.patch.object(vw.governance_store.os, "replace", side_effect=OSError("replace failed")),
+            mock.patch.object(vw.governance_store, "_TargetLock",
+                              side_effect=vw.governance_store.StoreError({"detail": "lock busy"})),
+        ):
+            with failure, self.assertRaises(SystemExit) as refusal:
+                self.write("FIX-201")
+            self.assertEqual(refusal.exception.code, 1)
+            self.assertEqual(self.path.read_bytes(), original)
+            self.assertEqual(list(self.path.parent.rglob("*.lock")), [])
+            self.assertEqual(list(self.path.parent.glob("*.tmp")), [])
+        with mock.patch.object(vw, "build_execution_packet") as build:
+            self.write("FIX-404")
+            build.assert_not_called()
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_failed_lock_acquisition_keeps_external_file_and_allows_same_process_retry(self):
+        lock = vw.governance_store._TargetLock(self.path)
+        lock.path.write_bytes(b"another writer")
+        with mock.patch.object(os, "open", side_effect=PermissionError("open denied")), \
+             self.assertRaises(SystemExit):
+            self.write("FIX-201")
+        self.assertEqual(lock.path.read_bytes(), b"another writer")
+        self.assertFalse(lock._inproc.locked())
+        # An undeletable stale lock must respect the normal contention timeout.
+        os.utime(lock.path, (1, 1))
+        with mock.patch.object(Path, "unlink", side_effect=PermissionError("unlink denied")):
+            self.assertFalse(lock._stale())
+        lock.path.unlink()
+        self.assertFalse(self.path.exists())
+        self.write("FIX-201")
+        self.assertTrue(self.path.is_file())
+
+    def test_failed_lock_pid_write_closes_descriptor_and_allows_same_process_retry(self):
+        lock = vw.governance_store._TargetLock(self.path)
+        with mock.patch.object(os, "write", side_effect=OSError("disk full")) as write, \
+             self.assertRaises(SystemExit):
+            self.write("FIX-201")
+        with self.assertRaises(OSError):
+            os.fstat(write.call_args.args[0])
+        self.assertFalse(lock.path.exists())
+        self.assertFalse(lock._inproc.locked())
+        self.assertFalse(self.path.exists())
+        self.write("FIX-201")
+        self.assertTrue(self.path.is_file())
+
+    def test_concurrent_cli_merges_and_real_cli_errors(self):
+        with ExitStack() as processes:
+            with vw.governance_store._TargetLock(self.path):
+                writers = [
+                    processes.enter_context(subprocess.Popen(
+                        self.command + ["--task", task, "--budget", str(budget)],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE))
+                    for task, budget in (("FIX-201", 11), ("FIX-202", 22))
+                ]
+            for writer in writers:
+                stdout, stderr = writer.communicate(timeout=60)
+                self.assertEqual(writer.returncode, 0, stderr)
+                self.assertIn(b"[OK] wrote", stdout)
+        packets = json.loads(self.path.read_text(encoding="utf-8"))["packets"]
+        self.assertEqual({k: v["budget"]["max_steps"] for k, v in packets.items()},
+                         {"FIX-201": 11, "FIX-202": 22})
+        self.path.write_bytes(b"damaged")
+        refused = subprocess.run(self.command, capture_output=True, timeout=60)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn(b"invalid JSON", refused.stderr)
+        self.assertEqual(self.path.read_bytes(), b"damaged")
 
 
 if __name__ == "__main__":

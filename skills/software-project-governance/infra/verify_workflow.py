@@ -13594,20 +13594,39 @@ EXECUTION_PACKET_REQUIRED_FIELDS = {
 }
 
 
-def _load_execution_packets(path=None):
-    packet_path = path or EXECUTION_PACKET_PATH
-    if not packet_path.is_file():
-        return {}, f"{packet_path} not found"
+def _read_execution_packet_document(path, *, missing_ok=False):
     try:
-        data = json.loads(packet_path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        if missing_ok:
+            return {}, {}
+        raise
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        return {}, f"invalid JSON: {exc}"
+        raise ValueError(f"invalid JSON: {exc}") from exc
     if not isinstance(data, dict):
-        return {}, "execution packet root must be object"
+        raise ValueError("execution packet root must be object")
+    if "version" in data and (type(data["version"]) is not int or data["version"] != 1):
+        raise ValueError(f"unsupported execution packet version: {data['version']!r}")
     packets = data.get("packets", data)
     if not isinstance(packets, dict):
-        return {}, "packets must be object"
-    return packets, ""
+        raise ValueError("packets must be object")
+    if any(not governance_store._TASK_ID_RE.fullmatch(key) for key in packets):
+        raise ValueError("execution packet map must be keyed by task ID")
+    if any(not isinstance(packet, dict) for packet in packets.values()):
+        raise ValueError("each execution packet must be object")
+    metadata = {k: v for k, v in data.items() if k != "packets"} if "packets" in data else {}
+    return packets, metadata
+
+
+def _load_execution_packets(path=None):
+    packet_path = path or EXECUTION_PACKET_PATH
+    try:
+        packets, _ = _read_execution_packet_document(packet_path)
+        return packets, ""
+    except FileNotFoundError:
+        return {}, f"{packet_path} not found"
+    except (OSError, ValueError) as exc:
+        return {}, str(exc)
 
 
 def _execution_packet_field_issues(packet):
@@ -14808,10 +14827,12 @@ def build_execution_packet(task):
     }
 
 
-def generate_execution_packets(existing=None):
+def generate_execution_packets(existing=None, *, task_ids=None):
     generated = {}
     existing = existing or {}
     for task in _active_execution_packet_tasks():
+        if task_ids is not None and task["task_id"] not in task_ids:
+            continue
         packet = dict(existing.get(task["task_id"], {})) if isinstance(existing.get(task["task_id"]), dict) else {}
         base = build_execution_packet(task)
         base.update(packet)
@@ -14867,70 +14888,42 @@ def cmd_execution_packet(args):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    packets, _ = _load_execution_packets()
-    payload = generate_execution_packets(existing=packets)
-    selected = None
-    if args.task:
-        wanted = set(args.task)
-        selected = {
-            tid: packet for tid, packet in payload["packets"].items()
-            if tid in wanted
-        }
-    # FEAT-092: advisory step-budget guard — the packet constrained scope
-    # but never budget (session-f3f46901: AUD-001 409 steps/90.1M). Illegal
-    # values fail closed BEFORE anything is written (argparse type=int
-    # already refuses non-ints with exit 2).
+    from contextlib import nullcontext
+
     budget = getattr(args, "budget", None)
-    if budget is not None:
-        if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
-            print("[ERROR] --budget must be a positive integer (got {0!r})".format(budget))
-            sys.exit(2)
-        stamped = selected if selected is not None else payload["packets"]
-        for packet in stamped.values():
-            packet["budget"] = {"max_steps": budget}
-    if args.write:
-        # FIX-296 (EVD-959): the write face never DROPS packets. FEAT-080
-        # (g) refines the --task --write combination into an INCREMENTAL
-        # MERGE: exactly the selected packets are regenerated; every other
-        # runtime entry (unselected active packets, inactive-task entries,
-        # manual packet-level enrichment) and every top-level manual key
-        # carry over value-for-value — the regeneration-wipes-enrichment
-        # pit this session hit three times. A bare --write keeps the
-        # FIX-296 full-regenerate semantics (file reflects the live
-        # tracker; packet-level enrichment still overlays via the
-        # existing merge in generate_execution_packets).
-        if selected is not None:
-            merged_packets = dict(packets)
-            merged_packets.update(selected)
-            packets_meta = {}
-            try:
-                raw_existing = json.loads(EXECUTION_PACKET_PATH.read_text(
-                    encoding="utf-8"))
-                if isinstance(raw_existing, dict):
-                    packets_meta = {
-                        key: value for key, value in raw_existing.items()
-                        if key not in ("version", "generated_at", "packets")}
-            except (OSError, ValueError):
-                packets_meta = {}
-            payload = {**packets_meta, **payload, "packets": merged_packets}
-        EXECUTION_PACKET_PATH.parent.mkdir(parents=True, exist_ok=True)
-        EXECUTION_PACKET_PATH.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        note = ""
-        if selected is not None:
-            # F-3 (FIX-405 batch): report the ACTUALLY regenerated set — a
-            # requested-but-absent id must not appear as "regenerated".
-            note = (f" (incremental merge: regenerated "
-                    f"{', '.join(sorted(selected))};"
-                    f" preserved {len(merged_packets) - len(selected)} other"
-                    f" entr{'y' if len(merged_packets) - len(selected) == 1 else 'ies'}")
-        print(f"[OK] wrote {len(payload['packets'])} execution packet(s) to "
-              f"{EXECUTION_PACKET_PATH}{note}")
-    else:
-        preview = payload if selected is None else {**payload, "packets": selected}
-        print(json.dumps(preview, ensure_ascii=False, indent=2))
+    if budget is not None and (type(budget) is not int or budget <= 0):
+        print(f"[ERROR] --budget must be a positive integer (got {budget!r})")
+        sys.exit(2)
+
+    wanted = set(args.task) if args.task else None
+    note = ""
+    try:
+        path = EXECUTION_PACKET_PATH.resolve()
+        with governance_store._TargetLock(path) if args.write else nullcontext():
+            packets, metadata = _read_execution_packet_document(path, missing_ok=True)
+            payload = generate_execution_packets(existing=packets, task_ids=wanted)
+            generated = payload["packets"]
+            if budget is not None:
+                for packet in generated.values():
+                    packet["budget"] = {"max_steps": budget}
+            if not args.write:
+                message = json.dumps(payload, ensure_ascii=False, indent=2)
+            elif wanted is not None and not generated:
+                message = "[OK] no active execution packets matched the selected tasks"
+            else:
+                if wanted is not None:
+                    payload["packets"] = {**packets, **generated}
+                    preserved = len(payload["packets"]) - len(generated)
+                    note = (f" (incremental merge: regenerated {', '.join(sorted(generated))};"
+                            f" preserved {preserved} other {'entry' if preserved == 1 else 'entries'})")
+                document = {**metadata, **payload}
+                data = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+                governance_store._atomic_write_bytes(path, data)
+                message = f"[OK] wrote {len(payload['packets'])} execution packet(s) to {EXECUTION_PACKET_PATH}{note}"
+    except (OSError, ValueError, governance_store.StoreError) as exc:
+        print(f"[ERROR] {EXECUTION_PACKET_PATH}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(message)
 
 
 # ── SYSGAP-036: Agent Activation Check (Check 20) ────────────────

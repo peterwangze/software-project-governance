@@ -541,26 +541,34 @@ class _TargetLock:
 
     def __enter__(self):
         self._inproc.acquire()
-        deadline = time.monotonic() + self.timeout_seconds
-        while True:
+        try:
+            deadline = time.monotonic() + self.timeout_seconds
+            while True:
+                try:
+                    fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError:
+                    if self._stale():
+                        continue
+                    if time.monotonic() >= deadline:
+                        _refuse({
+                            "code": "lock_contention",
+                            "detail": f"target lock busy: {self.path} — retry "
+                                      f"the same operation (transient, "
+                                      f"disposition retryable)",
+                        })
+                    time.sleep(_LOCK_POLL_SECONDS)
+                else:
+                    self._acquired = True
+                    break
             try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 os.write(fd, str(os.getpid()).encode("ascii"))
+            finally:
                 os.close(fd)
-                self._acquired = True
-                return self
-            except FileExistsError:
-                if self._stale():
-                    continue
-                if time.monotonic() >= deadline:
-                    self._inproc.release()
-                    _refuse({
-                        "code": "lock_contention",
-                        "detail": f"target lock busy: {self.path} — retry "
-                                  f"the same operation (transient, "
-                                  f"disposition retryable)",
-                    })
-                time.sleep(_LOCK_POLL_SECONDS)
+            return self
+        except BaseException:
+            # A failed __enter__ does not get a matching __exit__.
+            self.__exit__(None, None, None)
+            raise
 
     def _stale(self) -> bool:
         try:
@@ -570,13 +578,16 @@ class _TargetLock:
         if age > _LOCK_STALE_SECONDS:
             try:
                 self.path.unlink()
+            except FileNotFoundError:
+                return True
             except OSError:
-                pass
+                return False
             return True
         return False
 
     def __exit__(self, *exc_info):
         if self._acquired:
+            self._acquired = False
             try:
                 self.path.unlink()
             except OSError:

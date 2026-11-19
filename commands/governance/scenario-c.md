@@ -27,12 +27,12 @@
    - C-2. 插件残留清理删除面。仅对从本次安装信息确认的插件独占根运行 `python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>" --dry-run` 并展示清单。用户用 AskUserQuestion 确认该清单后才执行 `python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>"`。归属不明、共享技能目录或未获确认时跳过清理，继续其余步骤。
    - D. 更新 `工作流版本` 为 `active_version`
    - E. 持续归档触发检测与执行（`<plugin_home>` 来自 resolve_entry.py，取代 `$WORKFLOW_HOME` 路径考古；归档写操作同 ask-确认前置——dry-run 报告先行呈现，用户确认后才执行迁移）：
-     - 在已确认的宿主根运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器：
+     - 在已确认的宿主根运行 `python "<plugin_home>/infra/archive.py" migrate --auto --dry-run` 检测四类触发器：
        1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2
        2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task
        3. task 增量：热文件中可归档 completed task 达到阈值
        4. 90 天兜底：长期未归档但仍有可归档历史数据
-     - dry-run 报告需要归档 → **呈现 dry-run 报告并通过 AskUserQuestion 确认** → 运行 `python <plugin_home>/infra/archive.py migrate --auto`，再运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
+     - dry-run 报告需要归档 → **呈现 dry-run 报告并通过 AskUserQuestion 确认** → 运行 `python "<plugin_home>/infra/archive.py" migrate --auto`，再运行 `python "<plugin_home>/infra/verify_workflow.py" check-archive-integrity`
      - 归档成功 → 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）
      - 归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成
      - 无可归档数据 → 跳过归档（不修改文件）

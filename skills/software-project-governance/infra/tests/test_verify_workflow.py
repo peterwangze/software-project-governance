@@ -9545,9 +9545,9 @@ class GovernanceStatusContractTests(unittest.TestCase):
         required = [
             "持续归档触发检测与执行",
             "plugin_home",
-            '`python <plugin_home>/infra/archive.py migrate --auto --dry-run`',
-            '`python <plugin_home>/infra/archive.py migrate --auto`',
-            '`python <plugin_home>/infra/verify_workflow.py check-archive-integrity`',
+            '`python "<plugin_home>/infra/archive.py" migrate --auto --dry-run`',
+            '`python "<plugin_home>/infra/archive.py" migrate --auto`',
+            '`python "<plugin_home>/infra/verify_workflow.py" check-archive-integrity`',
             "发布/版本 bump 收尾场景 MUST 阻断完成",
             "无可归档数据",
         ]
@@ -23166,7 +23166,7 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # ticket.
     # Bootstrap reads the root and hot fields together; these sizes bind the new template bytes.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
-        "lightweight": 5266,
+        "lightweight": 5272,
         "standard": 10177,
         "strict": 11065,
         "secondary-thin": 2614,

@@ -224,12 +224,12 @@ Bootstrap 注入内容（按 `profile` 差异化——lightweight 注入轻量�
 - silent-track: 不输出
 
 **治理数据归档**（版本 bump / 发布收尾后触发；归档写操作 AskUserQuestion 确认后执行——FEAT-035）:
-在本次确认的宿主根运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检查持续归档触发器:
+在本次确认的宿主根运行 `python "<plugin_home>/infra/archive.py" migrate --auto --dry-run` 检查持续归档触发器:
 - 首次迁移: archive/index.md 不存在 AND plan-tracker > 80KB AND ≥2 已发布版本
 - 发布强制: 新版本标记已发布后，除最新已发布版本外仍有热文件历史 task
 - task 增量: 可归档 completed task 达到阈值
 - 90 天兜底: 长期未归档且仍有可归档历史数据
-→ dry-run 显示需要归档: 呈现 dry-run 报告并通过 AskUserQuestion 确认后，运行 `python <plugin_home>/infra/archive.py migrate --auto`，再运行 `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`
+→ dry-run 显示需要归档: 呈现 dry-run 报告并通过 AskUserQuestion 确认后，运行 `python "<plugin_home>/infra/archive.py" migrate --auto`，再运行 `python "<plugin_home>/infra/verify_workflow.py" check-archive-integrity`
 → 归档完整性失败: 阻断发布完成 / Gate 完成
 
 - IF .governance/archive/index.md 存在 → 已归档条目可通过索引查询

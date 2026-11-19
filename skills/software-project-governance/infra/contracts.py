@@ -148,6 +148,7 @@ __all__ = [
     "LogicalRecord",
     "OPERATION_ID_PATTERN",
     "OPERATION_REPLAY_DECISIONS",
+    "QUALITY_BUDGET_DIMENSIONS",
     "RecordScope",
     "REFERENCE_VALIDATION_STATES",
     "RESULT_OK",
@@ -176,6 +177,15 @@ __all__ = [
 
 CheckID = str
 CommandKey = str
+
+QUALITY_BUDGET_DIMENSIONS = (
+    "performance",
+    "reliability",
+    "security",
+    "accessibility",
+    "ux",
+    "maintainability",
+)
 
 #: Finding severity vocabulary — the engine's existing semantics (§3.5 sample A).
 SEVERITIES: Tuple[str, ...] = ("BLOCKING", "WARN", "INFO")

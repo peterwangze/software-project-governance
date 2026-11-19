@@ -1,15 +1,9 @@
 """Build a task's execution packet from its plan, intake, and maintained contract."""
 
 import json
+from datetime import datetime
 
-QUALITY_BUDGET_DIMENSIONS = (
-    "performance",
-    "reliability",
-    "security",
-    "accessibility",
-    "ux",
-    "maintainability",
-)
+from contracts import QUALITY_BUDGET_DIMENSIONS
 
 
 def build_execution_packet(task):
@@ -162,3 +156,23 @@ def merge_intake_contract(scaffold, existing, plan_acceptance, governance_dir):
                 contract["expected_output"] = placeholder
         packet["acceptance_contract"] = contract
     return packet
+
+
+def generate_packet_document(tasks, *, task_ids, existing, governance_dir, build_packet):
+    packets = {}
+    for task in tasks:
+        task_id = task["task_id"]
+        if task_ids is not None and task_id not in task_ids:
+            continue
+        packet = merge_intake_contract(build_packet(task), existing.get(task_id, {}),
+                                       task.get("acceptance", ""), governance_dir)
+        packet["task_id"] = task_id
+        for field in ("priority", "status"):
+            if field in task:
+                packet[field] = task[field]
+        packets[task_id] = packet
+    return {
+        "version": 1,
+        "generated_at": datetime.now().replace(microsecond=0).isoformat(),
+        "packets": packets,
+    }

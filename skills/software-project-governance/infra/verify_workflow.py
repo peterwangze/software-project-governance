@@ -187,7 +187,7 @@ from bootstrap_aggregate import cmd_governance_bootstrap
 import task_row_update
 from task_row_update import cmd_task_row_update
 import governance_store
-from execution_packet import QUALITY_BUDGET_DIMENSIONS, build_execution_packet, merge_intake_contract
+from contracts import QUALITY_BUDGET_DIMENSIONS
 from governance_store import (cmd_decision_append, cmd_evidence_append,
                               cmd_locks_amend, cmd_locks_extend,
                               cmd_locks_release)
@@ -14541,25 +14541,19 @@ def check_interruption_policy(
     return result
 
 
+def build_execution_packet(task):
+    from execution_packet import build_execution_packet as build
+    return build(task)
+
+
 def generate_execution_packets(existing=None, *, task_ids=None, governance_dir=None):
-    generated = {}
+    from execution_packet import generate_packet_document
     existing = existing or {}
     if any(not isinstance(packet, dict) for packet in existing.values()):
         raise ValueError("each execution packet must be object")
-    for task in _active_execution_packet_tasks():
-        if task_ids is not None and task["task_id"] not in task_ids:
-            continue
-        base = merge_intake_contract(build_execution_packet(task), existing.get(task["task_id"], {}),
-                                     task.get("acceptance", ""), governance_dir or SAMPLE_PATH.parent)
-        base["task_id"] = task["task_id"]
-        base["priority"] = task.get("priority", base.get("priority", ""))
-        base["status"] = task.get("status", base.get("status", ""))
-        generated[task["task_id"]] = base
-    return {
-        "version": 1,
-        "generated_at": datetime.now().replace(microsecond=0).isoformat(),
-        "packets": generated,
-    }
+    return generate_packet_document(_active_execution_packet_tasks(), task_ids=task_ids,
+                                    existing=existing, governance_dir=governance_dir or SAMPLE_PATH.parent,
+                                    build_packet=build_execution_packet)
 
 
 def check_execution_packets(packet_path=None):

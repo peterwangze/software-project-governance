@@ -218,14 +218,33 @@ class GuardOutputPinTests(unittest.TestCase):
     — zero real-environment contact, exit codes and lines are deterministic.
     """
 
+    @staticmethod
     @lru_cache(maxsize=1)
-    def _runs(self):
-        pass_fixture, fail_fixture, wellformed = cmg._ensure_guard_fixtures()
-        return {
-            "pass": cmg.run_guard(pass_fixture),
-            "fail": cmg.run_guard(fail_fixture),
-            "wellformed": cmg.run_guard(wellformed),
-        }
+    def _runs():
+        with cmg._guard_fixtures() as (pass_fixture, fail_fixture, wellformed):
+            return {
+                "pass": cmg.run_guard(pass_fixture),
+                "fail": cmg.run_guard(fail_fixture),
+                "wellformed": cmg.run_guard(wellformed),
+            }
+
+    def test_overlapping_fixture_groups_clean_only_their_own_hosts(self):
+        import tempfile
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temp, patch.object(tempfile, "tempdir", temp):
+            old = Path(temp) / "spg-contract-matrix-guard"
+            old.mkdir()
+            sentinel = old / "unrelated.txt"
+            sentinel.write_bytes(b"keep")
+            with cmg._guard_fixtures() as first:
+                with cmg._guard_fixtures() as second:
+                    self.assertNotEqual(first[0].parent, second[0].parent)
+                    self.assertTrue(all(host.is_dir() for host in (*first, *second)))
+                self.assertFalse(second[0].parent.exists())
+                self.assertTrue(all(host.is_dir() for host in first))
+            self.assertEqual(list(Path(temp).iterdir()), [old])
+            self.assertEqual(sentinel.read_bytes(), b"keep")
 
     def test_derived_pin_matches_snapshot(self):
         current = cmg.derive_guard_output_pin()

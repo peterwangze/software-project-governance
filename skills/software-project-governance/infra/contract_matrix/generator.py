@@ -26,13 +26,12 @@ from __future__ import annotations
 
 import argparse
 import ast
-import atexit
 import json
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -281,22 +280,20 @@ _WELLFORMED_TRACKER = (
     "| **P1** | FX-800 | 合规演示行 | ✅ 完成 (演示) |\n"
 )
 
-_GUARD_FIXTURE_BASE = Path(tempfile.gettempdir()) / "spg-contract-matrix-guard"
-
-
-def _ensure_guard_fixtures() -> tuple[Path, Path, Path]:
-    pass_fixture = _GUARD_FIXTURE_BASE / "pass-host"
-    fail_fixture = _GUARD_FIXTURE_BASE / "fail-host"
-    wellformed_fixture = _GUARD_FIXTURE_BASE / "wellformed-host"
-    shutil.rmtree(_GUARD_FIXTURE_BASE, ignore_errors=True)
-    pass_fixture.mkdir(parents=True)
-    (fail_fixture / ".governance").mkdir(parents=True)
-    (fail_fixture / ".governance" / "plan-tracker.md").write_text(
-        _MALFORMED_TRACKER, encoding="utf-8")
-    (wellformed_fixture / ".governance").mkdir(parents=True)
-    (wellformed_fixture / ".governance" / "plan-tracker.md").write_text(
-        _WELLFORMED_TRACKER, encoding="utf-8")
-    return pass_fixture, fail_fixture, wellformed_fixture
+@contextmanager
+def _guard_fixtures():
+    """Give one group of guard subprocesses its own hosts for the duration of the run."""
+    with tempfile.TemporaryDirectory(prefix="spg-contract-matrix-") as directory:
+        base = Path(directory)
+        pass_fixture = base / "pass-host"
+        fail_fixture = base / "fail-host"
+        wellformed_fixture = base / "wellformed-host"
+        pass_fixture.mkdir()
+        for host, tracker in ((fail_fixture, _MALFORMED_TRACKER),
+                              (wellformed_fixture, _WELLFORMED_TRACKER)):
+            (host / ".governance").mkdir(parents=True)
+            (host / ".governance" / "plan-tracker.md").write_text(tracker, encoding="utf-8")
+        yield pass_fixture, fail_fixture, wellformed_fixture
 
 
 def run_guard(project_root: Path) -> dict:
@@ -322,10 +319,10 @@ def _count_free(fragment: str) -> str:
 
 def derive_guard_output_pin() -> dict:
     """Run all three fixtures and derive the guard's output contract markers."""
-    pass_fixture, fail_fixture, wellformed_fixture = _ensure_guard_fixtures()
-    pass_run = run_guard(pass_fixture)
-    fail_run = run_guard(fail_fixture)
-    wellformed_run = run_guard(wellformed_fixture)
+    with _guard_fixtures() as (pass_fixture, fail_fixture, wellformed_fixture):
+        pass_run = run_guard(pass_fixture)
+        fail_run = run_guard(fail_fixture)
+        wellformed_run = run_guard(wellformed_fixture)
 
     pass_lines = [line for line in pass_run["stdout"].splitlines() if line]
     fail_lines = [line for line in fail_run["stdout"].splitlines() if line]
@@ -541,24 +538,24 @@ _GOLDEN_COMMANDS = (
 
 def write_golden_samples(path: Path = GOLDEN_PATH) -> list[str]:
     """Run the representative sample commands, record outputs for review."""
-    pass_fixture, fail_fixture, _wellformed = _ensure_guard_fixtures()
-    fixture_map = {"<pass-fixture>": str(pass_fixture),
-                   "<fail-fixture>": str(fail_fixture)}
-    sections = []
-    for title, argv in _GOLDEN_COMMANDS:
-        resolved = [fixture_map.get(part, part) for part in argv]
-        completed = subprocess.run(
-            [sys.executable, str(_ENGINE_PATH)] + resolved,
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=300, check=False, cwd=str(_REPO_ROOT),
-        )
-        sections.append(
-            f"### {title}\n"
-            f"command: python verify_workflow.py "
-            f"{' '.join(resolved[1:] if resolved[0].endswith('.py') else resolved)}\n"
-            f"exit_code: {completed.returncode}\n"
-            f"--- stdout ---\n{completed.stdout.rstrip()}\n"
-        )
+    with _guard_fixtures() as (pass_fixture, fail_fixture, _wellformed):
+        fixture_map = {"<pass-fixture>": str(pass_fixture),
+                       "<fail-fixture>": str(fail_fixture)}
+        sections = []
+        for title, argv in _GOLDEN_COMMANDS:
+            resolved = [fixture_map.get(part, part) for part in argv]
+            completed = subprocess.run(
+                [sys.executable, str(_ENGINE_PATH)] + resolved,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=300, check=False, cwd=str(_REPO_ROOT),
+            )
+            sections.append(
+                f"### {title}\n"
+                f"command: python verify_workflow.py "
+                f"{' '.join(resolved[1:] if resolved[0].endswith('.py') else resolved)}\n"
+                f"exit_code: {completed.returncode}\n"
+                f"--- stdout ---\n{completed.stdout.rstrip()}\n"
+            )
     header = (
         f"FEAT-020 golden samples — {TASK_ID} contract matrix human-review\n"
         f"sidecar (acceptance ③). Generated by generator.py --golden at\n"
@@ -645,9 +642,6 @@ def main(argv=None) -> int:
     if args.golden:
         return _cmd_golden(args)
     return _cmd_check(args)
-
-
-atexit.register(lambda: shutil.rmtree(_GUARD_FIXTURE_BASE, ignore_errors=True))
 
 
 if __name__ == "__main__":

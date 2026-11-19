@@ -50,12 +50,11 @@ Claude Code:
 /plugin install software-project-governance@spg
 ```
 
-Alternative Claude paths:
+To install from a local checkout:
 
 ```bash
-/plugin install https://github.com/peterwangze/software-project-governance.git
-git clone https://github.com/peterwangze/software-project-governance.git
-/plugin install /path/to/software-project-governance
+/plugin marketplace add /path/to/software-project-governance
+/plugin install software-project-governance@spg
 ```
 
 DeepSeek Harness (dsh) plugin install — `dsh plugin` is a thin pnpm forwarder, so the add spec is a pnpm package spec (same style as the dsh-novel-writing plugin). Prerequisites: **dsh ≥ 0.1.2-rc.1** (the version boundary where the preset activates with the bundle; on ≤0.1.1-rc.2 use the optional launch.py path below), **pnpm**, and for the `github:` form **git + network**; the launch.py path and all verification commands need **Python 3** (`python`; some Linux/macOS distributions use `python3`).
@@ -306,12 +305,9 @@ http://127.0.0.1:5173/
 /plugin marketplace add peterwangze/software-project-governance
 /plugin install software-project-governance@spg
 
-# 方式二：直接从 git URL 安装
-/plugin install https://github.com/peterwangze/software-project-governance.git
-
-# 方式三：克隆到本地后安装
-git clone https://github.com/peterwangze/software-project-governance.git
-/plugin install /path/to/software-project-governance
+# 或从已有本地仓库安装
+/plugin marketplace add /path/to/software-project-governance
+/plugin install software-project-governance@spg
 ```
 
 安装后，工作流入口会在后续会话中自动可用；**但首次使用前仍必须先完成一次初始化**，在你的项目根目录创建 `.governance/` 治理文件。安装完成不等于已经可用完成。
@@ -439,7 +435,7 @@ dsh 侧有两个安装面，各自有**官方对称命令**：
 
 | Agent | 安装 | 升级 | 降级 | 卸载 |
 |-------|------|------|------|------|
-| Claude Code | `/plugin marketplace add` + `/plugin install software-project-governance@spg` | `/plugin marketplace update` 后更新插件 | 从旧版本 git URL 重装 `/plugin install` | 宿主 `/plugin` 命令面卸载（以 `/plugin` 帮助为准） |
+| Claude Code | `/plugin marketplace add` + `/plugin install software-project-governance@spg` | `/plugin marketplace update` 后更新插件 | 从所需 tag 的本地检出目录添加市场，按插件名重装 | 宿主 `/plugin` 命令面卸载（以 `/plugin` 帮助为准） |
 | zcode | 同 Claude 协议（`/plugin marketplace add` + `/plugin install`） | 同上 | 同上 | 同上 |
 | Codex / Gemini CLI / opencode | 无官方包管理器——克隆仓库 + 平台投影指针（`AGENTS.md` / `GEMINI.md` 等） | `git pull`（指针不变） | `git checkout v<tag>` | 删除投影指针（可选删除克隆目录） |
 
@@ -464,12 +460,8 @@ Remove-Item Env:\DSH_HOME   # 用完清理临时目录
 zcode 新版运行时复用了 Claude 插件市场协议，支持通过 `marketplace add` + `plugin install` 两步安装：
 
 ```bash
-# 方式一：通过插件市场安装（推荐，两步）
 /plugin marketplace add peterwangze/software-project-governance
 /plugin install software-project-governance@spg
-
-# 方式二：直接从 git URL 安装
-/plugin install https://github.com/peterwangze/software-project-governance.git
 ```
 
 zcode 读取 `.claude-plugin/marketplace.json`（市场清单）和 `.zcode-plugin/plugin.json`（插件元数据）。**0.62.0 起**，0.56.0 的逆向 seed-hash 本地植入工具 `project/zcode-local-load.py` 已废弃移除（DEC-093）——新版 zcode 原生支持市场安装，不再需要逆向耦合。

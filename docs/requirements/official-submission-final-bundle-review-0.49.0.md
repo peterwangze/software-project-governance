@@ -10,22 +10,22 @@ No official approval. No marketplace approval. No universal/full runtime support
 
 ## Bundle Inventory
 
-| Area | Current artifact | 0.49.0 review result | Boundary |
+| Area | Artifact reviewed at 0.49.0 | 0.49.0 review result | Boundary |
 | --- | --- | --- | --- |
 | Plugin metadata | `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json` | PRESENT | Metadata and assets are local/package readiness evidence, not official or marketplace approval. |
 | Public positioning | `README.md` | PRESENT | README states delivery trust layer positioning and mainstream loading boundaries. |
 | Privacy and security | `docs/marketplace/privacy-security.md` | PRESENT | Local data and side-effect boundaries are documented. |
-| Submission checklist | `docs/marketplace/submission-checklist-0.41.0.md` | PRESENT / HISTORICAL | Checklist is readiness evidence, not a submission result. |
-| Official submission positioning | `docs/marketplace/official-submission-0.46.0.md` | PRESENT | Must be consumed with later 0.49.0 blockers. |
-| Ecosystem positioning | `docs/marketplace/ecosystem-positioning-0.46.0.md` | PRESENT | Correctly positions workflow as governance trust layer, not external capability replacement. |
-| Ecosystem comparison | `docs/marketplace/comparison-0.46.0.md` | PRESENT | Differentiation is complementary and no-overclaim safe. |
-| Migration guide | `docs/marketplace/migration-guide-0.46.0.md` | PRESENT | Preserves host-specific availability and fallback boundaries. |
-| Examples | `docs/marketplace/examples-0.46.0.md` | PRESENT | Examples preserve blocked/degraded states. |
+| Submission checklist | [submission-checklist-0.41.0](https://github.com/peterwangze/software-project-governance/blob/2729094f3b68b9025e9e40ab461c89ee08e81dc1/docs/marketplace/submission-checklist-0.41.0.md) | PRESENT / HISTORICAL | Checklist is readiness evidence, not a submission result. |
+| Official submission positioning | [official-submission-0.46.0](https://github.com/peterwangze/software-project-governance/blob/2729094f3b68b9025e9e40ab461c89ee08e81dc1/docs/marketplace/official-submission-0.46.0.md) | PRESENT | Must be consumed with later 0.49.0 blockers. |
+| Ecosystem positioning | [ecosystem-positioning-0.46.0](https://github.com/peterwangze/software-project-governance/blob/2729094f3b68b9025e9e40ab461c89ee08e81dc1/docs/marketplace/ecosystem-positioning-0.46.0.md) | PRESENT | Correctly positions workflow as governance trust layer, not external capability replacement. |
+| Ecosystem comparison | [comparison-0.46.0](https://github.com/peterwangze/software-project-governance/blob/2729094f3b68b9025e9e40ab461c89ee08e81dc1/docs/marketplace/comparison-0.46.0.md) | PRESENT | Differentiation is complementary and no-overclaim safe. |
+| Migration guide | [migration-guide-0.46.0](https://github.com/peterwangze/software-project-governance/blob/2729094f3b68b9025e9e40ab461c89ee08e81dc1/docs/marketplace/migration-guide-0.46.0.md) | PRESENT | Preserves host-specific availability and fallback boundaries. |
+| Examples | [examples-0.46.0](https://github.com/peterwangze/software-project-governance/blob/2729094f3b68b9025e9e40ab461c89ee08e81dc1/docs/marketplace/examples-0.46.0.md) | PRESENT | Examples preserve blocked/degraded states. |
 | Mainstream loading guide | `README.md`, `adapters/*/README.md`, `docs/requirements/mainstream-agent-loading-0.47.0.md` | PRESENT | Loading readiness is not universal/full runtime support. |
 | Runtime/readiness matrix | `docs/requirements/runtime-readiness-matrix-0.43.0.md` | PRESENT | PASS/BLOCKED/DEGRADED matrix remains the source of runtime claims. |
 | External validation | `docs/requirements/external-project-validation-0.49.0.md` | PARTIAL / BLOCKED | Two real external targets were probed, but no full external validation PASS. |
 | Codex marketplace lifecycle | `docs/requirements/codex-desktop-marketplace-lifecycle-0.49.0.md` | PARTIAL / BLOCKED | CLI marketplace source sync is proved; Desktop UI install/enable/invoke/upgrade/uninstall remains BLOCKED/NOT_RUN. |
-| 1.0.0 readiness reconciliation | `docs/requirements/one-dot-zero-readiness-gap-analysis-0.48.0.md` | PRESENT | 1.0.0 remains blocked. |
+| 1.0.0 readiness reconciliation | [one-dot-zero-readiness-gap-analysis-0.48.0](https://github.com/peterwangze/software-project-governance/blob/2729094f3b68b9025e9e40ab461c89ee08e81dc1/docs/requirements/one-dot-zero-readiness-gap-analysis-0.48.0.md) | PRESENT | 1.0.0 remains blocked. |
 
 ## Evidence Consumed Since 0.46.0
 
@@ -74,7 +74,7 @@ The bundle is **not** evidence of:
 
 ## Validation Commands
 
-The following checks are the required local validation surface for this review:
+Run these historical checks with the verifier and evidence from the review revision (`git worktree add --detach ../replay-0.49.0 v0.49.0`).
 
 ```bash
 python skills/software-project-governance/infra/verify_workflow.py check-official-submission-ecosystem --fail-on-issues

@@ -22,15 +22,16 @@ Recommended Claude Code install path:
 /plugin install software-project-governance@spg
 ```
 
-Alternative local or URL install paths:
+To install from an existing local checkout:
 
 ```bash
-/plugin install https://github.com/peterwangze/software-project-governance.git
-git clone https://github.com/peterwangze/software-project-governance.git
-/plugin install /path/to/software-project-governance
+/plugin marketplace add /path/to/software-project-governance
+/plugin install software-project-governance@spg
 ```
 
 After install, open the target project root and run `/governance` to initialize or resume project-local governance state. Do not copy this repository's sample `.governance/` directory into another project.
+
+For an official directory submission, the maintainer verifies the install and invocation on the target host, then submits the repository through the [Anthropic directory portal](https://claude.ai/directory/manage). Keep the submission receipt and review decision separate. [Upstream submission instructions](https://github.com/anthropics/claude-plugins-official#third-party-plugins)
 
 ## Verify
 

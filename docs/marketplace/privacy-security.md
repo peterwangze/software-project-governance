@@ -2,7 +2,7 @@
 
 Audience: official marketplace evaluators, security-conscious adopters, and team leads reviewing Software Project Governance before installation.
 
-This document describes repository facts for version 0.41.0 readiness work. It is not a legal privacy policy, terms page, or listing approval notice.
+This document describes the package’s local data handling, permissions, and side effects.
 
 ## Local data boundary
 
@@ -12,7 +12,6 @@ This document describes repository facts for version 0.41.0 readiness work. It i
 | Repository sample records | This repository's own `.governance/` directory is dogfood/sample runtime data for this project, not a template that should be copied into adopter projects. |
 | Skills and docs | The workflow reads local skill, agent, command, adapter, and documentation files from the installed repository package. |
 | Evidence | Evidence records are intended to describe local commands, diffs, review status, risks, and decisions. They should not contain secrets, tokens, passwords, private keys, or production credentials. |
-| External policy links | No external privacy or terms link is introduced by this 0.41.0 readiness slice. |
 
 ## Permissions and side effects
 
@@ -45,19 +44,6 @@ This repository does not define a telemetry service, hosted analytics collector,
 
 The workflow records governance facts in local project files. If a host AI coding environment, shell command, package manager, git remote, or third-party tool performs network activity, that behavior belongs to that host or command path and should be reviewed separately.
 
-## No official acceptance claim
+## Evaluator review
 
-This package does not claim official marketplace acceptance, listing approval, or availability in every runtime.
-
-0.41.0 readiness work prepares documentation, metadata, and review artifacts so evaluators can inspect the package more easily. Acceptance, listing, or approval can only be determined by the relevant marketplace process.
-
-## Evaluator Review Pointers
-
-| Review topic | Local file or command |
-| --- | --- |
-| Package metadata | `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` |
-| First-screen positioning | `README.md` |
-| Official readiness gaps | `docs/marketplace/official-readiness-gap-analysis-0.41.0.md` |
-| Privacy/security posture | `docs/marketplace/privacy-security.md` |
-| Submission readiness | `docs/marketplace/submission-checklist-0.41.0.md` |
-| Validation entry | `python skills/software-project-governance/infra/verify_workflow.py verify` |
+Review the package metadata in `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` and `.codex-plugin/plugin.json`. From the repository root run `python skills/software-project-governance/infra/verify_workflow.py verify`. The outstanding external validation, Codex Desktop lifecycle, and official submission evidence requirements are recorded in the [submission review](../requirements/official-submission-final-bundle-review-0.49.0.md#carry-forward-blockers).

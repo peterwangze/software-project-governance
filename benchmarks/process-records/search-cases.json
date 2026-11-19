@@ -1,0 +1,24 @@
+{
+  "project": [
+    {"name":"hot task","op":"lookup","q":"FIX-504","expected":["plan-tracker.md#FIX-504"]},
+    {"name":"hot evidence","op":"lookup","q":"EVD-2254","expected":["evidence-log.md#EVD-2254"]},
+    {"name":"cold decision block","op":"lookup","q":"DEC-088","expected":["archive/decisions/decisions-v0.1.0-0.59.0.md#DEC-088"]},
+    {"name":"duplicate risk occurrences","op":"lookup","q":"RISK-037","expected":["archive/risks/risks-v0.1.0-0.59.0.md#RISK-037","archive/risks/risks-v0.1.0-0.72.0.md#RISK-037"]},
+    {"name":"CJK phrase inside a token","op":"search","kind":"decision","q":"首条切片","expected":["decision-log.md#DEC-388"]},
+    {"name":"two Chinese characters","op":"search","kind":"evidence","q":"字形","expected":["archive/evidence/evidence-v0.1.0-0.91.0-incremental-20260929-1.md#EVD-949","archive/evidence/evidence-v0.1.0-0.99.0.md#EVD-1560","archive/evidence/evidence-v0.1.0-0.99.0.md#EVD-1561"]},
+    {"name":"typed two-hop task to evidence to decision","op":"trace","q":"FEAT-121","expected":["evidence-log.md#EVD-2254 > decision-log.md#DEC-396"]},
+    {"name":"absent identifier","op":"lookup","q":"FIX-987654321","expected":[]},
+    {"name":"paraphrased intent (challenge)","op":"search","kind":"decision","q":"为什么派发工单不再重复取锁","expected":["decision-log.md#DEC-396"]}
+  ],
+  "demo": [
+    {"name":"hot task","op":"lookup","q":"FIX-901","expected":["plan-tracker.md#FIX-901"]},
+    {"name":"hot evidence","op":"lookup","q":"EVD-901","expected":["evidence-log.md#EVD-901"]},
+    {"name":"cold decision block","op":"lookup","q":"DEC-100","expected":["archive/decisions/earlier.md#DEC-100"]},
+    {"name":"duplicate risk occurrences","op":"lookup","q":"RISK-900","expected":["archive/risks/earlier.md#RISK-900","risk-log.md#RISK-900"]},
+    {"name":"CJK phrase inside a token","op":"search","kind":"decision","q":"首条切片","expected":["decision-log.md#DEC-901"]},
+    {"name":"two Chinese characters","op":"search","kind":"evidence","q":"字形","expected":["evidence-log.md#EVD-901"]},
+    {"name":"typed two-hop task to evidence to decision","op":"trace","q":"FIX-901","expected":["evidence-log.md#EVD-901 > decision-log.md#DEC-901"]},
+    {"name":"absent identifier","op":"lookup","q":"FIX-987654321","expected":[]},
+    {"name":"paraphrased intent (challenge)","op":"search","kind":"decision","q":"为什么派发工单不再重复取锁","expected":["decision-log.md#DEC-901"]}
+  ]
+}

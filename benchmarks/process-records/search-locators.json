@@ -1,0 +1,277 @@
+{
+  "field_order": [
+    "path",
+    "first_line",
+    "last_line",
+    "sha256_raw_span",
+    "id_role",
+    "raw_id"
+  ],
+  "project": {
+    "locators": {
+      "plan-tracker.md#FIX-504": [
+        "plan-tracker.md",
+        56,
+        56,
+        "b1bf0975110fad1ce5ce24c44bcb8cbf62c4eef61cbd70d0f545723540194d50",
+        "identifier",
+        "FIX-504"
+      ],
+      "evidence-log.md#EVD-2254": [
+        "evidence-log.md",
+        147,
+        147,
+        "8f6b4f47e85c00643a34e85765cb7cc0230399c1f9bf6324132f167f5eccd90b",
+        "identifier",
+        "EVD-2254"
+      ],
+      "archive/decisions/decisions-v0.1.0-0.59.0.md#DEC-088": [
+        "archive/decisions/decisions-v0.1.0-0.59.0.md",
+        11,
+        17,
+        "7d453a0391e9dff2a3d0a07ab8daadaf29e2bf2c031a0af1b3ffa00ca9f98f63",
+        "identifier",
+        "DEC-088"
+      ],
+      "archive/risks/risks-v0.1.0-0.59.0.md#RISK-037": [
+        "archive/risks/risks-v0.1.0-0.59.0.md",
+        14,
+        14,
+        "605f7ad221d8c99a522a2ad60a91a7eb3ffb1c9c3721a939196422ed6815f4e4",
+        "identifier",
+        "RISK-037"
+      ],
+      "archive/risks/risks-v0.1.0-0.72.0.md#RISK-037": [
+        "archive/risks/risks-v0.1.0-0.72.0.md",
+        11,
+        11,
+        "ce7831cbbf79c19788b295b5627af98fbbd3863ceb072bc25dcebc893bd76b37",
+        "identifier",
+        "RISK-037"
+      ],
+      "decision-log.md#DEC-388": [
+        "decision-log.md",
+        51,
+        51,
+        "77c5bdce8e641a87cc5b7e35be7d9847f2334ae159d58939832377d80e01d165",
+        "identifier",
+        "DEC-388"
+      ],
+      "archive/evidence/evidence-v0.1.0-0.91.0-incremental-20260929-1.md#EVD-949": [
+        "archive/evidence/evidence-v0.1.0-0.91.0-incremental-20260929-1.md",
+        62,
+        62,
+        "344e44f95a503f65e3819c225f285255545176e289bb1c371d643fc33ac13be2",
+        "identifier",
+        "EVD-949"
+      ],
+      "archive/evidence/evidence-v0.1.0-0.99.0.md#EVD-1560": [
+        "archive/evidence/evidence-v0.1.0-0.99.0.md",
+        112,
+        112,
+        "03e5776bf6ec09b2f250d1d5ed9ba30b0cd150f138361fcc378b3305282c7255",
+        "identifier",
+        "EVD-1560"
+      ],
+      "archive/evidence/evidence-v0.1.0-0.99.0.md#EVD-1561": [
+        "archive/evidence/evidence-v0.1.0-0.99.0.md",
+        113,
+        113,
+        "e850952adfc7b8d7bd8ce39f32e4a1134f955b7d3b267e0d9edf9ad5fe811bb8",
+        "identifier",
+        "EVD-1561"
+      ],
+      "decision-log.md#DEC-396": [
+        "decision-log.md",
+        59,
+        59,
+        "0c1a652011690552bb85d7f9a496863669abe484c50e4b3b29f6e3e8a8fcdd54",
+        "identifier",
+        "DEC-396"
+      ],
+      "decision-log.md#DEC-194": [
+        "decision-log.md",
+        23,
+        23,
+        "e3d7b47c395307cb55a83c24d8dbdbeea88f8819783ade53d4c59255e0ddb582",
+        "identifier",
+        "DEC-194"
+      ],
+      "decision-log.md#DEC-194 补记": [
+        "decision-log.md",
+        24,
+        24,
+        "06819258d32575613658524f4d6d5d86342354d3c95d9112a2821e67257f8905",
+        "related_candidate",
+        "DEC-194 补记"
+      ],
+      "decision-log.md#DEC-214": [
+        "decision-log.md",
+        27,
+        27,
+        "91f818d017cad4dff9a6fce7dd95953c93db589a63e82b3f35468bb66de7c6d7",
+        "identifier",
+        "DEC-214"
+      ],
+      "decision-log.md#DEC-214①（勘误）": [
+        "decision-log.md",
+        28,
+        28,
+        "7ffe6a80eb28ced4df0e14cd24b77e4407a3563f1c9b82341cbb2285c2f12f2e",
+        "related_candidate",
+        "DEC-214①（勘误）"
+      ],
+      "decision-log.md#DEC-214②（补记，review-FIX-355 C-04 承接）": [
+        "decision-log.md",
+        30,
+        30,
+        "9729b3ec555c74ac61df77d7b207a2d0f1fa82f2145a2842c245ec9b0820b873",
+        "related_candidate",
+        "DEC-214②（补记，review-FIX-355 C-04 承接）"
+      ],
+      "archive/evidence/current-to-archive-2026-11-18.md#EVD-424@73": [
+        "archive/evidence/current-to-archive-2026-11-18.md",
+        73,
+        73,
+        "7a4502bbcd7f1b2f3206bf4b2e9cd3764ff1ed22f36b62d1505cda84d47a7f36",
+        "identifier",
+        "EVD-424"
+      ],
+      "archive/evidence/current-to-archive-2026-11-18.md#EVD-424@130": [
+        "archive/evidence/current-to-archive-2026-11-18.md",
+        130,
+        130,
+        "41d0bbbd8078ab563c1c926c5d9e188c2bad9d79c28f26657ec7374e688643f6",
+        "identifier",
+        "EVD-424"
+      ]
+    },
+    "challenges": [
+      {
+        "name": "two physical evidence rows in one archive",
+        "op": "lookup",
+        "q": "EVD-424",
+        "expected": [
+          "archive/evidence/current-to-archive-2026-11-18.md#EVD-424@73",
+          "archive/evidence/current-to-archive-2026-11-18.md#EVD-424@130"
+        ]
+      },
+      {
+        "name": "decision with addendum",
+        "op": "lookup",
+        "q": "DEC-194",
+        "expected": [
+          "decision-log.md#DEC-194",
+          "decision-log.md#DEC-194 补记"
+        ]
+      },
+      {
+        "name": "two qualified decision amendments",
+        "op": "lookup",
+        "q": "DEC-214",
+        "expected": [
+          "decision-log.md#DEC-214",
+          "decision-log.md#DEC-214①（勘误）",
+          "decision-log.md#DEC-214②（补记，review-FIX-355 C-04 承接）"
+        ]
+      }
+    ]
+  },
+  "demo": {
+    "locators": {
+      "plan-tracker.md#FIX-901": [
+        "plan-tracker.md",
+        1,
+        1,
+        "c2c32bc2bfad0518f3ec69e0f0644c9d9cd2307e9cd912facce7e6b7bf888ee0",
+        "identifier",
+        "FIX-901"
+      ],
+      "evidence-log.md#EVD-901": [
+        "evidence-log.md",
+        1,
+        1,
+        "87d975df7ba4f309afa62d993df14b9ea79a301081aa30df1918835f15247dc1",
+        "identifier",
+        "EVD-901"
+      ],
+      "archive/decisions/earlier.md#DEC-100": [
+        "archive/decisions/earlier.md",
+        1,
+        3,
+        "68bbb0322709edc229d27312fbb746eaa8b6c89f9d77e190b8d5baa713354880",
+        "identifier",
+        "DEC-100"
+      ],
+      "archive/risks/earlier.md#RISK-900": [
+        "archive/risks/earlier.md",
+        1,
+        1,
+        "797fabe4322edadc8e9b386392b8d92178419937731a70faaacbb8ae7af9fd85",
+        "identifier",
+        "RISK-900"
+      ],
+      "risk-log.md#RISK-900": [
+        "risk-log.md",
+        1,
+        1,
+        "8e977e11129ca3743a76d507e0606b27405964601c715850422f8e5ac45bb74b",
+        "identifier",
+        "RISK-900"
+      ],
+      "decision-log.md#DEC-901": [
+        "decision-log.md",
+        1,
+        1,
+        "59bcda43b73cdb7f92e78046df81e8e50cfab7f7eda865ee6fa23dd98da78986",
+        "identifier",
+        "DEC-901"
+      ],
+      "decision-log.md#DEC-902@2": [
+        "decision-log.md",
+        2,
+        2,
+        "a52d49c21eeceed952094a2254914cf7fffdb93c2127f50ce4eef380d9b9d00d",
+        "identifier",
+        "DEC-902"
+      ],
+      "decision-log.md#DEC-902@3": [
+        "decision-log.md",
+        3,
+        3,
+        "e5de2eec6ae3e5e430f3f62e40e45a0e801002845ff86ea22435e7a2b46dad92",
+        "identifier",
+        "DEC-902"
+      ],
+      "decision-log.md#DEC-902①（勘误）": [
+        "decision-log.md",
+        4,
+        4,
+        "2232be30534ef5b8d57173183bff59958b00fd292222ef41d44a640ab9ea4dbd",
+        "related_candidate",
+        "DEC-902①（勘误）"
+      ],
+      "decision-log.md#DEC-902 后续待定": [
+        "decision-log.md",
+        5,
+        5,
+        "e04a130621e2042fcdfe55a6feab70f39fdb9aeb657164348ff35db4d8bde448",
+        "unresolved_suffix",
+        "DEC-902 后续待定"
+      ]
+    },
+    "challenges": [
+      {
+        "name": "same-key rows, known and unknown decision suffixes",
+        "op": "lookup",
+        "q": "DEC-902",
+        "expected": [
+          "decision-log.md#DEC-902@2",
+          "decision-log.md#DEC-902@3",
+          "decision-log.md#DEC-902①（勘误）",
+          "decision-log.md#DEC-902 后续待定"
+        ]
+      }
+    ]
+  }
+}

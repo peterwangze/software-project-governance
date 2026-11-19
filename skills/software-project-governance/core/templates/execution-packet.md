@@ -1,166 +1,33 @@
 # AI Execution Packet 模板
 
-运行态文件位置：`.governance/execution-packets.json`
-
-每个活跃 P0/P1 任务必须有一个短执行包。执行包面向 AI 执行者，目标是把长规则压缩成当前任务可直接遵守的事实边界。
-
-## JSON 结构
-
-```json
-{
-  "version": 1,
-  "generated_at": "2026-05-23T00:00:00",
-  "packets": {
-    "FIX-084": {
-      "task_id": "FIX-084",
-      "priority": "P0",
-      "status": "进行中",
-      "goal": "FIX-084 AI execution packet",
-      "product_success_contract": {
-        "user": "TO_BE_DEFINED: impacted persona for FIX-084",
-        "job_to_be_done": "TO_BE_DEFINED: user job and desired outcome for FIX-084",
-        "non_goals": [
-          "TO_BE_DEFINED: explicit non-goal that protects scope.",
-          "TO_BE_DEFINED: explicit non-goal that prevents process evidence from replacing product value."
-        ],
-        "success_metrics": [
-          "TO_BE_DEFINED: user-visible outcome or acceptance scenario.",
-          "TO_BE_DEFINED: runnable E2E, test, or command that proves the outcome."
-        ],
-        "competitive_baseline": "TO_BE_DEFINED: mature-team or competing-product baseline this task must match.",
-        "done_definition": [
-          "TO_BE_DEFINED: product success evidence is recorded with concrete facts.",
-          "TO_BE_DEFINED: independent review confirms the user outcome is not replaced by process completion."
-        ]
-      },
-      "acceptance_contract": {
-        "scenario": "TO_BE_DEFINED: user-visible acceptance scenario for FIX-084",
-        "command": "TO_BE_DEFINED: runnable E2E, smoke, unit, or validation command",
-        "expected_output": "TO_BE_DEFINED: concrete pass output, assertion, or observable demo result",
-        "last_run": {
-          "status": "TO_BE_DEFINED",
-          "exit_code": null,
-          "summary": "TO_BE_DEFINED: last run output summary with evidence location"
-        },
-        "demo_evidence": "TO_BE_DEFINED: demo, CLI output, or artifact proving the scenario"
-      },
-      "quality_budget": {
-        "dimensions": {
-          "performance": {
-            "threshold": "TO_BE_DEFINED: minimum acceptable performance threshold",
-            "validation": "TO_BE_DEFINED: command, metric source, or evidence path",
-            "status": "TO_BE_DEFINED",
-            "evidence": "TO_BE_DEFINED: latest performance result",
-            "exception": ""
-          },
-          "reliability": {
-            "threshold": "TO_BE_DEFINED: minimum acceptable reliability threshold",
-            "validation": "TO_BE_DEFINED: command, metric source, or evidence path",
-            "status": "TO_BE_DEFINED",
-            "evidence": "TO_BE_DEFINED: latest reliability result",
-            "exception": ""
-          },
-          "security": {
-            "threshold": "TO_BE_DEFINED: minimum acceptable security threshold",
-            "validation": "TO_BE_DEFINED: command, metric source, or evidence path",
-            "status": "TO_BE_DEFINED",
-            "evidence": "TO_BE_DEFINED: latest security result",
-            "exception": ""
-          },
-          "accessibility": {
-            "threshold": "TO_BE_DEFINED: minimum acceptable accessibility threshold",
-            "validation": "TO_BE_DEFINED: command, metric source, or evidence path",
-            "status": "TO_BE_DEFINED",
-            "evidence": "TO_BE_DEFINED: latest accessibility result",
-            "exception": ""
-          },
-          "ux": {
-            "threshold": "TO_BE_DEFINED: minimum acceptable UX threshold",
-            "validation": "TO_BE_DEFINED: command, metric source, or evidence path",
-            "status": "TO_BE_DEFINED",
-            "evidence": "TO_BE_DEFINED: latest UX result",
-            "exception": ""
-          },
-          "maintainability": {
-            "threshold": "TO_BE_DEFINED: minimum acceptable maintainability threshold",
-            "validation": "TO_BE_DEFINED: command, metric source, or evidence path",
-            "status": "TO_BE_DEFINED",
-            "evidence": "TO_BE_DEFINED: latest maintainability result",
-            "exception": ""
-          }
-        }
-      },
-      "vertical_slice": {
-        "user_visible_slice": "TO_BE_DEFINED: smallest user-visible behavior or scenario this task will make usable",
-        "demo_path": "TO_BE_DEFINED: runnable demo, smoke test, URL, screenshot, or command proving the slice",
-        "scope_guard": "TO_BE_DEFINED: narrow files and behavior in scope for this slice only",
-        "rollback_plan": "TO_BE_DEFINED: how to revert or disable the slice if validation fails",
-        "status": "TO_BE_DEFINED",
-        "evidence": "TO_BE_DEFINED: latest demo proof or planned evidence location"
-      },
-      "interruption_policy": {
-        "mode": "critical-only: default execute routine reversible work and record assumptions when needed",
-        "critical_triggers": [
-          "Ask the user when product intent is unclear.",
-          "Ask the user when acceptance standard or done criteria are unclear.",
-          "Ask the user before irreversible, release, risk acceptance, external dependency, or mode change decisions."
-        ],
-        "auto_execute": [
-          "Run routine execution, local validation, focused code edits, and governance record updates when scope is known and reversible.",
-          "Commit and push normal single-task changes when validation, evidence, and review gates are satisfied."
-        ],
-        "assumption_record": {
-          "assumption": "TO_BE_DEFINED: default choice used for a reversible non-critical ambiguity",
-          "basis": "TO_BE_DEFINED: fact source or repository pattern supporting the default",
-          "reversibility": "TO_BE_DEFINED: why the choice can be changed without product damage",
-          "validation": "TO_BE_DEFINED: command or demo that will verify the assumption",
-          "rollback": "TO_BE_DEFINED: how to revert if the assumption is wrong"
-        },
-        "interruption_budget": "At most one user interruption per work unit unless a new critical trigger appears."
-      },
-      "allowed_change_scope": [
-        "Only change files required by this task row.",
-        "Keep unrelated refactors and release version bumps out of this task."
-      ],
-      "required_evidence": [
-        "evidence-log entry with 事实依据, 目标对齐, 用户影响, and 结构化事实 JSON",
-        "validation commands with exit_code and concise output summary",
-        "independent review evidence or explicit degraded review evidence"
-      ],
-      "next_commands": [
-        "Use acceptance_contract.command once it specifies the host project's runnable check."
-      ],
-      "done_definition": [
-        "Plan-tracker closure path is satisfied.",
-        "Reviewer has APPROVED the product-code change.",
-        "Single-task commit and push are completed."
-      ],
-      "source": "plan-tracker.md##当前活跃事项"
-    }
-  }
-}
-```
+每个活跃 P0/P1 事务的执行包保存在宿主项目的 `.governance/execution-packets.json`。按计划中的事务 ID 取包，用它对齐改动范围、验收结果和独立审查所需的证据。
 
 ## 生成命令
 
-```bash
-python "<plugin_home>/infra/verify_workflow.py" --project-root "<项目目录>" execution-packet --write
+将 `<plugin_home>` 换成已安装的 `software-project-governance` 技能目录（其中有 `SKILL.md`），`<项目目录>` 换成宿主项目根目录，`<TASK_ID>` 换成计划中的实际 ID。从任意工作目录运行下列命令可只读预览完整 JSON。
+
+```sh
+python "<plugin_home>/infra/verify_workflow.py" --project-root "<项目目录>" execution-packet --task "<TASK_ID>"
 ```
 
-生成器从当前项目 `.governance/` 下的 `intake.record` 读取申报的文件范围和验收原文。工单内的需求依据可能是用户引文、决议或会话引用。当前来源按 `task-priority-analysis` 裁决，`intake.demand_revisions` 指向变更依据。旧包可用 `execution-packet --task <ID>` 预览最新定位。旧工单缺少验收原文时，明确标为“验收要求”的计划列可以提供预期结果。重跑保留人工契约，只有从计划自动填入且尚未编辑的预期结果才随计划修订。
+读取输出中的 `packets[事务 ID]`。若 `packets` 为空，核对该宿主计划的 ID、优先级和活跃状态。需要落盘时，在同一命令末尾加 `--write`，只更新所选事务，保留其他包。旧版直接按事务 ID 存储的包也可通过这个入口读取。
 
-默认的 `next_commands` 指向 `acceptance_contract.command`。在该字段填写一次项目自身可运行的命令即可。验收原文用于核对预期结果，实际运行后填写 `last_run`。
+## JSON 结构
+
+计划给出 `goal` 的默认值、优先级和状态。核对 `allowed_change_scope`、`required_evidence`、`next_commands` 和 `done_definition`，为每项 `TO_BE_DEFINED` 填写该事务的事实或待验证项。
+
+- 包中有 `intake` 时，在宿主的 `.governance/` 下打开 `intake.record`，可找回受理时记录的范围、验收和需求依据。当前需求来源沿用 `task-priority-analysis` 的裁决。如有 `intake.demand_revisions`，可据此查阅修订依据。旧包可用上述命令预览最新定位。
+- 若旧工单缺少验收原文，生成器使用计划中明确标为“验收要求”的列。重跑保留人工契约。由计划自动填入的预期结果在人工编辑前随计划修订。
+- 将宿主自己的验收命令填写在 `acceptance_contract.command`。默认 `next_commands` 指向该字段。用 `expected_output` 对照实际输出，运行后填写 `last_run` 和 `demo_evidence`。
 
 ## 门禁
 
-`check-governance` 的 Check 18c 会读取该文件。活跃 P0/P1 任务缺少执行包，或执行包缺少目标、允许改动范围、必需证据、下一命令、完成定义时，治理检查失败。
+`check-governance --fail-on-issues` 的 Check 18c 检查执行包的必需字段。其余契约可按需打开下列模板，或通过同一已安装 CLI 运行对应检查并加 `--fail-on-issues`。
 
-`check-governance` 的 Check 18d 会检查 `product_success_contract`。活跃 P0/P1 任务必须把上述 `TO_BE_DEFINED` 草案替换为具体内容，声明用户、JTBD、非目标、成功指标、竞争基线和完成定义。成功指标必须至少包含一个用户可见结果和一个可运行验证信号，且不得只写 governance/check/review/evidence 等流程完成项。
-
-`check-governance` 的 Check 18e 会检查 `acceptance_contract`。活跃 P0/P1 任务必须把 `scenario`、`command`、`expected_output`、`last_run` 和 `demo_evidence` 替换为具体内容；`command` 必须是可运行验收/E2E/smoke/test/check 命令，`last_run.status` 必须为 PASS 且 `exit_code` 必须为 0。
-
-`check-governance` 的 Check 18f 会检查 `quality_budget`。活跃 P0/P1 任务必须覆盖 performance、reliability、security、accessibility、ux、maintainability 六个维度；每个维度必须有具体阈值、验证信号、状态和证据。已关闭或进行中任务必须为 PASS，或用 EXEMPT/not_applicable 并写清例外理由；待实施任务可以暂用 NOT_RUN_YET，但仍必须写清阈值、验证方式和证据计划。
-
-`check-governance` 的 Check 18g 会检查 `vertical_slice`。活跃 P0/P1 任务必须写清最小用户可见切片、可演示路径、范围边界、回滚方案、状态和证据；进行中或关闭任务必须为 PASS，待实施任务可以暂用 NOT_RUN_YET。只写内部技术层、全仓大改、人工审查通过或主观描述不能替代可演示切片。
-
-`check-governance` 的 Check 18i 会检查 `interruption_policy`。活跃 P0/P1 任务必须写清 critical-only 模式、product intent / acceptance standard / irreversible 等关键打断触发、可自动执行动作、assumption record 五字段和 interruption budget。非关键可逆不确定性必须记录假设后继续执行，不能把 routine work 交还给用户确认。
+| 契约字段 | 需要确定的内容 | 检查 |
+| --- | --- | --- |
+| [product_success_contract](product-success-contract.md) | 用户、要完成的事、范围外事项、成功指标、对标基线与完成条件 | 18d · `check-product-success-contracts` |
+| [acceptance_contract](executable-acceptance-contract.md) | 用户场景、可运行验收、预期与实际输出、演示证据 | 18e · `check-acceptance-contracts` |
+| [quality_budget](quality-budget.md) | 六个质量维度的阈值、验证方式、状态、证据与适用例外 | 18f · `check-quality-budget` |
+| [vertical_slice](vertical-slice-delivery-packet.md) | 可演示的最小用户场景、改动范围、回滚方式和验证结果 | 18g · `check-vertical-slices` |
+| [interruption_policy](user-interruption-policy.md) | 须向用户确认的决策、可自行执行的动作、可逆假设与打断预算 | 18i · `check-interruption-policy` |

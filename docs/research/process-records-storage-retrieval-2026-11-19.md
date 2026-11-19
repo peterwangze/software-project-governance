@@ -1,86 +1,30 @@
-# 治理记录该怎样写，又怎样找回原证
+# 治理记录的写入与查找
 
-2026-11-19，AUDIT-165。维护者遇到两个不同的问题。一是把同一次验收分别写进证据和计划时，需要理解两处格式，还可能只写成一半。二是几周后只记得当时的问题，难以找到决定、勘误和实际验收。以提交 `3565407` 的现行工具和本项目冻结的记录为对照，本轮得到三项取舍。
+AUDIT-165，2026-11-19。以本项目冻结的热账和归档为样本，先复用现行查找入口，再按真实需求试点结构化读写。完整方法、失败案例、问题标注与上游来源保存在固定版本，逐题结果可在对应的冻结样本上复算。[完整研究报告](https://github.com/peterwangze/software-project-governance/blob/b900d373b9483837b1957caecb9065cf3728029c/docs/research/process-records-storage-retrieval-2026-11-19.md) · [实验代码与公开夹具](https://github.com/peterwangze/software-project-governance/tree/b900d373b9483837b1957caecb9065cf3728029c/benchmarks/process-records)
 
-| 要做的事 | 有实验支持的下一步 | 成本或限制 |
-| --- | --- | --- |
-| 一次提交验收发现、附件与任务变更 | 先试一个结构化事务入口。接口给宿主使用，短任务卡给人读，附件按原件签收。 | 故障注入支持把这次业务变更一起提交。真实执行者的填写时间仍待测量。 |
-| 按编号、原话或引用找依据 | 日常沿用现有归档指针和 rg。重复查询可试可重建的只读 SQLite 索引，命中要能打开原件。 | 每次都重验全部源文件时，本机单次查询仍以 rg 更快。两个汉字需要字面回退。 |
-| 找意思相近的决定，或按周期统计 | 语义排名只用于找候选。跨周期统计可以按需导出 Parquet，用现成的 DuckDB 读取。 | 六道改写题没有一个方法把目标排到第一。列式导出在小样本上反而更大。 |
-
-## 先看现行系统
-
-现行 CLI 已经负责分配编号、验证列与引用、写回状态和生成回执。决策库也已有按项目选择的 Markdown／JSON 权威态、冻结迁移协议和回退。执行契约、审批流水各有读取者。早期设计在两份热文件约 1.76 MB 时决定先做派生索引，保留有实测数据后再评估 SQLite 的条件。[历史取舍](../requirements/architecture-evolution-0.80.0.md) · [记录写入口](../../skills/software-project-governance/infra/governance_store.py) · [决策库](../../skills/software-project-governance/infra/decision_repository.py) · [审批账本](../../skills/software-project-governance/infra/authority_ledger.py)
-
-本次同口径的计划与证据共 192,904 字节，四份热文件共 322,001 字节。一次原生证据取号依然会扫 157 个归档 Markdown（含索引），共 7,117,118 字节。文件缓存已热时五次为 102–110 毫秒。把热文件做小，解决不了跨库取号和跨文件事务。
-
-在热决策原件的隔离副本运行现行迁移命令。读取器认出 38 条，含 32 条当前五列、4 条旧十一列和另外两种列形。另有两行带圈号的补记未被归为主决策。`sample → freeze → shadow` 在 DEC-194 六列变体处以退出码 2 停下，要求对该源记录明确裁决。`cancel` 使用冻结令牌恢复了 `MD_ACTIVE`，原件逐字节相同。这给迁移设了一个实际边界：同一个业务编号可以指向多个物理位置，每次修订都要能单独回看。[迁移工具](../../skills/software-project-governance/infra/decision_migration.py)
-
-## 写一次验收
-
-用相同的合成任务、真实原生 CLI、新建临时目录，对照两条入口。原生的 `evidence-append` 与 `task-row-update` 已接收结构化参数。多行发现及裸竖线直接装入表格单元时被拒绝，把原文作为附件后，57 个 UTF-8 字节全部保留。现行用户遇到这个问题就可以使用附件。
-
-候选入口由一份严格模型生成 JSON Schema。九个必填字段覆盖版本、操作号、任务、预期修订、起止状态、目标对齐、发现和附件。正常请求产生同一修订的任务卡和可机读回执。试点时可让宿主从已领取任务填入操作号、修订等上下文，由执行者确认交付事实。这个分工仍需观察真实填写过程。[Pydantic JSON Schema](https://docs.pydantic.dev/latest/concepts/json_schema/) · [写入实验和请求示例](../../benchmarks/process-records/write.py)
-
-| 实际操作 | 观察结果 |
+| 事务 | 取舍与依据 |
 | --- | --- |
-| 在原生两条命令之间终止进程 | 已产生 EVD-1，任务仍在 dev。用同一操作号重试、从证据定位其编号后，才进入 review，证据只有一条。 |
-| 在 SQLite 已插证据、尚未更新状态时终止进程 | 子进程退出码 71。重开为 dev、零条证据。同一请求重试后只产生一次效果。 |
-| 两个进程用同一修订竞争；同时读任务和证据 | 一次提交成功，一次报告冲突。独立复核曾读到旧状态和新证据，修正为同一短读事务后，交错读分别得到 dev/0 条与 review/1 条。 |
-| 错误输入和恢复 | 12 类拒绝保持状态，包括过期修订、未知字段、同操作号改意图和附件越界。两条记录连同原附件在空库重放成功。改动源附件会拒绝恢复。单独篡改导出中第二条所记的指纹，整批回滚。完整性检查返回 ok。 |
+| 把发现、附件和任务状态一起交付 | 多行原文可用现行附件入口。原生两条命令之间中断时，证据已落盘，任务仍在开发。SQLite 单事务在相同故障处回滚，重试只产生一次效果。先在新项目试一笔跨记录验收，测真实填写成本。 |
+| 按编号、用词或关系找原件 | 日常优先用现有归档指针和 rg。160 个源文件共 6.93 MB，现行指针答对全部 5 道编号题。原文、rg 和 SQLite 三类方法均答对原题 8/9，找到 10/11 个标注出处，另找齐三道重号与补记题的 7 处原件。SQLite 长连接约 0.07 ms，每次重验全部来源约 67 ms，rg 约 54 ms。两个汉字的查询需要字面回退。重复查找多的项目可试可删除的只读索引。 |
+| 只有模糊问法，或要跨周期统计 | 六道中文改写题中，BM25、BGE 和融合排名均未将指定原件排到首位，两个无答案问题也有语义候选。排名仅供人工回查。统计可按需导出给 DuckDB。6,791 个真实文本片段从 JSONL 的 8.46 MB 压到 Parquet 的 2.03 MB，两种格式的 4,895 组计数完全相同，小夹具的 Parquet 反而更大。 |
 
-一次五轮交错取样，现行两条 CLI 的中位数为 802 毫秒，候选单入口为 312 毫秒。计时包含临时初始化、进程启动及回执，进程数量也不同。这个差值不能估算数据库本身的增益。实验采用本机 SQLite 3.50.4、DELETE 日志、FULL 同步。在线备份、完整历史恢复、跨主机运行与断电恢复需要另行演练。若将来采用 WAL，运行时版本还要核对上游的 WAL-reset 修复。[SQLite 日志说明](https://sqlite.org/wal.html#walreset) · [在线备份](https://www.sqlite.org/backup.html)
+## 试点次序和采用条件
 
-## 找到哪一份原件
-
-四类热记录与归档正文共 160 个文件、6,925,933 字节。派生归档索引单列为基准，避免让索引里的引用再算一次命中。读取器切出 916 条任务、3,621 条证据、77 条风险、396 条决策及关联候选，另有 1,781 个未归类文本片段。100 个编号对应多处记录。来源指纹为 `ec4713ad9c9fd100992057f896abe6d52bdccafe382bf701fa2d2a6e18a1d9bc`。实验前后核对原件字节。冻结样本留在项目本机。
-
-九道预先标注的问题覆盖热编号、冷编号、重号、中文词、显式的任务→证据→决定关系、无此编号及意图改写。命中按文件、物理起止行、原始字节 SHA-256、标签和角色核分。另测三道历史边界题，专门找同一文件的重号、勘误与补记。出处可以复验，搜索名次不能签发审批。[题目](../../benchmarks/process-records/search-cases.json) · [物理位置标注](../../benchmarks/process-records/search-locators.json)
-
-| 方法 | 九题全对的题数；找到的标注出处 | 毫秒，五次各题中位数再取中位 |
-| --- | --- | ---: |
-| 原文扫描与结构解析 | 8/9；10/11 | 103.007 |
-| rg 预筛文件后结构解析 | 8/9；10/11 | 53.941 |
-| SQLite 已打开的连接，冻结索引内查询 | 8/9；10/11 | 0.069 |
-| SQLite 新连接，每题核验源文件和命中原文 | 8/9；10/11 | 66.651 |
-| 现行归档指针加热表，仅五道编号题 | 5/5；5/5 | 8.138 |
-
-四条完整路径在三道追加题上都找到 7/7 个物理出处。DEC-214 主记录和两份附注逐条返回，EVD-424 在同一文件的两次出现也都保留。两个汉字“字形”在原始 unicode61 与 trigram MATCH 中各自为 0/3，短词字面匹配找回 3/3。四条路径都漏掉了意图改写题。数据库一次构建约 1.51 秒，占 34,238,464 字节，其中两个 FTS 索引分别增加 4,108,288 和 19,791,872 字节。以上计时使用已经预热的操作系统缓存。另测 11 道可按编号、字面或关系回答的问题，每题各启动 3 个全新 CLI 进程，逐题中位再取中位约 292 毫秒。独立检查发现缓存正文即使单独被改写也应拒绝返回，已加入原件字节对照和回归测试。[SQLite 三元分词规则](https://www.sqlite.org/fts5.html#the_trigram_tokenizer) · [索引及回源实现](../../benchmarks/process-records/search.py)
-
-## 改写检索与归档统计
-
-另选 393 份主决策、389 个编号，排除 3 条修订候选，用六个事先指定目标的中文改写问题和两个无答案问题实测。比较 SQLite trigram BM25、开源中文 BGE 小模型和倒数排名融合（RRF）。模型按固定修订下载，只在本地 CPU 四线程推理。每个正例只标了一份要找的原件，其他潜在相关结果没有做穷尽判断。[模型及许可](https://huggingface.co/BAAI/bge-small-zh-v1.5/tree/7999e1d3359715c523056ef9478215996d62a620) · [RRF 原论文](https://cormack.uwaterloo.ca/cormack/cormacksigir09-rrf.pdf) · [离线对照](../../benchmarks/process-records/alternative.py)
-
-| 相同六题，前三名找到指定原件 | BM25 | BGE | RRF | 嵌入成本 |
-| --- | ---: | ---: | ---: | --- |
-| 每条前 510 词元，273 条发生截断 | 1/6 | 2/6 | 2/6 | 23.3 秒，向量 804,864 字节 |
-| 256 词元、重叠 32，覆盖完整 1,337 段，每份原件取最佳段 | 1/6 | 0/6 | 1/6 | 40.1 秒，向量 2,738,176 字节 |
-
-两种切分的三个方法首位均为 0/6。两个无答案问题仍有语义和融合候选。本轮没有依据为自动答复设置信心阈值。更多真实问法、盲标相关性和对无答案的处理，才足以决定是否引入模型依赖。
-
-对同批 6,791 个文本片段，DuckDB 1.5.6 分别查询 UTF-8 JSONL 和 Zstd Parquet。两份导出逐段复核正文指纹，4,895 组记录类型与编号的计数相同。一次测量中，JSONL 为 8,462,590 字节，分组中位 18.85 毫秒；Parquet 为 2,032,363 字节、7.39 毫秒。7 次计时，转换约 62 毫秒。公开的小夹具分别为 2,307 和 2,410 字节。导出只保留类型、基础编号、位置、指纹和原文等七列。勘误可以与主记录同组，修订角色和审批关系仍需查原件。这个导出适合按需统计。[DuckDB Parquet](https://duckdb.org/docs/stable/data/parquet/overview) · [导出实验](../../benchmarks/process-records/cold_projection.py)
-
-## 采用路径和退出条件
-
-1. **现在可用。** 按已知编号走现行原件与归档指针，短词用字面查询，复杂发现放附件。工作流只交接用户原意、当前契约、原件引用、资源试用和验收结论。已消费的过程说明可从日常入口退出。
-2. **读取试点。** 在重复查找多的真实项目上并行试一个可删除的影子索引。先检查实际权威态，再发布对应代次。手工编辑、Git 恢复或权威切换后重新验鲜，回看时列出物理出处、关联角色及原件。在查错、过期或不可识别时回到现有入口。用真实查询的端到端时间、遗漏出处和使用频次决定是否值得常驻。
-3. **写入试点。** 选一项新项目事务，由同一个写入者管理操作号、预期修订、状态、证据与附件指纹，复用原生状态机和宿主身份。导出契约与只读任务卡。多处同号用不可变记录标识加显式修订关系处理。先跑失败重试、并发、一致读、导出恢复，再比较 Codex 与 DSH 各自完成一笔同类事务的时间、手填字段和修正次数。需保留 DSH 已授权直修的一次领取。
-4. **切换由实际采用需求触发。** 在逐类盘点所有读写者、歧义记录经人裁决、历史及附件双向核对、在线备份恢复和宿主整体验收均通过后，才决定某一类记录的权威是否迁移。退出试点时丢弃派生索引或导出，使用原入口。当前研究没有更改生产记录格式、原生 CLI 或审批协议。
+1. **先试只读检索。** 保留 Markdown／JSON 权威态，源文件或权威切换后重验。返回原件的路径、行号、指纹和修订角色。DEC-214 的主记录与两份勘误、补记应能分别打开。用实际查找频次、遗漏和回源总耗时决定是否保留索引。
+2. **再试一笔写入。** 同一请求携带操作号、预期修订、状态、证据和附件指纹。先复验中断重试、并发冲突、一致读取与导出恢复，再用 Codex 和 DSH 的同类事务比较手填字段、修正次数和成品验收。DSH 沿用已授权的单项直修入口。
+3. **有迁移需求再切换权威。** 核对所有读写方，逐条裁定重号和未解析记录，核验历史与附件并演练备份恢复。试点不可用时，使用现有 CLI 和归档指针。
 
 ## 复跑
 
-以下命令在仓库根目录运行。精确检索需要 rg 及带 FTS5/trigram 的 Python SQLite。写实验使用 Pydantic 2.12.5（脚本声明实验依赖），统计使用 DuckDB 1.5.6。私有源可传本机冻结目录，真实样本的逐行标注只适用于上述指纹。公开夹具可独立复验行为。检索输出包含原文，实验数据库、结果和模型目录宜存放在本机临时目录。
+从包含固定提交的仓库根目录建立独立工作树。以下命令在新检出中使用公开夹具。检索需要支持 FTS5/trigram 的 Python SQLite，rg 在 PATH 中时加入对照。写入需要 Pydantic 2.12.5 和支持 STRICT 与 JSON 的 SQLite。统计需要 DuckDB 1.5.6，可用装有相应依赖的解释器分别运行。
 
-```text
+```sh
+git worktree add --detach ../spg-records-lab b900d373b9483837b1957caecb9065cf3728029c
+cd ../spg-records-lab
 python -X utf8 benchmarks/process-records/search.py bench
 python -X utf8 -m unittest discover -s benchmarks/process-records -p test_search.py
-python -X utf8 benchmarks/process-records/write.py --example
-python -X utf8 benchmarks/process-records/write.py --schema
 python -X utf8 benchmarks/process-records/write.py
 python -X utf8 benchmarks/process-records/cold_projection.py
-python -X utf8 benchmarks/process-records/search.py --source <冻结的治理目录> bench --cases project --repeats 5
 ```
 
-将命令中的 `python` 指向已装对应实验依赖的解释器即可。本机单独在 DuckDB 工具环境运行统计脚本；PowerShell 命令为 `& 'D:/AI/dev_toolchain/python_app_tool_list/.venv/Scripts/python.exe' -X utf8 benchmarks/process-records/cold_projection.py`。其他机器也可在临时虚拟环境中用 `python -m pip install pydantic==2.12.5 duckdb==1.5.6` 取得这两项实验依赖。
-
-语义对照需另备本地 torch、transformers 和脚本开头列出的六个固定模型文件。本次为 Python 3.14.3、torch 2.12.0.dev20260408+cu128、transformers 5.5.3，使用 CPU。运行 `python -X utf8 benchmarks/process-records/alternative.py --governance-dir <冻结的治理目录> --model-dir <模型目录>`，再加 `--chunks` 复跑。两轮输入相同。实验输出性能只代表本机这组文件和题目。
+复验项目九题及三道追加题，需要对应的本机冻结 `.governance` 目录。在同一检出中运行 `python -X utf8 benchmarks/process-records/search.py --source "<冻结的治理目录>" bench --cases project --repeats 5`。语义对照另需固定的六个模型文件、torch 与 transformers。语料指纹、版本及参数见[完整复跑条件](https://github.com/peterwangze/software-project-governance/blob/b900d373b9483837b1957caecb9065cf3728029c/docs/research/process-records-storage-retrieval-2026-11-19.md#复跑)。

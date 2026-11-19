@@ -101,6 +101,7 @@ import face of the loop-wiring consumers is unchanged.
 """
 
 import hashlib
+import os
 import re
 import subprocess
 from datetime import date, datetime
@@ -157,7 +158,7 @@ _SOURCE_BLOCKER_FIELD_RE = re.compile(
     r"(?P<key>unresolved_block(?:er)?s)(?:[ \t]*[=:：][ \t]*(?P<value>[^|\r\n]*))?"
     r"[ \t]*(?(cell)\|[ \t]*)\r?$", re.MULTILINE | re.IGNORECASE)
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
-_HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+_GIT_OID = r"(?:[0-9a-f]{40}|[0-9a-f]{64})"
 # FEAT-094 ③: conflict-check exemptions — BLOCKED is the T2 round≥3
 # escalation verdict (recording ABOVE the report's NEEDS_CHANGE is
 # designed trigger semantics); ABORTED/UNKNOWN are supervisor facts about
@@ -172,9 +173,10 @@ _OBLIGATION_DISCHARGING_RESULTS = frozenset(
 _REPORT_SHA_FIELD_RE = re.compile(
     r"^- report_sha256: ([0-9a-f]{64})\s*$", re.MULTILINE)
 _COMMIT_FIELD_RE = re.compile(
-    r"^- snapshot_commit: ([0-9a-f]{40}|git:unavailable)\s*$", re.MULTILINE)
+    rf"^- snapshot_commit: ({_GIT_OID}|git:unavailable)\s*$", re.MULTILINE)
 _BIND_FIELD_RE = re.compile(
-    r"^- snapshot_bind: (.+)=([0-9a-f]{40})\s*$", re.MULTILINE)
+    rf"^- snapshot_bind: (.+)=({_GIT_OID})\s*$", re.MULTILINE)
+_MODE_FIELD_RE = re.compile(r"^- snapshot_mode: (.+)=([0-7]{6})\s*$", re.MULTILINE)
 _REPORT_FIELD_RE = re.compile(
     r"^- report: (.+?)\s*$", re.MULTILINE)
 
@@ -240,9 +242,10 @@ def _resolve_report_face(report_path, root=None):
     report cannot be read (fail-closed at the caller — no report, no
     binding, no record).
     """
-    candidates = [Path(report_path)]
-    if root is not None and not Path(report_path).is_absolute():
-        candidates.append(Path(root) / report_path)
+    report = Path(str(report_path).replace("\\", "/"))
+    candidates = [report]
+    if root is not None and not report.is_absolute():
+        candidates.insert(0, Path(root) / report)
     for candidate in candidates:
         if candidate.is_file():
             try:
@@ -287,7 +290,7 @@ def _conflicting_blocker_fields(text):
     return fields
 
 
-def _git_output(repo_root, *argv):
+def _git_output(repo_root, *argv, input_bytes=None):
     """One argv-list git invocation → stripped stdout, or None (git
     unavailable / non-repo / failure — disclosed, never faked). Zero
     shell, zero network; same posture as governance_store's git_object
@@ -295,12 +298,67 @@ def _git_output(repo_root, *argv):
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo_root), *argv],
-            capture_output=True, timeout=30)
+            capture_output=True, timeout=30, input=input_bytes)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
         return None
     return proc.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _file_binding(root, spec):
+    """Pin working bytes using Git clean filters and Git's recorded file types."""
+    from delivery_acceptance import _plain_stat
+    root = Path(root).resolve()
+    path = root / spec
+    try:
+        relative = path.relative_to(root)
+        if not relative.parts or ".." in relative.parts:
+            raise ValueError("outside review root")
+        spec = relative.as_posix()
+        parent = path.parent
+        while parent != root:
+            if parent.exists() or parent.is_symlink():
+                _plain_stat(parent)
+            parent = parent.parent
+    except (OSError, ValueError):
+        return {"path": spec, "hash": "unavailable"}
+    literal = ":(literal)" + spec
+    staged = _git_output(root, "ls-files", "--stage", "--", literal)
+    entry = staged.partition("\t")[0].split() if staged and "\n" not in staged else []
+    mode = entry[0] if len(entry) == 3 and entry[2] == "0" else None
+    if path.is_symlink():
+        target = os.fsencode(os.readlink(path))
+        blob = _git_output(root, "hash-object", "--stdin", input_bytes=target)
+        return {"path": spec, "hash": blob or "unavailable", "mode": "120000"}
+    if mode == "160000" and (path / ".git").exists():
+        try:
+            _plain_stat(path)
+        except (OSError, ValueError):
+            return {"path": spec, "hash": "unavailable"}
+        blob = _git_output(path, "rev-parse", "HEAD")
+        if blob:
+            return {"path": spec, "hash": blob, "mode": mode}
+    if staged == "" and not path.exists() and not path.is_symlink():
+        previous = _git_output(root, "rev-parse", "--verify", "HEAD:" + spec)
+        if previous and re.fullmatch(_GIT_OID, previous):
+            return {"path": spec, "hash": "0" * len(previous), "mode": "000000"}
+    blob = _git_output(root, "hash-object", "--", spec)
+    if not blob or not re.fullmatch(_GIT_OID, blob):
+        return {"path": spec, "hash": "unavailable"}
+    if path.is_file():
+        if mode == "120000" and entry[1] == blob and _git_output(root, "config", "--bool", "core.symlinks") == "false":
+            return {"path": spec, "hash": blob, "mode": mode}
+        if _git_output(root, "config", "--bool", "core.filemode") == "true":
+            mode = "100755" if path.stat().st_mode & 0o100 else "100644"
+        elif mode not in ("100644", "100755"):
+            mode = "100644"
+    return {"path": spec, "hash": blob, "mode": mode}
+
+
+def derive_review_facts(root, task, review_ids, *, base=None, commit=None):
+    from review_facts import derive_review_facts as derive
+    return derive(root, task, review_ids, base=base, commit=commit)
 
 
 def snapshot_binding(repo_root, bind_files=()):
@@ -322,16 +380,11 @@ def snapshot_binding(repo_root, bind_files=()):
             len([ln for ln in status.splitlines() if ln.strip()])))
     bindings = []
     for raw in bind_files or ():
-        spec = str(raw)
-        blob = _git_output(root, "hash-object", "--", spec)
-        bindings.append({
-            "path": spec.replace("\\", "/"),
-            "hash": blob if blob and _HEX40_RE.match(blob) else "unavailable",
-        })
+        bindings.append(_file_binding(root, str(raw).replace("\\", "/")))
     return {
-        "commit": commit if commit and _HEX40_RE.match(commit)
+        "commit": commit if commit and re.fullmatch(_GIT_OID, commit)
         else "git:unavailable",
-        "commit_status": "resolved" if commit and _HEX40_RE.match(commit)
+        "commit_status": "resolved" if commit and re.fullmatch(_GIT_OID, commit)
         else "unavailable",
         "worktree": worktree,
         "bindings": bindings,
@@ -429,9 +482,18 @@ def verify_review_trust(review_file, repo_root=None):
         unknown |= state == "unverified"
 
     # 3. per-file blob pins (the untracked-safe bindings)
+    modes = dict(_MODE_FIELD_RE.findall(text))
     for bind_match in _BIND_FIELD_RE.finditer(text):
         spec, pinned_blob = bind_match.group(1), bind_match.group(2)
-        blob = _git_output(root, "hash-object", "--", spec)
+        current_bind = _file_binding(root, spec)
+        blob = current_bind["hash"]
+        if modes.get(spec) == "000000" and _git_output(root, "ls-files", "--stage", "--", ":(literal)" + spec) == "":
+            path = root / spec
+            if not path.exists() and not path.is_symlink():
+                blob = "0" * len(pinned_blob)
+                current_bind["mode"] = "000000"
+        if blob == "unavailable":
+            blob = None
         state = _pin_check(
             face["checks"], "snapshot_bind", pinned_blob, blob,
             "bound file content drifted after the review (REV-009 "
@@ -439,6 +501,11 @@ def verify_review_trust(review_file, repo_root=None):
         face["checks"][-1]["path"] = spec
         conflict |= state == "mismatch"
         unknown |= state == "unverified"
+        if spec in modes:
+            state = _pin_check(face["checks"], "snapshot_mode", modes[spec], current_bind.get("mode"))
+            face["checks"][-1]["path"] = spec
+            conflict |= state == "mismatch"
+            unknown |= state == "unverified"
 
     if conflict:
         face["verdict"] = "CONFLICT"
@@ -702,6 +769,7 @@ def _review_ledger_transaction(evidence_dir, *, task_id, round_n,
         "report_sha256": report_sha256,
         "commit": binding["commit"],
         "worktree": binding["worktree"],
+        "bindings": binding["bindings"],
         "scope": scope_norm,
     }
     batch = [("review_recorded", review_payload)]
@@ -1025,6 +1093,8 @@ def write_review_record(
     for bound in binding["bindings"]:
         trust_fields.append("- snapshot_bind: {0}={1}".format(
             bound["path"], bound["hash"]))
+        if bound.get("mode"):
+            trust_fields.append("- snapshot_mode: {0}={1}".format(bound["path"], bound["mode"]))
     review_text = _review_file_text(
         task_id, round_n, result_norm, reviewer, report_path, today, "pending",
         force_note=force_note, scope=scope_norm, delta_base=delta_base,

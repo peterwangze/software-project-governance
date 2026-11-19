@@ -1642,7 +1642,7 @@ def _normalize_review_conclusion(value):
     states (ABORTED/UNKNOWN) — recognized for PARSING, deliberately NOT
     legal closure states (see _REVIEW_DEATH_TERMINALS).
     """
-    _resolve_shared()
+    # The vocabulary is local; evidence intake can normalize it without loading the engine.
     normalized = str(value or "").strip().upper()
     normalized = _REVIEW_NON_TERMINAL_ALIASES.get(normalized, normalized)
     if normalized in (*_REVIEW_TERMINAL_CONCLUSIONS, "NEEDS_CHANGE",

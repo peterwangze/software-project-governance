@@ -517,6 +517,102 @@ class EvidenceAppendTests(StoreTestCase):
         self.assertIn(cjk, text)
 
 
+class ReviewedEvidenceTests(StoreTestCase):
+    commands = [{"cmd": "test x | check", "exit_code": 0, "summary": "Both cases passed."}]
+
+    def basis(self, facts):
+        return "独立运行验收。结构化事实：" + json.dumps(facts, ensure_ascii=False)
+
+    def snapshot(self):
+        return {path.relative_to(self.gov): path.read_bytes() if path.is_file() else None
+                for path in self.gov.rglob("*")}
+
+    def test_partial_declaration_cannot_fall_back_to_writer_credential(self):
+        # EVD-2264 had a machine receipt and commands, but missed diff and review.
+        before = self.snapshot()
+        for basis in (self.basis({"commands": self.commands}), "结构化事实：{bad}", "结构化事实："):
+            for dry_run in (True, False):
+                with self.subTest(basis=basis, dry_run=dry_run):
+                    result = _call_evidence(self.gov, {"basis": basis}, dry_run=dry_run)
+                    self.assertRefused(result, "schema_violation")
+                    self.assertEqual(self.snapshot(), before)
+
+    def test_research_receipt_keeps_its_own_evidence_shape(self):
+        basis = self.basis({"experiments": ["open-source project comparison"]})
+        result = _call_evidence(self.gov, {"task_id": "AUDIT-165", "evd_type": "验收",
+                                           "artifacts": "docs/research/comparison.md", "basis": basis})
+        self.assertFalse(result.get("error"), result)
+        self.assertFalse(vw.requires_impact_evidence("AUDIT-165", "验收", "docs/research/comparison.md"))
+
+    def test_review_proof_owns_fields_and_replay_survives_a_different_index(self):
+        records = ["REVIEW-FEAT-046-R0", "REVIEW-FEAT-046-R1"]
+        supplied = {"basis": self.basis({"commands": self.commands})}
+        derived = {"files_changed": ["src/a.txt", "src/b.txt"],
+                   "diff_summary": "Two reviewed files differ from the base.",
+                   "review": {"reviewer": "Independent reviewer", "conclusion": "APPROVED_WITH_NOTES",
+                              "records": [{"id": value} for value in records]},
+                   "git": {"tree": "a" * 40, "commit": None, "base": "b" * 40}}
+        op_id = gs.new_operation_id()
+        with mock.patch("review_record.derive_review_facts", return_value=derived) as derive:
+            result = _call_evidence(self.gov, supplied, review_records=records, operation_id=op_id)
+            self.assertFalse(result.get("error"), result)
+            derive.assert_called_once_with(self.gov.parent, "FEAT-046", records, base=None, commit=None)
+        row = self.evidence_rows()[-1]
+        cells = gs._split_row(row)
+        facts = json.loads(vw._extract_structured_fact_json(cells[4]))
+        self.assertEqual(facts["review"]["records"], [{"id": value} for value in records])
+        self.assertEqual(facts["commands"], self.commands)
+        self.assertEqual(facts["files_changed"], derived["files_changed"])
+        self.assertNotIn("ci", facts)
+        entry = {"description": cells[3], "fact_basis": cells[4], "raw_line": row,
+                 "evd_id": cells[0], "task_id": cells[1]}
+        with mock.patch.object(vw, "_current_release_impact_entries", return_value=[entry]):
+            checked = vw.check_structured_evidence()
+        self.assertTrue(checked["pass"], checked)
+        self.assertFalse(checked["entries"][0]["machine_attested"])
+        self.assertEqual(checked["entries"][0]["files_changed"], 2)
+
+        saved_bytes = self.evidence_bytes()
+        with mock.patch("review_record.derive_review_facts", side_effect=AssertionError("unexpected recapture")):
+            self.assertFalse(_call_evidence(self.gov, supplied, review_records=records,
+                                            operation_id=op_id).get("error"))
+            # Simulate a persisted row whose operation ledger has not been saved yet.
+            (self.gov / gs.LEDGER_FILE_NAME).unlink()
+            rejected = _call_evidence(self.gov, supplied, review_records=records[:1], operation_id=op_id)
+            self.assertRefused(rejected, "operation_id_conflict")
+            self.assertFalse((self.gov / gs.LEDGER_FILE_NAME).exists())
+            replay = _call_evidence(self.gov, supplied, review_records=records, operation_id=op_id)
+            self.assertFalse(replay.get("error"), replay)
+        self.assertEqual(self.evidence_bytes(), saved_bytes)
+
+    def test_review_refuses_extra_self_attestations_and_missing_proofs_without_writes(self):
+        before = self.snapshot()
+        for extra in ("files_changed", "diff_summary", "review", "git", "ci"):
+            result = _call_evidence(self.gov, {"basis": self.basis({"commands": self.commands, extra: "passed"})},
+                                    review_records=["REVIEW-FEAT-046-R0"])
+            self.assertRefused(result, "schema_violation")
+        with mock.patch("review_record.derive_review_facts", side_effect=ValueError("source changed")):
+            result = _call_evidence(self.gov, {"basis": self.basis({"commands": self.commands})},
+                                    review_records=["REVIEW-FEAT-046-R0"])
+            self.assertRefused(result, "schema_violation")
+            self.assertIn("source changed", result["detail"])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_legacy_verdicts_and_review_applicability(self):
+        for state in ("APPROVED", "APPROVED_WITH_NOTES", "NEEDS_CHANGE", "NEEDS_CHANGES", "BLOCKED",
+                      "ABORTED", "UNKNOWN", "NOT_REQUIRED"):
+            facts = {"files_changed": ["sample"], "diff_summary": "Actual diff summary",
+                     "commands": self.commands, "review": {"conclusion": state, "reviewer": "historical signer"}}
+            with self.subTest(state=state):
+                self.assertEqual(vw._validate_structured_fact_payload(facts), [])
+        facts["review"] = {"applicability": "NOT_REQUIRED", "reason": "No product code changed."}
+        self.assertEqual(vw._validate_structured_fact_payload(facts), [])
+        facts["review"]["conclusion"] = "APPROVED"
+        self.assertTrue(vw._validate_structured_fact_payload(facts))
+        facts["review"] = {"applicability": "NOT_REQUIRED", "reason": ""}
+        self.assertTrue(vw._validate_structured_fact_payload(facts))
+
+
 class EvidenceRefTests(StoreTestCase):
     def refs_result(self, refs, **kwargs):
         return _call_evidence(self.gov, overrides={"refs": refs},

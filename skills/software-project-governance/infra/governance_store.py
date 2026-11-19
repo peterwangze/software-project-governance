@@ -146,6 +146,7 @@ import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
+from checks.evidence_domain import read_structured_fact, requires_impact_evidence, structured_fact_result
 from contracts import (  # L0 — consumed read-only, never redefined
     ERROR_CODE_DISPOSITIONS,
     EVIDENCE_REF_KINDS,
@@ -1029,18 +1030,23 @@ def _validate_refs(refs, repo_root, governance_dir):
 # ── evidence-append (B-5) ────────────────────────────────────────────────────
 
 
-def _build_evidence_row(*, evd_id, task_id, evd_type, description, basis,
-                        artifacts, actor, date_str, gate, conclusion, refs,
-                        op_id):
-    marker = (f"（机器写入：governance-store evidence-append {op_id}；"
-              f"schema v{SCHEMA_VERSION}）")
-    basis_cell = f"事实依据：{basis} {marker}".strip()
+def _evidence_artifacts(artifacts, refs):
     refs_cell = artifacts
     if refs:
         rendered = "; ".join(
             f"refs[{item['kind']}:{item['value']}={item['validation']}]"
             for item in refs)
         refs_cell = f"{artifacts}；{rendered}" if artifacts else rendered
+    return refs_cell
+
+
+def _build_evidence_row(*, evd_id, task_id, evd_type, description, basis,
+                        artifacts, actor, date_str, gate, conclusion, refs,
+                        op_id):
+    marker = (f"（机器写入：governance-store evidence-append {op_id}；"
+              f"schema v{SCHEMA_VERSION}）")
+    basis_cell = f"事实依据：{basis} {marker}".strip()
+    refs_cell = _evidence_artifacts(artifacts, refs)
     cells = [evd_id, task_id, evd_type, description, basis_cell, refs_cell,
              actor, date_str, gate, conclusion]
     _cells_no_newline("evidence cell", cells)
@@ -1153,10 +1159,55 @@ def _validate_user_impact_passage(description):
         })
 
 
+def _review_evidence(description, basis, root, task_id, review_records, review_base, review_commit,
+                     fingerprint):
+    from review_record import derive_review_facts
+
+    cells = [description, basis]
+    inputs = []
+    for index, cell in enumerate(cells):
+        span, supplied, error = read_structured_fact(cell)
+        if span is None:
+            continue
+        if error:
+            _refuse({"code": "schema_violation", "detail": error})
+        if read_structured_fact(cell[span.stop:])[0] is not None:
+            _refuse({"code": "schema_violation", "detail": "multiple 结构化事实 fields are ambiguous"})
+        inputs.append((index, span, supplied))
+    if len(inputs) != 1:
+        _refuse({"code": "schema_violation",
+                 "detail": "--review-record requires one 结构化事实 JSON object containing commands"})
+    index, span, supplied = inputs[0]
+    if not isinstance(supplied, dict) or set(supplied) != {"commands"}:
+        _refuse({"code": "schema_violation", "detail": "only commands may be supplied with --review-record; "
+                 "the review and Git facts come from the referenced records"})
+    try:
+        facts = derive_review_facts(root, task_id, review_records, base=review_base, commit=review_commit)
+    except (ValueError, OSError) as exc:
+        _refuse({"code": "schema_violation", "detail": str(exc)})
+    facts["commands"] = supplied["commands"]
+    # The ledger may be lost after the row was persisted. Bind the original request
+    # so recovery can distinguish a retry from a different use of the same op id.
+    facts["review"]["input_fingerprint"] = fingerprint
+    encoded = json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+    # Keep arbitrary Git paths and shell commands inside a single Markdown cell.
+    encoded = encoded.replace("|", r"\u007c").replace("`", r"\u0060")
+    cells[index] = cells[index][:span.start] + encoded + cells[index][span.stop:]
+    return cells
+
+
+def _validate_declared_evidence(description, basis):
+    _, _, issues = structured_fact_result(description, basis, machine_attested=True)
+    if issues:
+        _refuse({"code": "schema_violation", "detail": "；".join(issues)})
+
+
 def _evidence_row_validator(row_text, op_id):
     cells = _validate_row_shape(row_text, expected_columns=EVIDENCE_COLUMNS,
                                 mandatory=EVIDENCE_COLUMNS)
     _validate_evidence_content(cells)
+    if requires_impact_evidence(cells[1], cells[2], cells[5]):
+        _validate_declared_evidence(cells[3], cells[4])
     if f"evidence-append {op_id}" not in row_text:
         _refuse({
             "code": "manual_intervention",
@@ -1169,7 +1220,8 @@ def evidence_append(*, task_id, evd_type, description, basis, artifacts="",
                     actor="governance-store", date=None, gate="G11",
                     conclusion="✅ 完成", refs=(), governance_dir,
                     repo_root=None, operation_id=None, dry_run=False,
-                    now=None, expected_revision=None, timeout_seconds=10.0):
+                    now=None, expected_revision=None, timeout_seconds=10.0,
+                    review_records=(), review_base=None, review_commit=None):
     """B-5: append one machine EVD row — skeleton hard-validated.
 
     Mechanical skeleton only: ID continuity (max hot + 1, archive collision
@@ -1206,14 +1258,33 @@ def evidence_append(*, task_id, evd_type, description, basis, artifacts="",
     governance_dir, target, root = _append_context(
         governance_dir, repo_root, EVIDENCE_FILE_NAME)
     checked_refs = _validate_refs(typed_refs, root, governance_dir)
-    fingerprint = _fingerprint({
+    request = {
         "command": "evidence-append", "task": task_id, "type": evd_type,
         "description": description, "basis": basis, "artifacts": artifacts,
         "actor": actor, "date": date_str, "gate": gate,
         "conclusion": conclusion,
         "refs": [{"kind": r.kind, "value": r.value} for r in typed_refs],
-    })
+    }
+    if not review_records and (review_base is not None or review_commit is not None):
+        _refuse({"code": "schema_violation", "detail": "--review-base/--review-commit require --review-record"})
+    if review_records:
+        request.update(review_records=list(review_records), review_base=review_base, review_commit=review_commit)
+    fingerprint = _fingerprint(request)
     marker = f"governance-store evidence-append {op_id}"
+
+    if review_records:
+        # A completed write is replayable even after the original index has moved.
+        # Derive before opening a lock so a failed proof leaves the project untouched.
+        already_written = (not dry_run and operation_id and
+                           (op_id in _load_ledger(governance_dir)["operations"]
+                            or marker.encode() in _read_bytes(target)))
+        if not already_written:
+            description, basis = _review_evidence(description, basis, governance_dir.parent,
+                                                  task_id, review_records, review_base,
+                                                  review_commit, fingerprint)
+            _validate_declared_evidence(description, basis)
+    elif requires_impact_evidence(task_id, evd_type, _evidence_artifacts(artifacts, checked_refs)):
+        _validate_declared_evidence(description, basis)
 
     def build(text):
         row, _cells = _build_evidence_row(
@@ -1268,6 +1339,16 @@ def evidence_append(*, task_id, evd_type, description, basis, artifacts="",
         # this operation marker is a crashed prior attempt — recover,
         # never re-append.
         if marker in text:
+            stored_line = next(line for line in text.splitlines() if marker in line)
+            stored_cells = _split_row(stored_line)
+            if len(stored_cells) == EVIDENCE_COLUMNS:
+                _, facts, _ = structured_fact_result(stored_cells[3], stored_cells[4], machine_attested=True)
+                saved_review = facts.get("review") if isinstance(facts, dict) else None
+                saved = saved_review.get("input_fingerprint") if isinstance(saved_review, dict) else None
+                if (review_records or saved) and saved != fingerprint:
+                    _refuse(_error_result(op_id, "operation_id_conflict",
+                                          "persisted review evidence belongs to a different request",
+                                          observed_revision=len(original)))
             _recover_append(
                 governance_dir, op_id, "evidence-append", task_id,
                 fingerprint, marker, len(original), now)
@@ -2575,6 +2656,10 @@ def add_evidence_append_arguments(parser: argparse.ArgumentParser) -> None:
                         help="description cell; must carry 目标对齐： >= 30 chars")
     parser.add_argument("--basis", required=True,
                         help="factual basis (after 事实依据：)")
+    parser.add_argument("--review-record", dest="review_records", action="append", default=[],
+                        help="derive impact evidence from this formal review ID (repeat for each round)")
+    parser.add_argument("--review-base", help="Git baseline (default HEAD for staged changes, parent for a commit)")
+    parser.add_argument("--review-commit", help="full commit SHA; omit to use the staged tree")
     parser.add_argument("--artifacts", required=True,
                         help="artifacts cell (all 10 row cells must be non-empty)")
     parser.add_argument("--actor", default="governance-store")
@@ -2719,7 +2804,10 @@ def cmd_evidence_append(args) -> int:
         artifacts=args.artifacts, actor=args.actor,
         date=args.date or None, gate=args.gate,
         conclusion=args.conclusion,
+        review_records=getattr(args, "review_records", ()),
+        review_base=getattr(args, "review_base", None), review_commit=getattr(args, "review_commit", None),
         refs=_split_refs_list(args.refs),
+        repo_root=_governance_dir_from(args).parent,
         governance_dir=_governance_dir_from(args),
         operation_id=args.operation_id or None,
         dry_run=args.dry_run,

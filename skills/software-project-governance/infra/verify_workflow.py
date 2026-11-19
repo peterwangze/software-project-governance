@@ -1210,7 +1210,10 @@ from checks.evidence_domain import (  # noqa: E402
     check_evidence_completeness,
     check_evidence_quality,
     check_fact_grounding,
-    check_structured_evidence,
+    check_structured_evidence, requires_impact_evidence,
+    _FORENSIC_HEAD_RE, _is_product_code_location, _is_review_evidence, _is_audit_or_review_type,
+    SECRET_FIELD_RE, SECRET_ASSIGNMENT_RE, _contains_secret_like,
+    _extract_structured_fact_json, _validate_structured_fact_payload,
     render_evidence_binding_drift_block, render_rb2_goal_contract_block,
 )
 
@@ -12720,40 +12723,6 @@ def _current_release_task_ids():
     return task_ids
 
 
-def _is_product_code_location(file_location):
-    return any(pattern in file_location for pattern in PRODUCT_CODE_PATTERNS)
-
-
-def _is_review_evidence(raw_ids, evd_type):
-    return (
-        raw_ids.startswith("REVIEW-")
-        or evd_type in ("Code Review", "代码审查", "审查")
-        or "审查" in evd_type
-    )
-
-
-# FEAT-104: forensic (investigation-only) evidence markers — anchored at the
-# head of the evd_type field ONLY (explicit "[取证]"/"[forensics]"/"取证:"
-# tags, or 取证/调查/诊断/对账/复盘 followed by a delimiter, a report/minutes
-# suffix word, or end-of-field). Mid-prose matches are deliberately NOT
-# forensic: free-text guessing must not hide implementation rows from review
-# debt ("修复并附调查记录" / "诊断脚本实现" stay implementation).
-_FORENSIC_HEAD_RE = re.compile(
-    r"(?:\[(?:取证|forensics)\]|(?:取证|forensics)\s*[:：]"
-    r"|(?:取证|调查|诊断|对账|复盘)"
-    r"(?=$|[\s：:、，,）)】\]—\-]|报告|会议|纪要|记录))",
-    re.IGNORECASE,
-)
-
-
-def _is_audit_or_review_type(evd_type):
-    """Non-implementation evidence: audit/review rows (FIX-174) plus forensic
-    investigation-only rows (FEAT-104) never constitute execution evidence
-    for review-debt / review-coverage judgments (activity ≠ delivery)."""
-    return (any(token in evd_type for token in ("审查", "审视", "审计", "Review"))
-            or bool(evd_type and _FORENSIC_HEAD_RE.match(evd_type.strip())))
-
-
 def _normalize_priority(value):
     normalized = value.strip().strip("*")
     return normalized if normalized in ("P0", "P1", "P2") else ""
@@ -13112,20 +13081,7 @@ def parse_impact_analysis_entries_with_exemptions():
         file_location = parts[6] if len(parts) > 6 else ""
 
         covered_ids = expand_task_ids(task_id) if task_id and re.search(r"[A-Z]+-\d+", task_id) else set()
-        explicit_impact = evd_type == "影响分析"
-        product_delivery_by_path = _is_product_code_location(file_location)
-        product_delivery_by_current_task_type = (
-            bool(covered_ids & hot_task_ids)
-            and evd_type in {"实现", "修复", "修复闭环", "开发", "代码"}
-        )
-        product_delivery = (
-            bool(covered_ids & hot_task_ids)
-            and (product_delivery_by_path or product_delivery_by_current_task_type)
-            and not _is_review_evidence(task_id, evd_type)
-            and not _is_audit_or_review_type(evd_type)
-        )
-
-        if explicit_impact or product_delivery:
+        if requires_impact_evidence(task_id, evd_type, file_location, active=bool(covered_ids & hot_task_ids)):
             hot_covered = covered_ids & hot_task_ids
             target_ids = sorted(hot_covered) if hot_covered else [task_id]
             if not target_ids:
@@ -13442,13 +13398,6 @@ UNGROUNDED_CLAIM_RE = re.compile(
     r"(?:我\s*)?(?:假设|猜测|推测|估计)|(?:大概|应该|可能)(?:已经|是|可以|完成|存在)|编造|幻觉"
 )
 
-SECRET_FIELD_RE = re.compile(r"(?:api[_-]?key|token|secret|password|passwd)", re.IGNORECASE)
-SECRET_ASSIGNMENT_RE = re.compile(
-    r"['\"]?(?:api[_-]?key|token|secret|password|passwd)['\"]?\s*[:=]\s*['\"]?[^\s,'\"}]+",
-    re.IGNORECASE,
-)
-
-
 def _current_release_impact_entries():
     """Return impact/product-delivery entries for the active in-progress release.
 
@@ -13464,120 +13413,6 @@ def _current_release_impact_entries():
 
 
 # ── FIX-083: Structured Evidence Check ────────────────────────────
-
-def _extract_structured_fact_json(description):
-    """Extract the JSON object after `结构化事实:` without being confused by nested braces."""
-    markers = list(re.finditer(r"结构化事实[:：]", description))
-    if not markers:
-        return ""
-    first_non_json = ""
-    for marker in markers:
-        idx = marker.end()
-        while idx < len(description) and description[idx].isspace():
-            idx += 1
-        if idx < len(description) and description[idx] == "`":
-            idx += 1
-            while idx < len(description) and description[idx].isspace():
-                idx += 1
-        if idx >= len(description) or description[idx] != "{":
-            if not first_non_json:
-                first_non_json = description[idx:].strip()
-            continue
-        break
-    else:
-        return first_non_json
-
-    depth = 0
-    in_string = False
-    escape = False
-    for pos in range(idx, len(description)):
-        ch = description[pos]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return description[idx:pos + 1]
-    return description[idx:].strip()
-
-
-def _contains_secret_like(value):
-    """Return True when structured evidence appears to carry a raw secret."""
-    if isinstance(value, dict):
-        for key, child in value.items():
-            key_text = str(key)
-            if SECRET_FIELD_RE.search(key_text):
-                if child not in (None, "", "<redacted>", "REDACTED", "***", "***REDACTED***"):
-                    return True
-            if _contains_secret_like(child):
-                return True
-        return False
-    if isinstance(value, list):
-        return any(_contains_secret_like(item) for item in value)
-    if isinstance(value, str):
-        return bool(SECRET_ASSIGNMENT_RE.search(value))
-    return False
-
-
-def _validate_structured_fact_payload(payload):
-    issues = []
-    if not isinstance(payload, dict):
-        return ["结构化事实必须是 JSON object"]
-
-    commands = payload.get("commands")
-    if not isinstance(commands, list) or not commands:
-        issues.append("commands 必须是非空数组")
-    else:
-        for index, command in enumerate(commands, start=1):
-            if not isinstance(command, dict):
-                issues.append(f"commands[{index}] 必须是 object")
-                continue
-            cmd = command.get("cmd")
-            exit_code = command.get("exit_code")
-            summary = command.get("summary")
-            if not isinstance(cmd, str) or not cmd.strip():
-                issues.append(f"commands[{index}].cmd 必须是非空字符串")
-            if not isinstance(exit_code, int):
-                issues.append(f"commands[{index}].exit_code 必须是整数")
-            if not isinstance(summary, str) or len(summary.strip()) < 5:
-                issues.append(f"commands[{index}].summary 必须说明输出摘要")
-            log_path = command.get("log_path")
-            if log_path is not None and not isinstance(log_path, str):
-                issues.append(f"commands[{index}].log_path 必须是字符串")
-
-    files_changed = payload.get("files_changed")
-    if not isinstance(files_changed, list) or not files_changed or not all(isinstance(item, str) and item for item in files_changed):
-        issues.append("files_changed 必须是非空字符串数组")
-
-    diff_summary = payload.get("diff_summary")
-    if not isinstance(diff_summary, str) or len(diff_summary.strip()) < 10:
-        issues.append("diff_summary 必须说明文件 diff 摘要")
-
-    review = payload.get("review")
-    if not isinstance(review, dict):
-        issues.append("review 必须是 object")
-    else:
-        conclusion = review.get("conclusion")
-        reviewer = review.get("reviewer")
-        if conclusion not in {"APPROVED", "NEEDS_CHANGES", "BLOCKED", "NOT_REQUIRED"}:
-            issues.append("review.conclusion 必须是 APPROVED/NEEDS_CHANGES/BLOCKED/NOT_REQUIRED")
-        if not isinstance(reviewer, str) or not reviewer.strip():
-            issues.append("review.reviewer 必须是非空字符串")
-
-    if _contains_secret_like(payload):
-        issues.append("结构化事实疑似包含 secret/token/password 明文")
-    return issues
-
 
 # ── FIX-084: AI Execution Packet Check ───────────────────────────
 

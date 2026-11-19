@@ -7,7 +7,7 @@ evidence-quality, structured-evidence, and fact-grounding checks (Checks 1,
 This module owns the evidence check domain. Shared helpers and constants that
 are still defined in verify_workflow.py (path resolution, evidence-log path
 constants, header-marker constant sets, `expand_task_ids`,
-`GovernanceDataSource`, the structured-fact JSON helpers, and the context-task
+`GovernanceDataSource`, and the context-task
 parsers) are reached through a deferred module reference rather than a
 top-level import, so that verify_workflow.py can import this module at module
 load time without creating an import cycle. When the common-helpers domain
@@ -71,7 +71,6 @@ _SHARED_NAMES = (
     "_context_file", "_context_task", "_extract_task_title_from_line",
     "_governance_table_cells", "_normalize_priority",
     "_current_release_impact_entries",
-    "_extract_structured_fact_json", "_validate_structured_fact_payload",
     # FIX-390: DEC-168 machine row-family credential predicate (Check 18b
     # machine-attestation face) — by identity, never re-stated (FIX-292).
     "_row_has_governance_store_machine_credential",
@@ -806,6 +805,173 @@ def render_evidence_binding_drift_block(all_issues):
     return all_issues
 
 
+def _is_product_code_location(file_location):
+    from checks.review_domain import PRODUCT_CODE_PATTERNS
+    return any(pattern in file_location for pattern in PRODUCT_CODE_PATTERNS)
+
+
+def _is_review_evidence(raw_ids, evd_type):
+    return (
+        raw_ids.startswith("REVIEW-")
+        or evd_type in ("Code Review", "代码审查", "审查")
+        or "审查" in evd_type
+    )
+
+
+# FEAT-104: forensic (investigation-only) evidence markers — anchored at the
+# head of the evd_type field ONLY (explicit "[取证]"/"[forensics]"/"取证:"
+# tags, or 取证/调查/诊断/对账/复盘 followed by a delimiter, a report/minutes
+# suffix word, or end-of-field). Mid-prose matches are deliberately NOT
+# forensic: free-text guessing must not hide implementation rows from review
+# debt ("修复并附调查记录" / "诊断脚本实现" stay implementation).
+_FORENSIC_HEAD_RE = re.compile(
+    r"(?:\[(?:取证|forensics)\]|(?:取证|forensics)\s*[:：]"
+    r"|(?:取证|调查|诊断|对账|复盘)"
+    r"(?=$|[\s：:、，,）)】\]—\-]|报告|会议|纪要|记录))",
+    re.IGNORECASE,
+)
+
+
+def _is_audit_or_review_type(evd_type):
+    """Non-implementation evidence: audit/review rows (FIX-174) plus forensic
+    investigation-only rows (FEAT-104) never constitute execution evidence
+    for review-debt / review-coverage judgments (activity ≠ delivery)."""
+    return (any(token in evd_type for token in ("审查", "审视", "审计", "Review"))
+            or bool(evd_type and _FORENSIC_HEAD_RE.match(evd_type.strip())))
+
+
+def requires_impact_evidence(task_id, evd_type, file_location, *, active=True):
+    """Impact and product delivery receipts share Check 18b; research has its own evidence."""
+    if evd_type == "影响分析":
+        return True
+    product = evd_type in {"产品代码", "实现", "修复", "修复闭环", "开发", "代码"} or _is_product_code_location(file_location)
+    return active and product and not _is_review_evidence(task_id, evd_type) and not _is_audit_or_review_type(evd_type)
+
+
+SECRET_FIELD_RE = re.compile(r"(?:api[_-]?key|token|secret|password|passwd)", re.IGNORECASE)
+SECRET_ASSIGNMENT_RE = re.compile(
+    r"['\"]?(?:api[_-]?key|token|secret|password|passwd)['\"]?\s*[:=]\s*['\"]?[^\s,'\"}]+",
+    re.IGNORECASE,
+)
+
+
+_STRUCTURED_FACT_MARKER = re.compile(r"结构化事实[:：][\s`]*")
+
+
+def read_structured_fact(text):
+    """Locate and decode a marked object, skipping prose labels before a real payload."""
+    fallback = (None, None, None)
+    for marker in _STRUCTURED_FACT_MARKER.finditer(text):
+        start = marker.end()
+        if not text.startswith("{", start):
+            if fallback[0] is None:
+                fallback = (slice(start, len(text)), None, "结构化事实必须是 JSON object")
+            continue
+        try:
+            payload, size = json.JSONDecoder().raw_decode(text[start:])
+        except ValueError as exc:
+            return slice(start, len(text)), None, f"结构化事实 JSON 解析失败: {exc}"
+        return slice(start, start + size), payload, None
+    return fallback
+
+
+def _extract_structured_fact_json(description):
+    span, _, _ = read_structured_fact(description)
+    return description[span].strip() if span is not None else ""
+
+
+def structured_fact_result(description, basis, *, machine_attested):
+    """Only rows without a declared JSON payload can use the machine receipt alone."""
+    for field in (description, basis):
+        span, payload, error = read_structured_fact(field)
+        if span is not None:
+            issues = [error] if error else _validate_structured_fact_payload(payload)
+            return True, payload, issues
+    return False, None, [] if machine_attested else ["缺少 结构化事实: JSON"]
+
+
+def _contains_secret_like(value):
+    """Return True when structured evidence appears to carry a raw secret."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            if SECRET_FIELD_RE.search(key_text):
+                if child not in (None, "", "<redacted>", "REDACTED", "***", "***REDACTED***"):
+                    return True
+            if _contains_secret_like(child):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_secret_like(item) for item in value)
+    if isinstance(value, str):
+        return bool(SECRET_ASSIGNMENT_RE.search(value))
+    return False
+
+
+def _validate_structured_fact_payload(payload):
+    issues = []
+    if not isinstance(payload, dict):
+        return ["结构化事实必须是 JSON object"]
+
+    commands = payload.get("commands")
+    if not isinstance(commands, list) or not commands:
+        issues.append("commands 必须是非空数组")
+    else:
+        for index, command in enumerate(commands, start=1):
+            if not isinstance(command, dict):
+                issues.append(f"commands[{index}] 必须是 object")
+                continue
+            cmd = command.get("cmd")
+            exit_code = command.get("exit_code")
+            summary = command.get("summary")
+            if not isinstance(cmd, str) or not cmd.strip():
+                issues.append(f"commands[{index}].cmd 必须是非空字符串")
+            if type(exit_code) is not int:
+                issues.append(f"commands[{index}].exit_code 必须是整数")
+            if not isinstance(summary, str) or len(summary.strip()) < 5:
+                issues.append(f"commands[{index}].summary 必须说明输出摘要")
+            log_path = command.get("log_path")
+            if log_path is not None and not isinstance(log_path, str):
+                issues.append(f"commands[{index}].log_path 必须是字符串")
+
+    files_changed = payload.get("files_changed")
+    if not isinstance(files_changed, list) or not files_changed or not all(isinstance(item, str) and item for item in files_changed):
+        issues.append("files_changed 必须是非空字符串数组")
+
+    diff_summary = payload.get("diff_summary")
+    if not isinstance(diff_summary, str) or len(diff_summary.strip()) < 10:
+        issues.append("diff_summary 必须说明文件 diff 摘要")
+
+    review = payload.get("review")
+    if not isinstance(review, dict):
+        issues.append("review 必须是 object")
+    else:
+        from checks.review_domain import _normalize_review_conclusion
+
+        applicability = review.get("applicability")
+        conclusion = review.get("conclusion")
+        if applicability == "NOT_REQUIRED":
+            if conclusion is not None:
+                issues.append("不适用审查只声明 applicability，不同时声明结论")
+            reason = review.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                issues.append("review.reason 必须说明不适用原因")
+        else:
+            if applicability not in (None, "REQUIRED"):
+                issues.append("review.applicability 必须是 REQUIRED 或 NOT_REQUIRED")
+            # Historical receipts used NOT_REQUIRED as the conclusion.
+            legacy_not_required = applicability is None and conclusion == "NOT_REQUIRED"
+            if not _normalize_review_conclusion(conclusion) and not legacy_not_required:
+                issues.append("review.conclusion 必须是正式审查状态或历史 NOT_REQUIRED")
+            reviewer = review.get("reviewer")
+            if not isinstance(reviewer, str) or not reviewer.strip():
+                issues.append("review.reviewer 必须是非空字符串")
+
+    if _contains_secret_like(payload):
+        issues.append("结构化事实疑似包含 secret/token/password 明文")
+    return issues
+
+
 def check_structured_evidence():
     """FIX-083: Check current product-code evidence has machine-readable facts.
 
@@ -829,28 +995,9 @@ def check_structured_evidence():
     for entry in _current_release_impact_entries():
         desc = entry["description"]
         basis_text = entry.get("fact_basis", "")
-        raw_json = _extract_structured_fact_json(desc)
-        if not raw_json and basis_text:
-            raw_json = _extract_structured_fact_json(basis_text)
-        # FIX-390: machine-attestation fallback — only when the row carries
-        # NO structured-fact JSON anywhere (a present-but-invalid JSON is
-        # judged on its own defects; the credential never rescues it).
-        machine_attested = False
-        if not raw_json:
-            machine_attested = _row_has_governance_store_machine_credential(
-                entry.get("raw_line", ""))
-        issues = []
+        credential = _row_has_governance_store_machine_credential(entry.get("raw_line", ""))
+        has_fact, payload, issues = structured_fact_result(desc, basis_text, machine_attested=credential)
         status = "PASS"
-        payload = None
-
-        if raw_json:
-            try:
-                payload = json.loads(raw_json)
-                issues.extend(_validate_structured_fact_payload(payload))
-            except json.JSONDecodeError as exc:
-                issues.append(f"结构化事实 JSON 解析失败: {exc.msg}")
-        elif not machine_attested:
-            issues.append("缺少 结构化事实: JSON")
 
         if issues:
             status = "FAIL"
@@ -859,8 +1006,8 @@ def check_structured_evidence():
         result["entries"].append({
             "task_id": entry["task_id"],
             "evd_id": entry["evd_id"],
-            "has_structured_fact": bool(raw_json),
-            "machine_attested": machine_attested,
+            "has_structured_fact": has_fact,
+            "machine_attested": credential and not has_fact,
             "status": status,
             "issues": issues,
             "commands": len(payload.get("commands", [])) if isinstance(payload, dict) and isinstance(payload.get("commands"), list) else 0,

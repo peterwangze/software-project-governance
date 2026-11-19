@@ -11,22 +11,14 @@
 - 已完成事项必须至少有一条证据。
 - Gate 结论必须可追溯到证据。
 - 产品代码交付证据必须包含 `事实依据:`、`目标对齐:`、`用户影响:`。
-- 0.38.0+ 当前版本产品代码交付证据还必须包含 `结构化事实:` JSON，最小字段如下：
+- 有正式审查时，在既有 `evidence-append` 命令上追加 `--review-record <REVIEW-ID>`。每轮传一次 ID。提交前以当前暂存树核对各轮覆盖和内容。事实依据只需记录用户影响的依据及实际执行的命令，例如：
 
 ```json
-{
-  "commands": [
-    {
-      "cmd": "python skills/software-project-governance/infra/verify_workflow.py check-governance --fail-on-issues",
-      "exit_code": 0,
-      "summary": "Governance health passed with zero issues.",
-      "log_path": "terminal output"
-    }
-  ],
-  "files_changed": ["skills/software-project-governance/infra/verify_workflow.py"],
-  "diff_summary": "Short summary of the relevant diff.",
-  "review": {"conclusion": "APPROVED", "reviewer": "Code Reviewer"}
-}
+{"commands":[{"cmd":"python -m unittest tests.test_delivery","exit_code":0,"summary":"Two delivery regressions passed."}]}
 ```
 
+将 JSON 置于说明或事实依据的 `结构化事实:` 标记后。写入器从正式签核和 Git 补出 `files_changed`、`diff_summary`、`review` 和 `git`。在 `--artifacts` 中指向测试回执或相关交付物。
+
+- 提交后的复核可加 `--review-commit <实际完整 SHA>`；跨提交比较可指定 `--review-base <基线>`。例如先执行 `gh run view <run-id> --json headSha,conclusion,url`，确认 `headSha` 等于目标提交，再将真实结果和 URL 加入该笔 `commands` 与 `--refs`。本地测试结果和提交前的树只证明各自实际检查的范围。
+- 既有显式 JSON 仍接受 `commands`、`files_changed`、`diff_summary` 与 `review`。无适用审查时使用 `"review":{"applicability":"NOT_REQUIRED","reason":"具体原因"}`；历史 `conclusion: NOT_REQUIRED` 记录仍然可读。
 - `结构化事实:` 不得包含 API key、token、password、secret 等明文敏感值；只记录脱敏摘要或日志路径。

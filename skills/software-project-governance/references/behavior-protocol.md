@@ -173,9 +173,9 @@
 
 **产品代码证据说明字段（MANDATORY）**:
 - `事实依据:` MUST 引用可复查事实，如文件、命令、测试输出、日志路径或审查结论。
-- `结构化事实:` MUST 为单个 JSON object，至少包含 `commands`、`files_changed`、`diff_summary`、`review`。
-- `commands[]` MUST 记录 `cmd`、`exit_code`、`summary`，可选 `log_path`；不得记录 secret/token/password/API key 明文。
-- `files_changed` MUST 列出本事项实际产品代码路径；`diff_summary` MUST 概括关键 diff；`review` MUST 记录独立审查结论或 `NOT_REQUIRED` 快速通道。
+- 有正式签核时用 `evidence-append --review-record <REVIEW-ID>`，涉及多轮时重复传入各轮 ID。在 `结构化事实:` JSON 只填写实际执行的 `commands`（`cmd`、`exit_code`、`summary`，可选 `log_path`）；文件清单、差异、审者、结论和 Git 树由写入器核实并补入。
+- 提交前核对暂存内容；提交后传 `--review-commit <完整 SHA>`，需要跨提交对比时传 `--review-base <基线>`。CI 结果使用同一提交的真实查询回执。未取得回执时写明未验证。详细示例见 `core/templates/evidence-log.md`。
+- 同时支持既有显式记录（`commands`、`files_changed`、`diff_summary`、`review`）；无适用审查时在 `review` 中填写 `applicability: NOT_REQUIRED` 与 `reason`。仅记录脱敏输出或日志位置。
 - `目标对齐:` MUST 说明变更如何服务项目目标；`用户影响:` MUST 包含 `获得=`、`感知=`、`体验变化=`、`迁移指南=`。
 
 **AI Execution Packet（MANDATORY, 0.38.0+）**:

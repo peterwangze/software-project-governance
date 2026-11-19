@@ -109,5 +109,21 @@ class InjectionZeroDriftTests(unittest.TestCase):
                           f"AGENTS.md.template pointer {keyword}")
 
 
+class DispatchPromptTests(unittest.TestCase):
+    def test_worker_receives_one_renderable_contract(self):
+        template = (_INFRA_DIR.parent / "references/agent-dispatch-template.md").read_text(encoding="utf-8")
+        _, body, instructions = template.split("\n````\n")
+        fields = set()
+        for line in instructions.splitlines():
+            if line.startswith("|"):
+                fields.update(re.findall(r"`\{(\w+)\}`", line.split("|")[1]))
+        # Rendering with just the declared inputs previously failed on coordinator-only slots.
+        rendered = body.format_map({key: f"<{key}>" for key in fields})
+        for key in fields | {"task_description", "file_list", "acceptance_criteria", "destructive_redlines"}:
+            self.assertIn(f"<{key}>", rendered)
+        for command in ("agent-locks-acquire", "review-record"):
+            self.assertNotIn(command, rendered)
+
+
 if __name__ == "__main__":
     unittest.main()

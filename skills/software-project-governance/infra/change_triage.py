@@ -1107,7 +1107,7 @@ def acquire_dispatch_locks(*, task_id, files, expected_new=None,
     (a lock on a nonexistent file protects nothing once the real file
     appears), and the lock set could drift from the same-day triage
     record's ``files``. This API is the only sanctioned acquisition path
-    (CLI ``agent-locks-acquire``; the dispatch template forbids
+    (CLI ``agent-locks-acquire``; behavior protocol M7.6a forbids
     hand-writing the lock file).
 
     Validation order (fail-closed — NOTHING is written on any error):

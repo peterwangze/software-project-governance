@@ -4,7 +4,7 @@
  * flags; child-process IO lives in nested-runner.ts).
  *
  * Bridges the software-project-governance agent dispatch template
- * (references/agent-dispatch-template.md placeholder table L94-108) onto a
+ * (references/agent-dispatch-template.md placeholder table) onto a
  * nested `pi --mode json -p --no-session` child process with an isolated
  * context window — the official subagent reference path
  * (examples/extensions/subagent/index.ts; design ADR-2 candidate A).

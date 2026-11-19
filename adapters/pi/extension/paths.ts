@@ -6,7 +6,7 @@
  * extension never depends on cwd for resolving governance assets.
  *
  * Evidence anchors (pi v1.1.0): role/skill semantics per
- * references/agent-dispatch-template.md placeholder table L94-108
+ * references/agent-dispatch-template.md placeholder table
  * ({role_definition_path} / {task_skill_path}); pi settings wiring uses
  * repo-absolute paths (docs/settings.md L147-158), so both resolution bases
  * (plugin root and cwd) are legitimate for dispatch callers.

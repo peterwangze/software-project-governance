@@ -717,12 +717,7 @@ Coordinator spawn Agent 前 **MUST** 检查 `agent-locks.json` 的 `active_tasks
 
 **锁获取**
 
-所有文件通过第二道防线检查后：
-
-1. **写入 `active_tasks`**：添加 `task_id` 条目，记录 `spawned_at`（ISO8601）、`coordinator_session`、`target_files`。
-2. **写入 `file_locks`**：为每个 `target_file` 添加条目，记录 `locked_by`（task_id）、`locked_at`（ISO8601）、`ttl_seconds`（默认 300）、`ttl_reason`（默认 `"default"`）。
-3. **保存** `agent-locks.json`。
-4. **Spawn Agent**。
+Coordinator 完成上述检查后，通过 `verify_workflow.py agent-locks-acquire --task <id> --files <paths> --role <role> --session <session> --ttl-reason <reason>` 获取锁。未落盘的新文件须用 `--expected-new` 声明。命令校验路径、重复任务、跨任务冲突和锁文件完整性，核对当日 triage 文件清单；拒绝时零写入。只在取锁成功后派发，禁止手写获取记录。
 
 **锁释放**
 

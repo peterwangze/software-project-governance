@@ -467,10 +467,7 @@ class DshAdapterTests(unittest.TestCase):
             "- id: persona",
             "name: '@deepseek-ai/dsh-persona'",
             "software-project-governance",
-            # FIX-411: FEAT-078's persona rewrite words the bootstrap entry
-            # as `resolve_entry`（检测面）without the ".py" suffix — the old
-            # marker predates that sanctioned rewording.
-            "resolve_entry",
+            "governance-bootstrap --format json",
             "ask_user_question",
             # FIX-253/REQ-112: the persona must carry the compressed
             # behavior contract (关键行为契约) unconditionally.
@@ -972,7 +969,8 @@ class DshAdapterTests(unittest.TestCase):
         self.assertTrue(version, "SKILL.md frontmatter version is missing")
         self.assertIn(f"@bootstrap-version: {version}", text)
         self.assertIn("software-project-governance", text)
-        self.assertIn("resolve_entry.py", text)
+        self.assertIn("governance-bootstrap --format json", text)
+        self.assertIn("resolve_entry.py", text)  # old CLI recovery
         self.assertIn("ask_user_question", text)
         self.assertIn("subagent", text)
         self.assertIn("关键行为契约", text)  # FIX-253 anchor (§6.6.2)

@@ -814,18 +814,7 @@ def _build_payload(host_root, envelope, budget_ms, profile, started):
             timespec="seconds").replace("+00:00", "Z"),
         "budget_ms": budget_ms,
         "profile": profile,
-        "resolve": {
-            "plugin_home": envelope["plugin_home"],
-            "host_project_root": envelope["host_project_root"],
-            "active_version": envelope["active_version"],
-            "scenario_hint": envelope["scenario_hint"],
-            "resolved_root_ok": envelope["resolved_root_ok"],
-            "governance_initialized": envelope["governance_initialized"],
-            "snapshot_exists": envelope["snapshot_exists"],
-            "snapshot_fresh": envelope["snapshot_fresh"],
-            "hooks_installed": envelope["hooks_installed"],
-            "diagnostic": envelope["diagnostic"],
-        },
+        "resolve": envelope,
     }
 
     gov_dir = host_root / ".governance"
@@ -1219,8 +1208,9 @@ def cmd_governance_bootstrap(args):
         budget_ms = DEFAULT_BUDGET_MS
     profile = getattr(args, "profile", "standard")
 
-    host_root = resolve_entry.resolve_host_root(
-        getattr(args, "project_root", None))
+    host_root = getattr(args, "_validated_host_root", None)
+    if host_root is None:
+        host_root = resolve_entry.resolve_host_root(getattr(args, "project_root", None))
     envelope = resolve_entry.resolve(host_root)
 
     if not envelope["resolved_root_ok"]:

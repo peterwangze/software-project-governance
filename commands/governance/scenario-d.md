@@ -7,7 +7,7 @@
 
 **检测条件**：`session-snapshot.md` 存在 AND 日期在 24h 内
 
-**数据源补充（FEAT-033 bootstrap 聚合快路径；FEAT-034 时序重排）**：恢复面板所需的当前状态交叉验证数据（任务统计 / 风险 / 候选）MAY 优先取自单次 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB），替代多次 verify 调用 + 逐段读 plan-tracker；snapshot 字段解析与 D1-D3 流程不变。**首次交互前置（FEAT-034）**：快路径数据就绪后 D3 恢复面板 + AskUserQuestion **立即**执行——D2 交叉验证与其它深检后置为用户选择后按需执行（用户选择"继续上次"并进入实际修改前 MUST 补齐 D2 交叉验证）；`health.state="deferred"` 期间恢复面板健康位显示「待检查」而非通过。
+**恢复热面（FEAT-033/034）**：沿用路由已取得的聚合结果（任务、风险、候选），从对应面恢复。**首次交互前置（FEAT-034）**：快路径数据就绪后 D3 恢复面板 + AskUserQuestion **立即**执行——D2 交叉验证与其它深检后置为用户选择后按需执行（用户选择"继续上次"并进入实际修改前 MUST 补齐 D2 交叉验证）；`health.state="deferred"` 期间恢复面板健康位显示「待检查」而非通过。
 
 **新鲜度规则**：
 | 时间 | 处理 |

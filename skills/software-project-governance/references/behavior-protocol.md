@@ -212,9 +212,9 @@
 
 ### M4.1 会话开始协议
 
-**时序（FEAT-034 首次交互前置）**：第 1~3 步的热数据获取 MAY 经 `governance-bootstrap --format json` 快路径单命令完成（不可用时按原步骤逐项读取）；热数据就绪后 MUST 立即呈现最小状态行 + AskUserQuestion 首次交互——第 5 步健康摘要等深检后置为用户选择后按需执行（推进类动作前 MUST 补齐，deferred 期间显示「待检查」）；完整纪律见 M5.5。
+**时序（FEAT-034 首次交互前置）**：本次 `governance-bootstrap --format json` 同时提供根与热面，入口首次判根后复用同一结果。热数据就绪即呈现最小状态行并进入 AskUserQuestion；健康摘要按需后置，推进类动作前 MUST 补齐。详见 M5.5。
 
-1. 读取 `.governance/plan-tracker.md`，获取项目配置和 Gate 状态
+1. 从本次结果的 `project`、`gates` 取得项目配置和 Gate 状态。
 2. **跨会话状态恢复（MANDATORY）**：读取 `.governance/session-snapshot.md`（如存在）。与 `.governance/plan-tracker.md` 对比：
    - snapshot 中标记为 "进行中" 且 plan-tracker 中仍为 "进行中" 的任务 → 这些是遗留任务，继续执行
    - snapshot 中标记为 "进行中" 但 plan-tracker 中为 "未开始" 的任务 → snapshot 已过期，忽略
@@ -414,7 +414,7 @@ AskUserQuestion 是交互边界的**默认行为**。以下是唯一有效的跳
 
 会话 bootstrap 的交互时序纪律——快路径数据就绪后立即把第一次决策权交给用户，深检后置但不豁免：
 
-1. **快路径立即 ask（MUST）**：第一动作 `resolve_entry.py --json`（fail-closed，不变）之后，第二动作为快路径数据获取（`governance-bootstrap --format json` 单命令聚合，FEAT-033）——就绪后 MUST **立即**呈现最小状态行（模式确认 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互。深检（`check-governance --summary-only --scope quick` 健康摘要、交叉验证、版本升级序列、归档检测）**不作为首次 ask 的前置条件**，后置为用户选择后按需执行。
+1. **快路径立即 ask（MUST）**：复用本次 `governance-bootstrap --format json` 返回的可信根和热面。就绪后 MUST **立即**呈现最小状态行（模式确认 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互。深检（`check-governance --summary-only --scope quick` 健康摘要、交叉验证、版本升级序列、归档检测）**不作为首次 ask 的前置条件**，后置为用户选择后按需执行。
 2. **诚实语义（MUST）**：健康面未检查时（`health.state="deferred"`）状态行健康位显示「待检查」，MUST NOT 显示绿色通过或暗示已检查——deferred 不是 PASS。
 3. **深检后置 ≠ 深检可选（MUST）**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时，MUST 先补跑对应深检再继续——推进类深检面固定 full（FEAT-084/DEC-303）：健康摘要深检用 `check-governance --summary-only`（缺省 scope=full）或显式 `--scope full`，**quick 通过 ≠ 完整治理通过**（插件产品自检等排除面段不在 quick 面）；本条只重排深检时序，不削减 M6 Gate 义务、M8 验证义务与任何安全约束（fail-closed 第一动作不变）。
 4. **实质工作时间跟踪义务（arch 判定，AUDIT-154）**：禁止把"首次 ask 提前"单独当作治理提效结论——"先 ask 选完、用户再等数分钟深检"是虚假改善。治理开销评估 MUST 同时跟踪**进入实质工作时间**（time-to-substantive-work，`governance-cost-report`），与 TTFA（time-to-first-ask）成对报告。口径声明：`time_to_work` 是治理开销的 **lower bound**（DEC-205——ask 后的治理性 read/pwsh 计入 first_work_tool），不得把下界当无偏值使用；跨时点轨迹对比不可直接 diff（RISK-052）——效果验证用同快照内对比或新会话采样后重新生成对照。
@@ -767,7 +767,7 @@ Coordinator 在每次读取 `agent-locks.json` 时 **MUST** 检查 `file_locks` 
 
 **M7.8.2 健康检查事件化**：`check-governance` / verify 全量深检仅三类触发——① 会话首次深检（M4.1 step 5 / M5.5 后置深检）；② 推进类动作（发布、版本 bump、治理写回、恢复遗留任务）前（M5.5 条 3）；③ 异常信号（FAIL / 异常输出 / 回归失败等需要深检定位）。**逐轮例行全量检查 = 违规**（每轮复审后、每个子任务返回后例行跑全量 check-governance 不在三触发器内）。本条只约束三触发器之外的例行深检，不取消 M7.4 step 2（任务完成外部验证）与 M8 自检的既有强制点——后者按各自原文口径执行（会话级摘要面默认 quick，FEAT-084）。
 
-**M7.8.3 热路径单源（write-guard 同级表述）**：`governance-bootstrap --format json` 是 plan-tracker 热数据的**唯一合法读取路径**（FEAT-034 快路径）；Coordinator 在会话热路径上直读 `.governance` 热面文件（plan-tracker / execution-packets / evidence-log）= **违规**（与 M1.2 write-guard 同级表述）。冷面/归档查询（.governance/archive/index.md 检索、decision-log 历史回溯等按需展开面）不在此列；`governance-bootstrap` 聚合命令不可用时按 FEAT-034 fallback 六段读取降级（legacy 行为灰度同此，见 SKILL.md「行为灰度开关」）。
+**M7.8.3 热路径单源（write-guard 同级表述）**：`governance-bootstrap --format json` 是 plan-tracker 热数据的**唯一合法读取路径**（FEAT-034 快路径）；Coordinator 在会话热路径上直读 `.governance` 热面文件（plan-tracker / execution-packets / evidence-log）= **违规**（与 M1.2 write-guard 同级表述）。冷面/归档查询（.governance/archive/index.md 检索、decision-log 历史回溯等按需展开面）不在此列。仅旧 CLI 明确不支持该子命令，且独立解析成功后，可按 §B1 手读六段；显式 legacy 使用已确认的根，遵循 `behavior`。
 
 ## M8. 自检协议（MANDATORY）
 

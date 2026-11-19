@@ -2,7 +2,7 @@
 
 > FEAT-038 拆分自路由层的「入口引导（FIX-238）」节与「错误码」节（逐字搬移，零语义丢失）。
 > 本文件不在默认注入面——**触发条件**：`<plugin_home>` 解析失败 / `resolved_root_ok == false` / resolve_entry 超时或缺依赖 / bootstrap 引导段陈旧 / 需要按错误码处置时 Read。
-> 正常路径无需本文件：路由层的「第一动作」「第二动作」已覆盖常规解析。
+> 正常路径见路由层「第一动作」。本页处理旧命令和诊断。
 
 ## 入口引导（FIX-238：平台注入 + vendor 兜底 + 超时/升级链）
 
@@ -12,17 +12,17 @@
   - Claude Code：`$CLAUDE_PLUGIN_ROOT`（插件安装根；`<plugin_home>` = `$CLAUDE_PLUGIN_ROOT/skills/software-project-governance`）
   - Codex：从 system context 中 `software-project-governance` skill 的 `file:` 绝对路径解析（`<plugin_install_root>/skills/software-project-governance/SKILL.md` → `<plugin_home>` = 该 `skills/software-project-governance` 目录）
   - 通用环境变量：`SOFTWARE_PROJECT_GOVERNANCE_HOME` / `SPG_HOME`（已安装宿主显式指定）
-- **vendor 引导脚本兜底（宿主无 AGENTS.md/CLAUDE.md 时仍可定位）**：`<plugin_home>/infra/bootstrap.sh`（POSIX）与 `<plugin_home>/infra/bootstrap.cmd`（Windows）随插件发布分发，定位 resolve_entry.py → 运行 `--json` → 输出 envelope。
+- 仅当已安装旧 CLI 明确报告未知子命令 `governance-bootstrap` 时，运行 `python <plugin_home>/infra/resolve_entry.py --json`；退出成功且 `resolved_root_ok == true` 后方可六段读取 `.governance/plan-tracker.md`，否则 MUST STOP。 旧版解析可使用随包的 POSIX / Windows 超时包装：
   - POSIX：`bash "<plugin_home>/infra/bootstrap.sh"`
   - PowerShell：`& "<plugin_home>\infra\bootstrap.cmd"`（等价地 `python "<plugin_home>/infra/resolve_entry.py" --json`）
-  - 平台注入 + 脚本兜底都不可用时 → **STOP fail-closed**，展示分类诊断，不呈现治理状态（DEC-080 / RISK-038）。
+  - 聚合命令其余非零退出、无效 JSON、根不可用或超时：**STOP fail-closed**，显示诊断，不呈现治理状态、不尝试六段回退。
 
-**resolve_entry 超时兜底（FIX-238.3）**：所有调用侧（bootstrap.sh / bootstrap.cmd / `verify_workflow.py resolve-entry`）共享退出码契约：`0` 成功（stdout 为 envelope JSON）；`1` 其他失败；`2` python 缺失；`3` resolve_entry.py 缺失（FileNotFound）；`4` 超时；`5` store stub（resolve_entry.py 存在但不是 canonical 解析器——缺 FX-130 marker，重装插件）。超时值 `SPG_RESOLVE_TIMEOUT`（正整数秒，默认 15s；非法回退默认——FIX-234 先例）。超时/缺失输出分类诊断（`spg-bootstrap-error: <category>`）且 exit 非 0，**不静默、不无限重试**。
+**resolve_entry 超时兜底（FIX-238.3）**：所有调用侧（bootstrap.sh / bootstrap.cmd / `verify_workflow.py resolve-entry`）共享退出码契约：`0` 输出 envelope JSON（仍须检查 `resolved_root_ok == true`）；`1` 其他失败；`2` python 缺失；`3` resolve_entry.py 缺失（FileNotFound）；`4` 超时；`5` store stub（resolve_entry.py 存在但不是 canonical 解析器——缺 FX-130 marker，重装插件）。超时值 `SPG_RESOLVE_TIMEOUT`（正整数秒，默认 15s；非法回退默认——FIX-234 先例）。超时/缺失输出分类诊断（`spg-bootstrap-error: <category>`）且 exit 非 0，**不静默、不无限重试**。
 
 **旧宿主 bootstrap 升级链（FIX-238.2——@bootstrap-version 陈旧标记）**：
 
 - 陈旧标记：平台原生入口文件（AGENTS.md/CLAUDE.md）引导段 `@bootstrap-version` 头 < SKILL.md frontmatter `active_version`（或缺失头——视为 pre-0.73.0 陈旧）。
-- 标陈旧且更高版本 SKILL.md 已安装 → **先升级 bootstrap 段**（从当前模板写回该段，保留入口文件其余内容不变），再继续后续引导。
+- 标陈旧且更高版本 SKILL.md 已安装 → 呈现升级摘要，获确认后仅替换治理段。维护同版本入口时按 `commands/governance-init.md` Step 7 检查正文漂移并重投影。
 - 未检测到更高版本 → 输出确定性错误 + `/plugin update` 指引，**不无限 fallback**。
 - 版本比较 fail-closed：无法确定新版本（版本串不可解析）→ **不升级**，输出指引。
 

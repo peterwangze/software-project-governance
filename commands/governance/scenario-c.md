@@ -5,14 +5,14 @@
 
 ## Scenario C: 工作流升级
 
-**检测条件**：`resolve_entry.py` 输出 `scenario_hint == "C"`——即 `.governance/` 存在、无异常、且 host `工作流版本` < `active_version`（`active_version` 来自 SKILL.md frontmatter，权威；DEC-096）。不再由本命令在 prose 中比较版本号。
+**检测条件**：本次 `resolve.scenario_hint == "C"`——即 `.governance/` 存在、无异常、且 host `工作流版本` < `active_version`（`active_version` 来自 SKILL.md frontmatter，权威；DEC-096）。不再由本命令在 prose 中比较版本号。
 
 **时序（FEAT-034 首次交互前置）**：版本差距 + CHANGELOG delta 摘要随快路径首次 ask 一并呈现征询确认；下方步骤 4 的升级写序列（入口 bootstrap 替换 / plan-tracker 结构补全 / 归档迁移等写操作）在用户确认升级后执行——写序列不前置于首次交互，**用户未响应前零写操作**（FEAT-035——读入口与写迁移解耦：展示状态不拥有修改项目的隐含授权）。
 
 **深检衔接（DEC-207② P2-1，MUST）**：版本升级写序列属推进类动作——用户确认升级后、执行写序列前 MUST 先满足 M5.5 条 3 的深检前置（健康摘要 full 面深检：`check-governance --summary-only`〔缺省 scope=full，FEAT-084 起 quick 面不替代推进类深检〕+ 交叉验证；FEAT-034 后置时序的必达补齐），不得以"已获得升级确认"替代深检。
 
 **流程**：
-1. 从 resolve_entry envelope 读取 `active_version`（权威）与 plan-tracker 记录版本，计算版本差距
+1. 从同次返回的 `resolve` 读取 `active_version`（权威）与 plan-tracker 记录版本，计算版本差距
 2. 提取 CHANGELOG delta（从 plan-tracker 版本到当前版本）
 3. **AskUserQuestion 呈现升级摘要，征询确认（FEAT-035——确认前不执行任何写操作）**：
    - 版本跨度（记录版本 → `active_version`）

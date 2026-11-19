@@ -7,9 +7,9 @@
 ## 第一动作（每会话）
 
 1. 会话 skill 目录有 `software-project-governance` → 调用 `skill` 工具加载（resourceBase 即 `<plugin_root>/skills/software-project-governance`）。
-2. 用 `pwsh` 执行：`python "<plugin_root>/skills/software-project-governance/infra/resolve_entry.py" --json`
-3. `resolved_root_ok == false` → MUST STOP，展示 `diagnostic`，不呈现治理状态（DEC-080 / RISK-038 fail-closed）。
-4. `resolved_root_ok == true` → `governance-bootstrap --format json` 取热数据，立即呈现最小状态行 + `ask_user_question` 首次交互（FEAT-034）；深检后置为按需执行，推进类动作前 MUST 补齐。
+2. 若本次当前工作区尚无聚合结果，用 `pwsh` 执行 `python "<plugin_root>/skills/software-project-governance/infra/verify_workflow.py" governance-bootstrap --format json`。
+3. 除下述旧版缺少子命令外，仅在退出成功、JSON 有效且 `resolve.resolved_root_ok == true` 时采用热数据；否则 MUST STOP，展示 diagnostic 或命令错误，不呈现治理状态。 仅旧 CLI 明确不支持该子命令时才运行 `python "<plugin_root>/skills/software-project-governance/infra/resolve_entry.py" --json`；成功且 `resolved_root_ok == true` 方可六段读取。
+4. 从同次热面呈现最小状态行 + `ask_user_question` 首次交互；深检按需后置，推进类动作前 MUST 补齐。
 5. 无该 skill → 提示本会话未加载治理技能，按普通任务执行。恢复接入见本页末尾的适配器指南。
 
 ## 行为灰度开关（FEAT-040——legacy 回退通道）
@@ -18,7 +18,7 @@
 
 ## SELF-CHECK（任何输出之前自问）
 
-1. 读了 `.governance/plan-tracker.md`？知道阶段/Gate/模式？任一未知 → 立即停止，先读。
+1. 本次根、模式、阶段和 Gate 是否可核实？未知 → 停止并定位相应缺面；旧宿主的 plan-tracker 为 `.governance/plan-tracker.md`。
 2. 即将输出问句？→ 改用 `ask_user_question`。到达交互边界？→ MUST `ask_user_question`（完整 SELF-CHECK：SKILL.md「Bootstrap 规程明细」§B0）。
 3. 任务标记已完成，或收到含 NEEDS_CHANGE 的审查结论 → 复审与推荐是 MUST 义务（关键行为契约：复审必达 / 完成必推荐 / 选项必带依据 / 推荐必标需求源 / 发现即闭环——加载 skill 后见 SKILL.md「关键行为契约」段）。
 

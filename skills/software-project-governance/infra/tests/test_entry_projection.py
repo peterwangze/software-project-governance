@@ -22,6 +22,7 @@ Run:
 
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -62,7 +63,7 @@ _MINI_THIN = """## Governance Bootstrap（强制 — 每次会话第一动作 ·
 
 ### 最小存活检查（第一动作）
 
-1. 运行 `python <plugin_home>/skills/software-project-governance/infra/resolve_entry.py --json`；`resolved_root_ok == false` → MUST STOP。
+1. 优先执行 `governance-bootstrap --format json`。仅旧 CLI 缺少子命令时运行 `python <plugin_home>/infra/resolve_entry.py --json`；`resolved_root_ok == false` → MUST STOP。
 2. 读 `.governance/plan-tracker.md`；完整规则：`skills/software-project-governance/SKILL.md` 或主入口 `{PRIMARY_ENTRY}`。
 
 ### SELF-CHECK（在任何输出之前）
@@ -307,6 +308,32 @@ class DualEntryPlanTests(unittest.TestCase):
             self.assertEqual(kinds.get("AGENTS.md", "none"), "none")
 
 
+    def test_old_lone_thin_refreshes_in_place_and_preserves_host_text(self):
+        thin = sep.render_thin_pointer(_MINI_THIN, "CLAUDE.md")
+        old = thin.replace("优先执行 `governance-bootstrap --format json`。", "先运行独立解析器。")
+        with Workspace() as ws:
+            ws.write_entry("AGENTS.md", "# Local project\n\n" + old + "\n# Host notes\nkeep-me\n")
+            ws.apply()
+            text = ws.read_entry("AGENTS.md")
+            self.assertIn(thin.strip(), text)
+            self.assertIn("# Host notes\nkeep-me", text)
+            self.assertNotIn("先运行独立解析器", text)
+            self.assertFalse((ws.root / "CLAUDE.md").exists())
+            self.assertTrue(sep.build_sync_report(ws.root, source_root=ws.root)["pass"])
+            ws.apply()
+            self.assertEqual(ws.read_entry("AGENTS.md"), text)
+
+    def test_single_platform_entry_verifies_for_each_shipped_profile(self):
+        for profile in sep.FULL_PROFILE_KEYS:
+            for name in ("AGENTS.md", "CLAUDE.md"):
+                with self.subTest(profile=profile, name=name), tempfile.TemporaryDirectory() as td:
+                    root = Path(td)
+                    (root / name).write_text("# Local project\n", encoding="utf-8")
+                    sep.apply_entry_projection(root, profile=profile, source_root=_REPO_ROOT)
+                    report = sep.build_sync_report(root, profile=profile, source_root=_REPO_ROOT)
+                    self.assertTrue(report["pass"], report["issues"])
+
+
 class ApplyAndIdempotencyTests(unittest.TestCase):
 
     def test_apply_dual_entry_and_double_apply_zero_diff(self):
@@ -381,6 +408,21 @@ class ThinPointerValidationTests(unittest.TestCase):
         )
         issues = sep.validate_thin_pointer(broken, "CLAUDE.md")
         self.assertTrue(any("plan-tracker" in i for i in issues))
+
+    def test_shipped_entries_use_aggregate_before_the_legacy_resolver(self):
+        templates = sep.load_canonical_templates(_REPO_ROOT)
+        entries = {**templates, "DSH project": (_REPO_ROOT / sep.DSH_THIN_TEMPLATE).read_text(encoding="utf-8"),
+                   "router": (_REPO_ROOT / "commands/governance.md").read_text(encoding="utf-8")}
+        for name in ("lightweight", "standard", "strict", "secondary-thin", "DSH project", "router"):
+            with self.subTest(entry=name):
+                entry = entries[name]
+                aggregate = entry.index("governance-bootstrap --format json")
+                fallback = entry.index("resolve_entry.py", aggregate)
+                self.assertNotIn("resolve_entry.py", entry[:aggregate])
+                self.assertIn("旧", entry[aggregate:fallback])
+                self.assertIn("子命令", entry[aggregate:fallback])
+                self.assertIn("MUST STOP", entry)
+                self.assertIn("resolved_root_ok", entry)
 
     def test_real_repo_rendered_thin_within_budget(self):
         templates = sep.extract_canonical_templates(

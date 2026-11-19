@@ -115,7 +115,7 @@
 
 ### 每会话 bootstrap 健康摘要（REQ-145.1, A3）
 
-本 SKILL 每会话经 persona 第一动作（加载本入口 + 运行 `resolve_entry.py --json`）**必然加载**。**执行时序（FEAT-034 首次交互前置）**：第 2 步（resolve_entry，fail-closed 不变）之后先走快路径——运行 `governance-bootstrap --format json` 获取热数据（resolve+状态+候选+migration 标志+next_actions）并**立即**呈现最小状态行 + AskUserQuestion 首次交互；健康摘要（`check-governance --summary-only --scope quick`）**后置**为用户选择后按需执行的深检——深检结果不作为首次 ask 的前置条件；`health.state="deferred"` 期间状态行健康位显示「待检查」而非绿色通过。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑健康摘要与对应深检再继续——**推进类深检固定 full 面（FEAT-084/DEC-303，安全语义不回退）**：用 `check-governance --summary-only`（缺省 scope=full，全量引擎全部段）或显式 `--scope full`，quick 通过 ≠ 完整治理通过（插件产品自检/ArchGuard/loop-claim 等排除面段不在 quick 面）。后置执行时按以下契约运行健康摘要：
+本 SKILL 经 persona 加载。先按 §B1 一次取得聚合结果；本次根可信后立即呈现最小状态行并开始首次交互。健康摘要（`check-governance --summary-only --scope quick`）**后置**为用户选择后按需执行的深检——深检结果不作为首次 ask 的前置条件；`health.state="deferred"` 期间状态行健康位显示「待检查」而非绿色通过。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑健康摘要与对应深检再继续——**推进类深检固定 full 面（FEAT-084/DEC-303，安全语义不回退）**：用 `check-governance --summary-only`（缺省 scope=full，全量引擎全部段）或显式 `--scope full`，quick 通过 ≠ 完整治理通过（插件产品自检/ArchGuard/loop-claim 等排除面段不在 quick 面）。后置执行时按以下契约运行健康摘要：
 
 - 运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only --scope quick`（DSH 支持 CLI；FEAT-084/DEC-303 形态 B——会话摘要默认 quick 面：FEAT-025 注册表 quick 面段执行 + 排除面段 NOT_RUN 披露，段数以注册表为准）。读取四态汇总行 `Governance: {N} issues (quick) | {p} passed / {f} failed / {nr} not-run / {c} cache-reused / {u} undetermined | run check-governance (full) for the {nr} not-run segments`——**quick N 与 full N 是两个口径，不得混读**（`(quick)` 标记与四态计数由 QR-4 机守卫强制；发布门基线/审查 census 一律按 full 口径解读）；NOT_RUN 段逐段携带注册表原因码，全部实质段未执行时 N 显示 `N=unknown` 而非 0；注册表守卫不可信时 fail-closed 自动回退 full 跑满（FIX-304 口径）。摘要**只读、只显示、不阻断**（fail-safe 到简报而非硬失败）；`--level` 详略档仅对 full 面生效，quick 输出不按 level 拆。legacy 回退（FEAT-040）：`GOVERNANCE_LEGACY_BEHAVIOR=1` 时会话摘要命令回退 `--summary-only`（无 scope，全量引擎）。按摘要驱动后续动作：
   - `Governance: [PASS]`／`0 issues (quick)`（N=0）→ 无动作，继续 bootstrap。
@@ -124,7 +124,7 @@
   - `Governance: timed out` → 运行超时（>60s）→ 软超时取消该步，继续会话。
   - `Governance: N=unknown (quick)` / `Governance: N issues (parse degraded)` → quick 面无实质执行知识或摘要解析降级（输出格式漂移 fail-safe），不报错；需要确数时运行 full 面深检。
 - **详略分档（full 面）**（`--level lightweight|standard|strict`，缺省 standard）：轻量=汇总+首个 FAIL；标准=汇总+首个 FAIL/WARN+最多 5 条明细（FAIL 优先，每条截断 130 字符）+「共 N issues，--level strict 查看全部」指引行（FIX-278 G1 top-N——消除 103 字符摘要触发 ~25KB 追查链的放大（audit-148 §2.1））；严格=汇总+全部 FAIL/WARN。三档**跑同一个** `--summary-only`，仅输出详略不同，**不按 profile 拆逻辑**。
-- **bootstrap 聚合快路径（FEAT-033；FEAT-034 起为第二动作）**：会话 bootstrap 在健康摘要之前 MUST 先跑 `python skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合，≤8KB 投影：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions）以支撑首次交互前置；其 `health.state="deferred"` 表示本命令未做健康检查——健康摘要仍以后置的 `check-governance --summary-only --scope quick` 为准，deferred 期间显示「待检查」，不得把 deferred 当作已通过。
+- **bootstrap 聚合快路径（FEAT-033/034）**：复用 §B1 的 `resolve` 与热面；`health.state="deferred"` 期间显示「待检查」。深检以后置的健康摘要为准。
 
 
 <a id="automation-levels"></a>

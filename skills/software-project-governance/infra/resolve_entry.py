@@ -343,6 +343,45 @@ def resolve(host_root=None):
     }
 
 
+def extract_project_root_arg(argv):
+    """Extract the explicit host root from either side of a workflow subcommand."""
+    filtered = []
+    project_root = None
+    iterator = iter(range(len(argv)))
+    for index in iterator:
+        value = argv[index]
+        if value == "--project-root":
+            try:
+                project_root = argv[index + 1]
+            except IndexError:
+                raise ValueError("--project-root requires a path")
+            next(iterator, None)
+        elif value.startswith("--project-root="):
+            project_root = value.split("=", 1)[1]
+        else:
+            filtered.append(value)
+    return project_root, filtered
+
+
+def validate_project_root(project_root):
+    """Validate an explicit --project-root value (fail-closed, FIX-245).
+
+    Returns ``(host_root, error)``: the resolved absolute directory Path
+    plus ``None`` for a valid root; ``(None, reason)`` for an empty,
+    nonexistent, or non-directory path.
+    """
+    if not project_root:
+        return None, "path is empty"
+    candidate = Path(project_root).expanduser()
+    try:
+        candidate = candidate.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, "path does not exist"
+    if not candidate.is_dir():
+        return None, "not a directory"
+    return candidate, None
+
+
 def resolve_host_root(project_root_arg):
     """Resolve HOST_PROJECT_ROOT with fail-closed semantics.
 
@@ -351,14 +390,8 @@ def resolve_host_root(project_root_arg):
     we never silently rewrite it to PLUGIN_HOME.
     """
     if project_root_arg is not None:
-        candidate = Path(project_root_arg).expanduser()
-        try:
-            candidate = candidate.resolve(strict=True)
-        except (OSError, RuntimeError):
-            return None
-        if not candidate.is_dir():
-            return None
-        return candidate
+        # The standalone resolver historically accepts an empty spelling as cwd.
+        return validate_project_root(Path(project_root_arg))[0]
 
     try:
         cwd = Path(os.getcwd())

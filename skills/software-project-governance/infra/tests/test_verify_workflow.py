@@ -23164,11 +23164,12 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
     # 6197/6200 tok — the deliberate re-price (including the thin-line
     # sizing against the frozen DEC-211③ hard gate) rides the FEAT-097
     # ticket.
+    # Bootstrap reads the root and hot fields together; these sizes bind the new template bytes.
     ENTRY_TEMPLATE_CANONICAL_BYTES = {
-        "lightweight": 5669,
-        "standard": 10686,
-        "strict": 11574,
-        "secondary-thin": 2840,
+        "lightweight": 5282,
+        "standard": 10191,
+        "strict": 11079,
+        "secondary-thin": 2614,
     }
 
     def test_entry_template_surfaces_price_the_canonical_blocks(self):

@@ -61,7 +61,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ### 每会话 bootstrap 健康摘要（REQ-145.1, A3）
 
-**每会话触发 MUST 先读** [健康摘要执行细则](references/behavior-contract-details.md) §bootstrap-health。本 SKILL 经 persona 第一动作加载；`resolve_entry.py --json` fail-closed 不变。之后先跑 `governance-bootstrap --format json`，立即给最小状态行 + AskUserQuestion；健康摘要等深检在用户选择后按需执行，不前置阻塞首次交互。
+**每会话触发 MUST 先读** [健康摘要执行细则](references/behavior-contract-details.md) §bootstrap-health。按 §B1 一次取得当前项目可信根与热面，再进入首次交互。健康摘要按需后置，推进类动作前必须补齐 full 面深检。
 
 会话摘要默认 `check-governance --summary-only --scope quick`，四态统计与 NOT_RUN 原因逐段披露，quick/full 不混读；无实质执行知识用 `N=unknown`。`health.state="deferred"` MUST 显示「待检查」，不能当作通过。摘要只读、只显示、不阻断；FAIL 直达用户，WARN 记上下文；不可用/超时/解析降级按细则 fail-safe 披露。
 
@@ -74,7 +74,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 ### B0 SELF-CHECK 全文 / 模式确认句式 / 治理开关映射 / Agent Team 激活（§B0）
 
 **SELF-CHECK 全文（任何输出之前）**：
-1. 我是否已经读了 `.governance/plan-tracker.md`？否 → **立即停止，先去读**。
+1. 我是否已取得本次工作区可信的 `resolve` 和 plan-tracker 热面？否 → **立即停止，先按 §B1 定位**。
 2. 我是否知道当前项目处于哪个阶段？否 → **你没读 plan-tracker，去读**（`## 项目配置` 节）。
 3. 上一 session 结束后是哪个阶段？是否有 carry-over 任务？不知道 → **去读 session-snapshot.md**。
 4. **我即将输出的文本是否包含向用户提问的问句？** 检查关键词：`吗？`、`？`、`要不要`、`是否`、`需要我`、`你想`、`Should I`、`Do you want`。如果是 → **立即删除问句，改用 AskUserQuestion 工具**。M5.1 违规不是"建议"——是流程违规。
@@ -98,8 +98,8 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 ### B1 Step 1 规程明细（读 plan-tracker + 跨会话恢复）
 
 **1. 快路径与六段 fallback（FEAT-034）**：
-- 快路径：`python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合 ≤8KB——resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，即下方 a~f 热数据段落的单命令投影）。
-- 聚合命令不可用（命令缺失/超时/解析失败）→ fallback 原六段读取——读 `.governance/plan-tracker.md` 热数据段落（按优先级）：
+- 快路径：从宿主注入的技能位置确定 `<plugin_home>`，运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`；同次启动若已取得当前项目的返回值，直接复用。除下述旧版缺少子命令外，仅在退出成功、JSON 有效且 `resolve.resolved_root_ok == true` 时采用热数据；否则 MUST STOP，展示 diagnostic 或命令错误，不呈现治理状态。有效但预算不足时按 `deferred` 展开所需面，缺失字段标未知。
+- 仅当已安装旧 CLI 明确报告未知子命令 `governance-bootstrap` 时，运行 `python <plugin_home>/infra/resolve_entry.py --json`；退出成功且 `resolved_root_ok == true` 后方可六段读取 `.governance/plan-tracker.md`，否则 MUST STOP。下列六段也用于本次 `behavior` 明确选定的 legacy 性能回退：
   a. `## 项目配置` — 当前 phase/stage/gate/mode/permission_mode/工作流版本
   b. `## Gate 状态跟踪` — 所有 Gate 状态
   c. `## 项目总览` — 当前统计（任务数/已完成/阻塞中/风险数）
@@ -111,7 +111,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 **2. AI Execution Packet（0.38.0+）**：
 - IF `.governance/execution-packets.json` 存在：读取当前 `TASK_ID` 对应短包，优先使用短包中的 `goal`、`allowed_change_scope`、`required_evidence`、`next_commands`、`done_definition`；短包用于约束本次执行边界，长篇 plan-tracker 和规则文件只作事实源补充。
-- IF 当前任务为活跃 P0/P1 且短包缺失：运行 `python <plugin_home>/infra/verify_workflow.py execution-packet --write`（`<plugin_home>` 来自 resolve_entry.py），再读取生成后的短包继续执行。
+- IF 当前任务为活跃 P0/P1 且短包缺失：运行 `python <plugin_home>/infra/verify_workflow.py execution-packet --write`（`<plugin_home>` 取本次定位结果），再读取生成后的短包继续执行。
 - `check-governance` Check 18c 会阻断缺包或字段无效的活跃 P0/P1 任务。
 
 **3. 归档感知**：IF `.governance/archive/index.md` 存在——读取 `.governance/archive/index.md` 了解已归档条目的位置；交叉验证时 evidence-log.md 中找不到某 task 的证据 → 先查 index.md 定位归档文件；**归档文件中的证据 = 有效证据——不可误判为缺失**。已归档 entry 标准查询路径：Read `.governance/archive/index.md` → grep 目标 ID → 按索引路径 Read 归档文件定位条目（总开销 2 次 Read call）。
@@ -119,7 +119,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 **4. 跨会话恢复与检测**：
 - 读取 `.governance/session-snapshot.md`（如存在）对照 plan-tracker：快照中的进行中任务 → 确认为 carry-over 任务继续执行；待确认决策 → 检查是否已过期或仍需确认；风险 escalation deadline ≤ 今天 → 立即升级。
 - 工作流脱轨检测：检查 plan-tracker 的 `最近复盘日期`——距今 > 7 天 AND 有若干新 commit 但 plan-tracker 无更新 → ⚠️ 工作流可能已被忽略，提醒用户是否需要更新治理状态。
-- Hook 存活检测（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在；缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。MUST 先运行 `python <plugin_home>/infra/resolve_entry.py --json` 拿到 `plugin_home`（`<plugin_home>` 取代 `$WORKFLOW_HOME` 路径考古；DEC-096），再提示重装：`cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
+- Hook 存活检测（系统级约束——不依赖 agent 自觉）：检查 `.git/hooks/pre-commit`、`.git/hooks/commit-msg` 和 `.git/hooks/post-commit` 是否存在；缺失 → ⚠️ 治理 hook 缺失——agent 的 commit 不受系统约束。用本次 `resolve.plugin_home` 提示重装：`cp "<plugin_home>/infra/hooks/pre-commit" .git/hooks/pre-commit && cp "<plugin_home>/infra/hooks/commit-msg" .git/hooks/commit-msg && cp "<plugin_home>/infra/hooks/post-commit" .git/hooks/post-commit`
 
 **5. 版本变化检测 + bootstrap 升级序列 A~E（FEAT-035 全文——提示 + 确认后执行）**：
 1. 读取 plan-tracker `工作流版本` 和当前安装版本（SKILL.md frontmatter `version`）。
@@ -128,7 +128,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
    - **B. 升级平台原生入口文件 bootstrap 段**（用户确认升级后执行——agent 执行）：读取当前入口文件，找到 `## Governance Bootstrap` 段落（FIX-238.2 陈旧标记：段落内 `@bootstrap-version` 头 < SKILL frontmatter `active_version` 即陈旧；无法确定新版本 → 不升级，输出 `/plugin update` 指引）；替换为**与最新模板完全一致**的内容（按 profile 选精简/完整版）；**保留入口文件其余所有内容不变**；输出：`Bootstrap 已升级：v{old} → v{new}。` **深检前置（MUST——DEC-207② P2-1 / M5.5 条 3）**：版本升级写序列属推进类动作——执行 B~E 写操作前 MUST 先完成健康摘要（full 面深检：`check-governance --summary-only`，缺省 scope=full；FEAT-084 起 quick 面不替代推进类深检）+ 交叉验证等深检；用户确认升级不免除深检。
    - **C. 自动补全 plan-tracker 缺失结构**（用户确认升级后直接执行）：项目配置缺少字段？→ 自动添加（permission_mode、工作流版本）；缺少 `## 版本规划` 节？→ 自动添加（版本路线图空表 + 版本里程碑 + V-Gate + 版本规划纪律）；缺少 `## 需求跟踪矩阵` 节？→ 自动添加；缺少 `## 变更控制` 节？→ 自动添加（含快速通道）；变更控制流程是旧版（无快速通道）？→ 自动更新为含快速通道的版本；`.git/hooks/post-commit` / `.git/hooks/commit-msg` 不存在？→ 提示一次性安装命令（agent 不能自动写 .git/hooks/——安全问题）；**插件残留清理删除面**（cleanup.py——dry-run 先行 + 确认后执行；每版本更新时执行）：先运行 `python <plugin_home>/infra/cleanup.py --dry-run` 呈现待删报告（`<plugin_home>` 来自 resolve_entry.py；基于 manifest.json 的结构 diff——不在 canonical manifest 中的文件 = 残留；`.governance/`、`.git/` 硬编码保护不触碰），通过 AskUserQuestion 确认后再执行 `python <plugin_home>/infra/cleanup.py`（不确认 → 跳过清理，不影响其余步骤），输出 `✅ 已清理 {N} 个过期文件/目录`。
    - **D. 更新 plan-tracker `工作流版本`** 为当前版本。
-   - **E. 持续归档触发检测与执行**（用户确认升级后执行；归档写操作同 ask-确认前置——dry-run 报告先行呈现，AskUserQuestion 确认后才执行迁移）：运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（`<plugin_home>` 来自 resolve_entry.py）：1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2；2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task；3. task 增量：热文件中可归档 completed task 达到阈值；4. 90 天兜底：长期未归档但仍有可归档历史数据。dry-run 报告需要归档 → 呈现 dry-run 报告并通过 AskUserQuestion 确认后执行：a. `python <plugin_home>/infra/archive.py migrate --auto`；b. `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`；c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）。归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成。无可归档数据 → 跳过归档（不修改文件）。
+   - **E. 持续归档触发检测与执行**（用户确认升级后执行；归档写操作同 ask-确认前置——dry-run 报告先行呈现，AskUserQuestion 确认后才执行迁移）：运行 `python <plugin_home>/infra/archive.py migrate --auto --dry-run` 检测四类触发器（`<plugin_home>` 取本次定位结果）：1. 首次迁移：`.governance/archive/index.md` 不存在 AND `plan-tracker.md` > 80 KB AND 已发布版本 ≥ 2；2. 发布强制：出现新的已发布版本后，除最新已发布版本外仍有未归档历史 task；3. task 增量：热文件中可归档 completed task 达到阈值；4. 90 天兜底：长期未归档但仍有可归档历史数据。dry-run 报告需要归档 → 呈现 dry-run 报告并通过 AskUserQuestion 确认后执行：a. `python <plugin_home>/infra/archive.py migrate --auto`；b. `python <plugin_home>/infra/verify_workflow.py check-archive-integrity`；c. 输出归档迁移摘要（格式: 📦 治理数据归档完成: 归档{N}个task→..., plan-tracker: {old}KB→{new}KB(-{pct}%)）。归档完整性失败 → 记录到 risk-log；发布/版本 bump 收尾场景 MUST 阻断完成。无可归档数据 → 跳过归档（不修改文件）。
 3. **用户要做的仍然只有：/plugin update → 下次会话。** 升级不再静默写文件——确认后其余步骤自动完成。
 
 ### B2 交叉验证与优先级（entry 模板 Step 2 / Step 4 承接）
@@ -185,7 +185,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 如果 agent 不遵守协议（跳过 Gate、忽略 AskUserQuestion、选择性执行规则），按以下顺序排查：
 1. agent 加载了 skill 吗？ → 检查 agent 是否知道当前阶段和 Gate 状态
 2. agent 读了 plan-tracker 吗？ → 检查 agent 是否提到当前 Tier 和待执行任务
-3. agent 的证据可信吗？ → 运行 `python <plugin_home>/infra/verify_workflow.py check-governance`（`<plugin_home>` 来自 resolve_entry.py）
+3. agent 的证据可信吗？ → 运行 `python <plugin_home>/infra/verify_workflow.py check-governance`（`<plugin_home>` 取本次定位结果）
 4. agent 的完成是真的吗？ → 读 agent 声称创建/修改的文件
 完整的 8 种失败模式、检测方法和应急动作见 `skills/software-project-governance/references/agent-failure-modes.md`。
 

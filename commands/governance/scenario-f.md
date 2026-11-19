@@ -7,9 +7,9 @@
 
 **检测条件**：一切正常——`.governance/` 存在、健康、版本最新、无 snapshot、无异常
 
-**数据源（MUST，FIX-270 秒级快路径）**：状态展示 = 运行 `python <plugin_home>/infra/verify_workflow.py status`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify）→ **渲染其输出**（文本或 `status --json`），而不是重新手工读取治理文件。
+**数据源（MUST，FIX-270 秒级快路径）**：状态展示 = 运行 `python <plugin_home>/infra/verify_workflow.py status`（复用本次 `resolve.plugin_home`）→ **渲染其输出**（文本或 `status --json`），而不是重新手工读取治理文件。
 
-- **bootstrap 聚合快路径（FEAT-033，推荐入口）**：单次会话引导/路由需要 resolve + 状态 + 候选一次性数据时，MAY 运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（只读聚合：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions，≤8KB JSON 投影；`--budget-ms` 超时 fail-safe 返回 `deferred` 明示未完成范围）——一次调用替代"多次 verify 调用 + 多段读 plan-tracker"的串行链。`status` 仍是底层全量投影依赖（Delivery Trust Snapshot / Gate 全表等完整面以 `status` 输出为准）；`governance-bootstrap` 的 `health.state` 恒为 `deferred`（v1 未接线健康检查——健康面 MUST 另跑 `check-governance --summary-only --scope quick`（会话摘要默认，FEAT-084/DEC-303 形态 B；推进类深检用 full 面 `--summary-only` 无 scope），不得把 deferred 当作已检查）。
+- **bootstrap 聚合快路径（FEAT-033）**：复用路由的 `governance-bootstrap --format json` 结果；`resolve`、状态和候选已在同次调用取得。需要完整状态时执行 `status`。
 - **默认不再要求全量读 4 个治理文件**（plan-tracker.md / evidence-log.md / risk-log.md / decision-log.md）——`status` 命令已用行级结构化解析输出 Scenario F 面板所需全部数据（项目配置 / Gate 状态 / 任务统计 / 活跃风险含 ≤3 天升级线标记 / 最近活动 / 插件版本新鲜度 / 建议下一步线索 / Delivery Trust Snapshot）。
 - **按需展开（例外）**：仅当 (a) 用户展开 `<details>` 详情，(b) `status` 输出字段缺失/解析失败，或 (c) 数据对不上时，才用 read 工具按需读取对应治理文件。
 - **Delivery Trust Snapshot 数据来源** = `status` 命令输出 + `governance-context` 既有输出（两者都是确定性 CLI 输出；Snapshot 字段合约见下方，不得以手工翻读证据文件替代）。
@@ -24,7 +24,7 @@ Delivery Trust Snapshot 拆为两份契约，`/governance` 与 `/governance-stat
 
 - 默认视图数据源 = `governance-bootstrap` 聚合数据面 + `check-governance` 健康结果；agent 只做渲染与引导，不做重复数据挖掘
 - Existing-project resume signal：已有 `.governance/` 状态时 Mode 字段 MUST 携带 `Existing governance state detected`，并保留 carry-over active task count、open risk count 和 next action；hook state 异常（installed/missing）必须在 Mode/Health 位可见
-- Context-aware resume handoff：MUST run the same factual discovery contract as `python <plugin_home>/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify）。Next/Decision 字段的未完成事项 MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
+- Context-aware resume handoff：MUST run the same factual discovery contract as `python <plugin_home>/infra/verify_workflow.py governance-context --fixture project/e2e-test-project --fail-on-issues`（复用本次 `resolve.plugin_home`）。Next/Decision 字段的未完成事项 MUST be backed by `Source facts`; if no facts exist, output `not found` and `do not invent` new work.
 - 展开语义：用户显式请求（如"完整状态"）或高风险场景（发布 / Gate 检查 / 版本 bump / 故障诊断）需要完整面时，从 `status` 输出**直接渲染**完整面板（20 字段 CLI snapshot + pack doc-surface 语义行，不手工重建）；`--level strict` 语义 = 完整面板 + Gate 全表按始终展开处理
 - 其余面板内容沿用折叠规则：始终展开 = 默认 Snapshot 视图 + 项目配置摘要（名称、profile、trigger_mode、permission_mode、版本、阶段）+ 建议下一步；默认折叠（`<details>`，非关键信息）= Gate 状态表（G1-G11）→ `<details><summary>Gate 状态表</summary>...表格...</details>`；最近活动（最近 5 个已完成任务、最近 5 个决策）→ `<details><summary>最近活动</summary>...列表...</details>`；插件版本新鲜度 → `<details><summary>插件版本</summary>...版本信息...</details>`；完整 Snapshot 面板（20 字段 CLI + pack doc-surface 语义行；仅显式请求时渲染）
 - **折叠红线（异常不隐藏）**：权限风险（hooks 缺失 / permission_mode 非法）、已知 FAIL、证据缺失不得因折叠或瘦身而不可见——默认视图的 Risks/Health 字段必须携带异常位（哪怕压缩为一行）
@@ -83,7 +83,7 @@ Context acceptance harness：运行 `python <plugin_home>/infra/verify_workflow.
 
 ### 状态展示后的引导（MUST）
 
-**时序（FEAT-034 首次交互前置）**：本引导 = 快路径（第二动作）后的首次用户交互——`governance-bootstrap`/`status` 渲染完成后**立即**执行；健康摘要（`check-governance --summary-only --scope quick`，FEAT-084 会话面默认）等深检后置为用户选择后按需执行（推进类深检固定 full 面），`health.state="deferred"` 期间面板健康位显示「待检查」而非通过。
+**时序（FEAT-034 首次交互前置）**：本引导 = 本次聚合快路径后的首次用户交互——`governance-bootstrap`/`status` 渲染完成后**立即**执行；健康摘要（`check-governance --summary-only --scope quick`，FEAT-084 会话面默认）等深检后置为用户选择后按需执行（推进类深检固定 full 面），`health.state="deferred"` 期间面板健康位显示「待检查」而非通过。
 
 展示完治理面板后，**MUST 通过 AskUserQuestion 引导用户进入下一步**——Scenario F 不是终点，是工作起点。
 

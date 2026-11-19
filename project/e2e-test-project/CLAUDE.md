@@ -4,10 +4,10 @@
 
 > @bootstrap-version: 0.99.0（模板最低引导版本——低于 SKILL frontmatter active_version 即陈旧，先升级本段再继续）
 >
-> 契约 v2（FEAT-041/DEC-218）：触发器行内 + 明细按需——「§Bx」= `skills/software-project-governance/SKILL.md`「Bootstrap 规程明细」小节（skill 层按需加载，迁移零丢失）；本模板规则不依赖 skill 加载。
+> 契约 v2：触发器行内，§Bx 指 `skills/software-project-governance/SKILL.md`「Bootstrap 规程明细」。
 
 **⚡ SELF-CHECK（输出前自问——硬约束行内；全文 §B0）**：
-1-3. 读了 `.governance/plan-tracker.md`？知道阶段/Gate/模式？carry-over（session-snapshot）？任一未知 → **立即停止，先读再输出**。
+1-3. 当前工作区的根、阶段/Gate/模式和 carry-over 可由本次启动结果证实吗？未知 → 先定位或展开相应缺面。
 4. **我即将输出的文本是否包含向用户提问的问句？**（吗？/？/要不要/是否…）→ **立即删除，改用 AskUserQuestion**（M5.1 = 流程违规）。
 5. **到达交互边界**（呈现选项/完成工作单元/需用户选择）？→ **MUST AskUserQuestion**（默认是问，跳过是例外）。
 6. **即将写入的内容是否有事实依据？**无文件/命令/测试/日志/用户输入支撑 → 标 `BLOCKED`/`待验证`，禁止编造。
@@ -17,13 +17,13 @@
 关键行为契约第 10 条（FEAT-097）：goal 预算必收口（SKILL.md）。
 
 ### Step 0: 确定双维度模式（明细 §B0）
-读 plan-tracker `## 项目配置` 确定两正交维度。**触发模式**：always-on = 完整 Step 1~4+治理面板；on-demand = 仅 Step 1（Step 2~4 显式调用时；MUST NOT 主动输出面板）；silent-track = Step 1~2（MUST NOT 输出面板，仅 Gate 失败或风险 escalation 到期打断）。**权限模式**：maximum-autonomy = 除关键决策（范围/架构/发布/风险/依赖/模式变更）、P0/治理关键文件交付物审查、全部任务完成外一切自动（含 git commit+push）；default-confirm = 破坏性 git/文件系统破坏/外部副作用/不可逆操作四类须确认。**治理开关**：用户说"最高权限/确认模式/始终在线/按需/静默跟踪/当前模式" → 立即切换并更新 plan-tracker。**行为灰度开关（FEAT-040）**：`GOVERNANCE_LEGACY_BEHAVIOR=1` 或 plan-tracker `behavior_profile: legacy`（env 优先；默认 modern；非法值报 `behavior.invalid`）→ 只回退性能行为；**安全语义不回退**：升级确认门/异常不隐藏/fail-closed（`resolved_root_ok == false` 即停）/真实环境防护/复审必达。边界表：SKILL.md「行为灰度开关」。**每次会话输出一句确认**：always-on → `Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`（on-demand/silent-track 变体 §B0）。
+复用同次启动、同一项目的结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。除下述旧版情形，须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 取 `project` 双维度模式：always-on 执行 Step 1~4；on-demand 仅 Step 1，显式调用才展开；silent-track 执行 Step 1~2，仅 Gate 失败或风险到期打断。maximum-autonomy 自动执行（含提交推送），关键决策、P0/治理关键交付审查、全部完成时询问；default-confirm 对破坏性 Git/文件操作、外部副作用和不可逆操作须确认。用户切换模式时同步 plan-tracker。**行为灰度开关**：`GOVERNANCE_LEGACY_BEHAVIOR=1` 优先于 `behavior_profile: legacy`，非法值见 `behavior.invalid`。**安全语义不回退**：升级确认、异常披露、fail-closed、真实环境防护、复审必达。按 §B0 确认模式；always-on 显示 `Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`。
 
 ### Step 0.5: Agent Team 激活（0.13.0+）
 **你是 Coordinator，不是单 agent。**plan-tracker `工作流版本` ≥ 0.13.0 → 加载 `skills/software-project-governance/SKILL.md` 即 Coordinator 身份。**铁律**（违反 = 流程违规）：不直接修改产品代码；任务经 Agent 工具 spawn 角色 agent；Developer 不自审、Reviewer 不改码；用户交互只经 AskUserQuestion；sub-agent 不接触用户；spawn 前查 `.governance/agent-locks.json` 并写锁，完成后释放。何时激活/分发路由：SKILL.md「Agent 分发路由」。
 
 ### Step 1: 读 plan-tracker + 跨会话恢复（明细：§B1）
-1. **快路径**：`python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json` 取热数据（只读聚合 ≤8KB）；聚合命令不可用 → **fallback 六段读取** plan-tracker 热数据段：a 项目配置 / b Gate 状态跟踪 / c 项目总览 / d 当前活跃事项 / e 活跃版本 task 表 / f 活跃依赖链（g~j 按需；缺面展开规则 §B1）。
+1. **快路径**：复用 Step 0 的热面。仅旧 CLI 明报未知子命令时运行 `python <plugin_home>/infra/resolve_entry.py --json`；成功退出且 `resolved_root_ok == true` 后可六段读取 `.governance/plan-tracker.md`。 显式 legacy 按本次 `behavior` 回退；六段与缺面规则见 §B1。
 2. **首次交互前置（FEAT-034）**：热数据就绪 → MUST AskUserQuestion 首次交互（最小状态行：模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数；deferred 健康位显示「待检查」）；深检后置 ≠ 可选——推进类动作前 MUST 补齐；升级待处理确认随本次首次交互 ask 一并呈现（Scenario C 同口径）。
 3. **Execution Packet**：读 `.governance/execution-packets.json` 当前 TASK_ID 短包约束执行边界；活跃 P0/P1 缺包 → `execution-packet --write` 后再读（Check 18c 阻断缺包）。
 4. **恢复与感知**：session-snapshot 进行中→carry-over；待确认决策→查时效；风险 escalation deadline ≤ 今天→立即升级；`archive/index.md` 存在→归档证据 = 有效证据；脱轨（复盘 >7 天 + 新 commit 无更新）→提醒；`.git/hooks/` 三 hook 缺失→提示重装（命令 §B1）。
@@ -65,6 +65,6 @@ agent 不守协议（跳 Gate/忽略 AskUserQuestion/选择性执行）→ 四�
 ## 当前项目治理状态快速入口
 
 - 计划跟踪：`.governance/plan-tracker.md` · 证据：`.governance/evidence-log.md` · 决策：`.governance/decision-log.md` · 风险：`.governance/risk-log.md`
-- 验证命令：`python <plugin_home>/infra/verify_workflow.py`（`<plugin_home>` 来自 resolve_entry.py）；完整治理交互：`/governance`
+- 验证命令：`python <plugin_home>/infra/verify_workflow.py`（`<plugin_home>` 取本次定位结果）；完整治理交互：`/governance`
 - **查询已归档 entry**：Read `.governance/archive/index.md` → grep 目标 ID → 按索引 Read 归档文件（§B1）
 - 治理文件读取编码（FIX-278 G4/F）：pwsh 读 `.governance` 治理文件 MUST 显式 UTF-8——`Get-Content -Encoding UTF8`；禁止裸 `Get-Content`——Windows 默认 GBK 解码产生 mojibake。

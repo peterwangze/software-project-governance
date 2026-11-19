@@ -363,10 +363,8 @@ class AggregateFieldCompletenessTests(unittest.TestCase):
 
     def test_resolve_face_reuses_resolve_entry_envelope(self):
         resolve = self.payload["resolve"]
-        self.assertTrue(resolve["resolved_root_ok"])
+        self.assertEqual(resolve, ba.resolve_entry.resolve(self.root))
         self.assertEqual(resolve["scenario_hint"], "F")
-        self.assertTrue(resolve["plugin_home"])
-        self.assertIn("active_version", resolve)
 
     def test_migration_face_matches_fixture_versions(self):
         # resolve() reads the ACTIVE version from PLUGIN_HOME at call time —

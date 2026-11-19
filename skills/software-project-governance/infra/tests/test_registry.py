@@ -956,6 +956,41 @@ class RegistrationIntegrityTests(unittest.TestCase):
 class StartupImportTests(unittest.TestCase):
     """Acceptance ② — registry load and per-command load add no startup mass."""
 
+    def test_public_bootstrap_resolves_once_and_loads_only_its_handler(self):
+        from textwrap import dedent
+
+        result = _probe(dedent(f"""
+            import io
+            import runpy
+            from contextlib import ExitStack, redirect_stdout
+            from unittest.mock import patch
+            import registry, resolve_entry
+
+            engine = {str(_INFRA_DIR / 'verify_workflow.py')!r}
+            cases = []
+            for options in ([], ['--project-root', '.']):
+                with ExitStack() as scope:
+                    argv = [engine, *options, 'governance-bootstrap', '--budget-ms=0']
+                    scope.enter_context(patch.object(sys, 'argv', argv))
+                    def count(module, name):
+                        return scope.enter_context(patch.object(module, name, wraps=getattr(module, name)))
+                    explicit = count(resolve_entry, 'validate_project_root')
+                    cwd = count(resolve_entry, 'resolve_host_root')
+                    resolve = count(resolve_entry, 'resolve')
+                    load = count(registry, 'load_handler')
+                    out = scope.enter_context(redirect_stdout(io.StringIO()))
+                    try:
+                        runpy.run_path(engine, run_name='__main__')
+                    except SystemExit as stop:
+                        assert stop.code in (None, 0), stop.code
+                    face = json.loads(out.getvalue())['resolve']
+                    cases.append([explicit.call_count + cwd.call_count, resolve.call_count,
+                                  [call.args[0] for call in load.call_args_list], face['resolved_root_ok']])
+            unrelated = {{'verify_workflow', 'governance_store', 'execution_isolation'}} & sys.modules.keys()
+            print(json.dumps([cases, sorted(unrelated)]))
+        """))
+        self.assertEqual(result, [[[1, 1, ["governance-bootstrap"], True]] * 2, []])
+
     def test_engine_baseline_is_an_executable_portable_budget(self):
         """F-4: enforce the frozen R6 ceiling with an executable caliber.
 

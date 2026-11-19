@@ -8,7 +8,7 @@ derives every entry-file bootstrap section from it:
 
 * primary entry  → the selected profile's full template (unchanged flow);
 * secondary entry → a generated thin pointer (≤40 lines, ≤3072 bytes) that
-  keeps the minimal survival checks (resolve_entry first action, plan-tracker
+  keeps the minimal survival checks (aggregate bootstrap, plan-tracker
   read, SELF-CHECK, mode confirmation, governance quick entries) and points
   at the primary entry instead of duplicating the full template;
 * single-entry workspaces keep the full bootstrap (backward compatible).
@@ -67,7 +67,7 @@ _PLACEHOLDER = "{PRIMARY_ENTRY}"
 THIN_SHARED_CORE_ANCHORS = (
     ("bootstrap header", "Governance Bootstrap"),
     ("bootstrap version line", "> @bootstrap-version: "),
-    ("resolve_entry first action", "resolve_entry.py"),
+    ("aggregate bootstrap first action", "governance-bootstrap --format json"),
     ("plan-tracker read", ".governance/plan-tracker.md"),
     ("SELF-CHECK", "SELF-CHECK"),
     ("mode confirmation (always-on)", "always-on"),
@@ -77,7 +77,7 @@ THIN_SHARED_CORE_ANCHORS = (
 #: Extras carried by the GENERATED secondary-thin projection only.
 THIN_DIALECT_GENERATED_ANCHORS = (
     ("bootstrap header (H2 form)", "## Governance Bootstrap"),
-    ("resolve_entry (full command)", "resolve_entry.py --json"),
+    ("old CLI resolve_entry fallback", "resolve_entry.py --json"),
     ("AskUserQuestion (generated spelling)", "AskUserQuestion"),
     ("quick entries", ".governance/evidence-log.md"),
     ("skill entry", "skills/software-project-governance/SKILL.md"),
@@ -348,7 +348,7 @@ def bootstrap_h2_singleton_violations(new_text: str, section_text: str) -> list[
 
 
 def has_full_bootstrap(section_text: str) -> bool:
-    return _FULL_BOOTSTRAP_MARKER in section_text
+    return _FULL_BOOTSTRAP_MARKER in section_text or "### 每次会话第一动作" in section_text.splitlines()
 
 
 def is_thin_pointer_section(section_text: str) -> bool:
@@ -483,9 +483,11 @@ def plan_entry_writes(
         existing = _read_text(secondary_path)
         span = bootstrap_section_span(existing)
         current = _section_content(existing, span)
-        if span is not None and is_thin_pointer_section(current) and \
-                not validate_thin_pointer(current, primary):
-            return []  # sticky thin pointer; nothing to do
+        if span is not None and is_thin_pointer_section(current):
+            if _normalized_content(current) == _normalized_content(sections["thin"]):
+                return []
+            return [EntryWrite(secondary, "thin", sections["thin"],
+                               "refresh the existing thin pointer while the primary is absent")]
         plan.append(EntryWrite(
             secondary, "full", sections["full"],
             "single-entry workspace: full bootstrap (backward compatible)",
@@ -615,6 +617,8 @@ def build_sync_report(
             continue
         kind, section = _classify_entry(_read_text(path), _h2_titles(templates[profile]))
         kinds[name] = kind
+        if name == secondary and not (root / primary).exists() and kind == "full":
+            expected_kind = "full"  # the sole platform entry also carries the full template
         content = _normalized_content(section)
         entry = {
             "file": name,

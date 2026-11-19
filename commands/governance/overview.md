@@ -23,7 +23,7 @@
 
 Web console 是可选的本地伴随状态面板，也是用户手动 `/governance` 后的默认可视化入口。
 
-> 路径约定：以下 `web-console` 命令中的 `<plugin_home>` 由 `resolve_entry.py` 提供（DEC-096）。`/governance` 的第一动作是运行 `python <plugin_home>/infra/resolve_entry.py --json`；`resolved_root_ok=false` 时 MUST STOP 并展示 diagnostic，不启动 Web console。
+> Web console 命令沿用 `/governance` 本次返回的 `resolve.plugin_home`。根未确认时 MUST STOP 并展示 diagnostic。
 
 - 手动执行 `/governance` 时，SHOULD 运行 `python <plugin_home>/infra/verify_workflow.py web-console --governance-entry`，启动或复用本地 Web console，并把 URL 输出给用户。
 - 如果 Web console 已运行，`/governance` 复用已有服务，不重复启动。
@@ -63,7 +63,7 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 ### 不变
 - `skills/software-project-governance/core/onboarding.md`——Scenario B 的参考协议
-- `"<plugin_home>/infra/verify_workflow.py"`——Scenario E 的诊断引擎（`<plugin_home>` 来自 `resolve_entry.py`，先 resolve 后 verify）
+- `"<plugin_home>/infra/verify_workflow.py"` 为 Scenario E 诊断引擎，沿用本次确认的技能目录。
 
 ---
 

@@ -46,7 +46,7 @@
 
 ## 设计原则
 
-1. **自动分类，不问用户**【自动化分级：B 级（CLI-Enforced Automation）——命令时点，deterministic 场景判定由 `resolve_entry.py` 的 `scenario_hint` 支撑，事件驱动非持续；详见 `commands/governance/overview.md` 的分级声明】：命令自动检测项目状态并路由到正确场景
+1. **自动分类，不问用户**【自动化分级：B 级（CLI-Enforced Automation）——命令时点，按聚合返回的 `resolve.scenario_hint` 分类，事件驱动非持续；详见 `commands/governance/overview.md` 的分级声明】：命令自动检测项目状态并路由到正确场景
 2. **最少提问**：每个场景最小化 AskUserQuestion 次数
 3. **安全默认**：异常先于状态展示，恢复先于推进
 4. **会话连续性**：snapshot 是跨会话的契约
@@ -55,13 +55,13 @@
 
 ## 决策树（自动分类——deterministic，DEC-096）
 
-**第一动作（不变，fail-closed）：MUST 先运行 `python <plugin_home>/infra/resolve_entry.py --json`**（`<plugin_home>` 由 resolve_entry.py 自定位；解析失败/超时/引导段陈旧时的分类诊断与降级链见 `commands/governance/bootstrap.md`——`resolved_root_ok == false` 时 MUST STOP，不呈现治理状态）。
+**第一动作（fail-closed）**：复用同次启动、同项目的聚合结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。仅旧 CLI 明确报告未知子命令时改用 `python <plugin_home>/infra/resolve_entry.py --json`，成功判根后才手读六段。其余非零退出、无效 JSON 或 `resolve.resolved_root_ok != true` → MUST STOP 并展示诊断。详见 `commands/governance/bootstrap.md`。
 
-**第二动作（FEAT-034 首次交互前置——快路径立即 ask）**：`resolved_root_ok == true` 后 MUST 运行 `python <plugin_home>/infra/verify_workflow.py governance-bootstrap --format json`（FEAT-033 只读聚合快路径，≤8KB：resolve envelope + 状态投影 + 候选 + migration 标志 + next_actions），**立即**呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互——Scenario D 呈现恢复选项（继续上次/审查快照/重新开始），Scenario F 呈现下一步引导（见 Scenario F 规程文件「状态展示后的引导」），其余场景按对应 Scenario 的首个用户决策点呈现。
+**首次交互（FEAT-034）**：读取同次返回的项目、候选与迁移状态，**立即**呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互——Scenario D 呈现恢复选项（继续上次/审查快照/重新开始），Scenario F 呈现下一步引导（见 Scenario F 规程文件「状态展示后的引导」），其余场景按对应 Scenario 的首个用户决策点呈现。
 
-**深检后置（FEAT-034——用户选择后按需执行）**：`check-governance --summary-only --scope quick` 健康摘要（FEAT-084/DEC-303 形态 B——会话面默认 quick：quick 面段执行 + 四态汇总行；legacy 回退时为无 scope 全量）、plan-tracker 六段热数据逐段读取、交叉验证、版本升级摘要呈现与确认后写序列（Scenario C——FEAT-035 ask-确认前置）、归档检测**不作为首次 ask 的前置条件**——深检结果不阻塞首次交互；`governance-bootstrap` 的 `health.state="deferred"` 期间，状态行健康位显示「待检查」而非绿色通过（诚实语义——deferred ≠ 已检查）。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑对应深检（健康摘要——**推进类深检固定 full 面**：`check-governance --summary-only`〔缺省 scope=full〕，quick 通过 ≠ 完整治理通过 + 交叉验证 + 按所选动作对应的升级/归档序列）再继续——版本升级写序列属推进类动作（DEC-207② P2-1），写操作执行前深检 MUST 补齐；安全约束零削减，只重排时序。
+**深检后置（FEAT-034——用户选择后按需执行）**：`check-governance --summary-only --scope quick` 健康摘要（FEAT-084/DEC-303 形态 B——会话面默认 quick：quick 面段执行 + 四态汇总行；legacy 回退时为无 scope 全量）、交叉验证、版本升级摘要呈现与确认后写序列（Scenario C——FEAT-035 ask-确认前置）、归档检测**不作为首次 ask 的前置条件**——深检结果不阻塞首次交互；`governance-bootstrap` 的 `health.state="deferred"` 期间，状态行健康位显示「待检查」而非绿色通过（诚实语义——deferred ≠ 已检查）。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑对应深检（健康摘要——**推进类深检固定 full 面**：`check-governance --summary-only`〔缺省 scope=full〕，quick 通过 ≠ 完整治理通过 + 交叉验证 + 按所选动作对应的升级/归档序列）再继续——版本升级写序列属推进类动作（DEC-207② P2-1），写操作执行前深检 MUST 补齐；安全约束零削减，只重排时序。
 
-读取 `scenario_hint`（A..F）并按对应 Scenario 分支：
+读取本次 `resolve.scenario_hint`（A..F），旧版使用同名顶层字段，按对应 Scenario 分支：
 
 - `resolved_root_ok == false` → **STOP**，展示 `diagnostic`，不呈现任何治理状态（DEC-080 / RISK-038 fail-closed）。
 - `scenario_hint == "A"` → Scenario A（全新项目初始化）
@@ -71,7 +71,7 @@
 - `scenario_hint == "E"` → Scenario E（异常恢复）
 - `scenario_hint == "F"` → Scenario F（状态展示）
 
-版本/异常/新鲜度等判定逻辑已下沉到 `resolve_entry.py` 的 `detect_scenario()` 纯函数（`infra/resolve_entry.py:196-227`）；本命令不再在 prose 里 stat 文件或比较版本号——旧 ASCII 判定树已删除（与 `detect_scenario` 重复的确定性逻辑，Code Reviewer R0 P2-1）。
+场景判定由 `resolve_entry.py` 的 `detect_scenario()` 生成；直接采用该结果。
 
 ---
 
@@ -92,7 +92,7 @@
 
 **跨场景执行注记（FEAT-034/035/036——拆分中零回退）**：
 
-- **首次交互前置**：六个 Scenario 的首次 ask 均按「第二动作」时序**立即**执行；深检（健康摘要/交叉验证/升级写序列/归档检测）后置为用户选择后按需执行，`health.state="deferred"` 期间健康位显示「待检查」而非通过。深检后置 ≠ 可选——推进类动作前 MUST 补齐。
+- **首次交互前置**：六个 Scenario 的首次 ask 均在聚合热面就绪后**立即**执行；深检（健康摘要/交叉验证/升级写序列/归档检测）后置为用户选择后按需执行，`health.state="deferred"` 期间健康位显示「待检查」而非通过。深检后置 ≠ 可选——推进类动作前 MUST 补齐。
 - **Scenario C 写序列**：版本升级写序列属推进类动作——执行前 MUST 满足 M5.5 条 3 深检前置；用户确认升级不免除深检；确认前零写操作（FEAT-035）。
 - **Scenario D 新鲜度**：≤24h 活跃恢复 / 24h~7d 标记且仍提供继续 / >7d 归档转 F（规则全文见规程文件）。
 - **Scenario F 双契约（FEAT-036）**：默认交互视图（≤8 字段，强制生成）+ 完整机器契约（20 字段 CLI snapshot + 4 字段 pack doc-surface，不随会话强制生成）。

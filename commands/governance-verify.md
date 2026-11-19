@@ -50,7 +50,7 @@
 - **IF** 最后更新日期距今 ≤ 7 天 → PASS
 
 ### Step 6: workflow 仓库专属检查（类别 E — 仅当适用时）
-- **先运行 `python <plugin_home>/infra/resolve_entry.py --json`** 拿到 `plugin_home`（取代 `$WORKFLOW_HOME` 路径考古）。`resolved_root_ok=false` 时 MUST STOP 并展示 diagnostic，不执行 verify_workflow。
+- 沿用当前项目已确认的 `resolve.plugin_home`；独立调用时依 `commands/governance.md` 第一动作定位。根解析失败时 MUST STOP 并展示 diagnostic。
 - **IF** `<plugin_home>/infra/verify_workflow.py` 存在 → 执行 `python <plugin_home>/infra/verify_workflow.py`，捕获输出和退出码
   - **IF** 退出码 = 0 → PASS
   - **ELSE** → 记录为 `workflow_verify_failed`，附带脚本输出

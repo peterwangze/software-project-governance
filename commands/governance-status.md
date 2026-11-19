@@ -11,11 +11,11 @@
 ## 执行流程
 
 ### Step 1: 检查是否已初始化
-- **IF** `.governance/plan-tracker.md` 不存在 → 返回错误 `STATUS-ERR-001`（未初始化）
+- 复用同次、同项目的 `resolve`；若尚未定位，先按 `commands/governance.md` 第一动作运行聚合入口。根未确认须停止。若 `resolve.governance_initialized == false` → 返回 `STATUS-ERR-001`（未初始化）。
 - **ELSE** → 继续 Step 2
 
 ### Step 2: 运行确定性状态命令（FIX-270 秒级快路径）
-- 运行 `python <plugin_home>/infra/verify_workflow.py status`（`<plugin_home>` 来自 resolve_entry.py，先 resolve 后 verify），**渲染其输出**，而不是重新手工读取治理记录。
+- 运行 `python <plugin_home>/infra/verify_workflow.py status`（取本次 `resolve.plugin_home`），**渲染其输出**，而不是重新手工读取治理记录。
 - `status` 输出已包含：项目配置（项目名称、Profile、触发模式、操作权限模式 permission_mode、工作流版本、当前阶段）、Gate 状态跟踪表（G1~G11 状态/通过日期/关键证据）、项目概览表（总任务数、已完成、阻塞中、关键风险数、最近 Gate 结论）、任务统计（含 P0 待处理）、活跃风险（含 ≤3 天升级截止标记）、最近活动（最近 5 个已完成任务 + 最近 5 个决策）、插件版本新鲜度、建议下一步线索、Delivery Trust Snapshot。
 - **默认不再要求 Agent 全量读 4 个治理文件**。仅当 (a) 用户展开详情，(b) `status` 输出字段缺失/解析失败，或 (c) 数据对不上时，才用 read 按需读取 `.governance/plan-tracker.md` / `risk-log.md` / `session-snapshot.md`；`.governance/evidence-log.md` 只在用户明确要求查看证据时读取。
 - 若 `status` 不可运行（模块未定位/超时/异常）→ 降级为既有手工读取流程，并记录降级原因（不静默过场）。
@@ -31,7 +31,7 @@
 
 ### Step 3.5: 插件版本新鲜度检查（advisory——非权威版本源）
 - 插件新鲜度检查为 **advisory（非权威）**——权威激活版本来自 `resolve_entry.py` 的 `active_version`（DEC-096）。`check-plugin-freshness` 只作为远端/本地差异提示，不作为版本判定依据。
-- **先运行 `python <plugin_home>/infra/resolve_entry.py --json`** 拿到 `plugin_home`（`plugin_home` 来自 `resolve_entry.py`，取代 `$WORKFLOW_HOME` 路径考古）。`resolved_root_ok=false` 时 MUST STOP 并展示 diagnostic，不得呈现状态。
+- 沿用 Step 1 已确认的 `resolve.plugin_home`。根诊断失败时 MUST STOP，不得呈现状态。
 - **FIX-270 起**：`status` 命令输出已含 `Plugin Freshness`（active_version vs plan-tracker 记录版本，advisory）；Step 2 已覆盖，无需重复运行。
 - **IF**（旧路径或 `status` 缺失时）运行 `check-plugin-freshness`，捕获输出
   - **IF** 状态为 OUTDATED → 在状态面板底部输出更新提醒（版本差距 + commits behind + 操作指引），并标注 `advisory——权威版本见 active_version`

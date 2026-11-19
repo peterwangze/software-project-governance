@@ -24,7 +24,7 @@ dsh plugin --profile web add github:peterwangze/software-project-governance
 - 治理技能在治理预设的每个会话中可用。隔离验证同时检查了普通 `standard` 会话的技能目录。〔isolation: 2026-10-20，Windows，治理技能与命令投影只在 governance 会话内出现〕
 - 选用治理预设后，用户输入 `/governance` 即加载统一治理入口。同名 skill 投影指向共享的 `commands/*.md`。〔live-session: 2026-07-08，dsh 0.1.0-rc.6 的 /name 手势〕
 
-`python adapters/dsh/launch.py --bootstrap-project <项目目录>` 将治理指针写入项目的 `AGENTS.md`。DSH 会自动注入该文件；技能由所选预设提供。原生 `skill` 返回的 `resourceBase` 指向 `skills/software-project-governance/`。`ask_user_question` 负责用户交互，读写使用 `read`、`write`、`edit`、`grep`、`glob` 和 `pwsh`。派发时把角色定义、任务和调度模板交给 `subagent`；它没有 `isolation: "worktree"` 参数，会修改同一文件的任务需串行执行或使用独立工作树。
+`python adapters/dsh/launch.py --bootstrap-project <项目目录>` 将治理指针写入项目的 `AGENTS.md`。同版本旧项目先追加 `--dry-run` 预览；确认后执行原命令，仅更新已有治理段并保留项目自有内容。DSH 会自动注入该文件；技能由所选预设提供。原生 `skill` 返回的 `resourceBase` 指向 `skills/software-project-governance/`。`ask_user_question` 负责用户交互，读写使用 `read`、`write`、`edit`、`grep`、`glob` 和 `pwsh`。派发时把角色定义、任务和调度模板交给 `subagent`；它没有 `isolation: "worktree"` 参数，会修改同一文件的任务需串行执行或使用独立工作树。
 
 项目治理 hooks 缺失时提示一次；按需从 `skills/software-project-governance/infra/hooks/` 安装。hooks 可从仓库检出或 `SOFTWARE_PROJECT_GOVERNANCE_HOME` 定位包根，旧版显式安装还提供 `skill-root.txt`。
 

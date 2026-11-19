@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 /** Repository root that ships this extension (adapters/pi/extension -> 3 levels up). */
 export function pluginRoot(): string {
 	// import.meta.url is available because pi loads extensions as ES modules via jiti.
-	const here = path.dirname(fs.realpathSync(fileURLToPath(new URL(".", import.meta.url))));
+	const here = path.dirname(fs.realpathSync(fileURLToPath(import.meta.url)));
 	return path.resolve(here, "..", "..", "..");
 }
 

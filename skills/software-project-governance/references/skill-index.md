@@ -54,7 +54,7 @@
 
 ## Agent 职能分组（7 组，14 个活跃文件化角色 Agent + Coordinator 自身）
 
-Agent 按项目运作职能分为 7 组，覆盖从立项到维护的全生命周期。Coordinator 已融入入口 SKILL.md——主 agent 加载后即成为 Coordinator；15 个活跃角色含 Coordinator，14 个活跃文件化角色 Agent 是活跃路由口径，位于 `agents/`。Deprecated 历史参考文件不参与路由口径。
+Agent 按项目运作职能分为 7 组，覆盖从立项到维护的全生命周期。Coordinator 已融入入口 SKILL.md——主 agent 加载后即成为 Coordinator；15 个活跃角色含 Coordinator，14 个活跃文件化角色 Agent 是活跃路由口径，位于 `agents/`。
 
 | 职能组 | 目录 | Agent | 生命周期阶段 |
 |--------|------|-------|------------|

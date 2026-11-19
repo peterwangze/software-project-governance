@@ -156,7 +156,7 @@
 | **运维组** | DevOps, Release | CI/CD→版本发布；运营监控由 DevOps 承接，反馈闭环进入 Maintenance | CI/CD, 环境管理, 监控告警, 发布检查, 版本规划, 变更日志 |
 | **维护组** | Maintenance | 维护与演进 | 缺陷修复, 复盘会议, 规则演进 |
 
-> 目录结构：`agents/<name>.md`（plugin root 平铺，符合 Claude Code 官方规范）。`agents/` 当前有 15 个文件：14 个活跃文件化角色 Agent，加 1 个 deprecated 的 `agents/coordinator.md` 历史参考；Coordinator 融入入口层，不再作为活跃独立 agent 文件。FIX-070 已把入口层路由、Agent 索引、通信协议和治理写回边界收敛到这一事实源口径。
+> 目录结构：`agents/<name>.md`（plugin root 平铺，符合 Claude Code 官方规范）。`agents/` 提供 14 个可派发的角色。主 agent 加载入口 SKILL 后担任 Coordinator。
 
 ### 入口层——引导进入业务智能层
 
@@ -340,7 +340,7 @@
 
 | 当前文件 | 目标位置 | 变更 |
 |---------|---------|------|
-| `skills/software-project-governance/SKILL.md` | 入口层 | Coordinator 已融入入口层（`agents/coordinator.md` 如存在仅作 deprecated 历史参考，不参与活跃路由） |
+| `skills/software-project-governance/SKILL.md` | 入口层 | 主 agent 加载后担任 Coordinator |
 | `agents/developer.md` | `agents/developer.md` | 已平铺（AUDIT-097） |
 | `agents/code-reviewer.md` | `agents/code-reviewer.md` | 已平铺（AUDIT-097） |
 | `agents/design-reviewer.md` | `agents/design-reviewer.md` | 已平铺（AUDIT-097） |

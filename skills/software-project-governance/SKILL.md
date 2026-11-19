@@ -18,7 +18,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 - **适配层**：`adapters/` + `.claude-plugin/` + `.codex-plugin/` + `平台原生入口文件`——平台原生格式投影
 - **入口层**：本文件——内嵌 Coordinator 身份、边界、路由表和参考索引；Coordinator 融入入口层
-- **业务智能层**：`agents/`——7 职能组、14 个活跃文件化角色 Agent（按项目运作职能分组：管理/设计/开发/测试/评审/运维/维护）+ Coordinator；`agents/coordinator.md` 如存在仅作 deprecated 历史参考
+- **业务智能层**：`agents/`——7 职能组、14 个活跃文件化角色 Agent（按项目运作职能分组：管理/设计/开发/测试/评审/运维/维护）+ 入口层 Coordinator
 - **能力层**：`skills/` + `stages/`——确定性步骤 SKILL，不依赖 LLM
 - **基础设施层**：`infra/`——脚本/工具/MCP/Hooks/验证引擎
 - **核心层**：`core/`——工作流合约/模板/生命周期/Gate/Profile
@@ -284,7 +284,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 
 ## Agent Team 职能分组
 
-15 个活跃角色含 Coordinator，按 7 个职能组组织；其中 14 个活跃文件化角色 Agent 位于 `agents/`，Coordinator 融入入口层。`agents/coordinator.md` 仅作为 deprecated 历史参考时不参与活跃路由。你按任务类型匹配 Agent。
+15 个活跃角色含 Coordinator，按 7 个职能组组织；其中 14 个活跃文件化角色 Agent 位于 `agents/`，Coordinator 融入入口层。你按任务类型匹配 Agent。
 
 ### 管理组（Coordinator 自身）
 

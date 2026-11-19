@@ -10,7 +10,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ## 六层架构
 
-本工作流按六层架构组织（详见 `docs/architecture/`）：
+本工作流按六层架构组织：
 
 ```
 适配层（平台投影）→ 入口层（本文件）→ 业务智能层（Agent 库）→ 能力层（SKILL 库）→ 基础设施层 → 核心层
@@ -18,7 +18,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 - **适配层**：`adapters/` + `.claude-plugin/` + `.codex-plugin/` + `平台原生入口文件`——平台原生格式投影
 - **入口层**：本文件——内嵌 Coordinator 身份、边界、路由表和参考索引；Coordinator 融入入口层
-- **业务智能层**：`agents/`——7 职能组、14 个活跃文件化角色 Agent（按项目运作职能分组：管理/设计/开发/测试/评审/运维/维护）+ Coordinator；`agents/coordinator.md` 如存在仅作 deprecated 历史参考
+- **业务智能层**：`agents/`——7 职能组、14 个活跃文件化角色 Agent（按项目运作职能分组：管理/设计/开发/测试/评审/运维/维护）+ 入口层 Coordinator
 - **能力层**：`skills/` + `stages/`——确定性步骤 SKILL，不依赖 LLM
 - **基础设施层**：`infra/`——脚本/工具/MCP/Hooks/验证引擎
 - **核心层**：`core/`——工作流合约/模板/生命周期/Gate/Profile
@@ -284,7 +284,7 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 
 ## Agent Team 职能分组
 
-15 个活跃角色含 Coordinator，按 7 个职能组组织；其中 14 个活跃文件化角色 Agent 位于 `agents/`，Coordinator 融入入口层。`agents/coordinator.md` 仅作为 deprecated 历史参考时不参与活跃路由。你按任务类型匹配 Agent。
+15 个活跃角色含 Coordinator，按 7 个职能组组织；其中 14 个活跃文件化角色 Agent 位于 `agents/`，Coordinator 融入入口层。你按任务类型匹配 Agent。
 
 ### 管理组（Coordinator 自身）
 
@@ -366,44 +366,9 @@ Coordinator 铁律第 1 条"不直接修改产品代码"的具体判定标准。
 
 ## Sub-agent 调度
 
-使用 Agent 工具创建子 agent。每个子 agent 启动时 MUST 加载两个文件：
+新派发 MUST 只填[调度模板](references/agent-dispatch-template.md)的占位符。角色定义与任务规范随工单交给执行者。Coordinator 按 [M7.6、M7.6a](references/behavior-protocol.md) 处理锁与并行隔离；向用户报告派发的角色、任务和完成结果。宿主无法加载插件角色且提供 `general-purpose` 时，用该类型承接同一工单。
 
-- **角色定义**：`agents/<name>.md`——定义身份、职责边界、工具权限
-- **任务规范**：`skills/<skill-name>/SKILL.md`——定义确定性执行步骤
-
-Sub-agent 硬边界：
-
-| 可以做的 | 不可以做的 |
-|---------|-----------|
-| 读取项目文件 | 与用户交互（无 AskUserQuestion） |
-| 生成输出文件 | 修改治理状态（plan-tracker/evidence-log） |
-| 返回结构化结果给 Coordinator | 做最终决策（决策型任务只出方案） |
-| 执行审查并输出报告 | 与其他 Sub-agent 直接通信 |
-| 执行验证命令 | 拒绝 Coordinator 分配的任务 |
-
-**调度模板**：Coordinator spawn sub-agent 时 MUST 使用 `references/agent-dispatch-template.md`——禁止传自定义 prompt，只能填充模板中的占位符。
-
-**并行调度安全**：Coordinator spawn 多个 agent 前 MUST 校验文件修改目标无重叠。两个 agent 修改同一文件路径 -> 启用 `isolation: "worktree"`（Agent 平台原生支持）物理隔离。不可用时串行化。详见 `references/behavior-protocol.md` M7.6。
-
-### Agent 调度平台限制 (0.28.0 发现)
-
-**已知限制**：Claude Code 当前版本不支持 plugin-namespaced subagent type。`software-project-governance:*` 格式的 agent type 会被路由为 Skill 加载而非独立 Agent spawn。
-
-**降级方案**：使用系统内置 `general-purpose` agent type，在 prompt 中显式加载角色定义：
-
-```
-Agent(
-  subagent_type="general-purpose",
-  prompt="你是 {角色名}。先加载角色定义：agents/{name}.md。然后加载任务规范：skills/{skill}/SKILL.md。\n\n## 任务...",
-  ...
-)
-```
-
-**已验证有效**：0.28.0 开发中 FIX-030/033/035/REL-004 全部使用此降级方案完成。
-
-**Agent 工作可见性**：Coordinator spawn sub-agent 时 MUST 向用户输出一行进度通知：
-`>> 派发 {功能性角色名} 执行 {TASK_ID}: {简短描述}...`
-完成后 MUST 输出结果摘要。禁止静默 spawn——用户应始终知道哪个角色 agent 在做什么任务。
+同一事务续派沿用原任务与权限，在描述和验收标准里交接新发现的候选、试用结果及待复验的工件。子代理按角色规范交回结果，用户交互、跨代理协调、最终决策和治理状态写回由 Coordinator 负责。
 
 ## 工作流合约
 
@@ -423,7 +388,7 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
 
 **体验脊柱与成本基线（FEAT-098）**：可交互产品的 `product_success_contract.success_metrics` MUST 包含最薄 E2E 体验路径：从启动、用户可见输出、关键操作到结果持久化/恢复，逐步列出输入、可见预期、运行命令与证据；先跑通再扩展内容。RPG 的「启动→文字可见→移动→对话→旗标→战斗→存档恢复」仅为实例，CLI/API 等按用户任务裁剪。静态可达性、测试数量或文件生成不能单独作为体验成功；未运行/任一步失败标 pending/failed，禁止借用其他指标宣称完成。Coordinator 将路径写入 `acceptance_contract.scenario/command/expected_output/demo_evidence`，实际运行后回填 `last_run`。
 
-成本比较 MUST 使用同口径调用账本：角色前缀/任务增量为输入内部分解，不与缓存读写、未缓存输入、输出重复相加；记录调用 ID、来源、耗时、成功产出/重复探索/返工/等待，返工关联上游调用、原因与证据。缺 usage、角色、计价率或归因标 unknown/null 并报告覆盖率；残余时间不得猜为等待，FIX 名称不得猜为返工。`governance-cost-report` 保留旧指标，新增 `call_accounting`；`costAccounting` 可选字段与可重放基线见 `docs/diagnostics/feat-098-cost-baseline.md`。
+成本比较 MUST 使用同口径调用账本：角色前缀/任务增量为输入内部分解，不与缓存读写、未缓存输入、输出重复相加；记录调用 ID、来源、耗时、成功产出/重复探索/返工/等待，返工关联上游调用、原因与证据。缺 usage、角色、计价率或归因标 unknown/null 并报告覆盖率；残余时间不得猜为等待，FIX 名称不得猜为返工。`governance-cost-report` 保留旧指标，新增 `call_accounting`；`costAccounting` 可选字段与可重放基线见 [成本计量基线](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/diagnostics/feat-098-cost-baseline.md)。
 
 ## Coordinator 参考知识（按需读取）
 
@@ -487,8 +452,8 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
   |---|---|
   | AskUserQuestion（第 38/53/189 行等） | `ask_user_question` 工具 |
   | Write / Edit / Bash（铁律第 1 条） | `write` / `edit` / `pwsh`（读取用 `read`/`grep`/`glob`） |
-  | Agent 工具 spawn（`subagent_type="general-purpose"` 降级方案，第 204-208 行） | `subagent` 工具——prompt = 角色定义全文 + 任务规范 + 调度模板填充；DSH 无 subagent_type 概念，该降级方案不适用，无需降级 |
-  | `isolation: "worktree"`（第 195 行） | DSH `subagent` 无此参数 → 同文件并发冲突时 MUST 串行化，或手工创建独立工作树 |
+  | Agent 工具 spawn（见「Sub-agent 调度」） | `subagent` 工具——prompt = 角色定义全文 + 任务规范 + 调度模板填充；DSH 无 subagent_type 概念，该降级方案不适用，无需降级 |
+  | `isolation: "worktree"`（行为协议 M7.6） | DSH `subagent` 无此参数 → 同文件并发冲突时 MUST 串行化，或手工创建独立工作树 |
   | 斜杠命令 `/governance`（frontmatter 描述） | dsh 的 `/name` 用户手势加载同名投影 skill，行为一致 |
 
 > 仓库根目录的 `平台原生入口文件` 不是产品资产——它是当前仓库使用 Claude Code 开发的临时文件。
@@ -503,8 +468,8 @@ python skills/software-project-governance/infra/verify_workflow.py execution-pac
   |---|---|
   | AskUserQuestion（第 38/53/189 行等） | `ask_user_question` extension 桥（tui/rpc 经 dialog 渲染；headless 报 `GOV_ASK_USER_HEADLESS` 走外宿主会话） |
   | Write / Edit / Bash（铁律第 1 条） | `write` / `edit` / `bash`（Windows 原生 `powershell`；读取用 `read`/`grep`/`find`/`ls`） |
-  | Agent 工具 spawn（`subagent_type="general-purpose"` 降级方案，第 204-208 行） | `dispatch_agent` extension 桥——prompt = 角色定义路径 + 任务规范路径 + 调度模板填充（`references/agent-dispatch-template.md`）；嵌套 pi 子进程默认 `--exclude-tools ask_user_question,dispatch_agent` 阻断递归派发（review F-3） |
-  | `isolation: "worktree"`（第 195 行） | pi `dispatch_agent` 无此参数 → 同文件并发冲突时 MUST 串行化，或手工创建独立工作树 |
+  | Agent 工具 spawn（见「Sub-agent 调度」） | `dispatch_agent` extension 桥——prompt = 角色定义路径 + 任务规范路径 + 调度模板填充（`references/agent-dispatch-template.md`）；嵌套 pi 子进程默认 `--exclude-tools ask_user_question,dispatch_agent` 阻断递归派发（review F-3） |
+  | `isolation: "worktree"`（行为协议 M7.6） | pi `dispatch_agent` 无此参数 → 同文件并发冲突时 MUST 串行化，或手工创建独立工作树 |
   | 斜杠命令 `/governance`（frontmatter 描述） | prompts 数组注册的 `/governance` 模板命令（`commands/governance.md`；首行 description 展开语义待冒烟验证——O-3'） |
 
 > 仓库根目录的 `平台原生入口文件` 不是产品资产——它是当前仓库使用 Claude Code 开发的临时文件。

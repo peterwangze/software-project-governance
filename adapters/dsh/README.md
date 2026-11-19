@@ -54,6 +54,8 @@ python skills/software-project-governance/infra/verify_workflow.py check-agent-a
 python skills/software-project-governance/infra/verify_workflow.py check-runtime-readiness-matrix
 ```
 
+2026-11-19 在临时项目和隔离的 `DSH_HOME` 实测，桌面附带的 CLI（`dsh --version` 为 `0.2.2-rc.5`）支持用 `dsh --profile headless --json -` 从标准输入接收任务。出厂 headless 配置忽略 GUI 已保存的登录，API key 依次取自进程环境、当前目录的 `.env` 和 `$DSH_HOME/.env`。本次缺少可用 key，退出码为 1，未取得模型答复，成品验收仍需独立运行证据。
+
 本机 2026-07-08 验证结果：本适配器在一个真实 dsh 会话（`dsh --version` 返回 `0.1.0-rc.6`）中完成编写与验证——原生 `skill` 工具加载 skill、原生 `subagent` 工具并行派发 3 个子代理、`ask_user_question`/`pwsh`/fs/web 工具全部可用，生成的 `governance` 预设通过 `agentPresets.standingKeyFor` 挂载校验。该结果证明 dsh 可以原生承载治理工作流；它不代表 browser 自动化或 MCP 服务器已闭环（两者仍是 host-dependent）。
 
 ## 能力边界（no-overclaim）

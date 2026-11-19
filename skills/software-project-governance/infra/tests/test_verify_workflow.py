@@ -8792,8 +8792,8 @@ class AgentRuntimeE2EHarnessTests(unittest.TestCase):
             matrix = vw._agent_runtime_e2e_command_matrix(Path(td))
 
         agents = {entry["agent"] for entry in matrix}
-        # FEAT-100: pi joins the matrix (headless `-p` runner; dsh stays
-        # excluded — no headless CLI runner, see AGENT_RUNTIME_E2E_PLATFORMS).
+        # FEAT-100 added pi's headless `-p` runner to the matrix.
+        # DSH live-session evidence is tracked in its adapter.
         self.assertEqual(agents, {"claude", "codex", "gemini", "opencode", "pi"})
         for entry in matrix:
             self.assertIn("command", entry)

@@ -19580,9 +19580,9 @@ def _e2e_contract_checks():
     ]
 
 
-# dsh is deliberately absent: it has no headless CLI runner, so its adapter
-# uses live-session E2E evidence instead of an agent-runtime-e2e matrix entry
-# (DSH-ADAPTER-001). Do not add it without a real headless runner.
+# DSH has a headless profile. The adapter tracks live-session evidence separately.
+# Adding DSH here requires a validated command and target-project evidence.
+# See adapters/dsh/README.md for the tested CLI and authentication requirements.
 AGENT_RUNTIME_E2E_PLATFORMS = ("claude", "codex", "gemini", "opencode", "pi")
 
 

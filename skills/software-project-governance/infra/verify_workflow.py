@@ -562,10 +562,12 @@ PROJECTION_SNIPPETS = {
         "launcher",
     ],
     ROOT / "adapters/claude/launch.py": [
-        "Claude Adapter Launcher",
-        "native_entry",
-        "read_order",
-        "validation",
+        'MANIFEST_PATH = ROOT / "adapters/claude/adapter-manifest.json"',
+        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Claude")',
+    ],
+    ROOT / "adapters/manifest_report.py": [
+        "{platform} Adapter Launcher", 'print("read_order:")', 'print("native_entry:")',
+        'print("runtime_e2e:")', 'print("validation:")',
     ],
     ROOT / "adapters/codex/README.md": [
         "Tier 1",
@@ -588,9 +590,8 @@ PROJECTION_SNIPPETS = {
         "launcher",
     ],
     ROOT / "adapters/codex/launch.py": [
-        "Codex Adapter Launcher",
-        "read_order",
-        "validation",
+        'MANIFEST_PATH = ROOT / "adapters/codex/adapter-manifest.json"',
+        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Codex")',
     ],
     ROOT / "adapters/gemini/README.md": [
         "## 兼容要求",
@@ -908,12 +909,8 @@ REQUIRED_SNIPPETS = {
         "native_entry",
         "launcher",
     ],
-    ROOT / "adapters/claude/launch.py": [
-        "Claude Adapter Launcher",
-        "native_entry",
-        "read_order",
-        "validation",
-    ],
+    ROOT / "adapters/claude/launch.py": PROJECTION_SNIPPETS[ROOT / "adapters/claude/launch.py"],
+    ROOT / "adapters/manifest_report.py": PROJECTION_SNIPPETS[ROOT / "adapters/manifest_report.py"],
     ROOT / "adapters/codex/README.md": [
         "Tier 1",
         "## Load",
@@ -931,11 +928,7 @@ REQUIRED_SNIPPETS = {
         "workflow_id",
         "launcher",
     ],
-    ROOT / "adapters/codex/launch.py": [
-        "Codex Adapter Launcher",
-        "read_order",
-        "validation",
-    ],
+    ROOT / "adapters/codex/launch.py": PROJECTION_SNIPPETS[ROOT / "adapters/codex/launch.py"],
     ROOT / "adapters/gemini/README.md": [
         "## 兼容要求",
         "## Gemini 路线判断",

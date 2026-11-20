@@ -26,6 +26,10 @@ class AdapterReportTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     lines = result.stdout.splitlines()
                     self.assertEqual(lines[0], f"== {platform} Adapter Launcher ==")
+                    native_lines = lines[lines.index("native_entry:") + 1:lines.index("runtime_e2e:")]
+                    self.assertEqual(
+                        native_lines, [f" - {key}: {value}" for key, value in sorted(manifest["native_entry"].items())],
+                    )
                     self.assertEqual(lines[-1], f" - command: {manifest['validation']['command']}")
 
     def test_late_validation_failure_preserves_partial_report(self):

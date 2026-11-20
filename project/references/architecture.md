@@ -1,5 +1,18 @@
 # 六层架构设计
 
+## 当前目录导航
+
+平台加载插件时涉及三个根目录。**插件仓库根**包含平台适配、命令、技能和发布材料。**主技能根**位于仓库的 `skills/software-project-governance/`，启动诊断中的 `plugin_home` 指向这里。**宿主项目根**是接受治理的项目，计划、证据、决策、风险等运行记录由该项目的 `.governance/` 保存。本仓库开发自身时也担任宿主。新项目的初始化模板随插件分发。[治理记录模板](../../skills/software-project-governance/core/templates/) · [数据归属说明](data-boundary.md)
+
+| 要找的内容 | 当前入口 |
+| --- | --- |
+| 用户命令、主技能与 Coordinator 身份 | [命令路由](../../commands/governance.md) · [主技能](../../skills/software-project-governance/SKILL.md) |
+| 阶段工作流与执行角色 | 每个阶段在仓库根的 `skills/stage-*/SKILL.md`，角色平铺在 `agents/*.md`。[开发阶段](../../skills/stage-development/SKILL.md) · [技能与角色索引](../../skills/software-project-governance/references/skill-index.md) · [治理开发角色](../../agents/governance-developer.md) |
+| 可执行实现与规则 | [Python CLI](../../skills/software-project-governance/infra/verify_workflow.py) · [核心规则与资产清单](../../skills/software-project-governance/core/manifest.json) |
+| 平台加载与项目指引 | [平台适配器](../../adapters/) · [Codex 项目入口](../../AGENTS.md) · [初始化命令及 Step 7 注入模板](../../commands/governance-init.md) |
+| Web 控制台与验证 | [本地 Web 控制台](../../web/) · [基础设施测试](../../skills/software-project-governance/infra/tests/) · [端到端样例项目](../e2e-test-project/) |
+| 设计依据、发布与变更历史 | [架构决策](../../docs/architecture/) · [发布材料](../../docs/release/) · [版本变更记录](../CHANGELOG.md) |
+
 ## 架构总览
 
 ```
@@ -134,7 +147,7 @@
 
 **依赖**：能力层（调用 SKILL）+ 基础设施层（直接调用工具）
 
-**被谁依赖**：入口层（加载 Coordinator Agent）
+**被谁依赖**：入口层的 Coordinator 根据任务派发角色 Agent。
 
 **特征**：
 - 角色 persona（"你是老周，一个..."）
@@ -162,7 +175,7 @@
 
 **是什么**：主 `skills/software-project-governance/SKILL.md`。它是当前工作流入口，内嵌 Coordinator 身份、产品代码边界、Agent 分发路由、Sub-agent 调度约束和参考索引；主 agent 加载后即成为 Coordinator，负责接管用户交互并编排 Agent Team。
 
-**依赖**：业务智能层（加载 Coordinator Agent）
+**依赖**：业务智能层提供可派发的角色 Agent。
 
 **被谁依赖**：适配层（各平台 adapter 指向此入口）
 
@@ -195,7 +208,7 @@
 | bootstrap 模板 | 平台原生入口的**模板**（注入用户项目用） | `commands/governance-init.md` Step 7 |
 | adapter README | 平台特定说明 | `adapters/claude/README.md` |
 
-> **注意**：平台原生入口文件有两类边界。产品事实源是 bootstrap 模板机制（定义在 `commands/governance-init.md` Step 7），用于注入用户项目；当前开发仓库还保留一个根目录 `CLAUDE.md` 作为本仓库自管理入口。仓库事实：`CLAUDE.md` 当前存在于工作树，受 `.gitignore` 忽略、未被 git 跟踪，但已列入 `skills/software-project-governance/core/manifest.json` 的 `root_entries.files`，因此它是 repo root 允许存在的本地入口文件，不是随插件分发的产品逻辑源。
+> 初始化命令的 Step 7 定义宿主入口的生成模板。开发仓库跟踪根目录的 `AGENTS.md`，本地生成的 `CLAUDE.md` 由 Git 忽略。`core/manifest.json` 的 `root_entries.files` 列有 `AGENTS.md`。
 
 **adapter manifest 标准字段**（每个 adapter 必须回答）：
 
@@ -224,7 +237,7 @@
 }
 ```
 
-**当前支持的平台**：
+**早期适配验证记录**（当时的宿主环境和测试范围）。各平台现行加载说明见[仓库首页](../../README.md)。
 
 | 平台 | 状态 | adapter 目录 | plugin 目录 |
 |------|------|-------------|------------|
@@ -279,7 +292,9 @@
 
 之前的混淆在于把"入口层"当成了"入口投影层"的全部——实际上入口投影还包括适配层的平台原生文件（平台原生入口文件、plugin.json）。六层架构明确了这一区分：入口层是工作流内部的，适配层是平台外部的。
 
-## 当前资产映射
+## 历史资产迁移映射
+
+以下表格保留设计阶段的映射与迁移意图。查找实际文件请使用文首的当前目录导航。
 
 ### 核心层映射
 
@@ -341,6 +356,7 @@
 | 当前文件 | 目标位置 | 变更 |
 |---------|---------|------|
 | `skills/software-project-governance/SKILL.md` | 入口层 | 主 agent 加载后担任 Coordinator |
+| `agents/governance-developer.md` | `agents/governance-developer.md` | 治理规则开发角色 |
 | `agents/developer.md` | `agents/developer.md` | 已平铺（AUDIT-097） |
 | `agents/code-reviewer.md` | `agents/code-reviewer.md` | 已平铺（AUDIT-097） |
 | `agents/design-reviewer.md` | `agents/design-reviewer.md` | 已平铺（AUDIT-097） |
@@ -446,6 +462,8 @@
 
 ## 目标目录结构
 
+此树保留早期设计目标。实际落地后，阶段技能与主技能在仓库的 `skills/` 下并列，命令在仓库根的 `commands/`。当前目录及入口见文首导航。
+
 ```
 skills/software-project-governance/
   SKILL.md                        ← 入口层（Coordinator 人格+路由表自包含）
@@ -520,7 +538,7 @@ adapters/                         ← 适配层（平台投影）
 
 1. **新增 AI CLI 平台**：在适配层新增 adapter 目录 + plugin 包，不修改核心层到入口层的任何文件
 2. **新增阶段/技能**：在能力层新增 SKILL 文件，在业务智能层声明 Agent 可调用新 SKILL
-3. **新增 Agent 角色**：在业务智能层新增 Agent 目录，声明 persona + 工具权限 + 可调用 SKILL 列表
+3. **新增 Agent 角色**：在仓库根的 `agents/` 下新增角色 Markdown 文件，声明 persona + 工具权限 + 可调用 SKILL 列表
 4. **新增工具/脚本**：在基础设施层新增，被能力层和业务智能层按需调用
 5. **修改工作流规则**：在核心层修改合约定义，向上逐层验证兼容性
 6. **任何层的修改不能跳层依赖**：核心层不能引用基础设施层的具体实现，能力层不能依赖业务智能层的 persona

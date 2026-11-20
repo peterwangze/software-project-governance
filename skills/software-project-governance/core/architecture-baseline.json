@@ -10,7 +10,7 @@
     }
   ],
   "generated": {
-    "git_head": "38285c1c036a0a5cf74498118c1f622465f2011f",
+    "git_head": "ad3b66d16f62ec42eaa39499116109eaaf98095b",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
@@ -135,7 +135,7 @@
         "count": 1,
         "kind": "import_vw",
         "lines": [
-          41
+          42
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/manifest.py"
@@ -144,10 +144,10 @@
         "count": 4,
         "kind": "vw_call",
         "lines": [
-          47,
-          51,
-          55,
-          323
+          48,
+          52,
+          56,
+          355
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/manifest.py"
@@ -156,7 +156,7 @@
         "count": 1,
         "kind": "vw_def",
         "lines": [
-          33
+          34
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/manifest.py"

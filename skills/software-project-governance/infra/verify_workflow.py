@@ -1073,6 +1073,7 @@ REQUIRED_SNIPPETS = {
         "语义化版本规则",
         "版本升级触发条件",
     ],
+    ROOT / "changelog.md": ["](project/CHANGELOG.md)"],
     ROOT / "project/CHANGELOG.md": [
         "# 变更日志",
         "## [0.10.0]",
@@ -1123,6 +1124,7 @@ from checks.manifest import (  # noqa: E402
     expand_manifest_to_canonical_set,
     check_manifest_canonical_product_artifacts,
     check_manifest_cleanup_scope,
+    check_repository_navigation,
     check_manifest_consistency,
     cmd_check_manifest_consistency,
 )
@@ -7164,6 +7166,7 @@ def check_architecture_fact_source(
     governance_developer_prompt_path=None,
 ):
     """FIX-065: keep Agent/team architecture facts synchronized."""
+    navigation_root = ROOT if architecture_path is None else None
     skill_path = skill_path or ROOT / "skills/software-project-governance/SKILL.md"
     skill_index_path = skill_index_path or ROOT / "skills/software-project-governance/references/skill-index.md"
     architecture_path = architecture_path or ROOT / "project/references/architecture.md"
@@ -7171,16 +7174,14 @@ def check_architecture_fact_source(
     agent_protocol_path = agent_protocol_path or ROOT / "skills/software-project-governance/references/agent-communication-protocol.md"
     governance_developer_prompt_path = governance_developer_prompt_path or ROOT / "agents/governance-developer.md"
 
-    failures = []
-    contents = {
-        skill_path: skill_path.read_text(encoding="utf-8"),
-        skill_index_path: skill_index_path.read_text(encoding="utf-8"),
-        architecture_path: architecture_path.read_text(encoding="utf-8"),
-        governance_command_path: governance_command_path.read_text(encoding="utf-8"),
-        agent_protocol_path: agent_protocol_path.read_text(encoding="utf-8"),
-        governance_developer_prompt_path: governance_developer_prompt_path.read_text(encoding="utf-8"),
-    }
+    documents = (
+        skill_path, skill_index_path, architecture_path, governance_command_path,
+        agent_protocol_path, governance_developer_prompt_path,
+    )
+    contents = {path: path.read_text(encoding="utf-8") for path in documents}
 
+    current_navigation = _markdown_section(contents[architecture_path], "## 当前目录导航")
+    failures = check_repository_navigation(architecture_path, current_navigation, navigation_root)
     forbidden_patterns = [
         ("legacy 7 groups / 9 Agent narrative", r"7\s*组\s*9\s*Agent|7组9Agent"),
         ("legacy 46-line SKILL.md entry narrative", r"46\s*行"),
@@ -7207,10 +7208,9 @@ def check_architecture_fact_source(
         "Coordinator 接管用户交互",
         "Producer-Reviewer 分离",
     ]
-    rel_skill = _display_path(skill_path)
     for phrase in required_skill_phrases:
         if phrase not in skill_content:
-            failures.append(f"{rel_skill}: missing architecture fact phrase: {phrase}")
+            failures.append(f"{_display_path(skill_path)}: missing architecture fact phrase: {phrase}")
 
     actual_routes = _skill_route_table_count(skill_path)
     documented_routes = _documented_route_table_count(governance_command_path)

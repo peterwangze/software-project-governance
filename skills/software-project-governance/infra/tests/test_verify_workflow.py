@@ -1419,7 +1419,7 @@ class ArchitectureFactSourceTests(unittest.TestCase):
         architecture.write_text(
             "# 六层架构设计\n\n"
             "入口层 SKILL.md 内嵌 Coordinator 身份、路由、边界和参考索引。\n"
-            "仓库根目录 CLAUDE.md 当前存在但未被 git 跟踪；core/manifest.json root_entries 声明它。\n"
+            "## 当前目录导航\n[主技能](SKILL.md)\n\n## 目标目录结构\n[历史路径](old/stage/SKILL.md)\n"
             f"{architecture_extra}\n",
             encoding="utf-8",
         )
@@ -27891,6 +27891,54 @@ class TaggedReleaseReplayCliTests(unittest.TestCase):
             vw.main(["check-release", "--version", "0.66.2"])
         self.assertIn("v0.66.2", str(raised.exception))
         current_claims.assert_not_called()
+
+
+class CurrentRepositoryNavigationTests(unittest.TestCase):
+    def test_stale_nested_skill_path_fails_at_verify_entry(self):
+        with tempfile.TemporaryDirectory() as td:
+            architecture = Path(td) / "architecture.md"
+            stale = "skills/software-project-governance/skills/stage-development/SKILL.md"
+            architecture.write_text(f"## 当前目录导航\n\n[开发阶段]({stale})\n", encoding="utf-8")
+            issues = vw.check_architecture_fact_source(architecture_path=architecture)
+            self.assertTrue(any(stale in issue for issue in issues))
+
+    def test_existing_target_outside_repository_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "repo"
+            architecture = root / "project/references/architecture.md"
+            architecture.parent.mkdir(parents=True)
+            (Path(td) / "outside.md").touch()
+            link = "../../../outside.md"
+            architecture.write_text(f"## 当前目录导航\n[越界]({link})\n", encoding="utf-8")
+            issues = vw.check_architecture_fact_source(architecture_path=architecture)
+            self.assertTrue(any(link in issue and "inside the repository" in issue for issue in issues))
+
+    def test_link_through_directory_alias_cannot_escape_repository(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "repo"
+            root.mkdir()
+            outside = Path(td) / "outside"
+            outside.mkdir()
+            (outside / "file.md").touch()
+            alias = root / "alias"
+            try:
+                alias.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                if os.name != "nt":
+                    self.skipTest("filesystem does not support directory symlinks")
+                # Windows permits directory junctions without developer mode or admin rights.
+                result = subprocess.run(["cmd", "/c", "mklink", "/J", str(alias), str(outside)], capture_output=True)
+                if result.returncode:
+                    self.skipTest("directory junction unavailable on this filesystem")
+            issues = vw.check_repository_navigation(root / "architecture.md", "[越界](alias/file.md)", root)
+            self.assertTrue(any("inside the repository" in issue for issue in issues))
+
+    def test_historical_navigation_does_not_substitute_for_current_section(self):
+        with tempfile.TemporaryDirectory() as td:
+            architecture = Path(td) / "architecture.md"
+            architecture.write_text("## 目标目录结构\n\n[旧目录](skills/init/)\n", encoding="utf-8")
+            issues = vw.check_architecture_fact_source(architecture_path=architecture)
+            self.assertTrue(any("当前目录导航" in issue for issue in issues))
 
 
 if __name__ == "__main__":

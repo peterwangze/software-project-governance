@@ -17,6 +17,7 @@ for the design and the line-number baseline used during extraction.
 
 import sys
 import json
+import re
 from pathlib import Path
 
 
@@ -53,6 +54,37 @@ def _git_files(args):
 
 def _root():
     return _vw().ROOT
+
+
+def check_repository_navigation(document, navigation, repository_root=None):
+    """Check local links in the current layout. Historical plans have their own paths."""
+    links = re.findall(r"\[[^\]\n]+\]\(([^)\n]+)\)", navigation)
+    if not links:
+        return [f"{document}: 当前目录导航 must contain repository links"]
+
+    if repository_root is None:
+        # Explicit document overrides may live in a standalone fixture directory.
+        parent = document.absolute().parent
+        repository_root = parent.parent.parent if parent.parts[-2:] == ("project", "references") else parent
+    repository_root = repository_root.resolve()
+
+    failures = []
+    for target in links:
+        relative_path = target.partition("#")[0]
+        if not relative_path:
+            failures.append(f"{document}: navigation link must identify a repository path: {target}")
+        elif re.match(r"^[a-z][a-z0-9+.-]*:", relative_path, re.I) or relative_path.startswith(("/", "\\")):
+            failures.append(f"{document}: expected a repository-relative navigation link: {target}")
+        else:
+            try:
+                resolved = (document.parent / relative_path).resolve()
+                resolved.relative_to(repository_root)
+            except (ValueError, OSError, RuntimeError):
+                failures.append(f"{document}: navigation target must resolve inside the repository: {target}")
+                continue
+            if not resolved.exists():
+                failures.append(f"{document}: missing navigation target: {target}")
+    return failures
 
 
 # ── Manifest-based REQUIRED_FILES builder ─────────────────────────

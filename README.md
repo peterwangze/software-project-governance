@@ -15,6 +15,8 @@ Use this workflow when your AI coding setup needs:
 
 ## Release and validation
 
+For the source layout, runtime entry points and project data locations, see the [repository navigation](https://github.com/peterwangze/software-project-governance/blob/master/project/references/architecture.md#当前目录导航). The [version history](https://github.com/peterwangze/software-project-governance/blob/master/project/CHANGELOG.md) records release changes.
+
 See the [release checklist](docs/release/release-checklist-0.99.0.md) and [rollback plan](docs/release/rollback-plan-0.99.0.md) for the current release. Earlier reviews, experiment results and release checklists remain available in the [project history](https://github.com/peterwangze/software-project-governance/tree/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs).
 
 ## Mainstream Agent Loading
@@ -504,6 +506,8 @@ CI 使用 Python 3.11。维护者运行全量单测时，先执行 CI 中的 `In
 
 以下文档供工作流开发者和贡献者参考，普通用户不需要阅读：
 
+- [当前代码与文档导航](https://github.com/peterwangze/software-project-governance/blob/master/project/references/architecture.md#当前目录导航)
+- [版本变更记录](https://github.com/peterwangze/software-project-governance/blob/master/project/CHANGELOG.md)
 - [从项目治理记录提炼的演进方向](docs/governance/evolution.md)
 - [协议层定义](skills/software-project-governance/core/protocol/plugin-contract.md)
 - [生命周期规则](skills/software-project-governance/core/lifecycle.md)

@@ -235,7 +235,7 @@ def evaluate_delivery_acceptance(
 
     contract_facts = _contract_facts(contract, contract_hash)
     try:
-        receipt, _ = _read_record(_project_path(root, RECEIPT), {
+        receipt, receipt_hash = _read_record(_project_path(root, RECEIPT), {
             "contract_sha256", "artifact_sha256", "entrypoint", "verifier", "results",
         })
         for field, expected in (
@@ -274,7 +274,12 @@ def evaluate_delivery_acceptance(
             detail = criterion.get("detail")
             issues.append(f"{key}: {status}" + (f" — {detail}" if detail else ""))
 
+    terminal = {}
+    if results.keys() == verified.keys() == contract["criteria"].keys() and all(
+        item["status"] in {"PASS", "FAIL"} for item in verified.values()
+    ):
+        terminal = {"receipt_sha256": receipt_hash, "receipt_verdict": "FAIL" if issues else "PASS"}
     return _result(
-        "FAIL" if issues else "PASS", issues, **contract_facts,
+        "FAIL" if issues else "PASS", issues, **contract_facts, **terminal,
         artifact_sha256=fingerprint, entrypoint=contract["entrypoint"], criteria_results=verified,
     )

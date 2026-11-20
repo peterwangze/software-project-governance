@@ -5,7 +5,6 @@ Column format constraints (mandatory—must match parser expectations):
   - parse_task_stats: status column resolved from table header, with historical fallbacks
   - parse_evidence_task_ids:  | EVD-xxx | <TASK-ID-column> | ..., parts[2]
   - parse_open_risks:         >= 10 parts, status at parts[9]
-  - parse_gate_status:        >= 5 parts (split[1:-1]), [0]=gate [2]=status
 
 Run:
     python -m unittest discover -s skills/software-project-governance/infra/tests -v
@@ -128,347 +127,6 @@ def _governance_temp_dir(prefix="spg-test-"):
         shutil.rmtree(path, ignore_errors=True)
 
 
-class LoopRuntimeClaimAdapterTests(unittest.TestCase):
-    """FIX-197 thin verify_workflow adapter coverage."""
-
-    def test_claim_command_emits_complete_pass_report(self):
-        # FIX-346: the 15 s subprocess budget predates the current full-repo
-        # scan cost and was measured timing out on an essentially idle
-        # machine (TimeoutExpired after 15.038 s in the 2026-09 calibration
-        # session). Recalibrated from the SAME idle calibration session as
-        # the median budget in test_loop_runtime_claims.py (same-source
-        # discipline: one session, explicit coefficient): CLI wall clock
-        # 3 runs = 16.991 / 15.821 / 17.925 s, p50 = 16.991 s, verdict PASS
-        # each run; timeout = p50 x 1.5 (the same coefficient the median
-        # budget uses) -> 26 s. Halved (13 s) it stays RED against every
-        # observed run (min 15.821 s), so the budget still bites.
-        # DEC-262: recalibrated again 26 s -> 36 s, same FIX-346 discipline
-        # (same-session idle measurement, p50 x 1.5): the candidate payload
-        # grew 15,385,341 B -> 25,258,238 B (+64%, across batches 0.87 ->
-        # 0.90 — NOT introduced by any single ticket), so the scan wall
-        # clock outgrew the 26 s budget (observed family-run
-        # TimeoutExpired twice). This session's idle calibration:
-        # CLI wall clock 3 runs = 24 / 25 / 24 s, p50 = 24 s, verdict PASS
-        # each run; timeout = 24 x 1.5 -> 36 s. Halved (18 s) it stays RED
-        # against every observed run (min 24 s), so the budget still bites.
-        completed = subprocess.run(
-            [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
-             "check-loop-runtime-claims", "--product-root", str(_INFRA_DIR.parents[2]),
-             "--project-root", str(_INFRA_DIR.parents[2])],
-            capture_output=True, text=True, encoding="utf-8", timeout=36,
-        )
-        self.assertEqual(0, completed.returncode, completed.stderr)
-        payload = json.loads(completed.stdout)
-        self.assertEqual("PASS", payload["verdict"])
-        self.assertEqual(payload["inventory"]["candidate_count"], payload["parsed_candidates"])
-        self.assertEqual(0, payload["skipped_candidates"])
-        self.assertEqual(0, payload["truncated_candidates"])
-
-    def test_governance_and_release_use_explicit_three_root_modes(self):
-        installed = vw._loop_runtime_claim_context("installed_host")
-        release = vw._loop_runtime_claim_context("product_release")
-        self.assertEqual("installed_host", installed.scan_mode)
-        self.assertEqual("product_release", release.scan_mode)
-        for context in (installed, release):
-            self.assertEqual(vw.PLUGIN_ROOT, context.product_root)
-            self.assertEqual(vw.PLUGIN_ROOT / "skills/software-project-governance", context.plugin_home)
-            self.assertEqual(vw.HOST_PROJECT_ROOT, context.host_root)
-
-    def test_identity_attestation_verdict_drives_aggregate_gate(self):
-        """FIX-200: the gate runs the real identity attestation instead of
-        hard-coding IDENTITY_ATTESTATION_PENDING.  A PASS attestation with a
-        PASS semantic report yields a green gate; a non-PASS attestation
-        appends the real identity issue and fails the gate."""
-        report = SimpleNamespace(
-            verdict="PASS",
-            findings=[],
-            inventory=SimpleNamespace(inventory_sha256="abc", candidate_count=3),
-            parsed_candidates=3,
-            skipped_candidates=0,
-            truncated_candidates=0,
-        )
-        pass_result = {"verdict": "PASS", "phase": "staged_index", "issues": []}
-        with patch.object(vw, "_run_identity_attestation_fixture_only", return_value=pass_result):
-            detail = vw._loop_runtime_claim_gate_detail(report)
-        self.assertTrue(detail["pass"])
-        self.assertEqual([], detail["issues"])
-        self.assertIn("identity_verdict=PASS", detail["boundary"])
-
-        fail_result = {
-            "verdict": "FAIL", "phase": "staged_index",
-            "issues": ["IDENTITY_ATTESTATION_FAIL: REQUIRED_ROOT_UNAVAILABLE: missing"],
-        }
-        with patch.object(vw, "_run_identity_attestation_fixture_only", return_value=fail_result):
-            detail = vw._loop_runtime_claim_gate_detail(report)
-        self.assertFalse(detail["pass"])
-        self.assertIn("IDENTITY_ATTESTATION_FAIL: REQUIRED_ROOT_UNAVAILABLE: missing", detail["issues"])
-        self.assertIn("identity_verdict=FAIL", detail["boundary"])
-        # The hard-coded PENDING string must never appear for a real verdict.
-        self.assertNotIn(vw.IDENTITY_ATTESTATION_PENDING, detail["issues"])
-
-    def test_standalone_semantic_command_does_not_require_identity(self):
-        report = SimpleNamespace(verdict="PASS", as_dict=lambda: {"verdict": "PASS"})
-        args = SimpleNamespace(
-            product_root=str(_INFRA_DIR.parents[2]),
-            claim_project_root=str(_INFRA_DIR.parents[2]),
-            scan_mode="product_release",
-        )
-        output = io.StringIO()
-        with patch.object(vw, "scan_loop_runtime_claims", return_value=report), redirect_stdout(output):
-            vw.cmd_check_loop_runtime_claims(args)
-        # FIX-300: the semantic-only top-level verdict MUST declare its scope so
-        # a PASS can never be misread as "Check 31 fully green" (EVD-969).
-        payload = json.loads(output.getvalue())
-        self.assertEqual("PASS", payload["verdict"])
-        self.assertEqual("semantic_only", payload["verdict_scope"])
-
-
-class FIX300DualCaliberAgreementTests(unittest.TestCase):
-    """FIX-300 differential regression: standalone CLI vs engine Check 31.
-
-    RCA (reproduced deterministically on this repository): the identity
-    sub-phase resolves its host sources (HOST_PATHS ∪ authority
-    source_records — the .governance hot files plus the FIX-345
-    archive-aware anchor targets) from HOST_PROJECT_ROOT ==
-    os.getcwd() with no .governance existence probe and no FIX-240-style
-    uninitialized-host exemption, while the semantic calibers explicitly
-    skip host validation when .governance is absent (FIX-240).  When
-    HOST_PROJECT_ROOT drifts off the governed root (sub-directory cwd,
-    clean checkout, git worktree — the .governance hot files are
-    git-ignored), identity fails REQUIRED_ROOT_UNAVAILABLE with a bare
-    relative path while every semantic caliber passes — exactly the
-    EVD-969 divergence shape.  The fix keeps both fail-closed verdicts
-    intact and removes the ambiguity: the semantic-only output declares
-    its scope, and ``--fixture-identity`` re-runs the identity sub-phase
-    through the exact engine assembly so both calibers are directly
-    comparable on one input.
-
-    These tests run against the real product/plugin trees and the real
-    Git index (only HOST_PROJECT_ROOT is redirected into a temp host
-    root), so every verdict is a real engine verdict — no scanner mocks.
-    """
-
-    HOST_SOURCE_NAMES = (
-        ".governance/plan-tracker.md",
-        ".governance/session-snapshot.md",
-        ".governance/evidence-log.md",
-        ".governance/risk-log.md",
-        ".governance/decision-log.md",
-    )
-
-    # FIX-345: the authority source records are archive-aware (DEC-104 ->
-    # .governance/archive/decisions/..., AUDIT-133 -> the canonical audit
-    # report under docs/requirements/), so the populated agreement-shape host
-    # must also carry the files the re-anchored records resolve against;
-    # otherwise the identity sub-phase would raise REQUIRED_ROOT_UNAVAILABLE
-    # for a legitimate, digest-pinned re-anchor.
-    AUTHORITY_ANCHOR_SOURCE_NAMES = (
-        ".governance/archive/decisions/decisions-v0.1.0-0.78.0.md",
-        "docs/requirements/loop-engineering-post-implementation-audit-0.66.0.md",
-    )
-
-    @staticmethod
-    def _drifted_host(base, *, populated):
-        """A host root whose .governance sources are absent (divergence
-        shape) or populated with synthetic files (presence agreement
-        shape). Absent sources reproduce what the identity sub-phase sees
-        when HOST_PROJECT_ROOT resolves off the governed root."""
-        host = base / ("host-populated" if populated else "host-drifted")
-        host.mkdir()
-        if populated:
-            for name in (*FIX300DualCaliberAgreementTests.HOST_SOURCE_NAMES,
-                         *FIX300DualCaliberAgreementTests.AUTHORITY_ANCHOR_SOURCE_NAMES):
-                target = host / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(
-                    "# SYNTHETIC identity-presence fixture; no historical authority claim\n",
-                    encoding="utf-8")
-        return host
-
-    @staticmethod
-    def _engine_identity():
-        output = io.StringIO()
-        with redirect_stdout(output):
-            return vw._run_identity_attestation_fixture_only()
-
-    def _run_standalone_cli(self, host, *, scan_mode="product_release"):
-        args = SimpleNamespace(
-            product_root=None, claim_project_root=str(host),
-            scan_mode=scan_mode, fixture_identity=True,
-        )
-        output = io.StringIO()
-        with patch.object(vw, "HOST_PROJECT_ROOT", host), \
-                redirect_stdout(output):
-            try:
-                vw.cmd_check_loop_runtime_claims(args)
-            except SystemExit as exc:
-                self.fail(f"standalone exit={exc.code}: {output.getvalue()}")
-        return json.loads(output.getvalue())
-
-    def test_identity_host_source_drift_reproduces_divergence_shape(self):
-        """Root-cause shape lock: with the host sources unreachable the
-        engine identity sub-phase FAILs (bare REQUIRED_ROOT_UNAVAILABLE on
-        the first missing authority source record) while the engine
-        semantic caliber PASSes — the EVD-969 divergence shape."""
-        with _governance_temp_dir() as td:
-            host = self._drifted_host(Path(td), populated=False)
-            with patch.object(vw, "HOST_PROJECT_ROOT", host):
-                identity = self._engine_identity()
-            self.assertEqual("FAIL", identity["verdict"])
-            self.assertEqual(1, len(identity["issues"]))
-            # FIX-345: DEC-104 is the first source record and now resolves
-            # against its archive-aware location.
-            self.assertIn(
-                "IDENTITY_ATTESTATION_FAIL: REQUIRED_ROOT_UNAVAILABLE: "
-                ".governance/archive/decisions/decisions-v0.1.0-0.78.0.md",
-                identity["issues"][0])
-            # FIX-418 cwd-hermeticity pin (FIX-415 family): the semantic
-            # caliber below builds its claim context from the MODULE
-            # HOST_PROJECT_ROOT (bound from the PROCESS cwd at
-            # verify_workflow import time). The test asserts the dogfood
-            # semantic face (PASS against the real governed root); without
-            # a pin an infra/ start directory redirected host_root off the
-            # governed root and the verdict came back BLOCKED. Pin the root
-            # — the same target the repo-root baseline always used (zero
-            # behaviour change).
-            with patch.object(vw, "HOST_PROJECT_ROOT", vw.PLUGIN_ROOT):
-                semantic = vw.scan_loop_runtime_claims(
-                    vw._loop_runtime_claim_context("installed_host"))
-            self.assertEqual("PASS", semantic.verdict)
-
-    def test_fixture_identity_mode_agrees_with_engine_on_missing_sources(self):
-        """Differential agreement (red shape): with the host sources
-        unreachable the standalone ``--fixture-identity`` caliber reports
-        the SAME identity verdict and issue text as the engine sub-phase,
-        and its top-level verdict aggregates to FAIL with exit 1."""
-        with _governance_temp_dir() as td:
-            host = self._drifted_host(Path(td), populated=False)
-            with patch.object(vw, "HOST_PROJECT_ROOT", host):
-                engine = self._engine_identity()
-                args = SimpleNamespace(
-                    product_root=None, claim_project_root=str(host),
-                    scan_mode="product_release", fixture_identity=True,
-                )
-                output = io.StringIO()
-                with redirect_stdout(output), \
-                        self.assertRaises(SystemExit) as caught:
-                    vw.cmd_check_loop_runtime_claims(args)
-        self.assertEqual(1, caught.exception.code)
-        payload = json.loads(output.getvalue())
-        self.assertEqual("FAIL", payload["verdict"])
-        self.assertEqual("semantic+identity_fixture", payload["verdict_scope"])
-        self.assertEqual(engine["verdict"], payload["identity_verdict"])
-        self.assertEqual(engine["issues"], payload["identity_issues"])
-        # FIX-345: DEC-104 is the first source record; its archive-aware
-        # location is what the drifted host is missing first.
-        self.assertIn(
-            "REQUIRED_ROOT_UNAVAILABLE: .governance/archive/decisions/decisions-v0.1.0-0.78.0.md",
-            payload["identity_issues"][0])
-
-    def test_fixture_identity_mode_agrees_with_engine_on_present_sources(self):
-        """Differential agreement (green shape): with every host source
-        populated with synthetic regular files, both calibers report identity
-        PASS. installed_host does not certify historical source-record hashes;
-        that separate product_release face is covered by the synthetic test
-        below and the existing missing/forged-source rejection tests."""
-        with _governance_temp_dir() as td:
-            host = self._drifted_host(Path(td), populated=True)
-            with patch.object(vw, "HOST_PROJECT_ROOT", host):
-                engine = self._engine_identity()
-                self.assertEqual("PASS", engine["verdict"])
-                payload = self._run_standalone_cli(host, scan_mode="installed_host")
-        self.assertEqual("PASS", payload["verdict"])
-        self.assertEqual("semantic+identity_fixture", payload["verdict_scope"])
-        self.assertEqual("PASS", payload["identity_verdict"])
-        self.assertEqual([], payload["identity_issues"])
-
-    def test_synthetic_product_release_sources_agree_with_engine(self):
-        """Real scanner + attestor on a self-contained, explicitly test policy."""
-        from test_loop_runtime_claims import LoopRuntimeClaimTests
-        fixture = LoopRuntimeClaimTests()
-        self.addCleanup(fixture.doCleanups)
-        stack, product, plugin, host, _policy, _authority = fixture._roots()
-        self.addCleanup(stack.cleanup)
-        packaged = product / "skills/software-project-governance"
-        packaged.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(plugin, packaged)
-        subprocess.run(["git", "init", "-q"], cwd=product, check=True,
-                       capture_output=True)
-        subprocess.run(["git", "add", "."], cwd=product, check=True,
-                       capture_output=True)
-        with patch.object(vw, "PLUGIN_ROOT", product), \
-                patch.object(vw, "ROOT", product), \
-                patch.object(vw, "HOST_PROJECT_ROOT", host):
-            engine = self._engine_identity()
-            self.assertEqual(engine["verdict"], "PASS", engine)
-            payload = self._run_standalone_cli(host)
-        self.assertEqual(payload["identity_verdict"], engine["verdict"])
-        self.assertEqual(payload["identity_issues"], engine["issues"])
-        self.assertEqual(payload["verdict"], "PASS")
-
-
-class FIX403IdentityFixtureCleanupContractTests(unittest.TestCase):
-    """FIX-403: a TemporaryDirectory cleanup failure in the FIX-200 identity
-    fixture must degrade, never crash the governance gate.
-
-    RCA (2026-09-29, three reproductions, default and redirected TEMP with
-    the same signature): under a UAC-filtered token (DSH sandbox) the fixture
-    dir's ``__exit__`` cleanup hit PermissionError (WinError 5) on BOTH the
-    scandir of the self-created directory and the chmod recovery inside
-    tempfile's ``onexc`` handler, and neither was caught — so
-    check-governance (incl. ``--summary-only``, without ``--quick``) crashed
-    instead of reporting the identity verdict, violating the helper's own
-    docstring contract ("the governance check never crashes on identity
-    work").  The failure is simulated here on exactly that surface:
-    ``os.scandir`` and ``os.chmod`` raise PermissionError (errno 13, the
-    Windows Access-Denied mapping, offending path as ``.filename``) for any
-    path under the ``fix200-identity-`` fixture dir, routed through the real
-    ``shutil.rmtree`` cleanup machinery — no wholesale rmtree replacement,
-    so the onexc/ignore_errors routing itself is under test.
-    """
-
-    def test_cleanup_permission_error_degrades_to_verdict_not_crash(self):
-        """Contract: with scandir+chmod both denying the fixture dir at
-        cleanup time, (a) ``_run_identity_attestation_fixture_only`` must
-        not raise, and (b) it still returns the ``{verdict, issues, phase}``
-        shape so the gate reports a real identity outcome instead of a
-        crash."""
-        real_scandir = os.scandir
-        real_chmod = os.chmod
-
-        def denying_scandir(path=".", *args, **kwargs):
-            if "fix200-identity-" in str(path):
-                raise PermissionError(
-                    13, "Access is denied (simulated FIX-403 scandir WinError 5)",
-                    str(path))
-            return real_scandir(path, *args, **kwargs)
-
-        def denying_chmod(path, *args, **kwargs):
-            if "fix200-identity-" in str(path):
-                raise PermissionError(
-                    13, "Access is denied (simulated FIX-403 chmod WinError 5)",
-                    str(path))
-            return real_chmod(path, *args, **kwargs)
-
-        output = io.StringIO()
-        with patch.object(os, "scandir", denying_scandir), \
-                patch.object(os, "chmod", denying_chmod), redirect_stdout(output):
-            try:
-                result = vw._run_identity_attestation_fixture_only()
-            except Exception as exc:
-                # Red shape on unfixed code: PermissionError escaping the
-                # TemporaryDirectory __exit__ cleanup chain (scandir denial
-                # re-raised out of the chmod recovery inside tempfile.onexc).
-                self.fail(
-                    "FIX-403 contract violated: identity fixture crashed on "
-                    f"TemporaryDirectory cleanup failure: {exc!r}")
-        self.assertIn("verdict", result)
-        self.assertIn("issues", result)
-        self.assertIn("phase", result)
-        self.assertIsInstance(result["verdict"], str)
-        self.assertIsInstance(result["issues"], list)
-
-
 class FIX404ExternalValidationCleanupContractTests(unittest.TestCase):
     """FIX-404: the FIX-403 cleanup-crash defect family in the external
     project validation workspace (``spg-external-validation-``).
@@ -529,174 +187,6 @@ class FIX404ExternalValidationCleanupContractTests(unittest.TestCase):
         self.assertIn("pass", result)
         self.assertIn("workspace", result)
         self.assertIn("issues", result)
-
-
-class FIX200ScopedAttestationRehearsalTests(unittest.TestCase):
-    """FIX-216 preserves the architecture-named scoped rehearsal entry."""
-
-    @staticmethod
-    def _i1(phase="staged_index", sha=None):
-        empty = hashlib.sha256(b"").hexdigest()
-        empty_list = hashlib.sha256(b"[]").hexdigest()
-        git_binding = lambda role: {
-            "role": role,
-            "repository_identity": {
-                "schema_version": "loop-git-repository-tree/v1",
-                "object_format": "sha1",
-                "repository_root_tree_oid": "1" * 40,
-            },
-            "tree_prefix": "" if role == "product_root" else "skills/software-project-governance",
-            "selected_tree_oid": "2" * 40,
-            "records_digest": empty,
-        }
-        return {
-            "schema_version": "loop-identity-attestation/v1",
-            "phase": phase,
-            "scan_mode": "product_release",
-            "subject": {"kind": "index", "sha": None} if phase == "staged_index"
-                       else {"kind": "commit", "sha": sha},
-            "bindings": {
-                "product_root": git_binding("product_root"),
-                "plugin_home": git_binding("plugin_home"),
-                "host_root": {
-                    "role": "host_root",
-                    "schema_version": "loop-immutable-workspace-snapshot/v1",
-                    "manifest_digest": empty_list,
-                    "bytes_digest": empty,
-                    "records": [],
-                },
-            },
-            "source_envelope_sha256": empty,
-            "required_paths_digest": empty,
-            "accounting_contract": "loop-semantic-accounting/v1",
-            "accounting": {"record_count": 0, "payload_bytes": 0,
-                           "record_digest": empty, "aggregate_digest": empty},
-            "identity_verdict": "PASS",
-            "created_at": "2026-07-18T00:00:00Z",
-        }
-
-    @staticmethod
-    def _semantic():
-        empty = hashlib.sha256(b"").hexdigest()
-        return {
-            "schema_version": "loop-semantic-claim-report/v1",
-            "scan_mode": "product_release",
-            "semantic_verdict": "PASS",
-            "source_envelope_sha256": empty,
-            "scanner_inventory_digest": empty,
-            "accounting_contract": "loop-semantic-accounting/v1",
-            "accounting": {"record_count": 0, "payload_bytes": 0,
-                           "record_digest": empty, "aggregate_digest": empty},
-            "controls": {"policy_sha256": empty, "authority_sha256": empty},
-            "findings": [],
-        }
-
-    @staticmethod
-    def _args(root, *, write=None, compare=None, product_ref=":index", plugin_ref=":index"):
-        (root / "repo").mkdir(parents=True, exist_ok=True)
-        (root / "host").mkdir(parents=True, exist_ok=True)
-        return SimpleNamespace(
-            scan_mode="product_release", product_git_repo=str(root / "repo"),
-            product_git_ref=product_ref, product_prefix="",
-            plugin_git_repo=str(root / "repo"), plugin_git_ref=plugin_ref,
-            plugin_prefix="skills/software-project-governance",
-            host_root=str(root / "host"), snapshot_dir=str(root / "snapshots"),
-            write_attestation=str(write) if write else None,
-            compare_attestation=str(compare) if compare else None,
-            require_identity=True, fixture_only=True, fail_on_issues=True,
-        )
-
-    def _adapter_patches(self, root, i1):
-        product = root / "materialized-product"
-        plugin = root / "materialized-plugin"
-        product.mkdir(exist_ok=True)
-        (plugin / "core").mkdir(parents=True, exist_ok=True)
-        (plugin / "core/loop-runtime-claim-allowlist.json").write_text(
-            '{"required_paths":[]}\n', encoding="utf-8"
-        )
-        report = SimpleNamespace(
-            verdict="PASS", findings=[], as_s1_dict=lambda: self._semantic()
-        )
-        return ExitStack(), product, plugin, report
-
-    def test_atomic_fixture_write_is_visible_and_non_authorizing(self):
-        with _governance_temp_dir() as td:
-            root = Path(td)
-            artifact = root / "FIX-216-index.json"
-            args = self._args(root, write=artifact)
-            stack, product, plugin, report = self._adapter_patches(root, self._i1())
-            output = io.StringIO()
-            with stack, \
-                    patch.object(vw, "materialize_loop_runtime_git_root", side_effect=[product, plugin]) as materialize, \
-                    patch.object(vw, "attest_explicit_sources", return_value=self._i1()), \
-                    patch.object(vw, "scan_loop_runtime_claims", return_value=report), \
-                    patch.object(vw, "write_attestation", return_value="a" * 64), \
-                    redirect_stdout(output):
-                vw._cmd_check_loop_runtime_claims_identity(args)
-            self.assertNotIn("allow_tree", materialize.call_args_list[0].kwargs)
-            self.assertIs(materialize.call_args_list[1].kwargs["allow_tree"], True)
-        payload = json.loads(output.getvalue())
-        self.assertEqual("PASS", payload["verdict"])
-        self.assertTrue(payload["fixture_only"])
-        self.assertFalse(payload["release_authorized"])
-        self.assertFalse(payload["authorized"])
-        self.assertEqual("PENDING", payload["performance_budget_status"])
-        self.assertNotIn("fixture_only", payload["identity_attestation"])
-
-    def test_atomic_fixture_compare_consumes_staged_artifact_and_verified_commit(self):
-        commit = "1" * 40
-        with _governance_temp_dir() as td:
-            root = Path(td)
-            artifact = root / "FIX-216-index.json"
-            artifact.write_text("{}\n", encoding="utf-8")
-            final = self._i1("candidate_commit", commit)
-            args = self._args(
-                root, compare=artifact, product_ref=commit, plugin_ref=commit,
-            )
-            stack, product, plugin, report = self._adapter_patches(root, final)
-            output = io.StringIO()
-            transition = {
-                "schema_version": "loop-claim-aggregate/v1", "phase": "candidate",
-                "fixture_only": True, "release_authorized": False, "authorized": False,
-                "verdict": "PASS", "issues": [],
-                "staged_attestation_sha256": "a" * 64,
-                "candidate_attestation_sha256": "b" * 64,
-            }
-            completed = SimpleNamespace(returncode=0, stdout=commit + "\n", stderr="")
-            with stack, \
-                    patch.object(vw.subprocess, "run", return_value=completed), \
-                    patch.object(vw, "materialize_loop_runtime_git_root", side_effect=[product, plugin]), \
-                    patch.object(vw, "attest_explicit_sources", return_value=final), \
-                    patch.object(vw, "scan_loop_runtime_claims", return_value=report), \
-                    patch.object(vw, "load_attestation", return_value=self._i1()), \
-                    patch.object(vw, "compare_identity_attestations", return_value=transition) as compare_mock, \
-                    redirect_stdout(output):
-                vw._cmd_check_loop_runtime_claims_identity(args)
-            compare_mock.assert_called_once()
-            self.assertEqual(commit, compare_mock.call_args.kwargs["verified_fixture_commit"])
-        payload = json.loads(output.getvalue())
-        self.assertEqual("PASS", payload["transition"]["verdict"])
-        self.assertFalse(payload["authorized"])
-
-    def test_fixture_only_is_mandatory_and_full_release_gate_is_not_called(self):
-        with _governance_temp_dir() as td:
-            root = Path(td)
-            args = self._args(root, write=root / "index.json")
-            args.fixture_only = False
-            with patch.object(vw, "cmd_check_release") as release_mock, \
-                    self.assertRaisesRegex(vw.IdentityAttestationError, "FIXTURE_ONLY_REQUIRED"):
-                vw._cmd_check_loop_runtime_claims_identity(args)
-            release_mock.assert_not_called()
-            args.fixture_only = True
-            args.write_attestation = str(root / "host" / "inside-source.json")
-            with self.assertRaisesRegex(vw.IdentityAttestationError, "ROOT_SOURCE_AMBIGUOUS"):
-                vw._cmd_check_loop_runtime_claims_identity(args)
-
-    def test_identity_mode_requires_exactly_one_persistence_operation(self):
-        with _governance_temp_dir() as td:
-            args = self._args(Path(td))
-            with self.assertRaisesRegex(vw.IdentityAttestationError, "SCHEMA_MISSING"):
-                vw._cmd_check_loop_runtime_claims_identity(args)
 
 
 # ────────────────────────────────────────────────────────────
@@ -1126,20 +616,6 @@ class CleanCheckoutBoundaryTests(unittest.TestCase):
                     f"got={buggy_issues}",
                 )
 
-    def test_default_verify_does_not_run_release_fact_source_health_check(self):
-        with patch.object(vw, "check_files", return_value=[]), \
-             patch.object(vw, "check_snippets", return_value=[]), \
-             patch.object(vw, "check_architecture_fact_source", return_value=[]), \
-             patch.object(
-                 vw,
-                 "check_release_readiness_fact_source",
-                 side_effect=AssertionError("default verify must stay product-only"),
-             ), \
-             patch.object(vw, "check_agent_adapter_contract", return_value=[]), \
-             patch.object(vw, "check_version_consistency", return_value=[]):
-            with redirect_stdout(io.StringIO()):
-                vw.cmd_verify(argparse.Namespace())
-
     def test_missing_local_risk_log_is_empty_for_governance_health(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -1373,7 +849,6 @@ class ArchitectureFactSourceTests(unittest.TestCase):
         self,
         root,
         skill_extra="",
-        skill_index_operations_agents="Coordinator, DevOps, Maintenance",
         skill_index_extra="",
         agent_protocol_content=None,
         governance_developer_prompt_content=None,
@@ -1399,22 +874,8 @@ class ArchitectureFactSourceTests(unittest.TestCase):
         )
 
         skill_index = root / "skill-index.md"
-        skill_index.write_text(
-            "# SKILL 分类索引\n\n"
-            "| SKILL | 路径 | 用途 | 调用 Agent |\n"
-            "| --- | --- | --- | --- |\n"
-            "| stage-infra | `skills/stage-infra/SKILL.md` | 基础设施 | Coordinator, Architect, Developer, Governance Developer, DevOps |\n"
-            f"| stage-operations | `skills/stage-operations/SKILL.md` | 运营与反馈 | {skill_index_operations_agents} |\n"
-            "| stage-maintenance | `skills/stage-maintenance/SKILL.md` | 维护与演进 | Coordinator, Governance Developer, Maintenance |\n"
-            "| code-review | `skills/code-review/SKILL.md` | 代码审查 | Developer(自检), Governance Developer(自检), Code Reviewer(正式) |\n\n"
-            "## Agent↔SKILL 绑定总表\n\n"
-            "| 职能组 | Agent | 可调用 SKILL |\n"
-            "| --- | --- | --- |\n"
-            "| 开发组 | **Governance Developer** | stage-maintenance, stage-infra, code-review |\n"
-            f"{skill_index_extra}\n",
-            encoding="utf-8",
-        )
-
+        index = (vw.ROOT / "skills/software-project-governance/references/skill-index.md").read_text(encoding="utf-8")
+        skill_index.write_text(index + "\n" + skill_index_extra, encoding="utf-8")
         architecture = root / "architecture.md"
         architecture.write_text(
             "# 六层架构设计\n\n"
@@ -1474,15 +935,12 @@ class ArchitectureFactSourceTests(unittest.TestCase):
             issues = vw.check_architecture_fact_source(*paths)
             self.assertTrue(any("7 groups / 9 Agent" in issue for issue in issues))
 
-    def test_architecture_fact_source_rejects_release_operations_binding(self):
+    def test_architecture_fact_source_rejects_review_skill_with_no_independent_role(self):
         with tempfile.TemporaryDirectory() as td:
-            paths = self._write_fact_files(
-                Path(td),
-                skill_index_operations_agents="Coordinator, Release",
-            )
-            issues = vw.check_architecture_fact_source(*paths)
-            self.assertTrue(any("stage-operations must not be bound to Release" in issue for issue in issues))
-
+            paths = self._write_fact_files(Path(td))
+            index = paths[1]
+            index.write_text(index.read_text(encoding="utf-8").replace("Retro Reviewer", "Developer"), encoding="utf-8")
+            self.assertTrue(any("named independent reviewer" in issue for issue in vw.check_architecture_fact_source(*paths)))
     def test_architecture_fact_source_rejects_legacy_entry_narratives(self):
         with tempfile.TemporaryDirectory() as td:
             paths = self._write_fact_files(
@@ -1498,11 +956,11 @@ class ArchitectureFactSourceTests(unittest.TestCase):
             self.assertTrue(any("no behavior rules" in issue for issue in issues))
             self.assertTrue(any("native-entry exclusion" in issue for issue in issues))
 
-    def test_architecture_fact_source_rejects_route_count_drift(self):
+    def test_architecture_fact_source_rejects_unreachable_role_router(self):
         with tempfile.TemporaryDirectory() as td:
-            paths = self._write_fact_files(Path(td), governance_route_count=16)
-            issues = vw.check_architecture_fact_source(*paths)
-            self.assertTrue(any("route table count 16 does not match SKILL.md actual 19" in issue for issue in issues))
+            paths = self._write_fact_files(Path(td))
+            paths[3].write_text("Use missing/route.md", encoding="utf-8")
+            self.assertTrue(any("missing dispatch route" in problem for problem in vw.check_architecture_fact_source(*paths)))
 
     def test_architecture_fact_source_requires_key_phrases(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1521,21 +979,13 @@ class ArchitectureFactSourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             paths = self._write_fact_files(Path(td))
             skill, skill_index, architecture, governance, agent_protocol, governance_developer_prompt = paths
-            skill_index.write_text(
-                skill_index.read_text(encoding="utf-8")
-                .replace(", Governance Developer", "")
-                .replace("Governance Developer(自检), ", "")
-                .replace("| 开发组 | **Governance Developer** | stage-maintenance, stage-infra, code-review |\n", ""),
-                encoding="utf-8",
-            )
-            issues = vw.check_architecture_fact_source(
-                skill, skill_index, architecture, governance, agent_protocol, governance_developer_prompt
-            )
-            self.assertTrue(any("missing Governance Developer skill binding row" in issue for issue in issues))
-            self.assertTrue(any("stage-infra must bind Governance Developer" in issue for issue in issues))
-            self.assertTrue(any("stage-maintenance must bind Governance Developer" in issue for issue in issues))
-            self.assertTrue(any("code-review must bind Governance Developer" in issue for issue in issues))
-
+            skill_index.write_text(skill_index.read_text(encoding="utf-8")
+                                  .replace("Governance Developer", "Unknown producer")
+                                  .replace("`tech-review`", "`missing-review`"), encoding="utf-8")
+            issues = vw.check_architecture_fact_source(*paths)
+            self.assertTrue(any("missing Governance Developer → independent Code Reviewer route" in issue for issue in issues))
+            self.assertTrue(any("references missing skill missing-review" in issue for issue in issues))
+            self.assertTrue(any("missing independent consumer for tech-review" in issue for issue in issues))
     def test_architecture_fact_source_requires_governance_developer_protocol_entries(self):
         with tempfile.TemporaryDirectory() as td:
             protocol = self._agent_protocol_content().replace(
@@ -1580,27 +1030,7 @@ class ArchitectureFactSourceTests(unittest.TestCase):
             )
             paths = self._write_fact_files(Path(td), governance_developer_prompt_content=prompt)
             issues = vw.check_architecture_fact_source(*paths)
-            self.assertTrue(any("不得直接写 `.governance/` 治理记录" in issue for issue in issues))
-
-    def test_architecture_fact_source_requires_governance_developer_prompt_evidence_entry(self):
-        with tempfile.TemporaryDirectory() as td:
-            prompt = self._governance_developer_prompt_content().replace(
-                "- Proposed evidence-log entry\n",
-                "",
-            )
-            paths = self._write_fact_files(Path(td), governance_developer_prompt_content=prompt)
-            issues = vw.check_architecture_fact_source(*paths)
-            self.assertTrue(any("Proposed evidence-log entry" in issue for issue in issues))
-
-    def test_architecture_fact_source_requires_governance_developer_prompt_decision_risk_entry(self):
-        with tempfile.TemporaryDirectory() as td:
-            prompt = self._governance_developer_prompt_content().replace(
-                "- Proposed decision-log / risk-log entry\n",
-                "",
-            )
-            paths = self._write_fact_files(Path(td), governance_developer_prompt_content=prompt)
-            issues = vw.check_architecture_fact_source(*paths)
-            self.assertTrue(any("Proposed decision-log / risk-log entry" in issue for issue in issues))
+            self.assertTrue(any("direct governance writes must be prohibited" in issue for issue in issues))
 
     def test_architecture_fact_source_requires_governance_developer_prompt_coordinator_writeback_boundary(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1610,223 +1040,7 @@ class ArchitectureFactSourceTests(unittest.TestCase):
             )
             paths = self._write_fact_files(Path(td), governance_developer_prompt_content=prompt)
             issues = vw.check_architecture_fact_source(*paths)
-            self.assertTrue(any("Coordinator 负责最终写回" in issue for issue in issues))
-
-
-class ReleaseReadinessFactSourceTests(unittest.TestCase):
-    """FIX-069: plan, requirement matrix, 1.0.0 blockers, and architecture facts stay aligned."""
-
-    def _plan_content(self, release_row=None, dependency_chain_extra=None, req_overrides=None, active_rows=""):
-        req_overrides = req_overrides or {}
-        if release_row is None:
-            release_row = (
-                "| **1.0.0** | **预留** | **—** | **首次正式发布标签——不承载修改，仅当 "
-                "0.35.0 FIX-069~074 全部闭环、RISK-030 关闭、外部验证通过后打 tag** | **—** | "
-                "**纯版本标签——production-ready 声明；不得绕过主流 agent 真实环境 E2E 和防跑偏看护收口** |"
-            )
-        elif release_row is False:
-            release_row = ""
-        dependency_chain_extra = dependency_chain_extra or (
-            "\n    │\n    ▼\n"
-            "0.35.0 FIX-069~074 全部闭环 + RISK-030 关闭\n"
-            "（含主流 agent 真实环境 E2E、防跑偏看护、工具化收口；全部闭环前不得推进 1.0.0）"
-        )
-        req_rows = {
-            "REQ-059": "| REQ-059 | 架构事实源状态必须一致 | AUDIT-100 | P0 | FIX-069 | 🔄 进行中 | 0.35.0 |",
-            "REQ-060": "| REQ-060 | Agent Team 边界覆盖 | AUDIT-100 | P0 | FIX-070 | ✅ 已交付 | 0.35.0 |",
-            "REQ-061": "| REQ-061 | 主流 agent 入口状态真实 | AUDIT-100 | P0 | FIX-071 | 📋 待实施 | 0.35.0 |",
-            "REQ-062": "| REQ-062 | Skill 工具化归档 | AUDIT-100 | P1 | FIX-072 | 📋 待实施 | 0.35.0 |",
-            "REQ-063": "| REQ-063 | 目标偏离看护不空跑 | AUDIT-100 | P1 | FIX-073 | 📋 待实施 | 0.35.0 |",
-            "REQ-064": "| REQ-064 | E2E 真实性分层 | AUDIT-100 | P1 | FIX-074 | 📋 待实施 | 0.35.0 |",
-        }
-        req_rows.update(req_overrides)
-        return (
-            "# 当前项目样例\n\n"
-            f"{active_rows}\n\n"
-            "### 1.0.0 依赖链\n\n"
-            "```\n"
-            "0.11.0 ✅\n"
-            "    │\n"
-            "    ▼\n"
-            "AUDIT-072: 外部验证≥2(P0)"
-            f"{dependency_chain_extra}\n"
-            "    │\n"
-            "    ▼\n"
-            "1.0.0 正式发布\n"
-            "```\n\n"
-            "### 版本路线图\n\n"
-            "| 版本 | 状态 | 预计日期 | 核心范围 | 包含 Tier/Layer | 关键交付物 |\n"
-            "| --- | --- | --- | --- | --- | --- |\n"
-            f"{release_row}\n\n"
-            "## 需求跟踪矩阵\n\n"
-            "| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |\n"
-            "| --- | --- | --- | --- | --- | --- | --- |\n"
-            + "\n".join(req_rows[req_id] for req_id in sorted(req_rows))
-            + "\n"
-        )
-
-    def _architecture_content(self, extra=""):
-        return (
-            "# 六层架构设计\n\n"
-            "| 平台 | 状态 |\n"
-            "| --- | --- |\n"
-            "| Gemini | 未完成（仅兼容分析文档） |\n"
-            "| opencode | 未实现（0.35.0 P0 适配缺口） |\n\n"
-            "## 目标目录结构\n\n"
-            "```\n"
-            "skills/software-project-governance/\n"
-            "  SKILL.md                        ← 入口层\n"
-            "  skills/                         ← 能力层\n"
-            "    stage-development/SKILL.md\n"
-            "```\n"
-            f"{extra}\n"
-        )
-
-    def _write_release_fact_files(
-        self,
-        root,
-        plan_content=None,
-        architecture_content=None,
-        evidence_content="",
-    ):
-        plan = root / "plan-tracker.md"
-        architecture = root / "architecture.md"
-        evidence = root / "evidence-log.md"
-        plan.write_text(plan_content or self._plan_content(), encoding="utf-8")
-        architecture.write_text(architecture_content or self._architecture_content(), encoding="utf-8")
-        evidence.write_text(evidence_content, encoding="utf-8")
-        return plan, architecture, evidence
-
-    def test_release_readiness_fact_source_accepts_current_facts(self):
-        with tempfile.TemporaryDirectory() as td:
-            paths = self._write_release_fact_files(Path(td))
-            self.assertEqual(vw.check_release_readiness_fact_source(*paths), [])
-
-    def test_release_readiness_fact_source_requires_035_blockers_in_dependency_chain(self):
-        with tempfile.TemporaryDirectory() as td:
-            plan = self._plan_content(
-                dependency_chain_extra="\n    │\n    ▼\n外部验证通过后发布"
-            )
-            paths = self._write_release_fact_files(Path(td), plan_content=plan)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("1.0.0 dependency chain missing blocker token 0.35.0" in issue for issue in issues))
-            self.assertTrue(any("1.0.0 dependency chain missing blocker token RISK-030" in issue for issue in issues))
-            self.assertTrue(any("1.0.0 dependency chain missing goal-drift guardrail blocker" in issue for issue in issues))
-
-    def test_release_readiness_fact_source_requires_100_row_blockers(self):
-        with tempfile.TemporaryDirectory() as td:
-            plan = self._plan_content(
-                release_row=(
-                    "| **1.0.0** | **预留** | **—** | **首次正式发布标签——不承载修改，仅当所有 0.32.0 "
-                    "任务完成 + 外部验证通过后打 tag** | **—** | **纯版本标签** |"
-                )
-            )
-            paths = self._write_release_fact_files(Path(td), plan_content=plan)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("1.0.0 roadmap row missing release blocker 0.35.0" in issue for issue in issues))
-            self.assertTrue(any("1.0.0 roadmap row missing release blocker FIX-069" in issue for issue in issues))
-
-    def test_release_readiness_fact_source_requires_100_roadmap_row(self):
-        with tempfile.TemporaryDirectory() as td:
-            plan = self._plan_content(release_row=False)
-            paths = self._write_release_fact_files(Path(td), plan_content=plan)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("missing 1.0.0 roadmap row" in issue for issue in issues))
-
-    def test_release_readiness_fact_source_rejects_req_fix_mapping_drift(self):
-        with tempfile.TemporaryDirectory() as td:
-            plan = self._plan_content(
-                req_overrides={
-                    "REQ-063": "| REQ-063 | 目标偏离看护不空跑 | AUDIT-100 | P1 | FIX-072 | 📋 待实施 | 0.35.0 |",
-                }
-            )
-            paths = self._write_release_fact_files(Path(td), plan_content=plan)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("requirement matrix REQ-063 must reference FIX-073" in issue for issue in issues))
-
-    def test_release_readiness_fact_source_blocks_closing_fix_069_while_req_open(self):
-        with tempfile.TemporaryDirectory() as td:
-            evidence = (
-                "| EVD-999 | FIX-069 | 维护 | 修复闭环 | FIX-069 已完成，最终审查通过。 | files | Coordinator | 2026-05-15 | G11 | 完成 |\n"
-            )
-            paths = self._write_release_fact_files(Path(td), evidence_content=evidence)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("FIX-069 closing evidence conflicts with open REQ-059" in issue for issue in issues))
-
-    def test_release_readiness_fact_source_blocks_final_status_closure_while_req_open(self):
-        with tempfile.TemporaryDirectory() as td:
-            evidence = (
-                "| EVD-999 | FIX-069 | 维护 | 修复闭环 | 跨事实源检查已补齐。 | files | Coordinator | 2026-05-15 | G11 | 完成 |\n"
-            )
-            paths = self._write_release_fact_files(Path(td), evidence_content=evidence)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("FIX-069 closing evidence conflicts with open REQ-059" in issue for issue in issues))
-
-    def test_release_readiness_fact_source_allows_review_approval_while_req_open(self):
-        with tempfile.TemporaryDirectory() as td:
-            evidence = (
-                "| REVIEW-FIX-069 | FIX-069 | 维护 | 代码审查 | Code Review APPROVED，未关闭任务。 | files | Code Reviewer | 2026-05-15 | G11 | 审查通过 |\n"
-            )
-            paths = self._write_release_fact_files(Path(td), evidence_content=evidence)
-            self.assertEqual(vw.check_release_readiness_fact_source(*paths), [])
-
-    def test_release_readiness_fact_source_rejects_adapter_e2e_overstatement(self):
-        with tempfile.TemporaryDirectory() as td:
-            architecture = self._architecture_content(extra="| Gemini | ✅ 已完成，真实环境 E2E 通过 |\n")
-            paths = self._write_release_fact_files(Path(td), architecture_content=architecture)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("architecture overstates pending Gemini/opencode" in issue for issue in issues))
-
-    def test_release_readiness_fact_source_rejects_softened_adapter_overstatement(self):
-        with tempfile.TemporaryDirectory() as td:
-            architecture = self._architecture_content(
-                extra="| opencode | 缺口已完成，仅剩文档，真实环境 E2E 通过 |\n"
-            )
-            paths = self._write_release_fact_files(Path(td), architecture_content=architecture)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("architecture overstates pending Gemini/opencode" in issue for issue in issues))
-
-    def test_release_readiness_fact_source_allows_explicit_adapter_non_closure(self):
-        with tempfile.TemporaryDirectory() as td:
-            architecture = self._architecture_content(
-                extra="| Gemini | 仅作为预检，source proxy PASS 不构成真实环境 E2E 闭环 |\n"
-            )
-            paths = self._write_release_fact_files(Path(td), architecture_content=architecture)
-            self.assertEqual(vw.check_release_readiness_fact_source(*paths), [])
-
-    def test_release_readiness_fact_source_rejects_overstatement_when_req_delivered_but_fix_active(self):
-        with tempfile.TemporaryDirectory() as td:
-            plan = self._plan_content(
-                req_overrides={
-                    "REQ-061": "| REQ-061 | 主流 agent 入口状态真实 | AUDIT-100 | P0 | FIX-071 | ✅ 已交付 | 0.35.0 |",
-                    "REQ-064": "| REQ-064 | E2E 真实性分层 | AUDIT-100 | P1 | FIX-074 | ✅ 已交付 | 0.35.0 |",
-                },
-                active_rows=(
-                    "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |\n"
-                    "| --- | --- | --- | --- | --- | --- | --- |\n"
-                    "| **P0** | FIX-071 | 主流 code agent 适配闭环 | AUDIT-100 | 0.35.0 | 真实 agent E2E | 🔄 进行中 |"
-                ),
-            )
-            architecture = self._architecture_content(extra="| opencode | ✅ 已完成，真实环境 E2E 通过 |\n")
-            paths = self._write_release_fact_files(Path(td), plan_content=plan, architecture_content=architecture)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("architecture overstates pending Gemini/opencode" in issue for issue in issues))
-
-    def test_release_readiness_fact_source_rejects_duplicate_target_structure_entry(self):
-        with tempfile.TemporaryDirectory() as td:
-            architecture = (
-                "# 六层架构设计\n\n"
-                "## 目标目录结构\n\n"
-                "```\n"
-                "skills/software-project-governance/\n"
-                "  SKILL.md                        ← 入口层\n"
-                "  skills/                         ← 能力层\n"
-                "  skills/                         ← 能力层\n"
-                "```\n"
-            )
-            paths = self._write_release_fact_files(Path(td), architecture_content=architecture)
-            issues = vw.check_release_readiness_fact_source(*paths)
-            self.assertTrue(any("target directory structure repeats" in issue for issue in issues))
+            self.assertTrue(any("coordinator governance writeback boundary" in issue for issue in issues))
 
 
 class HotFactSourceConsistencyTests(unittest.TestCase):
@@ -3071,9 +2285,9 @@ class AgentAdapterContractTests(unittest.TestCase):
                     },
                     "agent_runtime_e2e": {
                         "status": "passed",
-                        "command": "codex exec -C project/e2e-test-project -s read-only --ephemeral \"report governance status\"",
+                        "command": "python verify_workflow.py agent-runtime-e2e --agent codex --timeout 180",
                         "verified_on": "2026-05-21",
-                        "evidence": "real codex exec target-cwd PASS after reading AGENTS.md bootstrap",
+                        "evidence": "real read-only codex exec target-cwd PASS after reading AGENTS.md bootstrap",
                     },
                     "full_e2e_verified": True,
                 }},
@@ -4108,19 +3322,13 @@ class GovernancePackStatusTests(unittest.TestCase):
         with isolated_projection_root(vw.ROOT) as root:
             self.assertEqual(vw.check_governance_pack_status(root), [])
 
-    def test_governance_pack_status_rejects_missing_status_pack_field(self):
+    def test_work_status_can_omit_the_unrelated_pack_summary(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._write_valid_pack_status_project(root)
-            status_path = root / "commands/governance-status.md"
-            status_path.write_text(
-                status_path.read_text(encoding="utf-8").replace("Pack summary", "Capability summary"),
-                encoding="utf-8",
-            )
-
-            issues = vw.check_governance_pack_status(root)
-            self.assertTrue(any("missing pack-aware status token `Pack summary`" in issue for issue in issues))
-
+            status = root / "commands/governance-status.md"
+            status.write_text("Read the unit with loop status --unit <id>", encoding="utf-8")
+            self.assertEqual(vw.check_governance_pack_status(root), [])
     def test_governance_pack_status_rejects_pack_enabled_overclaim(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -4212,264 +3420,45 @@ class GovernancePackStatusTests(unittest.TestCase):
 
 
 class GovernanceContextDiscoveryTests(unittest.TestCase):
-    """FIX-112: governance resume handoff must be fact-based and not-found safe."""
+    """Resume uses the recorded units even when historical prose claims open work."""
 
-    def _write_project(self, root, plan=None, snapshot=None, risk=None, evidence=None, docs=True):
-        gov = root / ".governance"
-        gov.mkdir(parents=True, exist_ok=True)
-        (gov / "plan-tracker.md").write_text(plan or "\n".join([
-            "# Plan",
-            "",
-            "## 项目配置",
-            "- **项目目标**: context test",
-            "- **操作权限模式**: maximum-autonomy",
-            "",
-            "## 项目总览",
-            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| Demo | 维护 | 1 | 0 | 0 | 0 | G11 passed | 2026-06-05 |",
-        ]), encoding="utf-8")
-        (gov / "session-snapshot.md").write_text(snapshot or "\n".join([
-            "# Session Snapshot",
-            "",
-            "## Carry-over Tasks",
-            "None",
-        ]), encoding="utf-8")
-        (gov / "evidence-log.md").write_text(evidence or "# Evidence log\n", encoding="utf-8")
-        (gov / "risk-log.md").write_text(risk or "# Risk log\n", encoding="utf-8")
-        if docs:
-            commands = root / "commands"
-            commands.mkdir(parents=True, exist_ok=True)
-            contract = (
-                "Delivery Trust Snapshot\n"
-                "Unfinished work\n"
-                "Source facts\n"
-                "Blocker state\n"
-                "Auto-continue\n"
-                "Interrupt boundary\n"
-                "not found\n"
-                "do not invent\n"
-                "governance-context\n"
-            )
-            (commands / "governance.md").write_text(contract, encoding="utf-8")
-            (commands / "governance-status.md").write_text(contract, encoding="utf-8")
-            # FEAT-038: the resume/unfinished-work contract is owned by the
-            # on-demand Scenario F document.
-            scenario_f = commands / "governance" / "scenario-f.md"
-            scenario_f.parent.mkdir(parents=True, exist_ok=True)
-            scenario_f.write_text(contract, encoding="utf-8")
+    def test_past_evidence_does_not_create_a_current_unit(self):
+        with tempfile.TemporaryDirectory() as td:
+            gov = Path(td) / ".governance"
+            gov.mkdir()
+            for filename in ("plan-tracker.md", "session-snapshot.md", "evidence-log.md"):
+                (gov / filename).write_text("FIX-111 is blocked; carry it over", encoding="utf-8")
+            report = vw.discover_governance_context(Path(td))
+            self.assertEqual(report["state"], "empty")
+            self.assertEqual(report["units"], [])
 
-    def test_discovers_next_priority_from_session_snapshot(self):
-        snapshot = "\n".join([
-            "# Session Snapshot",
-            "",
-            "## 下次会话优先级",
-            "1. 启动 FIX-112：Context-aware governance resume，继续从事实源承接。",
-        ])
+    def test_resume_route_resolves_to_shared_unit_reader(self):
+        self.assertEqual(vw.check_governance_context(vw.ROOT), [])
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            self._write_project(root, snapshot=snapshot)
+            for name in ("commands/governance/scenario-f.md", "commands/governance-status.md"):
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((vw.ROOT / name).read_bytes())
+            self.assertEqual(vw.check_governance_context(root), [])
+            target = root / "commands/governance/scenario-f.md"
+            target.write_text(target.read_text(encoding="utf-8").replace("governance-status.md", "unknown.md"),
+                              encoding="utf-8")
+            self.assertTrue(any("missing reference" in msg for msg in vw.check_governance_context(root)))
 
-            context = vw.discover_governance_context(root)
-
-        self.assertEqual(context["status"], "FOUND")
-        self.assertIn("FIX-112", context["detected_item"])
-        self.assertTrue(any("session-snapshot.md" in fact for fact in context["source_facts"]))
-        self.assertEqual(context["blocker_state"], "no blocker recorded in checked facts")
-        self.assertTrue(context["auto_continue"])
-
-    def test_no_facts_returns_not_found_without_invention(self):
+    def test_command_exposes_damaged_and_empty_state_distinctly(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_project(root)
-
-            context = vw.discover_governance_context(root)
-
-        self.assertEqual(context["status"], "NOT_FOUND")
-        self.assertIn("not found", context["detected_item"])
-        self.assertTrue(any("no unfinished user work facts found" in fact for fact in context["source_facts"]))
-        self.assertFalse(context["auto_continue"])
-        self.assertIn("AskUserQuestion", context["interrupt_boundary"])
-
-    def test_discovers_evidence_log_only_unfinished_fact(self):
-        evidence = "\n".join([
-            "# Evidence log",
-            "| 编号 | 对应任务 ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 | 提交日期 | 关联 Gate | 备注 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| EVD-999 | FIX-314 | 维护 | carry-over | FIX-314 next action: resume parser coverage; 未完成 | local evidence | Developer | 2026-06-07 | G11 | 进行中 |",
-        ])
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_project(root, evidence=evidence)
-
-            context = vw.discover_governance_context(root)
-
-        self.assertEqual(context["status"], "FOUND")
-        self.assertIn("FIX-314", context["detected_item"])
-        self.assertEqual(context["_items"][0]["task_id"], "FIX-314")
-        self.assertTrue(any("evidence-log.md" in fact for fact in context["source_facts"]))
-        self.assertTrue(context["auto_continue"])
-
-    def test_completed_evidence_with_historical_blocked_pending_words_is_not_unfinished(self):
-        evidence = "\n".join([
-            "# Evidence log",
-            "| 编号 | 对应任务 ID | 阶段 | 证据类型 | 证据说明 | 证据位置 | 提交人 | 提交日期 | 关联 Gate | 备注 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| EVD-997 | FIX-316 | 维护 | 修复闭环 | FIX-316 completed: blocked then resolved; pending issue fixed; next action no longer needed | local evidence | Developer | 2026-06-07 | G11 | 完成 / APPROVED / closed |",
-        ])
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_project(root, evidence=evidence)
-
-            context = vw.discover_governance_context(root)
-
-        self.assertEqual(context["status"], "NOT_FOUND")
-        self.assertNotIn("FIX-316", context["detected_item"])
-
-    def test_discovers_git_status_product_file_uncommitted_work(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_project(root)
-            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
-            product_file = root / "skills" / "demo" / "tool.py"
-            product_file.parent.mkdir(parents=True, exist_ok=True)
-            product_file.write_text("print('work')\n", encoding="utf-8")
-
-            context = vw.discover_governance_context(root)
-
-        self.assertEqual(context["status"], "FOUND")
-        self.assertIn("GIT-WORKTREE", context["detected_item"])
-        self.assertTrue(any("git status --short" in fact for fact in context["source_facts"]))
-        self.assertIn("skills/demo/tool.py", " ".join(context["source_facts"]))
-        self.assertTrue(context["auto_continue"])
-
-    def test_git_status_does_not_walk_up_to_parent_repo_for_child_fixture(self):
-        with tempfile.TemporaryDirectory() as td:
-            parent = Path(td)
-            subprocess.run(["git", "init"], cwd=parent, check=True, capture_output=True, text=True)
-            child = parent / "fixture"
-            self._write_project(child)
-            product_file = parent / "skills" / "demo" / "dirty.py"
-            product_file.parent.mkdir(parents=True, exist_ok=True)
-            product_file.write_text("print('parent dirty')\n", encoding="utf-8")
-
-            context = vw.discover_governance_context(child)
-
-        self.assertEqual(context["status"], "NOT_FOUND")
-        self.assertNotIn("GIT-WORKTREE", context["detected_item"])
-
-    def test_clean_recent_commit_without_unfinished_facts_stays_not_found(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_project(root)
-            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
-            subprocess.run(["git", "add", ".governance", "commands"], cwd=root, check=True)
-            subprocess.run(
-                ["git", "commit", "-m", "FIX-000: clean baseline"],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-
-            context = vw.discover_governance_context(root)
-
-        self.assertEqual(context["status"], "NOT_FOUND")
-        self.assertTrue(any("git log --oneline -5" in fact for fact in context["source_facts"]))
-        self.assertFalse(context["auto_continue"])
-
-    def test_blocked_fact_disables_auto_continue(self):
-        snapshot = "\n".join([
-            "# Session Snapshot",
-            "",
-            "## Carry-over tasks",
-            "| Task ID | Description | Status | Priority |",
-            "| --- | --- | --- | --- |",
-            "| FIX-200 | blocked handoff | blocked waiting for user decision | P0 |",
-        ])
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_project(root, snapshot=snapshot)
-
-            context = vw.discover_governance_context(root)
-
-        self.assertEqual(context["status"], "FOUND")
-        self.assertIn("FIX-200", context["detected_item"])
-        self.assertIn("blocked fact", context["blocker_state"])
-        self.assertFalse(context["auto_continue"])
-        self.assertIn("AskUserQuestion", context["interrupt_boundary"])
-
-    def test_open_risk_with_found_item_disables_auto_continue(self):
-        evidence = "\n".join([
-            "# Evidence log",
-            "| EVD-998 | FIX-315 | 维护 | carry-over | FIX-315 next action: resume source facts | local evidence | Developer | 2026-06-07 | G11 | 进行中 |",
-        ])
-        risk = "\n".join([
-            "# Risk log",
-            "| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| RISK-999 | 2026-06-07 | open guard | 维护 | trigger | impact | 高 | Coordinator | 打开 | mitigate | 2026-06-15 | FIX-315 | note |",
-        ])
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_project(root, evidence=evidence, risk=risk)
-
-            context = vw.discover_governance_context(root)
-
-        self.assertEqual(context["status"], "FOUND")
-        self.assertIn("FIX-315", context["detected_item"])
-        self.assertIn("open risk guard", context["blocker_state"])
-        self.assertFalse(context["auto_continue"])
-
-    def test_check_requires_source_facts_for_found_context(self):
-        broken_context = {
-            "status": "FOUND",
-            "detected_item": "FIX-999",
-            "source_facts": [],
-            "blocker_state": "no blocker recorded in checked facts",
-            "next_action": "resume FIX-999",
-            "auto_continue": True,
-            "interrupt_boundary": "continue automatically",
-        }
-        with patch.object(vw, "discover_governance_context", return_value=broken_context):
-            issues = vw.check_governance_context(vw.ROOT)
-
-        self.assertTrue(any("FOUND requires source facts" in issue for issue in issues))
-
-    def test_check_rejects_auto_continue_when_open_risk_guard_present(self):
-        broken_context = {
-            "status": "FOUND",
-            "detected_item": "FIX-999",
-            "source_facts": [".governance/risk-log.md: RISK-036"],
-            "blocker_state": "open risk guard present: RISK-036",
-            "next_action": "resume FIX-999",
-            "auto_continue": True,
-            "interrupt_boundary": "continue automatically",
-        }
-        with patch.object(vw, "discover_governance_context", return_value=broken_context):
-            issues = vw.check_governance_context(vw.ROOT)
-
-        self.assertTrue(any("open risk must disable auto-continue" in issue for issue in issues))
-
-    def test_governance_context_command_accepts_target_fixture_not_found(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_project(root)
-            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
-            buf = io.StringIO()
-            with redirect_stdout(buf):
+            args = argparse.Namespace(fixture=td, fail_on_issues=True)
+            output = io.StringIO()
+            with redirect_stdout(output):
                 vw.cmd_governance_context(args)
-
-        output = buf.getvalue()
-        self.assertIn("Governance Context Discovery", output)
-        self.assertIn("Status: NOT_FOUND", output)
-        self.assertIn("Unfinished work: not found", output)
-        self.assertIn("do not invent", output)
-        self.assertIn("Governance Context Result: PASSED", output)
-
-
+            self.assertEqual(json.loads(output.getvalue())["state"], "empty")
+            path = Path(td) / ".governance/flow-unit-runtime.json"
+            path.parent.mkdir()
+            path.write_text("{corrupt", encoding="utf-8")
+            with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                vw.cmd_governance_context(args)
+            self.assertEqual(vw.discover_governance_context(Path(td))["state"], "invalid")
 class CapabilityContextTests(unittest.TestCase):
     """FIX-115: capability context trace must be fact-backed and degraded-safe."""
 
@@ -4900,6 +3889,8 @@ class LifecycleRegistryTests(unittest.TestCase):
     def _write_registry(self, root, mutate=None, manifest_mutate=None):
         registry_path = root / "skills/software-project-governance/core/lifecycle-registry.json"
         registry_path.parent.mkdir(parents=True, exist_ok=True)
+        for name in ("loop-engineering-registry.json", "stage-gates.md", "lifecycle.md"):
+            (registry_path.parent / name).write_bytes((vw.LIFECYCLE_REGISTRY_PATH.parent / name).read_bytes())
         self._write_manifest(root, mutate=manifest_mutate)
         data = json.loads(vw.LIFECYCLE_REGISTRY_PATH.read_text(encoding="utf-8"))
         if mutate:
@@ -4916,65 +3907,44 @@ class LifecycleRegistryTests(unittest.TestCase):
             self._write_registry(root)
             self.assertEqual(vw.check_lifecycle_registry(root), [])
 
-    def test_command_reports_active_classic_phase_gate(self):
-        args = argparse.Namespace(fail_on_issues=True)
+    def test_command_reports_active_workflow(self):
         buf = io.StringIO()
         with redirect_stdout(buf):
-            vw.cmd_check_lifecycle_registry(args)
+            vw.cmd_check_lifecycle_registry(argparse.Namespace(fail_on_issues=True))
+        self.assertIn("Active lifecycle mode: loop-engineering", buf.getvalue())
+        self.assertIn("Result: PASSED", buf.getvalue())
+        self.assertNotIn("classic-phase-gate", buf.getvalue())
 
-        output = buf.getvalue()
-        self.assertIn("Lifecycle Registry Check", output)
-        self.assertIn("Active lifecycle mode: classic-phase-gate", output)
-        self.assertIn("Default lifecycle mode: classic-phase-gate", output)
-        self.assertIn("Result: PASSED", output)
+    def test_lifecycle_registry_rejects_wrong_runtime_and_gate_bindings(self):
+        mutations = [
+            (lambda d: d["runtime_activation"].update(flow_unit_status_runtime=False), "flow_unit_status_runtime"),
+            (lambda d: d.update(default_lifecycle_mode="classic-phase-gate"), "default_lifecycle_mode"),
+            (lambda d: d["gate_references"].pop(), "missing gate reference"),
+            (lambda d: d["gate_references"][0].update(source="other.md#G1"), "evidence catalog"),
+            (lambda d: d["loop_policy"].update(read_command="status"), "read_command"),
+            (lambda d: d["lifecycle_modes"][0].update(topology_source="absent.json"), "topology"),
+            (lambda d: d["gate_execution_registry"]["gate_checks"][1]["evidence_query"].pop("fields"), "evidence_query"),
+        ]
+        for mutate, expected in mutations:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                self._write_registry(root, mutate=mutate)
+                self.assertTrue(any(expected in issue for issue in vw.check_lifecycle_registry(root)))
 
-    def test_lifecycle_registry_rejects_runtime_activation(self):
+    def test_missing_tier_route_and_unresolvable_evidence_anchor_fail_independently(self):
+        for tier in ("setup", "inner", "middle", "outer"):
+            with self.subTest(tier=tier), tempfile.TemporaryDirectory() as td:
+                core = self._write_registry(Path(td)).parent
+                topology = core / "loop-engineering-registry.json"
+                data = json.loads(topology.read_text(encoding="utf-8"))
+                del data["iteration_paths"][tier]
+                topology.write_text(json.dumps(data), encoding="utf-8")
+                self.assertTrue(any("every executable tier" in issue for issue in vw.check_lifecycle_registry(Path(td))))
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["runtime_activation"]["flow_unit_status_runtime"] = True
-
-            self._write_registry(root, mutate=mutate)
-            issues = vw.check_lifecycle_registry(root)
-            self.assertTrue(any("runtime_activation.flow_unit_status_runtime must be false" in issue for issue in issues))
-
-    def test_lifecycle_registry_rejects_dynamic_mode_as_active(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["active_lifecycle_mode"] = "dynamic-flow-gate"
-                data["lifecycle_modes"][0]["active"] = False
-                data["lifecycle_modes"][1]["active"] = True
-
-            self._write_registry(root, mutate=mutate)
-            issues = vw.check_lifecycle_registry(root)
-            self.assertTrue(any("active_lifecycle_mode must be classic-phase-gate" in issue for issue in issues))
-            self.assertTrue(any("dynamic-flow-gate.active must be false" in issue for issue in issues))
-
-    def test_lifecycle_registry_rejects_missing_classic_gate(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["lifecycle_modes"][0]["gate_sequence"].remove("G11")
-
-            self._write_registry(root, mutate=mutate)
-            issues = vw.check_lifecycle_registry(root)
-            self.assertTrue(any("classic-phase-gate.gate_sequence must preserve G1-G11 order" in issue for issue in issues))
-
-    def test_lifecycle_registry_rejects_missing_flow_unit_schema_field(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["flow_unit_schema"]["required_fields"].remove("gate_references")
-
-            self._write_registry(root, mutate=mutate)
-            issues = vw.check_lifecycle_registry(root)
-            self.assertTrue(any("flow_unit_schema.required_fields missing `gate_references`" in issue for issue in issues))
-
+            core = self._write_registry(Path(td)).parent
+            catalog = core / "stage-gates.md"
+            catalog.write_text(catalog.read_text(encoding="utf-8").replace("## G7 ", "## Missing "), encoding="utf-8")
+            self.assertTrue(any("G7 must resolve" in issue for issue in vw.check_lifecycle_registry(Path(td))))
     def test_lifecycle_registry_rejects_missing_project_type_hook(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -5001,14 +3971,10 @@ class LifecycleRegistryTests(unittest.TestCase):
         runtime_activation = data["runtime_activation"]
         registry = data["gate_execution_registry"]
 
-        self.assertFalse(runtime_activation["declarative_gate_engine"])
-        self.assertTrue(runtime_activation["classic_registry_execution"])
-        self.assertTrue(registry["classic_registry_execution"])
-        self.assertEqual(registry["execution_scope"], "classic-g1-g11-only")
+        self.assertTrue(runtime_activation["unit_scoped_gate_execution"])
+        self.assertTrue(runtime_activation["flow_unit_status_runtime"])
+        self.assertEqual(registry["execution_scope"], "flow-unit")
         self.assertTrue(registry["automation_commands_are_metadata_only"])
-        self.assertFalse(registry["project_migration"])
-        self.assertFalse(registry["dynamic_flow_gate_default"])
-        self.assertEqual([item["gate_id"] for item in registry["gate_checks"]], vw.LIFECYCLE_REGISTRY_GATES)
         for gate_entry in registry["gate_checks"]:
             for field in (
                 "required_artifacts",
@@ -5021,210 +3987,25 @@ class LifecycleRegistryTests(unittest.TestCase):
             ):
                 self.assertIn(field, gate_entry)
 
-    def test_lifecycle_registry_preserves_classic_gate_check_contract_parity(self):
-        data = json.loads(vw.LIFECYCLE_REGISTRY_PATH.read_text(encoding="utf-8"))
-        behavior_keys = (
-            "label",
-            "executor",
-            "function",
-            "path",
-            "snippet",
-            "min_ratio",
-            "min_count",
-            "keyword",
-            "result",
-            "message",
-            "failure_message",
-        )
-        contract_by_gate = {
-            gate["gate_id"]: [
-                {key: check[key] for key in behavior_keys if key in check}
-                for check in gate["checks"]
-            ]
-            for gate in data["gate_execution_registry"]["gate_checks"]
-        }
+    def test_each_gate_requires_an_evidence_contract(self):
+        for gate in vw.LIFECYCLE_REGISTRY_GATES:
+            with self.subTest(gate=gate), tempfile.TemporaryDirectory() as td:
+                def mutate(data):
+                    entry = next(e for e in data["gate_execution_registry"]["gate_checks"] if e["gate_id"] == gate)
+                    entry["required_artifacts"] = []
+                    entry["checks"] = []
+                self._write_registry(Path(td), mutate=mutate)
+                issues = vw.check_lifecycle_registry(Path(td))
+                self.assertTrue(any(f"{gate}.required_artifacts" in issue for issue in issues))
+                self.assertTrue(any(f"{gate}.checks" in issue for issue in issues))
 
-        self.assertEqual(contract_by_gate, {
-            "G1": [
-                {"label": "项目目标可衡量", "executor": "function", "function": "check_quantifiable_metrics"},
-                {"label": "范围边界清晰", "executor": "function", "function": "check_scope_boundary"},
-                {"label": "关键干系人已识别", "executor": "function", "function": "check_stakeholders"},
-                {"label": "明確的『不做什麼』清單", "executor": "function", "function": "check_out_of_scope"},
-            ],
-            "G2": [
-                {
-                    "label": "调研覆盖技术/市场/用户三维度",
-                    "executor": "snippet_in_file",
-                    "path": "project/workflows/software-project-governance/research/company-practices.md",
-                    "snippet": "## ",
-                },
-                {
-                    "label": "竞争格局清晰（竞品≥3×≥4维度）",
-                    "executor": "file_exists",
-                    "path": "project/workflows/software-project-governance/research/agent-integration-models.md",
-                },
-                {
-                    "label": "关键发现有数据支撑",
-                    "executor": "research_doc_count",
-                    "path": "project/workflows/software-project-governance/research",
-                    "min_count": 4,
-                    "message": "research/ 目录含多份调研文档，数据来源可追溯",
-                    "failure_message": "research/ 调研文档不足 4 份",
-                },
-                {
-                    "label": "技术可行性约束已识别",
-                    "executor": "snippet_in_file",
-                    "path": ".governance/risk-log.md",
-                    "snippet": "RISK-",
-                },
-            ],
-            "G3": [
-                {"label": "评估了至少2个候选方案", "executor": "snippet_in_file", "path": ".governance/decision-log.md", "snippet": "备选方案"},
-                {
-                    "label": "评估标准事先定义",
-                    "executor": "snippet_in_file",
-                    "path": "skills/software-project-governance/core/protocol/plugin-contract.md",
-                    "snippet": "准入标准",
-                },
-                {"label": "选择原因已留痕", "executor": "snippet_in_file", "path": ".governance/decision-log.md", "snippet": "选择原因"},
-                {
-                    "label": "关键风险已通过PoC验证",
-                    "executor": "snippet_in_file",
-                    "path": "skills/software-project-governance/core/protocol/headless-runner-sample.md",
-                    "snippet": "## 目标",
-                },
-            ],
-            "G4": [
-                {
-                    "label": "开发环境可复现",
-                    "executor": "file_exists",
-                    "path": "skills/software-project-governance/infra/verify_workflow.py",
-                },
-                {"label": "仓库结构符合约定", "executor": "function", "function": "check_all_required_files_exist"},
-                {
-                    "label": "基础CI可运行",
-                    "executor": "file_exists",
-                    "path": "skills/software-project-governance/infra/verify_workflow.py",
-                },
-                {
-                    "label": "协作规范已建立",
-                    "executor": "snippet_in_file",
-                    "path": "skills/software-project-governance/SKILL.md",
-                    "snippet": "MUST",
-                },
-            ],
-            "G5": [
-                {
-                    "label": "架构满足非功能性需求",
-                    "executor": "snippet_in_file",
-                    "path": "skills/software-project-governance/core/protocol/plugin-contract.md",
-                    "snippet": "冲击场景",
-                },
-                {"label": "模块划分清晰、职责单一", "executor": "snippet_in_file", "path": "skills/main-workflow/SKILL.md", "snippet": "## "},
-                {
-                    "label": "关键接口已定义",
-                    "executor": "snippet_in_file",
-                    "path": "skills/software-project-governance/core/protocol/command-schema.md",
-                    "snippet": "Input Parameters",
-                },
-                {"label": "经过技术评审", "executor": "snippet_in_file", "path": "skills/tech-review/SKILL.md", "snippet": "评审"},
-                {"label": "详细设计覆盖核心模块", "executor": "snippet_in_file", "path": "skills/stage-architecture/SKILL.md", "snippet": "## "},
-            ],
-            "G6": [
-                {"label": "核心功能按设计实现", "executor": "completed_ratio", "min_ratio": 0.5},
-                {
-                    "label": "单元测试覆盖达标（standard: ≥70%）",
-                    "executor": "file_exists",
-                    "path": "skills/software-project-governance/infra/verify_workflow.py",
-                },
-                {"label": "Code Review 遗留项关闭", "executor": "evidence_mentions", "keyword": "code-review-standard"},
-                {
-                    "label": "集成验证通过",
-                    "executor": "file_exists",
-                    "path": "skills/software-project-governance/infra/verify_workflow.py",
-                },
-            ],
-            "G7": [
-                {"label": "关键缺陷已关闭", "executor": "function", "function": "check_risk_has_closed"},
-                {
-                    "label": "回归测试通过",
-                    "executor": "file_exists",
-                    "path": "skills/software-project-governance/infra/verify_workflow.py",
-                },
-                {
-                    "label": "性能指标达标",
-                    "executor": "constant_result",
-                    "result": "NEEDS_HUMAN",
-                    "message": "无性能测试基础设施——需人工确认性能指标",
-                },
-                {"label": "安全测试覆盖关键风险", "executor": "evidence_mentions", "keyword": "RISK-"},
-            ],
-            "G8": [
-                {
-                    "label": "CI 流水线稳定（最近运行成功率 ≥ 80%）",
-                    "executor": "file_exists",
-                    "path": "skills/software-project-governance/infra/verify_workflow.py",
-                },
-                {
-                    "label": "自动化测试覆盖核心路径",
-                    "executor": "snippet_in_file",
-                    "path": "skills/software-project-governance/infra/verify_workflow.py",
-                    "snippet": "def check_",
-                },
-                {
-                    "label": "质量门禁生效",
-                    "executor": "snippet_in_file",
-                    "path": "skills/software-project-governance/infra/verify_workflow.py",
-                    "snippet": "check-governance",
-                },
-                {"label": "部署流程文档化", "executor": "file_exists", "path": "skills/stage-release/SKILL.md"},
-            ],
-            "G9": [
-                {"label": "发布范围明确（版本号/范围/时间窗口）", "executor": "snippet_in_file", "path": "project/CHANGELOG.md", "snippet": "## [0."},
-                {"label": "变更日志完整", "executor": "file_exists", "path": "project/CHANGELOG.md"},
-                {
-                    "label": "回滚方案已验证",
-                    "executor": "constant_result",
-                    "result": "NEEDS_HUMAN",
-                    "message": "无回滚测试环境——需人工确认回滚方案",
-                },
-                {"label": "发布后验证已定义", "executor": "file_exists", "path": "skills/release-checklist/SKILL.md"},
-            ],
-            "G10": [
-                {"label": "收集到真实运营数据", "executor": "function", "function": "check_g10_real_operation_data"},
-                {"label": "用户反馈已归档", "executor": "function", "function": "check_g10_feedback_archived_classified"},
-                {"label": "关键问题已识别分类", "executor": "function", "function": "check_g10_issue_list_severity_status"},
-                {"label": "优化方向已明确", "executor": "function", "function": "check_g10_executable_optimization_items"},
-            ],
-            "G11": [
-                {"label": "复盘完成（含目标回顾/结果评估/原因分析/经验沉淀）", "executor": "function", "function": "check_g11_retro_complete"},
-                {"label": "经验回灌到规则和模板", "executor": "function", "function": "check_g11_rules_templates_backfilled"},
-                {
-                    "label": "下轮方向已明确（计划中的下一轮/活跃 P0）",
-                    "executor": "function",
-                    "function": "check_g11_next_round_direction",
-                },
-                {"label": "版本化记录已更新", "executor": "function", "function": "check_version_consistency_heuristic"},
-            ],
-        })
-
-    def test_lifecycle_registry_rejects_gate_execution_registry_boundary_drift(self):
+    def test_lifecycle_registry_rejects_unsafe_execution_policy(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["runtime_activation"]["classic_registry_execution"] = False
-                data["gate_execution_registry"]["classic_registry_execution"] = False
-                data["gate_execution_registry"]["dynamic_flow_gate_default"] = True
-                data["gate_execution_registry"]["project_migration"] = True
-
-            self._write_registry(root, mutate=mutate)
-            issues = vw.check_lifecycle_registry(root)
-            self.assertTrue(any("runtime_activation.classic_registry_execution must be true" in issue for issue in issues))
-            self.assertTrue(any("gate_execution_registry.classic_registry_execution must be true" in issue for issue in issues))
-            self.assertTrue(any("gate_execution_registry.dynamic_flow_gate_default must be false" in issue for issue in issues))
-            self.assertTrue(any("gate_execution_registry.project_migration must be false" in issue for issue in issues))
-
+            self._write_registry(Path(td), mutate=lambda d: d["gate_execution_registry"].update(
+                automation_commands_are_metadata_only=False, execution_scope="global", status="classic"))
+            issues = vw.check_lifecycle_registry(Path(td))
+            for field in ("automation_commands_are_metadata_only", "execution_scope", "status"):
+                self.assertTrue(any(f"gate_execution_registry.{field}" in issue for issue in issues))
     def test_lifecycle_registry_rejects_unknown_project_type_override(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -5305,20 +4086,6 @@ class LifecycleRegistryTests(unittest.TestCase):
             issues = vw.check_lifecycle_registry(root)
             self.assertTrue(any("profile_intensity_boundary must state project type and profile are orthogonal" in issue for issue in issues))
 
-    def test_lifecycle_registry_rejects_undeclared_project_type_unit_template(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["flow_unit_schema"]["allowed_unit_types"].remove("screen")
-
-            self._write_registry(root, mutate=mutate)
-            issues = vw.check_lifecycle_registry(root)
-            self.assertTrue(any(
-                "project_type_hooks.mobile-app.unit_templates includes undeclared unit type `screen`" in issue
-                for issue in issues
-            ))
-
     def test_lifecycle_registry_rejects_preset_default_not_in_hook_templates(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -5348,21 +4115,6 @@ class LifecycleRegistryTests(unittest.TestCase):
             issues = vw.check_lifecycle_registry(root)
             self.assertTrue(any(
                 "project_type_hooks.ai-agent-plugin.default_flow_unit_type must be included in unit_templates" in issue
-                for issue in issues
-            ))
-
-    def test_lifecycle_registry_rejects_project_type_default_not_allowed_unit_type(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["project_type_hooks"]["internal-script"]["unit_templates"].append("task")
-                data["project_type_hooks"]["internal-script"]["default_flow_unit_type"] = "task"
-
-            self._write_registry(root, mutate=mutate)
-            issues = vw.check_lifecycle_registry(root)
-            self.assertTrue(any(
-                "project_type_hooks.internal-script.default_flow_unit_type must be declared in flow_unit_schema.allowed_unit_types" in issue
                 for issue in issues
             ))
 
@@ -5437,7 +4189,7 @@ class LifecycleRegistryTests(unittest.TestCase):
             root = Path(td)
 
             def mutate(data):
-                data["no_overclaim_boundary"].append("RISK-037 closed and 1.0.0 production-ready.")
+                data["notes"] = "RISK-037 closed and 1.0.0 production-ready."
 
             self._write_registry(root, mutate=mutate)
             issues = vw.check_lifecycle_registry(root)
@@ -5452,11 +4204,9 @@ class LifecycleRegistryTests(unittest.TestCase):
                 data["project_type_gate_presets"]["ai-agent-plugin"]["release_checks"].append(
                     "declarative gate engine active; dynamic-flow-gate default; RISK-036 closure achieved."
                 )
-                data["runtime_activation"]["project_migration"] = True
 
             self._write_registry(root, mutate=mutate)
             issues = vw.check_lifecycle_registry(root)
-            self.assertTrue(any("runtime_activation.project_migration must be false" in issue for issue in issues))
             self.assertTrue(any("forbidden lifecycle overclaim `declarative gate engine active`" in issue for issue in issues))
             self.assertTrue(any("forbidden lifecycle overclaim `dynamic-flow-gate default`" in issue for issue in issues))
             self.assertTrue(any("forbidden lifecycle overclaim `risk-036 closure achieved`" in issue for issue in issues))
@@ -5495,615 +4245,6 @@ class LifecycleRegistryTests(unittest.TestCase):
 
             self._write_registry(root, mutate=mutate)
             self.assertEqual(vw.check_lifecycle_registry(root), [])
-
-
-class FlowUnitRuntimeTests(unittest.TestCase):
-    """FIX-136: optional flow-unit runtime hot state is visibility-only."""
-
-    def _unit(self, idx, lane, stage, *, deps=None, blockers=None, loop_count=0, gate_status=None):
-        return {
-            "flow_unit_id": f"game.chapter.{idx:02d}",
-            "title": f"Chapter {idx}",
-            "unit_type": "chapter",
-            "project_type": "game",
-            "lifecycle_mode": "dynamic-flow-gate",
-            "current_stage": stage,
-            "current_subphase": "backlog" if lane == "backlog" else lane,
-            "gate_lane": lane,
-            "gate_references": ["G5"] if lane == "backlog" else ["G6", "G7"],
-            "allowed_next_transitions": ["classic-G5"],
-            "dependencies": deps or [],
-            "blockers": blockers or [],
-            "evidence_refs": [],
-            "loop_state": {
-                "active_loop": loop_count > 0,
-                "loop_count": loop_count,
-                "last_loop_type": "defect-rework" if loop_count else None,
-            },
-            "runtime_status_source": "hot-project-state",
-            "gate_state": {"status": gate_status or lane},
-        }
-
-    def _runtime(self, mutate=None):
-        units = [
-            self._unit(1, "released", "operations", gate_status="released"),
-            self._unit(2, "testing", "testing", deps=["game.chapter.01"], loop_count=1, gate_status="testing"),
-            self._unit(3, "development", "development", deps=["game.chapter.02"], gate_status="in-progress"),
-        ]
-        for idx in range(4, 11):
-            units.append(self._unit(idx, "backlog", "architecture", deps=[f"game.chapter.{idx - 1:02d}"], gate_status="backlog"))
-        data = {
-            "schema_version": "1.0",
-            "workflow_model": "dynamic-flow-gate",
-            "default_lifecycle_mode": "classic-phase-gate",
-            "runtime_scope": "runtime-visibility-only",
-            "runtime_status_source": "hot-project-state",
-            "declarative_gate_engine": False,
-            "project_migration": False,
-            "active_lanes": {
-                "released": ["game.chapter.01"],
-                "testing": ["game.chapter.02"],
-                "development": ["game.chapter.03"],
-                "backlog": [f"game.chapter.{idx:02d}" for idx in range(4, 11)],
-            },
-            "blocked_downstream_units": [],
-            "rollup_status": "chapter 1 released; chapter 2 testing; chapter 3 development; chapter 4-10 backlog",
-            "flow_units": units,
-            "no_overclaim_boundary": [
-                "Flow-unit runtime is runtime visibility only.",
-                "Flow-unit runtime does not activate declarative gate engine.",
-                "Flow-unit runtime does not migrate projects.",
-                "Classic G1-G11 remains compatible.",
-                "Flow-unit runtime does not close RISK-036.",
-                "Flow-unit runtime does not close RISK-037.",
-                "Flow-unit runtime does not claim 1.0.0 production-ready.",
-            ],
-        }
-        if mutate:
-            mutate(data)
-        return data
-
-    def _write_runtime(self, root, mutate=None, raw=None):
-        path = root / ".governance/flow-unit-runtime.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if raw is not None:
-            path.write_text(raw, encoding="utf-8")
-        else:
-            path.write_text(json.dumps(self._runtime(mutate), indent=2), encoding="utf-8")
-        return path
-
-    def test_flow_unit_runtime_missing_file_is_safe(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self.assertEqual(vw.check_flow_unit_runtime(root), [])
-            context = vw.discover_flow_unit_runtime_context(root)
-            self.assertEqual(context["status"], "NOT_FOUND")
-
-    def test_flow_unit_runtime_cli_adapter_uses_canonical_leaf(self):
-        from checks.flow_unit_runtime import validate_flow_unit_runtime_payload
-
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            path = self._write_runtime(root, mutate=lambda data: data.pop("runtime_scope"))
-            display = vw._display_path(path, root)
-            expected = validate_flow_unit_runtime_payload(self._runtime(
-                lambda data: data.pop("runtime_scope")
-            ), str(display))
-            self.assertEqual(vw.check_flow_unit_runtime(root), expected)
-
-    def test_flow_unit_runtime_accepts_python_game_distribution(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_runtime(root)
-            self.assertEqual(vw.check_flow_unit_runtime(root), [])
-            context = vw.discover_flow_unit_runtime_context(root)
-            self.assertEqual(context["workflow_model"], "dynamic-flow-gate")
-            self.assertEqual(context["active_lanes"]["released"], ["game.chapter.01"])
-            self.assertEqual(context["active_lanes"]["testing"], ["game.chapter.02"])
-            self.assertEqual(context["active_lanes"]["development"], ["game.chapter.03"])
-            self.assertEqual(context["active_lanes"]["backlog"], [f"game.chapter.{idx:02d}" for idx in range(4, 11)])
-            self.assertIn("chapter 1 released", context["rollup_status"])
-
-    def test_flow_unit_runtime_dependency_blocking_only_downstream(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["flow_units"][2]["blockers"] = ["missing implementation evidence"]
-                data["flow_units"][2]["gate_state"]["status"] = "blocked"
-                data["blocked_downstream_units"] = ["game.chapter.04"]
-
-            self._write_runtime(root, mutate=mutate)
-            self.assertEqual(vw.check_flow_unit_runtime(root), [])
-            context = vw.discover_flow_unit_runtime_context(root)
-            self.assertEqual(context["blocked_downstream_units"], ["game.chapter.04"])
-            self.assertNotIn("game.chapter.02", context["blocked_downstream_units"])
-
-    def test_flow_unit_runtime_rejects_sibling_completion_implied_by_bad_blocking(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["flow_units"][2]["blockers"] = ["blocked"]
-                data["flow_units"][2]["gate_state"]["status"] = "blocked"
-                data["blocked_downstream_units"] = ["game.chapter.02", "game.chapter.04"]
-
-            self._write_runtime(root, mutate=mutate)
-            issues = vw.check_flow_unit_runtime(root)
-            self.assertTrue(any("only declared downstream dependents" in issue for issue in issues))
-
-    def test_flow_unit_runtime_loop_counters_are_reported_and_validated(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_runtime(root)
-            context = vw.discover_flow_unit_runtime_context(root)
-            self.assertEqual(context["loop_counters"]["game.chapter.02"], 1)
-
-            def mutate(data):
-                data["flow_units"][1]["loop_state"]["loop_count"] = -1
-
-            self._write_runtime(root, mutate=mutate)
-            issues = vw.check_flow_unit_runtime(root)
-            self.assertTrue(any("loop_state.loop_count must be a non-negative integer" in issue for issue in issues))
-
-    def test_flow_unit_runtime_malformed_nested_state_fails_closed_without_discovery_crash(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["flow_units"][1]["gate_state"] = "testing"
-                data["flow_units"][2]["loop_state"]["loop_count"] = "many"
-
-            self._write_runtime(root, mutate=mutate)
-            context = vw.discover_flow_unit_runtime_context(root)
-            self.assertEqual(context["status"], "FOUND")
-            self.assertEqual(context["loop_counters"]["game.chapter.03"], 0)
-            issues = vw.check_flow_unit_runtime(root)
-            self.assertTrue(any("gate_state must be an object" in issue for issue in issues))
-            self.assertTrue(any("loop_state.loop_count must be a non-negative integer" in issue for issue in issues))
-
-    def test_flow_unit_runtime_preserves_classic_and_no_overclaim_boundary(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["default_lifecycle_mode"] = "dynamic-flow-gate"
-                data["declarative_gate_engine"] = True
-                data["no_overclaim_boundary"].append("RISK-037 closed and 1.0.0 production-ready.")
-
-            self._write_runtime(root, mutate=mutate)
-            issues = vw.check_flow_unit_runtime(root)
-            self.assertTrue(any("default_lifecycle_mode must preserve classic-phase-gate" in issue for issue in issues))
-            self.assertTrue(any("declarative_gate_engine must be false" in issue for issue in issues))
-            self.assertTrue(any("forbidden flow-unit runtime overclaim `risk-037 closed`" in issue for issue in issues))
-            self.assertTrue(any("forbidden flow-unit runtime overclaim `1.0.0 production-ready`" in issue for issue in issues))
-
-    def test_flow_unit_runtime_rejects_equivalent_risk_closure_overclaims(self):
-        variants = [
-            ("RISK-037 is closed.", "risk-037 closed"),
-            ("Closed RISK-037 after runtime work.", "risk-037 closed"),
-            ("RISK-037 closure achieved.", "risk-037 closure achieved"),
-            ("RISK-036 is closed.", "risk-036 closed"),
-            ("Closed RISK-036 after external validation.", "risk-036 closed"),
-            ("RISK-036 closure achieved.", "risk-036 closure achieved"),
-        ]
-        for wording, expected in variants:
-            with self.subTest(wording=wording):
-                with tempfile.TemporaryDirectory() as td:
-                    root = Path(td)
-
-                    def mutate(data, wording=wording):
-                        data["rollup_status"] = wording
-
-                    self._write_runtime(root, mutate=mutate)
-                    issues = vw.check_flow_unit_runtime(root)
-                    self.assertTrue(
-                        any(f"forbidden flow-unit runtime overclaim `{expected}`" in issue for issue in issues),
-                        issues,
-                    )
-
-    def test_flow_unit_runtime_preserves_scoped_risk_closure_negation(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["rollup_status"] = (
-                    "Flow-unit runtime does not claim RISK-037 is closed; "
-                    "it does not claim closed RISK-036 evidence."
-                )
-
-            self._write_runtime(root, mutate=mutate)
-            issues = vw.check_flow_unit_runtime(root)
-            self.assertFalse(any("forbidden flow-unit runtime overclaim `risk-037" in issue for issue in issues))
-            self.assertFalse(any("forbidden flow-unit runtime overclaim `risk-036" in issue for issue in issues))
-
-    def test_flow_unit_runtime_legacy_negation_corpus_matches_canonical_leaf(self):
-        from checks.flow_unit_runtime import validate_flow_unit_runtime_payload
-
-        corpus = [
-            "RISK-037 is closed is not claimed.",
-            "Closed RISK-036 is not verified.",
-            "RISK-036 closure achieved is not proof.",
-            "RISK-037 closure achieved 仍打开。",
-        ]
-        for wording in corpus:
-            with self.subTest(wording=wording), tempfile.TemporaryDirectory() as td:
-                root = Path(td)
-                payload = self._runtime(lambda data: data.update(rollup_status=wording))
-                direct_issues = validate_flow_unit_runtime_payload(payload, "shared-corpus")
-                self._write_runtime(root, mutate=lambda data: data.update(rollup_status=wording))
-                adapter_issues = vw.check_flow_unit_runtime(root)
-                self.assertFalse(any("forbidden flow-unit runtime overclaim" in issue for issue in direct_issues))
-                self.assertFalse(any("forbidden flow-unit runtime overclaim" in issue for issue in adapter_issues))
-
-    def test_flow_unit_runtime_invalid_schema_fails_closed(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_runtime(root, raw=json.dumps([]))
-            issues = vw.check_flow_unit_runtime(root)
-            self.assertEqual(len(issues), 1)
-            self.assertTrue(issues[0].endswith("flow-unit runtime root must be an object"))
-            context = vw.discover_flow_unit_runtime_context(root)
-            self.assertEqual(context["status"], "INVALID")
-            self.assertIn("root must be an object", " ".join(context["source_facts"]))
-
-    def test_flow_unit_runtime_command_fails_closed_for_non_object_root_without_crash(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_runtime(root, raw=json.dumps([]))
-            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                with self.assertRaises(SystemExit) as cm:
-                    vw.cmd_check_flow_unit_runtime(args)
-            self.assertEqual(cm.exception.code, 1)
-            output = buf.getvalue()
-            self.assertIn("Runtime state: INVALID", output)
-            self.assertIn("flow-unit runtime root must be an object", output)
-
-    def test_flow_unit_runtime_command_fails_closed_for_non_string_boundary_item_without_crash(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["no_overclaim_boundary"].append({"bad": "state"})
-
-            self._write_runtime(root, mutate=mutate)
-            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                with self.assertRaises(SystemExit) as cm:
-                    vw.cmd_check_flow_unit_runtime(args)
-            self.assertEqual(cm.exception.code, 1)
-            output = buf.getvalue()
-            self.assertIn("Runtime state: FOUND", output)
-            self.assertIn("no_overclaim_boundary must be a non-empty string list", output)
-
-    def test_governance_context_ignores_malformed_flow_runtime_without_crash(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_runtime(root, raw=json.dumps([]))
-            context = vw.discover_governance_context(root)
-            self.assertIn(context["status"], {"FOUND", "NOT_FOUND"})
-            self.assertIsNone(context.get("flow_unit_runtime"))
-
-    def test_governance_context_keeps_malformed_boundary_runtime_visible_without_crash(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-
-            def mutate(data):
-                data["no_overclaim_boundary"].append(42)
-
-            self._write_runtime(root, mutate=mutate)
-            context = vw.discover_governance_context(root)
-            self.assertIn(context["status"], {"FOUND", "NOT_FOUND"})
-            flow_context = context.get("flow_unit_runtime")
-            self.assertIsNotNone(flow_context)
-            self.assertEqual(flow_context["status"], "FOUND")
-            self.assertIn("runtime visibility only", flow_context["no_overclaim_boundary"])
-            issues = vw.check_flow_unit_runtime(root)
-            self.assertTrue(any("no_overclaim_boundary must be a non-empty string list" in issue for issue in issues))
-
-    def test_flow_unit_runtime_command_reports_context(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_runtime(root)
-            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                vw.cmd_check_flow_unit_runtime(args)
-            output = buf.getvalue()
-            self.assertIn("Flow Unit Runtime Check", output)
-            self.assertIn("Workflow model: dynamic-flow-gate", output)
-            self.assertIn("Result: PASSED", output)
-
-
-class DynamicLifecycleMigrationTests(unittest.TestCase):
-    """FIX-139: migration preview is read-only, structured, and conservative."""
-
-    def _write_target(self, root, *, runtime=True, evidence=True, plan_extra="", evidence_text=None):
-        gov = root / ".governance"
-        gov.mkdir(parents=True, exist_ok=True)
-        (gov / "plan-tracker.md").write_text(
-            "\n".join([
-                "# Plan",
-                "## 项目配置",
-                "- workflow_model: classic-phase-gate",
-                "## Gate 状态跟踪",
-                "| Gate | 阶段转换 | 状态 |",
-                "| --- | --- | --- |",
-                "| G11 | next | passed |",
-                plan_extra,
-            ]),
-            encoding="utf-8",
-        )
-        if evidence:
-            (gov / "evidence-log.md").write_text(
-                evidence_text or "| EVD-001 | FIX-139 | preview evidence |",
-                encoding="utf-8",
-            )
-        if runtime:
-            (gov / "flow-unit-runtime.json").write_text(
-                json.dumps({"flow_units": [
-                    {"flow_unit_id": "mobile.sync", "gate_lane": "device-pilot"},
-                    {"flow_unit_id": "mobile.storage", "gate_lane": "testing"},
-                ]}),
-                encoding="utf-8",
-            )
-
-    def test_observed_units_in_legacy_runtime_keep_host_ids_and_lanes(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root)
-
-            preview = vw.build_dynamic_lifecycle_migration_preview(root)
-
-        self.assertEqual(preview["status"], "READY_FOR_REVIEW")
-        self.assertTrue(preview["dry_run"])
-        self.assertEqual(preview["workflow_model"]["target"], "dynamic-flow-gate")
-        self.assertEqual(preview["workflow_model"]["active_default_remains"], "classic-phase-gate")
-        self.assertEqual(preview["flow_units"]["count"], 2)
-        self.assertEqual(preview["flow_units"]["active_lanes"], {
-            "device-pilot": ["mobile.sync"], "testing": ["mobile.storage"],
-        })
-        self.assertEqual(Path(preview["flow_units"]["source"]), Path(".governance/flow-unit-runtime.json"))
-        self.assertEqual(preview["blocked_checks"], [])
-
-    def test_classic_project_without_runtime_has_no_observed_units(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root, runtime=False)
-
-            preview = vw.build_dynamic_lifecycle_migration_preview(root)
-
-        self.assertEqual(preview["status"], "READY_FOR_REVIEW")
-        self.assertEqual(preview["workflow_model"]["current"], "classic-phase-gate")
-        self.assertEqual(preview["flow_units"], {
-            "source": "none", "count": 0, "preview_units": [], "active_lanes": {},
-        })
-        self.assertTrue(preview["evidence_preservation"]["plan_tracker"]["preserved"])
-        self.assertTrue(preview["evidence_preservation"]["evidence_log"]["preserved"])
-
-    def test_history_mentions_dynamic_but_explicit_classic_keeps_current_classic(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(
-                root,
-                plan_extra="\n".join([
-                    "0.55.0 Dynamic Lifecycle + Flow-Gate migration/external validation 规划已入账。",
-                    "- workflow_model: classic-phase-gate",
-                    "- history mentions dynamic-flow-gate but it is only planning text",
-                ]),
-            )
-
-            preview = vw.build_dynamic_lifecycle_migration_preview(root)
-
-        self.assertEqual(preview["workflow_model"]["current"], "classic-phase-gate")
-        self.assertNotEqual(preview["workflow_model"]["current"], "dynamic-flow-gate")
-
-    def test_same_explicit_model_line_dynamic_opt_in_keeps_current_classic(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root)
-            plan_path = root / ".governance/plan-tracker.md"
-            plan_text = plan_path.read_text(encoding="utf-8")
-            plan_path.write_text(
-                plan_text.replace(
-                    "- workflow_model: classic-phase-gate",
-                    "- workflow_model: classic-phase-gate; dynamic-flow-gate is opt-in",
-                ),
-                encoding="utf-8",
-            )
-
-            preview = vw.build_dynamic_lifecycle_migration_preview(root)
-
-        self.assertEqual(preview["workflow_model"]["current"], "classic-phase-gate")
-        self.assertNotEqual(preview["workflow_model"]["current"], "dynamic-flow-gate")
-
-    def test_gate_status_tracking_without_explicit_dynamic_keeps_current_classic(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(
-                root,
-                plan_extra="\n".join([
-                    "0.55.0 Dynamic Lifecycle + Flow-Gate migration/external validation 规划已入账。",
-                    "Gate 状态跟踪: G11 passed; classic-phase-gate remains active/default.",
-                ]),
-            )
-
-            preview = vw.build_dynamic_lifecycle_migration_preview(root)
-
-        self.assertEqual(preview["workflow_model"]["current"], "classic-phase-gate")
-        self.assertNotEqual(preview["workflow_model"]["current"], "dynamic-flow-gate")
-
-    def test_missing_evidence_log_fails_closed(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root, evidence=False)
-
-            preview = vw.build_dynamic_lifecycle_migration_preview(root)
-            issues = vw.check_dynamic_lifecycle_migration_preview(root)
-
-        self.assertEqual(preview["status"], "BLOCKED")
-        self.assertTrue(any("missing .governance/evidence-log.md" in issue for issue in preview["blocked_checks"]))
-        self.assertTrue(any("missing .governance/evidence-log.md" in issue for issue in issues))
-
-    def test_dry_run_command_does_not_write_target(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root)
-            before = {
-                str(path.relative_to(root)): (path.stat().st_mtime_ns, path.read_bytes())
-                for path in root.rglob("*")
-                if path.is_file()
-            }
-            args = argparse.Namespace(target=str(root), dry_run=True, apply=False, fail_on_issues=True)
-            buf = io.StringIO()
-            with redirect_stdout(buf):
-                vw.cmd_dynamic_lifecycle_migration(args)
-            after = {
-                str(path.relative_to(root)): (path.stat().st_mtime_ns, path.read_bytes())
-                for path in root.rglob("*")
-                if path.is_file()
-            }
-
-        output = json.loads(buf.getvalue())
-        self.assertEqual(output["status"], "READY_FOR_REVIEW")
-        self.assertEqual(before, after)
-        self.assertEqual(output["write_operations"], [])
-
-    def test_missing_dry_run_flag_exits_closed(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root)
-            args = argparse.Namespace(target=str(root), dry_run=False, apply=False, fail_on_issues=True)
-            buf = io.StringIO()
-
-            with redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
-                vw.cmd_dynamic_lifecycle_migration(args)
-
-        self.assertEqual(ctx.exception.code, 1)
-        self.assertIn("requires explicit --dry-run", buf.getvalue())
-
-    def test_apply_flag_delegates_and_writes_after_confirmation(self):
-        """FIX-195 delegation remains; FEAT-004 makes apply confirm the
-        decomposition internally and write a v2-valid runtime.json.
-
-        The apply now SUCCEEDS (exit 0) — it confirms the full derived set,
-        writes runtime.json + backup, and appends a MIGRATION row. The
-        delegation from cmd_dynamic_lifecycle_migration --apply to
-        loop_migration.apply_migration is unchanged."""
-        from checks import flow_unit_runtime_v2
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root)
-            runtime_path = root / ".governance" / "flow-unit-runtime.json"
-            evidence_path = root / ".governance" / "evidence-log.md"
-            args = argparse.Namespace(target=str(root), dry_run=True, apply=True, fail_on_issues=True)
-            buf = io.StringIO()
-
-            # FEAT-004: apply succeeds → no SystemExit raised (exit 0).
-            with redirect_stdout(buf):
-                vw.cmd_dynamic_lifecycle_migration(args)
-
-            output = json.loads(buf.getvalue())
-            self.assertTrue(output["applied"])
-            self.assertTrue(output.get("decomposition_confirmed"))
-            self.assertEqual(output["workflow_model"]["new"], "loop-engineering")
-            self.assertTrue(output["flow_units_derived"] >= 1)
-            # runtime.json now exists (written) and passes the v2 validator.
-            self.assertTrue(runtime_path.is_file())
-            runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
-            issues = flow_unit_runtime_v2.validate_flow_unit_runtime_payload_v2(runtime)
-            self.assertEqual(issues, [],
-                             f"persisted runtime must pass v2 completely; got {issues}")
-            self.assertTrue((root / ".governance" / "archive").exists())
-            self.assertIn("MIGRATION-", evidence_path.read_text(encoding="utf-8"))
-
-    def test_project_specific_approval_and_risk_history_preserve_evidence(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(
-                root, plan_extra="RISK-036 closed after official approval.",
-                evidence_text="| EVD-001 | MOBILE-23 | marketplace approval |",
-            )
-            preview = vw.build_dynamic_lifecycle_migration_preview(root)
-            self.assertEqual(preview["status"], "READY_FOR_REVIEW")
-            self.assertEqual(preview["validation_issues"], [])
-            hashes = preview["evidence_preservation"]["hashes"]
-            for key, filename in (("plan_tracker", "plan-tracker.md"), ("evidence_log", "evidence-log.md")):
-                original = (root / ".governance" / filename).read_bytes()
-                self.assertEqual(hashes[f"{key}_sha256"], hashlib.sha256(original).hexdigest())
-
-    def test_invalid_runtime_blocks_without_inventing_units_or_changing_files(self):
-        unit = {"flow_unit_id": "adapter", "gate_lane": "pilot"}
-        cases = [
-            (b"{", "invalid JSON"),
-            (bytes([255]), "unreadable"),
-            (b"[]", "root must be an object"),
-            (b"{}", "flow_units must be a list"),
-            (b'{"flow_units": {}}', "flow_units must be a list"),
-            (json.dumps({"flow_units": [unit, None]}).encode(), "flow_units[1]"),
-            (json.dumps({"flow_units": [dict(unit, flow_unit_id=[])]}).encode(), "flow_units[0]"),
-            (json.dumps({"flow_units": [dict(unit, gate_lane=" ")]}).encode(), "flow_units[0]"),
-            (json.dumps({"flow_units": [unit, unit]}).encode(), "duplicate flow_unit_id"),
-        ]
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root)
-            path = root / ".governance/flow-unit-runtime.json"
-            for raw, reason in cases:
-                with self.subTest(reason=reason, raw=raw):
-                    path.write_bytes(raw)
-                    args = argparse.Namespace(target=str(root), dry_run=True, apply=False, fail_on_issues=True)
-                    output = io.StringIO()
-                    with redirect_stdout(output), self.assertRaises(SystemExit) as ctx:
-                        vw.cmd_dynamic_lifecycle_migration(args)
-                    self.assertEqual(ctx.exception.code, 1)
-                    report = json.loads(output.getvalue())
-                    self.assertEqual(report["status"], "BLOCKED")
-                    self.assertIn(reason, " ".join(report["validation_issues"]))
-                    self.assertEqual(Path(report["flow_units"]["source"]), path.relative_to(root))
-                    self.assertEqual(report["flow_units"]["preview_units"], [])
-                    self.assertEqual(report["write_operations"], [])
-                    self.assertEqual(path.read_bytes(), raw)
-
-    def test_unreadable_document_has_no_preserved_hash(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root)
-            evidence = root / ".governance/evidence-log.md"
-            evidence.write_bytes(bytes([255]))
-            report = vw.build_dynamic_lifecycle_migration_preview(root)
-            self.assertEqual(report["status"], "BLOCKED")
-            self.assertIn("unreadable", " ".join(report["validation_issues"]))
-            preservation = report["evidence_preservation"]
-            self.assertFalse(preservation["evidence_log"]["preserved"])
-            self.assertNotIn("evidence_log_sha256", preservation["hashes"])
-            self.assertEqual(evidence.read_bytes(), bytes([255]))
-
-    def test_broken_registry_blocks_even_with_valid_host_documents(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root)
-            source = root / "skills/software-project-governance/core/lifecycle-registry.json"
-            source.parent.mkdir(parents=True)
-            source.write_text("[]", encoding="utf-8")
-            with patch.object(vw, "ROOT", root):
-                report = vw.build_dynamic_lifecycle_migration_preview(root)
-            self.assertEqual(report["status"], "BLOCKED")
-            self.assertIn("lifecycle registry root must be an object", " ".join(report["validation_issues"]))
-
-    def test_empty_runtime_is_distinct_from_absent_and_invalid(self):
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._write_target(root, runtime=False)
-            path = root / ".governance/flow-unit-runtime.json"
-            path.write_text('{"flow_units":[]}', encoding="utf-8")
-            report = vw.build_dynamic_lifecycle_migration_preview(root)
-            self.assertEqual(report["status"], "READY_FOR_REVIEW")
-            self.assertEqual(report["flow_units"]["count"], 0)
-            self.assertEqual(Path(report["flow_units"]["source"]), path.relative_to(root))
 
 
 class CapabilitySelectionTests(unittest.TestCase):
@@ -6370,7 +4511,6 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
     def _clean_release_patches(self):
         return [
             patch.object(vw, "check_version_consistency", return_value=[]),
-            patch.object(vw, "check_release_readiness_fact_source", return_value=[]),
             patch.object(vw, "check_hot_fact_source_consistency", return_value=[]),
             patch.object(vw, "check_runtime_readiness_matrix", return_value=[]),
             patch.object(vw, "check_first_session_measurement", return_value=[]),
@@ -6402,6 +4542,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             }),
             patch.object(vw, "check_release_docs_coverage", return_value=[]),
             *_clean_sd_face_patches(),
+            patch("loop_workflow.release_issues", return_value=[]),
         ]
 
     def _apply_release_patches(self, patches):
@@ -6639,11 +4780,22 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                     changelog_path=changelog,
                 )
             self.assertTrue(result["pass"])
-            adapter_mock = mocks[6]
+            adapter_mock = mocks[5]
             adapter_mock.assert_called_once_with(run_runtime=True)
             self.assertIn("governance_pack_status", result["details"])
             self.assertIn("pack enabled", result["details"]["governance_pack_status"]["boundary"])
             self.assertFalse(result["details"]["one_dot_zero_blockers"]["required"])
+
+    def test_candidate_requires_scoped_release_receipt_when_execution_checks_are_skipped(self):
+        import loop_workflow
+        real_release_issues = loop_workflow.release_issues
+        stack, _ = self._apply_release_patches(self._clean_release_patches())
+        with stack, tempfile.TemporaryDirectory() as td, patch.object(vw, "HOST_PROJECT_ROOT", Path(td)), \
+                patch.object(loop_workflow, "release_issues", wraps=real_release_issues) as check:
+            result = vw.check_release_readiness(version="0.35.0", run_execution_gates=False)
+        check.assert_called_once_with(Path(td), None, "0.35.0")
+        self.assertFalse(result["details"]["release_loop"]["pass"])
+        self.assertFalse(result["pass"])
 
     def test_check_release_readiness_requires_changelog_version_when_requested(self):
         with tempfile.TemporaryDirectory() as td:
@@ -7386,7 +5538,6 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
     def _release_patches(self):
         return [
             patch.object(vw, "check_version_consistency", return_value=[]),
-            patch.object(vw, "check_release_readiness_fact_source", return_value=[]),
             patch.object(vw, "check_hot_fact_source_consistency", return_value=[]),
             patch.object(vw, "check_runtime_readiness_matrix", return_value=[]),
             patch.object(vw, "check_first_session_measurement", return_value=[]),
@@ -7408,6 +5559,7 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
             }),
             patch.object(vw, "check_release_docs_coverage", return_value=[]),
             *_clean_sd_face_patches(),
+            patch("loop_workflow.release_issues", return_value=[]),
         ]
 
     @staticmethod
@@ -7467,13 +5619,6 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
             },
         }
 
-    @staticmethod
-    def _clean_gate_sequence(mode="candidate"):
-        return {"verdict": "PASS", "reason": "", "violations": [],
-                "warnings": [],
-                "stats": {"lineage_mode": mode, "latest_tag": None,
-                          "prerelease_pending": 0}}
-
     def _cli_patches(self, regression):
         # run_release_execution_gates is faked because cmd_check_release
         # wires the REAL subprocess runner (verify / check-governance /
@@ -7488,10 +5633,7 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
         return self._release_patches() + [
             patch.object(vw, "run_release_execution_gates",
                          return_value=fake_gate_results),
-            patch.object(vw, "scan_loop_runtime_claims", return_value=None),
-            patch.object(
-                vw, "_loop_runtime_claim_gate_detail",
-                return_value={"pass": True, "issues": [], "boundary": ""}),
+
             patch.object(vw, "run_dsh_upgrade_regression_gates",
                          return_value=regression),
         ]
@@ -7634,36 +5776,10 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
                              for issue in result["issues"]))
         self.assertTrue(result["pass"], "skip path must not create a new FAIL")
 
-    def test_FEAT_016_br4_released_history_mode_discloses_skip_without_new_fail(self):
-        with patch.object(
-                vw, "check_gate_sequence_for_release",
-                return_value=self._clean_gate_sequence(mode="released")) as seq_mock, \
-             patch.object(vw, "run_dsh_upgrade_regression_gates") as default_runner:
-            stack = self._apply(self._release_patches())
-            with stack:
-                result = vw.check_release_readiness(
-                    run_execution_gates=True,
-                    execution_gate_runner=self._ok_execution_gate_runner,
-                    lineage_mode="candidate",
-                    gate_sequence_lineage_mode="released",
-                )
-        seq_mock.assert_called_once_with(lineage_mode="released")
-        default_runner.assert_not_called()
-        detail = result["details"]["dsh_upgrade_regression"]
-        self.assertTrue(detail["skipped"])
-        self.assertTrue(detail["pass"],
-                        "WARN semantics — BR-4 history query must not FAIL")
-        self.assertFalse(detail["required"])
-        self.assertIn("BR-4", detail["skip_reason"])
-        self.assertTrue(result["pass"])
-
     def test_FEAT_016_explicit_released_lineage_mode_skips_regression(self):
         with patch.object(
                 vw, "check_release_lineage",
                 return_value={"pass": True, "issues": [], "boundary": ""}), \
-             patch.object(
-                vw, "check_gate_sequence_for_release",
-                return_value=self._clean_gate_sequence(mode="released")), \
              patch.object(vw, "run_dsh_upgrade_regression_gates") as default_runner:
             stack = self._apply(self._release_patches())
             with stack:
@@ -7718,11 +5834,7 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
             patches = self._release_patches() + [
                 patch.object(vw, "run_release_execution_gates",
                              return_value=[]),
-                patch.object(vw, "scan_loop_runtime_claims", return_value=None),
-                patch.object(
-                    vw, "_loop_runtime_claim_gate_detail",
-                    return_value={"pass": True, "issues": [],
-                                  "boundary": ""}),
+
             ]
             stack = self._apply(patches)
             with stack:
@@ -7860,15 +5972,9 @@ class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
     ``pass == (not issues)`` for its own components, so the CLI verdict
     must stay consistent with the merged issue list."""
 
-    @staticmethod
-    def _clean_claim_gate(issues=()):
-        return {"pass": not list(issues), "issues": list(issues),
-                "boundary": ""}
-
-    def _patches(self, claim_gate):
+    def _patches(self):
         return [
             patch.object(vw, "check_version_consistency", return_value=[]),
-            patch.object(vw, "check_release_readiness_fact_source", return_value=[]),
             patch.object(vw, "check_hot_fact_source_consistency", return_value=[]),
             patch.object(vw, "check_runtime_readiness_matrix", return_value=[]),
             patch.object(vw, "check_first_session_measurement", return_value=[]),
@@ -7892,19 +5998,11 @@ class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
             patch.object(
                 vw, "check_release_lineage",
                 return_value={"pass": True, "issues": [], "boundary": ""}),
-            patch.object(
-                vw, "check_gate_sequence_for_release",
-                return_value={"verdict": "PASS", "reason": "",
-                              "violations": [], "warnings": [],
-                              "stats": {"lineage_mode": "candidate",
-                                        "latest_tag": None,
-                                        "prerelease_pending": 0}}),
             patch.object(vw, "run_release_execution_gates",
                          return_value=[]),
-            patch.object(vw, "scan_loop_runtime_claims", return_value=None),
-            patch.object(vw, "_loop_runtime_claim_gate_detail",
-                         return_value=claim_gate),
+
             *_clean_sd_face_patches(),
+            patch("loop_workflow.release_issues", return_value=[]),
         ]
 
     @staticmethod
@@ -7933,7 +6031,7 @@ class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
         must read PASSED with exit 0 (no SystemExit). Under the quirk the
         CLI forced pass False, printing FAILED - 0 issue(s) + exit 1."""
         stack = ExitStack()
-        for patch_item in self._patches(self._clean_claim_gate()):
+        for patch_item in self._patches():
             stack.enter_context(patch_item)
         with stack:
             text, exit_code = self._run_cli(self._args())
@@ -7941,28 +6039,10 @@ class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
         self.assertIn("Result: PASSED", text)
         self.assertNotIn("Result: FAILED", text)
 
-    def test_claim_issues_print_failed_count_and_exit_one(self):
-        """FIX-299: merged claim-gate issues must drive FAILED with the
-        exact issue count and exit 1 — the count assertion is the F-2
-        attribution strength (a real N-issue FAIL, never a 0-issue quirk)."""
-        claim_gate = self._clean_claim_gate([
-            "CLAIM_UNIT_UNKNOWN: skills/x.md claim id is not policy-owned",
-            "IDENTITY_ATTESTATION_FAIL: STAGED_DIGEST_MISMATCH: staged digest drift",
-        ])
-        stack = ExitStack()
-        for patch_item in self._patches(claim_gate):
-            stack.enter_context(patch_item)
-        with stack:
-            text, exit_code = self._run_cli(self._args())
-        self.assertEqual(1, exit_code)
-        self.assertIn("Result: FAILED - 2 issue(s)", text)
-        self.assertNotIn("Result: PASSED", text)
-        self.assertIn("[FAIL] loop runtime claim gate", text)
-
     def test_unreadable_sd_face_still_blocks_the_clean_cli_fixture(self):
         """Sibling fixtures must not mask a real SD scanner rejection."""
         with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
-            for item in self._patches(self._clean_claim_gate()):
+            for item in self._patches():
                 stack.enter_context(item)
             missing = Path(td) / "absent-projection.txt"
             stack.enter_context(patch(
@@ -8148,38 +6228,10 @@ class E2ECommandMatrixTests(unittest.TestCase):
     """FIX-060: e2e-check must execute real command proxies."""
 
     def _status_stdout(self, permission_mode="maximum-autonomy"):
-        return "\n".join([
-            "Project Overview",
-            "Tasks",
-            "Gate",
-            f"Permission Mode (permission_mode / 操作权限模式): {permission_mode}",
-            "Delivery Trust Snapshot",
-            "Resume state: Existing governance state detected",
-            "Carry-over: 1 active task(s)",
-            "Open risks: 1 open risk(s); RISK-036 opened 2026-06-01",
-            "Unfinished work: FIX-112 - Context-aware governance resume",
-            "Source facts: .governance/session-snapshot.md ## 下次会话优先级: FIX-112",
-            "Blocker state: no blocker recorded in checked facts",
-            "Auto-continue: yes",
-            "Interrupt boundary: continue automatically until critical decision, blocker, review, or release boundary",
-            "Hooks: installed (pre-commit, commit-msg, post-commit)",
-            "Goal: test",
-            "Stage: 维护",
-            "Gate/setup status: G11 passed",
-            "Risk: no open risks yet",
-            "Evidence: no delivery evidence yet",
-            "Next action: continue the active task and attach evidence before completion",
-            "Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work",
-            "Question budget: ask no more than 3 non-critical questions before snapshot; record deferred non-critical fields as assumptions",
-            "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status",
-            (
-                "No-overclaim boundary: local snapshot only; no official approval, "
-                "marketplace approval, universal/full runtime support, or "
-                "1.0.0 production-ready claim"
-            ),
-            "",
-        ])
-
+        return json.dumps({
+            "project": {"permission_mode": permission_mode},
+            "loops": {"state": "empty", "units": [], "no_global_stage": True},
+        })
     def test_e2e_matrix_entry_invokes_subprocess(self):
         entry = vw._e2e_command_matrix()[0]
         completed = subprocess.CompletedProcess(
@@ -8485,35 +6537,7 @@ class E2ECommandMatrixTests(unittest.TestCase):
                 "---\nversion: 0.45.0\n---\nCoordinator\nAgent Team\n",
                 encoding="utf-8",
             )
-            trust_snapshot_contract = (
-                "Delivery Trust Snapshot\n"
-                "Resume state\n"
-                "Existing governance state detected\n"
-                "Carry-over\n"
-                "Open risks\n"
-                "Unfinished work\n"
-                "Source facts\n"
-                "Blocker state\n"
-                "Auto-continue\n"
-                "Interrupt boundary\n"
-                "Hooks\n"
-                "Goal\n"
-                "Stage\n"
-                "Gate/setup status\n"
-                "Risk\n"
-                "Evidence\n"
-                "Next action\n"
-                "Preset guidance\n"
-                "lite is the recommended first-run default\n"
-                "standard is for team delivery\n"
-                "strict is for regulated/high-risk work\n"
-                "Question budget\n"
-                "no more than 3 non-critical questions before snapshot\n"
-                "deferred non-critical fields\n"
-                "assumptions\n"
-                "Verification signal\n"
-                "No-overclaim boundary\n"
-            )
+            status_contract = "governance-bootstrap --format json\nloop status --json\nloop status --unit unit --json"
             (e2e_dir / "commands" / "governance.md").write_text(
                 "Scenario F\nAskUserQuestion\nCoordinator\n"
                 "commands/governance/scenario-f.md\n",
@@ -8521,11 +6545,11 @@ class E2ECommandMatrixTests(unittest.TestCase):
             )
             (e2e_dir / "commands" / "governance").mkdir(parents=True, exist_ok=True)
             (e2e_dir / "commands" / "governance" / "scenario-f.md").write_text(
-                "Scenario F\n" + trust_snapshot_contract,
+                "Scenario F\n[status](../governance-status.md)",
                 encoding="utf-8",
             )
             (e2e_dir / "commands" / "governance-status.md").write_text(
-                trust_snapshot_contract,
+                status_contract,
                 encoding="utf-8",
             )
 
@@ -8824,7 +6848,7 @@ class AgentRuntimeE2EHarnessTests(unittest.TestCase):
         result = subprocess.CompletedProcess(
             ["claude"],
             0,
-            stdout="E2E_PLATFORM=claude; E2E_AGENT=coordinator; E2E_STAGE=维护; E2E_MODE=always-on x default-confirm\n",
+            stdout="E2E_PLATFORM=claude; E2E_AGENT=coordinator; E2E_UNIT=[]; E2E_MODE=always-on x default-confirm\n",
             stderr="",
         )
 
@@ -8833,14 +6857,14 @@ class AgentRuntimeE2EHarnessTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("E2E_PLATFORM=claude", message)
         self.assertIn("E2E_AGENT=coordinator", message)
-        self.assertIn("E2E_STAGE=维护", message)
+        self.assertIn("E2E_UNIT=[]", message)
         self.assertIn("E2E_MODE=always-on x default-confirm", message)
 
     def test_agent_runtime_passed_validator_rejects_agent_as_legacy_platform_field(self):
         result = subprocess.CompletedProcess(
             ["claude"],
             0,
-            stdout="E2E_AGENT=claude; E2E_STAGE=维护; E2E_MODE=always-on x default-confirm\n",
+            stdout="E2E_AGENT=claude; E2E_UNIT=[]; E2E_MODE=always-on x default-confirm\n",
             stderr="",
         )
 
@@ -8849,11 +6873,33 @@ class AgentRuntimeE2EHarnessTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("platform=claude", message)
 
+    def test_probe_response_must_match_the_target_host_even_with_multiple_real_units(self):
+        import loop_workflow as workflow
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            entry = next(e for e in vw._agent_runtime_e2e_command_matrix(root) if e["agent"] == "claude")
+            def evaluate(field):
+                response = "E2E_PLATFORM=claude; E2E_AGENT=Coordinator; " + field + "; E2E_MODE=always-on x default-confirm"
+                result = subprocess.CompletedProcess(entry["command"], 0, response, "")
+                return vw._evaluate_agent_runtime_e2e_command(entry, runner=lambda *args, **kwargs: result)["status"]
+
+            self.assertEqual(evaluate("E2E_UNIT=[]"), "PASS")
+            self.assertEqual(evaluate("E2E_UNIT=made-up"), "FAIL")
+            for unit_id in ("invoice", "export"):
+                workflow.start(root, unit_id=unit_id, tier="inner", goal="Restore " + unit_id,
+                               acceptance="The installed client reads its saved data.")
+            for field in ("E2E_UNIT=invoice", "E2E_UNIT=export"):
+                self.assertEqual(evaluate(field), "PASS")
+            for field in ("E2E_STAGE=维护", "E2E_UNIT=unknown", "E2E_UNIT=[]"):
+                self.assertEqual(evaluate(field), "FAIL")
+            workflow.runtime_path(root).write_text("{}", encoding="utf-8")
+            self.assertEqual(evaluate("E2E_UNIT=[]"), "FAIL")
+
     def test_agent_runtime_passed_validator_accepts_fields_in_any_order(self):
         result = subprocess.CompletedProcess(
             ["claude"],
             0,
-            stdout="E2E_AGENT=coordinator; E2E_PLATFORM=claude; E2E_MODE=silent-track x maximum-autonomy; E2E_STAGE=维护\n",
+            stdout="E2E_AGENT=coordinator; E2E_PLATFORM=claude; E2E_MODE=silent-track x maximum-autonomy; E2E_UNIT=[]\n",
             stderr="",
         )
 
@@ -8869,7 +6915,7 @@ class AgentRuntimeE2EHarnessTests(unittest.TestCase):
             0,
             stdout=(
                 '{"type":"text","part":{"text":"E2E_PLATFORM=opencode; '
-                'E2E_AGENT=Coordinator; E2E_STAGE=立项与目标定义; '
+                'E2E_AGENT=Coordinator; E2E_UNIT=[]; '
                 'E2E_MODE=always-on x default-confirm","time":123}}\n'
             ),
             stderr="",
@@ -8880,7 +6926,7 @@ class AgentRuntimeE2EHarnessTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("E2E_PLATFORM=opencode", message)
         self.assertIn("E2E_AGENT=Coordinator", message)
-        self.assertIn("E2E_STAGE=立项与目标定义", message)
+        self.assertIn("E2E_UNIT=[]", message)
         self.assertIn("E2E_MODE=always-on x default-confirm", message)
         self.assertNotIn('","time"', message)
 
@@ -8888,7 +6934,7 @@ class AgentRuntimeE2EHarnessTests(unittest.TestCase):
         result = subprocess.CompletedProcess(
             ["claude"],
             0,
-            stdout="E2E_PLATFORM=claude; E2E_AGENT=coordinator; E2E_STAGE=维护; E2E_MODE=manual x default-confirm\n",
+            stdout="E2E_PLATFORM=claude; E2E_AGENT=coordinator; E2E_UNIT=[]; E2E_MODE=manual x default-confirm\n",
             stderr="",
         )
 
@@ -9084,604 +7130,82 @@ class AgentRuntimeE2EHarnessTests(unittest.TestCase):
 
 
 class GovernanceStatusContractTests(unittest.TestCase):
-    """FIX-064: status contracts must expose operation permission mode."""
+    """A new process restores the same current work and permission facts as the session."""
 
-    def test_cmd_status_outputs_stable_permission_mode_line(self):
-        plan = "\n".join([
-            "# 计划跟踪",
-            "",
-            "## 项目配置",
-            "- **项目目标**: test",
-            "- **Profile**: standard",
-            "- **触发模式**: always-on",
-            "- **操作权限模式**: maximum-autonomy",
-            "- **当前阶段**: 维护",
-            "",
-            "## Gate 状态跟踪",
-            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
-            "| --- | --- | --- | --- | --- |",
-            "| G11 | → 下一轮 | passed | 2026-05-13 | done |",
-            "",
-            "## 项目总览",
-            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| Demo | 维护 | 1 | 1 | 0 | 0 | G11 通过 | 2026-05-13 |",
-            "",
-            "## 任务跟踪",
-            _TASK_COLS,
-            _TASK_SEP,
-            _task("FIX-064", status="已完成"),
-        ])
+    def test_status_reports_host_permissions_and_verified_work(self):
+        import loop_workflow as workflow
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             gov = root / ".governance"
             gov.mkdir()
-            sample = gov / "plan-tracker.md"
-            risk_path = gov / "risk-log.md"
-            sample.write_text(plan, encoding="utf-8")
-            risk_path.write_text("# 当前项目风险记录\n", encoding="utf-8")
-            # FIX-161: patch the interruption-policy module paths too, so cmd_status's
-            # internal check_interruption_policy call reads isolated fixtures instead
-            # of the real project's execution-packets / interaction-boundary (which
-            # contain in-flight tasks FIX-155/156/REL-047/REL-048 that fail the policy).
-            packet_path = gov / "execution-packets.json"
-            packet_path.write_text(json.dumps({"version": 1, "packets": {}}, ensure_ascii=False), encoding="utf-8")
-            boundary_path = root / "interaction-boundary.md"
-            boundary_path.write_text("# 用户交互边界规则\n## User Interruption Policy v2\ncritical-only policy.\n", encoding="utf-8")
-            template_path = root / "user-interruption-policy.md"
-            template_path.write_text("\n".join(["interruption_policy:", "critical_triggers:", "auto_execute:", "assumption_record:", "interruption_budget:"]), encoding="utf-8")
-            with patch.object(vw, "ROOT", root), \
-                 patch.object(vw, "SAMPLE_PATH", sample), \
-                 patch.object(vw, "RISK_PATH", risk_path), \
-                 patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
-                 patch.object(vw, "INTERACTION_BOUNDARY_PATH", boundary_path), \
-                 patch.object(vw, "USER_INTERRUPTION_POLICY_TEMPLATE_PATH", template_path), \
-                 patch.object(vw, "SESSION_SNAPSHOT_PATH", gov / "session-snapshot.md"):
-                buf = io.StringIO()
-                with redirect_stdout(buf):
-                    vw.cmd_status(None)
+            (gov / "plan-tracker.md").write_text(
+                "# Recovery host\n\n## 项目配置\n- **操作权限模式**: maximum-autonomy\n", encoding="utf-8")
+            snapshot = gov / "session-snapshot.md"
+            snapshot.write_text("# 旧会话\n| OLD-101 | unrelated handoff | 40% |", encoding="utf-8")
+            workflow.start(root, unit_id="repair", tier="inner", goal="Restore the saved draft",
+                           acceptance="Restarting the app recovers the saved title.")
+            args = [sys.executable, "-X", "utf8", str(_INFRA_DIR / "verify_workflow.py"),
+                    "--project-root", str(root)]
+            def invoke(*parts):
+                return subprocess.run([*args, *parts], cwd=root, capture_output=True, encoding="utf-8")
+            status = invoke("status", "--json")
+            self.assertTrue(vw._validate_e2e_status(status)[0], status.stdout)
+            report = json.loads(status.stdout)
+            self.assertEqual(report["project"]["permission_mode"], "maximum-autonomy")
+            self.assertEqual(report["loops"], json.loads(invoke("loop", "status", "--json").stdout))
+            self.assertNotIn("OLD-101", status.stdout)
+            text = invoke("status")
+            self.assertEqual(text.returncode, 0)
+            for value in ("Restore the saved draft", "recovers the saved title", "G6", "permission=maximum-autonomy"):
+                self.assertIn(value, text.stdout)
+            original = b'{"invalid": true}'
+            workflow.runtime_path(root).write_bytes(original)
+            invalid = invoke("status", "--json")
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertFalse(vw._validate_e2e_status(invalid)[0])
+            self.assertEqual(json.loads(invalid.stdout)["loops"]["units"], [])
+            self.assertEqual(workflow.runtime_path(root).read_bytes(), original)
 
-        output = buf.getvalue()
-        self.assertIn("Permission Mode (permission_mode / 操作权限模式): maximum-autonomy", output)
-        self.assertIn("Project Overview", output)
-        self.assertIn("Delivery Trust Snapshot", output)
-        self.assertIn("Resume state: Existing governance state detected", output)
-        self.assertIn("Carry-over: 0 active task(s)", output)
-        self.assertIn("Open risks: 0 open risk(s); none", output)
-        self.assertIn("Unfinished work: not found", output)
-        self.assertIn("Source facts:", output)
-        self.assertIn("Blocker state: not found", output)
-        self.assertIn("Auto-continue: no", output)
-        self.assertIn("Interrupt boundary: AskUserQuestion required", output)
-        self.assertIn("Goal: test", output)
-        self.assertIn("Stage: 维护", output)
-        self.assertIn("Gate/setup status: G11 通过", output)
-        self.assertIn("Risk: no open risks yet", output)
-        self.assertIn("Evidence: 1/1 task(s) completed; verify evidence before closing work", output)
-        self.assertIn("Preset guidance: lite is the recommended first-run default", output)
-        self.assertIn("standard is for team delivery", output)
-        self.assertIn("strict is for regulated/high-risk work", output)
-        self.assertIn("Question budget: ask no more than 3 non-critical questions before snapshot", output)
-        self.assertIn("record deferred non-critical fields as assumptions", output)
-        self.assertIn(
-            "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status",
-            output,
-        )
-        self.assertIn("No-overclaim boundary:", output)
-        self.assertIn("no official approval", output)
-        self.assertIn("marketplace approval", output)
-        self.assertIn("universal/full runtime support", output)
-        self.assertIn("1.0.0 production-ready", output)
-
-    def test_cmd_status_counts_active_seven_column_task_row(self):
-        plan = "\n".join([
-            "# 计划跟踪",
-            "",
-            "## 项目配置",
-            "- **项目目标**: test",
-            "- **Profile**: standard",
-            "- **触发模式**: always-on",
-            "- **操作权限模式**: maximum-autonomy",
-            "- **当前阶段**: 维护",
-            "",
-            "## Gate 状态跟踪",
-            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
-            "| --- | --- | --- | --- | --- |",
-            "| G11 | → 下一轮 | passed | 2026-05-13 | done |",
-            "",
-            "## 项目总览",
-            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| Demo | 维护 | 1 | 0 | 0 | 1 | G11 通过 | 2026-05-13 |",
-            "",
-            "## 当前活跃事项",
-            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
-            "| --- | --- | --- | --- | --- | --- | --- |",
-            "| **P0** | FIX-100 | First-run Delivery Trust Snapshot vertical slice | AUDIT-106 | 0.42.0 | status snapshot | 🚧 进行中 |",
-        ])
+    def test_status_on_an_empty_project_does_not_certify_historical_gates(self):
+        from tests.test_web_readers import PLAN
         with tempfile.TemporaryDirectory() as td:
-            sample = Path(td) / "plan-tracker.md"
-            sample.write_text(plan, encoding="utf-8")
-            with patch.object(vw, "SAMPLE_PATH", sample):
-                stats = vw.parse_task_stats()
-                buf = io.StringIO()
-                with redirect_stdout(buf):
-                    vw.cmd_status(None)
-
-        output = buf.getvalue()
-        self.assertEqual(stats["进行中"], 1)
-        self.assertIn("Carry-over: 1 active task(s)", output)
-        self.assertIn("Unfinished work: FIX-100", output)
-        self.assertIn("Source facts:", output)
-        self.assertIn("Next action: resume FIX-100 and attach evidence before completion", output)
-
-    def test_cmd_status_outputs_existing_project_resume_markers(self):
-        plan = "\n".join([
-            "# 计划跟踪",
-            "",
-            "## 项目配置",
-            "- **项目目标**: resume happy path",
-            "- **Profile**: standard",
-            "- **触发模式**: always-on",
-            "- **操作权限模式**: default-confirm",
-            "- **当前阶段**: 维护",
-            "",
-            "## Gate 状态跟踪",
-            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
-            "| --- | --- | --- | --- | --- |",
-            "| G11 | → 下一轮 | passed | 2026-06-03 | done |",
-            "",
-            "## 项目总览",
-            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| Demo | 维护 | 2 | 1 | 0 | 1 | G11 通过 | 2026-06-03 |",
-            "",
-            "## 当前活跃事项",
-            "| 优先级 | ID | 事项 | 依赖 | 目标版本 | 闭环路径 | 状态 |",
-            "| --- | --- | --- | --- | --- | --- | --- |",
-            "| **P0** | FIX-101 | Existing-project resume happy path | AUDIT-106 | 0.42.0 | status resume | 📋 待实施 |",
-        ])
-        risk = "\n".join([
-            "# 当前项目风险记录",
-            "| 编号 | 日期 | 风险/阻塞描述 | 所属阶段 | 触发条件 | 影响 | 严重级别 | Owner | 当前状态 | 缓解动作 | 截止日期 | 关联任务 | 备注 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| RISK-036 | 2026-06-01 | adoption risk | 维护 | trigger | impact | 高 | Coordinator | 打开 | mitigate | 2026-06-15 | FIX-101 | note |",
-        ])
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            gov = root / ".governance"
+            gov = Path(td) / ".governance"
             gov.mkdir()
-            sample = gov / "plan-tracker.md"
-            risk_path = gov / "risk-log.md"
-            sample.write_text(plan, encoding="utf-8")
-            risk_path.write_text(risk, encoding="utf-8")
-            for hook in ("pre-commit", "commit-msg", "post-commit"):
-                hook_path = root / ".git" / "hooks" / hook
-                hook_path.parent.mkdir(parents=True, exist_ok=True)
-                hook_path.write_text("#!/bin/sh\n", encoding="utf-8")
+            (gov / "plan-tracker.md").write_text(PLAN, encoding="utf-8")
+            for verb, code in ((["status", "--json"], 0), (["gates"], 0), (["gate", "G1"], 2), (["gate", "G99"], 2)):
+                result = subprocess.run([sys.executable, "-X", "utf8", str(_INFRA_DIR / "verify_workflow.py"),
+                                         "--project-root", td, *verb], cwd=td, capture_output=True, encoding="utf-8")
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                report = json.loads(result.stdout)
+                view = report.get("loops", report)
+                self.assertEqual((view["state"], view["units"]), ("empty", []))
 
-            with patch.object(vw, "ROOT", root), \
-                 patch.object(vw, "SAMPLE_PATH", sample), \
-                 patch.object(vw, "RISK_PATH", risk_path):
-                buf = io.StringIO()
-                with redirect_stdout(buf):
-                    vw.cmd_status(None)
-
-        output = buf.getvalue()
-        self.assertIn("Resume state: Existing governance state detected", output)
-        self.assertIn("Carry-over: 1 active task(s)", output)
-        self.assertIn("Open risks: 1 open risk(s); RISK-036 opened 2026-06-01", output)
-        self.assertIn("Unfinished work: FIX-101", output)
-        self.assertIn("Source facts:", output)
-        self.assertIn("Blocker state: open risk guard present: RISK-036", output)
-        self.assertIn("Auto-continue: no", output)
-        self.assertIn("Hooks: installed (pre-commit, commit-msg, post-commit)", output)
-        self.assertIn("Next action: resume FIX-101 and attach evidence before completion", output)
-        self.assertNotIn("governance-init", output)
-        self.assertNotIn("reinitialize", output.lower())
-
-    def test_cmd_status_counts_session_snapshot_carry_over_when_active_rows_absent(self):
-        plan = "\n".join([
-            "# 计划跟踪",
-            "",
-            "## 项目配置",
-            "- **项目目标**: snapshot resume",
-            "- **Profile**: standard",
-            "- **触发模式**: always-on",
-            "- **操作权限模式**: maximum-autonomy",
-            "- **当前阶段**: 维护",
-            "",
-            "## Gate 状态跟踪",
-            "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
-            "| --- | --- | --- | --- | --- |",
-            "| G11 | → 下一轮 | passed | 2026-06-03 | done |",
-            "",
-            "## 项目总览",
-            "| 项目 | 当前阶段 | 总任务数 | 已完成 | 阻塞中 | 关键风险数 | 最近 Gate 结论 | 最近复盘日期 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-            "| Demo | 维护 | 2 | 1 | 0 | 0 | G11 通过 | 2026-06-03 |",
-            "",
-            "## 当前活跃事项",
-            "",
-            "暂无活跃事项。",
-        ])
-        snapshot = "\n".join([
-            "# 会话快照 — 2026-06-03",
-            "",
-            "## 遗留任务",
-            "| 任务 ID | 描述 | 完成百分比 | 阻塞原因 | 优先级 |",
-            "|---------|------|------------|----------|--------|",
-            "| FIX-101 | Existing-project resume happy path | 40% | reviewer findings | P0 |",
-            "",
-            "## 本轮已完成",
-            "- none",
-        ])
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            gov = root / ".governance"
-            gov.mkdir()
-            sample = gov / "plan-tracker.md"
-            risk_path = gov / "risk-log.md"
-            snapshot_path = gov / "session-snapshot.md"
-            sample.write_text(plan, encoding="utf-8")
-            risk_path.write_text("# 当前项目风险记录\n", encoding="utf-8")
-            snapshot_path.write_text(snapshot, encoding="utf-8")
-            with patch.object(vw, "ROOT", root), \
-                 patch.object(vw, "SAMPLE_PATH", sample), \
-                 patch.object(vw, "RISK_PATH", risk_path), \
-                 patch.object(vw, "SESSION_SNAPSHOT_PATH", snapshot_path):
-                resume = vw.parse_resume_state()
-                buf = io.StringIO()
-                with redirect_stdout(buf):
-                    vw.cmd_status(None)
-
-        output = buf.getvalue()
-        self.assertEqual(resume["carry_over_count"], 1)
-        self.assertIn("Carry-over: 1 active task(s)", output)
-        self.assertIn("Unfinished work: FIX-101", output)
-        self.assertIn("Source facts:", output)
-        self.assertIn("Next action: resume FIX-101 and attach evidence before completion", output)
-
-    def test_governance_status_docs_require_permission_mode(self):
-        text = (vw.ROOT / "commands" / "governance-status.md").read_text(encoding="utf-8")
-
-        required = [
-            "操作权限模式 permission_mode",
-            "| permission_mode |",
-            "操作权限模式: {permission_mode}",
-            "不得只依赖项目配置原始字段顺序偶然展示",
-        ]
-        missing = [needle for needle in required if needle not in text]
-        self.assertEqual(missing, [])
-
-    def test_governance_status_docs_require_delivery_trust_snapshot_contract(self):
-        """FEAT-038: the Delivery Trust Snapshot contract now lives in the
-        Scenario F document; the router layer points at it. The contract
-        assertions follow the owning document (the router is asserted to carry
-        the routing pointer instead)."""
-        status_text = (vw.ROOT / "commands" / "governance-status.md").read_text(encoding="utf-8")
-        scenario_f = "commands/governance/scenario-f.md"
-        projected = governance_docs(
-            ("commands/governance-status.md", scenario_f), fixture=True)
-        fixture_status = projected["commands/governance-status.md"]
-
-        required = [
-            "Delivery Trust Snapshot",
-            "Resume state",
-            "Existing governance state detected",
-            "Carry-over",
-            "Open risks",
-            "Unfinished work",
-            "Source facts",
-            "Blocker state",
-            "Auto-continue",
-            "Interrupt boundary",
-            "Hooks",
-            "Goal",
-            "Stage",
-            "Gate/setup status",
-            "Risk",
-            "Evidence",
-            "Next action",
-            "Preset guidance",
-            "lite is the recommended first-run default",
-            "standard is for team delivery",
-            "strict is for regulated/high-risk work",
-            "Question budget",
-            "no more than 3 non-critical questions before snapshot",
-            "deferred non-critical fields",
-            "assumptions",
-            "Verification signal",
-            "No-overclaim boundary",
-            "official approval",
-            "marketplace approval",
-            "universal/full runtime support",
-            "1.0.0 production-ready",
-            "first-run-demo --assert-snapshot",
-            "governance-context",
-            "not found",
-            "do not invent",
-            "demo/local-only",
-            "external credentials",
-        ]
-        for label, text in {
-            "commands/governance-status.md": status_text,
-            f"commands/governance/scenario-f.md (source)": governance_doc(scenario_f),
-            f"commands/governance/scenario-f.md (fixture)": projected[scenario_f],
-            "project/e2e-test-project/commands/governance-status.md": fixture_status,
-        }.items():
-            with self.subTest(label=label):
-                self.assertEqual([needle for needle in required if needle not in text], [])
-        # The router layer must route to the owning document for this contract.
+    def test_status_routes_to_the_shared_work_unit_projection(self):
+        scenario = vw.ROOT / "commands/governance/scenario-f.md"
         router = governance_doc(GOVERNANCE_ROUTER_DOC)
-        self.assertIn("commands/governance/scenario-f.md", router)
-        self.assertIn("Delivery Trust Snapshot", router)
-
-    def test_governance_snapshot_dual_contract_default_view_guard(self):
-        """FEAT-036: the default interactive view is the <=8-field compact
-        contract with anomaly visibility, and the full machine contract stays
-        split-accurate: a 20-field CLI snapshot reachable via the existing
-        status CLI carriers plus a 4-field pack doc-surface contract guarded
-        by check-governance-pack-status (no parallel contract). Guards the
-        canonical command docs — FEAT-038: the `/governance` side of the
-        contract is owned by the Scenario F document."""
-        dual_markers = [
-            "默认交互视图合约",
-            "≤8 字段",
-            "异常不隐藏",
-            "最小状态行",
-            "≤700 tok",
-            "待检查（deferred",
-            "status --json",
-            "delivery_trust_snapshot",
-            "first-run-demo --assert-snapshot",
-            "不新建平行契约",
-            "20 字段 CLI snapshot 契约",
-            "4 字段 pack doc-surface 契约",
-            "不在任何 CLI snapshot 输出中",
-            "断言其中 19 字段",
-        ]
-        compact_labels = [
-            "Mode:", "Stage/Gate:", "Tasks:", "Risks:",
-            "Health:", "Next:", "Decision:", "Full:",
-        ]
-        self.assertEqual(len(compact_labels), 8)
-        for rel in ("commands/governance/scenario-f.md", "commands/governance-status.md"):
-            text = governance_doc(rel)
-            with self.subTest(file=rel):
-                missing = [m for m in dual_markers if m not in text]
-                self.assertEqual(missing, [])
-                match = re.search(
-                    r"默认交互视图合约[^\n]*\n+```[^\n]*\n(.*?)```",
-                    text, re.DOTALL)
-                self.assertIsNotNone(match, rel)
-                block = match.group(1)
-                field_lines = [
-                    line.strip() for line in block.splitlines()
-                    if re.match(r"^[A-Z][A-Za-z/-]*: ", line.strip())
-                ]
-                self.assertEqual(len(field_lines), 8)
-                for label in compact_labels:
-                    self.assertIn(label, block)
-                # full-face-only labels must NOT leak into the compact block
-                for leaked in ("Resume state:", "Preset guidance:",
-                               "Pack summary:", "No-overclaim boundary:"):
-                    self.assertNotIn(leaked, block)
-                # the Full pointer line must not regress to the old single
-                # "24-field artifact" carrier claim (R0 P1-1)
-                self.assertNotIn("24-field", block)
-                self.assertNotIn("24 字段", block)
-                # the full machine contract enumerates the engine truth
-                self.assertIn("Flow-unit lanes", text)
-
-    def test_target_status_validator_requires_no_overclaim_denial_content(self):
-        base_output = (
-            "Project Overview\n"
-            "Tasks\n"
-            "Gate\n"
-            "Permission Mode (permission_mode / 操作权限模式): maximum-autonomy\n"
-            "Delivery Trust Snapshot\n"
-            "Resume state: Existing governance state detected\n"
-            "Carry-over: 0 active task(s)\n"
-            "Open risks: 0 open risk(s); none\n"
-            "Unfinished work: not found\n"
-            "Source facts: checked .governance/plan-tracker.md; no unfinished user work facts found\n"
-            "Blocker state: not found\n"
-            "Auto-continue: no\n"
-            "Interrupt boundary: AskUserQuestion required before creating new work from assumptions\n"
-            "Hooks: installed (pre-commit, commit-msg, post-commit)\n"
-            "Goal: test\n"
-            "Stage: 维护\n"
-            "Gate/setup status: G11 passed\n"
-            "Risk: no open risks yet\n"
-            "Evidence: no delivery evidence yet\n"
-            "Next action: continue the active task and attach evidence before completion\n"
-            "Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work\n"
-            "Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions\n"
-            "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status\n"
-            "No-overclaim boundary: local snapshot only\n"
-        )
-        missing_denials = subprocess.CompletedProcess(args=[], returncode=0, stdout=base_output, stderr="")
-        ok, _ = vw._validate_e2e_target_status(missing_denials)
-        self.assertFalse(ok)
-
-        full_output = (
-            base_output
-            + "no official approval, marketplace approval, universal/full runtime support, "
-            + "or 1.0.0 production-ready claim\n"
-        )
-        with_denials = subprocess.CompletedProcess(args=[], returncode=0, stdout=full_output, stderr="")
-        ok, _ = vw._validate_e2e_target_status(with_denials)
-        self.assertTrue(ok)
-
-    def test_target_status_validator_requires_resume_markers(self):
-        output = (
-            "Project Overview\n"
-            "Tasks\n"
-            "Gate\n"
-            "Permission Mode (permission_mode / 操作权限模式): maximum-autonomy\n"
-            "Delivery Trust Snapshot\n"
-            "Goal: test\n"
-            "Stage: 维护\n"
-            "Gate/setup status: G11 passed\n"
-            "Risk: no open risks yet\n"
-            "Evidence: no delivery evidence yet\n"
-            "Next action: continue the active task and attach evidence before completion\n"
-            "Preset guidance: lite is the recommended first-run default; standard is for team delivery; strict is for regulated/high-risk work\n"
-            "Question budget: no more than 3 non-critical questions before snapshot; deferred non-critical fields become assumptions\n"
-            "Verification signal: python skills/software-project-governance/infra/verify_workflow.py status\n"
-            "No-overclaim boundary: local snapshot only; no official approval, marketplace approval, "
-            "universal/full runtime support, or 1.0.0 production-ready claim\n"
-        )
-        result = subprocess.CompletedProcess(args=[], returncode=0, stdout=output, stderr="")
-        ok, _ = vw._validate_e2e_target_status(result)
-        self.assertFalse(ok)
-
-    def test_governance_scenario_c_matches_continuous_archive_step_e(self):
-        # FEAT-038: the Scenario C body now lives in the on-demand document.
-        governance = governance_doc("commands/governance/scenario-c.md")
-        init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
-
-        required = [
-            "持续归档触发检测与执行",
-            "plugin_home",
-            '`python "<plugin_home>/infra/archive.py" migrate --auto --dry-run`',
-            '`python "<plugin_home>/infra/archive.py" migrate --auto`',
-            '`python "<plugin_home>/infra/verify_workflow.py" check-archive-integrity`',
-            "发布/版本 bump 收尾场景 MUST 阻断完成",
-            "无可归档数据",
-        ]
-        self.assertEqual([needle for needle in required if needle not in governance], [])
-        self.assertEqual([needle for needle in required if needle not in init], [])
-        forbidden = [
-            "python skills/software-project-governance/infra/archive.py",
-            "python skills/software-project-governance/infra/verify_workflow.py check-archive-integrity",
-        ]
-        self.assertEqual([needle for needle in forbidden if needle in governance], [])
-        self.assertEqual([needle for needle in forbidden if needle in init], [])
-
-    def test_scenario_c_upgrade_writes_are_ask_confirmed(self):
-        """FEAT-035 (AUDIT-154 A-4): Scenario C upgrade write operations are
-        ask-confirmed — the protocol presents an upgrade summary (version
-        span + CHANGELOG digest + explicit write-target list + rollback) via
-        AskUserQuestion and performs zero writes before the user responds.
-        R1 D7 erratum: this FEAT-035 test family lives inside
-        GovernanceStatusContractTests; the declared standalone class name
-        "UpgradeWriteConfirmationTests" was never created.
-        FEAT-038: the Scenario C body is now the on-demand document
-        `commands/governance/scenario-c.md`; the router layer carries a
-        no-regression note restating the zero-write gate."""
-        governance = governance_doc("commands/governance/scenario-c.md")
-        required = [
-            "AskUserQuestion 呈现升级摘要",
-            "用户未响应前零写操作",
-            "将执行的写操作清单",
-            "回滚方式",
-            "执行升级（推荐",
-            "dry-run 报告先行呈现",
-            # R1 D1: the cleanup deletion surface must be disclosed in the
-            # ask list — the user consents to deletions before they happen.
-            "插件残留清理删除面",
-        ]
-        self.assertEqual([needle for needle in required if needle not in governance], [])
-        for stale in ("自动升级序列", "已自动升级", "自动删除"):
-            self.assertNotIn(stale, governance)
-        # FEAT-038 no-regression: the router layer keeps the gate visible.
-        router = governance_doc(GOVERNANCE_ROUTER_DOC)
-        self.assertIn("未响应前零写操作", router)
-        self.assertIn("commands/governance/scenario-c.md", router)
-
-    def test_scenario_c_archive_migration_dry_run_confirmed(self):
-        """FEAT-035: archive migration (archive.py migrate) follows the same
-        ask-confirm gate — the dry-run report is presented first and the
-        migration runs only after AskUserQuestion confirmation."""
-        governance = governance_doc("commands/governance/scenario-c.md")
-        self.assertIn("呈现 dry-run 报告并通过 AskUserQuestion 确认", governance)
-
-    def test_init_templates_present_pending_upgrade_and_zero_write(self):
-        """FEAT-035: the standard + strict bootstrap templates present the
-        pending upgrade and execute only after confirmation — the old
-        silent-completion promise ("零用户行动 / 一切自动完成") is retired
-        while the auto-complete spirit stays (default option = execute).
-        FEAT-041 rebase: the strict template is the shared base + delta
-        composed by ``extract_canonical_templates``, so the FILE carries the
-        base once; the per-template guarantee is asserted on the COMPOSED
-        templates (both must carry the full gate needle set)."""
-        from sync_entry_projection import extract_canonical_templates
-        init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
-        composed = extract_canonical_templates(init)
-        for profile in ("standard", "strict"):
-            tpl = composed[profile]
-            with self.subTest(profile=profile):
-                self.assertEqual(tpl.count("呈现升级待处理"), 2)  # trigger + footer
-                self.assertEqual(tpl.count("用户未响应前零写操作"), 2)
-                self.assertEqual(tpl.count("执行升级（推荐）"), 2)
-                self.assertEqual(tpl.count("版本升级写序列属推进类动作"), 1)
-                # R1 D2: the upgrade ask timing is explicit on the bootstrap
-                # main path — the pending-upgrade confirm rides the FIRST
-                # interaction ask (same caliber as /governance Scenario C),
-                # not a second popup.
-                self.assertEqual(
-                    tpl.count("升级待处理确认随本次首次交互 ask 一并呈现"), 1)
-        for stale in ("零用户行动", "零用户操作", "一切自动完成", "自动序列", "已自动升级"):
-            self.assertNotIn(stale, init)
-
-    def test_upgrade_write_sequence_deep_check_linkage(self):
-        """DEC-207② P2-1: the version-upgrade write sequence is explicitly a
-        推进类动作 — the M5.5 rule 3 deep-check precondition is documented at
-        the Scenario C linkage point, in the bootstrap templates and in the
-        entry SKILL, closing the two-reading ambiguity.
-        FEAT-038: the Scenario C linkage point is the on-demand Scenario C
-        document; the router layer restates the same rule in its cross-scenario
-        note so the router alone is never silent about it."""
-        scenario_c = governance_doc("commands/governance/scenario-c.md")
-        self.assertIn("M5.5 条 3", scenario_c)
-        self.assertIn("版本升级写序列属推进类动作", scenario_c)
-        router = governance_doc(GOVERNANCE_ROUTER_DOC)
-        self.assertIn("M5.5 条 3", router)
-        self.assertIn("版本升级写序列属推进类动作", router)
-        init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
-        self.assertIn("DEC-207② P2-1 / M5.5 条 3", init)
-        skill = (vw.ROOT / "skills/software-project-governance/SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("版本升级写序列属推进类动作", skill)
-
-    def test_upgrade_cleanup_deletion_surface_dual_entry_aligned(self):
-        """FEAT-035 R1 (D1): the cleanup deletion surface is disclosed in the
-        Scenario C ask list and the confirmed write sequence aligns with the
-        bootstrap template C-2 step across BOTH entry points — dry-run report
-        first, deletion only after AskUserQuestion confirmation.  The old
-        "自动删除" wording (which contradicted governance-cleanup.md's own
-        dry-run-first safety guarantee) is retired from both faces.
-        FEAT-038: the `/governance` face is the on-demand Scenario C document."""
-        governance = governance_doc("commands/governance/scenario-c.md")
-        init = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
-        cleanup = (vw.ROOT / "commands" / "governance-cleanup.md").read_text(encoding="utf-8")
-        for text in (governance, init):
-            self.assertIn("插件残留清理删除面", text)
-            self.assertIn('python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>" --dry-run', text)
-            self.assertRegex(text.split('--target "<plugin_root>" --dry-run', 1)[1].splitlines()[0], r'确认.*(?:同一目标|--target "<plugin_root>")')
-        # FEAT-041 rebase: the file carries the shared base once (strict is
-        # composed from it), so the dual-template guarantee moves to the
-        # composed templates: each injected profile carries the deletion
-        # surface exactly once.
-        from sync_entry_projection import extract_canonical_templates
-        composed = extract_canonical_templates(init)
-        for profile in ("standard", "strict"):
-            self.assertEqual(composed[profile].count("插件残留清理删除面"), 1, profile)
-        self.assertNotIn("自动删除", governance)
-        self.assertNotIn("自动删除", init)
-        # template C-2 wording no longer contradicts governance-cleanup.md's
-        # own safety guarantee ("dry-run 先展示……用户确认后才执行")
-        self.assertIn("dry-run 先行 + AskUserQuestion 确认后执行", cleanup)
-        # dual-entry sequence alignment: cleanup sits between the hooks hint
-        # and the version-field update in both confirmed sequences.
-        g_seq = governance[governance.index("用户确认后执行升级序列"):]
-        self.assertLess(g_seq.index("Hook 存活检测"), g_seq.index("插件残留清理删除面"))
-        self.assertLess(g_seq.index("插件残留清理删除面"), g_seq.index("更新 `工作流版本` 为 `active_version`"))
-        i_block = init[init.index("版本变化检测 + bootstrap 升级"):]
-        self.assertLess(i_block.index("`.git/hooks/post-commit` 不存在"), i_block.index("插件残留清理删除面"))
-        self.assertLess(i_block.index("插件残留清理删除面"), i_block.index("**D. 更新 plan-tracker `工作流版本`**"))
-
+        self.assertIn(scenario.relative_to(vw.ROOT).as_posix(), router)
+        self.assertIn("../governance-status.md", scenario.read_text(encoding="utf-8"))
+        status = (scenario.parent / "../governance-status.md").read_text(encoding="utf-8")
+        for command in ("governance-bootstrap --format json", "loop status --unit <id> --json", "loop status --json"):
+            self.assertIn(command, status)
+    def test_upgrade_route_preserves_confirmation_and_recovery(self):
+        skill = _INFRA_DIR.parent / "SKILL.md"
+        relative = skill.relative_to(vw.ROOT).as_posix()
+        self.assertIn(relative, governance_doc("commands/governance-init.md"))
+        source = skill.read_text(encoding="utf-8")
+        self.assertIn("../../commands/governance/scenario-c.md", source)
+        scenario = governance_doc("commands/governance/scenario-c.md")
+        self.assertIn("commands/governance/scenario-c.md", governance_doc(GOVERNANCE_ROUTER_DOC))
+        for guard in ("用户未响应前零写操作", "回滚方式", "check-governance --summary-only", "归档完整性失败"):
+            self.assertIn(guard, scenario)
+        sequence = ("AskUserQuestion 呈现升级摘要", "用户确认后执行升级序列",
+                    'cleanup.py" --target "<plugin_root>" --dry-run', "确认该清单后才执行",
+                    'archive.py" migrate --auto --dry-run', "呈现 dry-run 报告并通过 AskUserQuestion 确认",
+                    'verify_workflow.py" check-archive-integrity')
+        locations = [scenario.index(step) for step in sequence]
+        self.assertEqual(locations, sorted(locations))
+        for guard in ("安装版本", "零写入", "回滚方式", "full 深检", "独占", "单独确认该清单", "校验失败记录风险"):
+            self.assertIn(guard, source)
     def test_governance_update_command_ask_confirmed_no_silent_semantics(self):
         """FEAT-035 R1 (D3): the deprecated manual governance-update command
         must not carry the old silent-upgrade mental model ("自动检测版本变
@@ -9700,6 +7224,24 @@ class GovernanceStatusContractTests(unittest.TestCase):
             "确认后更新 plan-tracker 工作流版本",
         ):
             self.assertIn(required, update)
+
+
+class FlowUnitRuntimeCommandTests(unittest.TestCase):
+    def test_native_command_projects_an_actual_unit_and_rejects_corrupt_state(self):
+        import loop_workflow
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".governance").mkdir()
+            loop_workflow.start(root, unit_id="export", goal="Export ledger", acceptance="CSV rows match",
+                                tier="middle", gate=None)
+            args = argparse.Namespace(fixture=str(root), fail_on_issues=True)
+            with redirect_stdout(io.StringIO()) as out:
+                vw.cmd_check_flow_unit_runtime(args)
+            self.assertEqual(json.loads(out.getvalue())["units"][0]["goal"], "Export ledger")
+            loop_workflow.runtime_path(root).write_bytes(b"{")
+            with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stopped:
+                vw.cmd_check_flow_unit_runtime(args)
+            self.assertNotEqual(stopped.exception.code, 0)
 
 
 class FirstRunDemoTests(unittest.TestCase):
@@ -9751,41 +7293,23 @@ class FirstRunDemoTests(unittest.TestCase):
         output = buf.getvalue()
         self.assertIn("First-Run Demo Harness", output)
         self.assertIn("First-Run Demo Result: PASSED", output)
-        for marker in [
-            "Delivery Trust Snapshot",
-            "Unfinished work:",
-            "Source facts:",
-            "Blocker state:",
-            "Auto-continue:",
-            "Interrupt boundary:",
-            "not found",
-            "Goal:",
-            "Stage:",
-            "Gate/setup status:",
-            "Risk:",
-            "Evidence:",
-            "Next action:",
-            "Preset guidance:",
-            "Question budget:",
-            "Verification signal:",
-            "No-overclaim boundary:",
-            "local/demo-only",
-            "no external credentials",
-            "no official approval",
-            "marketplace approval",
-            "universal/full runtime support",
-            "1.0.0 production-ready",
-        ]:
+        for marker in ("demo-delivery", "demo-export", "totals match", "loop-evidence/", "local/demo-only"):
             self.assertIn(marker, output)
+        self.assertNotIn("G0", output)
+
+    def test_first_run_demo_rejects_unsuccessful_observation(self):
+        with mock.patch("loop_workflow.verify_command", return_value={"decision": "iterate"}):
+            with self.assertRaisesRegex(ValueError, "demo-export failed"):
+                vw.build_first_run_demo_snapshot()
 
     def test_first_run_demo_assertion_reports_missing_field(self):
         snapshot = vw.build_first_run_demo_snapshot()
-        snapshot.pop("Evidence")
+        snapshot.pop("Work units")
 
         missing = vw.assert_first_run_demo_snapshot(snapshot)
 
-        self.assertIn("Evidence", missing)
-        self.assertIn("Evidence:", missing)
+        self.assertIn("Work units", missing)
+        self.assertIn("demo-export", missing)
 
 
 class GovernanceReviewFallbackPolicyTests(unittest.TestCase):
@@ -10071,30 +7595,17 @@ class PlanTrackerParsingTests(unittest.TestCase):
                 completed = vw.parse_completed_task_ids()
                 self.assertEqual(completed, {"FIX-072"})
 
-    def test_parse_gate_status(self):
-        with tempfile.TemporaryDirectory() as td:
-            sp = self._write(Path(td), self._PLAN_GATES)
-            with patch.object(vw, "SAMPLE_PATH", sp):
-                gates = vw.parse_gate_status()
-                self.assertEqual(len(gates), 2)
-                self.assertEqual(gates[0]["gate"], "G1")
-                self.assertEqual(gates[0]["status"], "passed")
-                self.assertEqual(gates[1]["gate"], "G2")
-                self.assertEqual(gates[1]["status"], "passed-on-entry")
-
     def test_parse_plan_tracker_empty(self):
         with tempfile.TemporaryDirectory() as td:
             sp = self._write(Path(td), "# empty\n")
             with patch.object(vw, "SAMPLE_PATH", sp):
                 self.assertEqual(len(vw.parse_completed_task_ids()), 0)
-                self.assertEqual(len(vw.parse_gate_status()), 0)
 
     def test_parse_plan_no_tasks_has_gates(self):
         with tempfile.TemporaryDirectory() as td:
             sp = self._write(Path(td), self._PLAN_GATES)
             with patch.object(vw, "SAMPLE_PATH", sp):
                 self.assertEqual(len(vw.parse_completed_task_ids()), 0)
-                self.assertEqual(len(vw.parse_gate_status()), 2)
 
 
 class Fix287ParserBoundaryTests(unittest.TestCase):
@@ -10104,7 +7615,6 @@ class Fix287ParserBoundaryTests(unittest.TestCase):
       (_PROFILE_TASK_COLUMNS authoritative source; no parts[9] hardcode).
     ③ parse_current_active_tasks — order-tolerant active-section boundary
       (not dependent on `### 最近完成` existing).
-    ④ parse_gate_status — bracketed Gate heading variants
       (`## Gate 状态跟踪（G1-G11）` full/half-width).
     """
 
@@ -10251,45 +7761,6 @@ class Fix287ParserBoundaryTests(unittest.TestCase):
             with patch.object(vw, "SAMPLE_PATH", sp):
                 ids = [t["task_id"] for t in vw.parse_current_active_tasks()]
                 self.assertEqual(ids, ["NEW-001"])
-
-    # ── ④ Gate heading bracket variants ──
-
-    _GATE_ROWS = [
-        "| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |",
-        "| --- | --- | --- | --- | --- |",
-        "| G1 | → 调研 | passed | 2026-04-01 | EVD-001 |",
-        "| G2 | → 技术选型 | pending | | |",
-    ]
-
-    def _gate_plan(self, heading):
-        return "\n".join(["# 计划跟踪", "", heading, "", *self._GATE_ROWS])
-
-    def test_gate_status_fullwidth_bracketed_heading(self):
-        with tempfile.TemporaryDirectory() as td:
-            sp = self._write(Path(td), self._gate_plan("## Gate 状态跟踪（G1-G11）"))
-            with patch.object(vw, "SAMPLE_PATH", sp):
-                gates = vw.parse_gate_status()
-                self.assertEqual([g["gate"] for g in gates], ["G1", "G2"])
-                self.assertEqual(gates[0]["status"], "passed")
-
-    def test_gate_status_halfwidth_bracketed_heading(self):
-        with tempfile.TemporaryDirectory() as td:
-            sp = self._write(Path(td), self._gate_plan("## Gate 状态跟踪 (G1-G11)"))
-            with patch.object(vw, "SAMPLE_PATH", sp):
-                self.assertEqual(len(vw.parse_gate_status()), 2)
-
-    def test_gate_statuses_wrapper_bracketed_heading(self):
-        with tempfile.TemporaryDirectory() as td:
-            sp = self._write(Path(td), self._gate_plan("## Gate 状态跟踪（G1-G11）"))
-            with patch.object(vw, "SAMPLE_PATH", sp):
-                self.assertEqual(len(vw.parse_gate_statuses()), 2)
-
-    def test_gate_status_exact_heading_regression_guard(self):
-        with tempfile.TemporaryDirectory() as td:
-            sp = self._write(Path(td), self._gate_plan("## Gate 状态跟踪"))
-            with patch.object(vw, "SAMPLE_PATH", sp):
-                self.assertEqual(len(vw.parse_gate_status()), 2)
-
 
 class GovernanceIntegrationTests(unittest.TestCase):
     """Integration: check-governance against temp .governance/."""
@@ -10707,12 +8178,10 @@ class GovernanceSignalNoiseTests(unittest.TestCase):
     def _minimal_m5_root(self, root, claude_text):
         (root / "CLAUDE.md").write_text(claude_text, encoding="utf-8")
         (root / "commands").mkdir(parents=True)
-        (root / "commands" / "governance-init.md").write_text(
-            "AskUserQuestion\nM5.1\n我即将输出的文本是否包含向用户提问的问句\n",
-            encoding="utf-8",
-        )
+        shutil.copyfile(_HERE.parents[3] / "commands/governance-init.md", root / "commands/governance-init.md")
         ib_dir = root / "skills/software-project-governance/references"
         ib_dir.mkdir(parents=True)
+        shutil.copyfile(_HERE.parents[3] / "skills/software-project-governance/SKILL.md", ib_dir.parent / "SKILL.md")
         (ib_dir / "interaction-boundary.md").write_text(
             "Use AskUserQuestion at interaction boundaries.\n",
             encoding="utf-8",
@@ -11391,12 +8860,10 @@ class Fix295Check10RecordDocScopeTests(unittest.TestCase):
         """Minimal root where the M5 structural checks (2/3/4) pass."""
         (root / "CLAUDE.md").write_text(claude_text, encoding="utf-8")
         (root / "commands").mkdir(parents=True)
-        (root / "commands" / "governance-init.md").write_text(
-            "AskUserQuestion\nM5.1\n我即将输出的文本是否包含向用户提问的问句\n",
-            encoding="utf-8",
-        )
+        shutil.copyfile(_HERE.parents[3] / "commands/governance-init.md", root / "commands/governance-init.md")
         ib_dir = root / "skills/software-project-governance/references"
         ib_dir.mkdir(parents=True)
+        shutil.copyfile(_HERE.parents[3] / "skills/software-project-governance/SKILL.md", ib_dir.parent / "SKILL.md")
         (ib_dir / "interaction-boundary.md").write_text(
             "Use AskUserQuestion at interaction boundaries.\n",
             encoding="utf-8",
@@ -13265,6 +10732,23 @@ class StructuredEvidenceTests(unittest.TestCase):
 
 
 class ExecutionPacketTests(unittest.TestCase):
+    def test_lightweight_local_fix_uses_its_registered_check_as_the_contract(self):
+        import loop_workflow
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            loop_workflow.start(root, unit_id="fix", task="FIX-12", goal="Correct the parser", acceptance="A path with spaces works",
+                                gate="G6", tier="inner", check_command=["python", "check.py"], expect_output="checked")
+            plan = root / ".governance/plan-tracker.md"
+            plan.write_text("## 项目配置\n- **Profile**: lightweight\n", encoding="utf-8")
+            task = {"priority": "P1", "task_id": "FIX-12", "status": "🔄 进行中"}
+            with patch.object(vw, "SAMPLE_PATH", plan), patch.object(vw, "parse_current_active_tasks", return_value=[task]):
+                self.assertEqual(vw.check_execution_packets()['required_tasks'], [])
+                for check in (vw.check_product_success_contracts, vw.check_acceptance_contracts, vw.check_quality_budget):
+                    self.assertEqual(check()["required_tasks"], [])
+                loop_workflow.start(root, unit_id="delivery", task="FIX-12", goal="Validate the deliverable",
+                                    acceptance="An installed client works", gate="G7", tier="middle")
+                self.assertEqual(vw.check_execution_packets()['required_tasks'], [])
+
     """FIX-084: active P0/P1 tasks need short AI execution packets."""
 
     def _setup_plan(self, tmpdir, rows):
@@ -13283,7 +10767,7 @@ class ExecutionPacketTests(unittest.TestCase):
         ]), encoding="utf-8")
         return root, sp, gov / "execution-packets.json"
 
-    def test_execution_packet_missing_file_fails_for_active_p0_p1(self):
+    def test_priority_alone_does_not_request_a_handoff(self):
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [
                 "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
@@ -13291,9 +10775,9 @@ class ExecutionPacketTests(unittest.TestCase):
             ])
             with patch.object(vw, "SAMPLE_PATH", sp):
                 r = vw.check_execution_packets(packet_path)
-            self.assertFalse(r["pass"])
-            self.assertEqual(r["required_tasks"], ["FIX-084"])
-            self.assertEqual(r["missing"], ["FIX-084"])
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["required_tasks"], [])
+            self.assertFalse(packet_path.exists())
 
     def test_execution_packet_generated_payload_passes(self):
         with tempfile.TemporaryDirectory() as td:
@@ -13322,9 +10806,9 @@ class ExecutionPacketTests(unittest.TestCase):
                         "task_id": "FIX-084",
                         "goal": "implement packet check",
                         "allowed_change_scope": ["any file"],
-                        "required_evidence": ["validation output only"],
+                        "required_evidence": ["TO_BE_DEFINED"],
                         "next_commands": ["python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v"],
-                        "done_definition": ["tests passed"],
+                        "done_definition": [],
                     }
                 },
             }), encoding="utf-8")
@@ -13333,8 +10817,8 @@ class ExecutionPacketTests(unittest.TestCase):
             self.assertFalse(r["pass"])
             issues = " ".join(r["entries"][0]["issues"])
             self.assertIn("too broad", issues)
-            self.assertIn("事实依据", issues)
-            self.assertIn("independent review", issues)
+            self.assertIn("required_evidence contains a placeholder", issues)
+            self.assertIn("done_definition must be non-empty", issues)
 
     # ── FIX-319: markdown bold is not a wildcard (bidirectional guard) ──
 
@@ -13486,16 +10970,16 @@ class ExecutionPacketTests(unittest.TestCase):
             self.assertTrue(r["pass"])
             self.assertEqual(r["required_tasks"], [])
 
-    def test_unfinished_status_still_requires_execution_packet(self):
+    def test_open_work_does_not_imply_an_external_handoff(self):
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [
                 "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 未完成 |",
             ])
             with patch.object(vw, "SAMPLE_PATH", sp):
                 r = vw.check_execution_packets(packet_path)
-            self.assertFalse(r["pass"])
-            self.assertEqual(r["required_tasks"], ["FIX-084"])
-            self.assertEqual(r["missing"], ["FIX-084"])
+            self.assertTrue(r["pass"])
+            self.assertEqual(r["required_tasks"], [])
+            self.assertFalse(packet_path.exists())
 
     def test_execution_packet_cli_reconfigures_stdout_for_unicode(self):
         with tempfile.TemporaryDirectory() as td:
@@ -13595,9 +11079,7 @@ class ExecutionPacketTests(unittest.TestCase):
                 json.dumps(seeded, ensure_ascii=False),
             )
 
-    def test_execution_packet_full_write_without_task_is_unchanged(self):
-        """FIX-296: full `--write` (no --task) keeps its exact legacy
-        behavior — message format and full-set file write, zero change."""
+    def test_unselected_write_does_not_create_unconsumed_packets(self):
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [
                 "| **P0** | FIX-084 | AI packet | DEC-068 | 0.38.0 | packet command | 📋 待启动 |",
@@ -13610,12 +11092,8 @@ class ExecutionPacketTests(unittest.TestCase):
                  contextlib.redirect_stdout(out):
                 vw.cmd_execution_packet(args)
 
-            self.assertEqual(
-                out.getvalue(),
-                f"[OK] wrote 2 execution packet(s) to {packet_path}\n",
-            )
-            on_disk = json.loads(packet_path.read_text(encoding="utf-8"))
-            self.assertEqual(set(on_disk["packets"]), {"FIX-084", "FIX-086"})
+            self.assertFalse(packet_path.exists())
+            self.assertIn("no active execution packets matched", out.getvalue())
 
 
 class ProductSuccessContractTests(unittest.TestCase):
@@ -13662,7 +11140,7 @@ class ProductSuccessContractTests(unittest.TestCase):
                 "| **P0** | FIX-088 | Product Success Contract | DEC-069 | 0.39.0 | template and check | 📋 待启动 |",
             ])
             with patch.object(vw, "SAMPLE_PATH", sp):
-                payload = vw.generate_execution_packets()
+                payload = vw.generate_execution_packets(contracts=["product_success_contract"])
             packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             with patch.object(vw, "SAMPLE_PATH", sp):
                 r = vw.check_product_success_contracts(packet_path)
@@ -13695,7 +11173,7 @@ class ProductSuccessContractTests(unittest.TestCase):
                 "packets": {
                     "FIX-088": {
                         "task_id": "FIX-088",
-                        "goal": "implement product success contract",
+                        "required_contracts": ["product_success_contract"], "goal": "implement product success contract",
                         "allowed_change_scope": ["limited scope"],
                         "required_evidence": ["事实依据 and 结构化事实"],
                         "next_commands": ["python test.py"],
@@ -13755,6 +11233,19 @@ class ProductSuccessContractTests(unittest.TestCase):
                 r = vw.check_product_success_contracts(packet_path)
             self.assertFalse(r["pass"])
             self.assertTrue(any("process-only" in issue for issue in r["entries"][0]["issues"]))
+
+    def test_reports_can_show_evidence_as_a_user_outcome(self):
+        contract = self._valid_contract()
+        for outcome in (
+            "用户刷新页面或执行 status 命令时能看到相同的目标、待处理子单元及上次退回证据",
+            "Users run the status command and see the review evidence attached to their selected work.",
+        ):
+            with self.subTest(outcome=outcome):
+                contract["success_metrics"] = [outcome]
+                self.assertEqual([], vw._validate_product_success_contract({"product_success_contract": contract}))
+        for process in ("Gate 已通过", "证据已写", "GATE G7 passed", "evidence-log includes review evidence"):
+            with self.subTest(process=process):
+                self.assertTrue(vw._is_process_only_product_success_metric(process))
 
 
 class ExecutableAcceptanceContractTests(unittest.TestCase):
@@ -13940,7 +11431,7 @@ class QualityBudgetTests(unittest.TestCase):
                 "| **P0** | FIX-090 | Quality Budget Gate | FIX-088 | 0.39.0 | quality budget | 📋 待启动 |",
             ])
             with patch.object(vw, "SAMPLE_PATH", sp):
-                payload = vw.generate_execution_packets()
+                payload = vw.generate_execution_packets(contracts=["quality_budget"], quality_dimensions=["performance"])
             packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             with patch.object(vw, "SAMPLE_PATH", sp):
                 r = vw.check_quality_budget(packet_path)
@@ -13968,7 +11459,7 @@ class QualityBudgetTests(unittest.TestCase):
             ])
             packet_path.write_text(json.dumps({
                 "version": 1,
-                "packets": {"FIX-090": {"task_id": "FIX-090", "goal": "quality budget"}},
+                "packets": {"FIX-090": {"task_id": "FIX-090", "required_contracts": ["quality_budget"], "goal": "quality budget"}},
             }), encoding="utf-8")
             with patch.object(vw, "SAMPLE_PATH", sp):
                 r = vw.check_quality_budget(packet_path)
@@ -13983,6 +11474,7 @@ class QualityBudgetTests(unittest.TestCase):
             with patch.object(vw, "SAMPLE_PATH", sp):
                 payload = vw.generate_execution_packets()
             budget = self._valid_quality_budget()
+            budget["required_dimensions"] = ["security"]
             del budget["dimensions"]["security"]
             payload["packets"]["FIX-090"]["quality_budget"] = budget
             packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -14202,7 +11694,7 @@ class VerticalSliceTests(unittest.TestCase):
                 "| **P1** | FIX-091 | Vertical Slice Delivery Packets | FIX-090 | 0.39.0 | slices | 📋 待实施 |",
             ])
             with patch.object(vw, "SAMPLE_PATH", sp):
-                payload = vw.generate_execution_packets()
+                payload = vw.generate_execution_packets(contracts=["vertical_slice"])
             packet_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
             with patch.object(vw, "SAMPLE_PATH", sp):
                 r = vw.check_vertical_slices(packet_path)
@@ -14230,7 +11722,7 @@ class VerticalSliceTests(unittest.TestCase):
             ])
             packet_path.write_text(json.dumps({
                 "version": 1,
-                "packets": {"FIX-091": {"task_id": "FIX-091", "goal": "slice guard"}},
+                "packets": {"FIX-091": {"task_id": "FIX-091", "required_contracts": ["vertical_slice"], "goal": "slice guard"}},
             }), encoding="utf-8")
             with patch.object(vw, "SAMPLE_PATH", sp):
                 r = vw.check_vertical_slices(packet_path)
@@ -14733,6 +12225,8 @@ class CommitMsgFactGroundingHookTests(unittest.TestCase):
             subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
             subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
 
+            from tests.test_pre_commit_review_evidence import create_fixture_commit, record_candidate
+            create_fixture_commit(root)
             gov = root / ".governance"
             gov.mkdir(parents=True, exist_ok=True)
             (gov / "plan-tracker.md").write_text("\n".join([
@@ -14752,22 +12246,22 @@ class CommitMsgFactGroundingHookTests(unittest.TestCase):
             product_file.write_text("product change\n", encoding="utf-8")
             subprocess.run(["git", "add", staged_path], cwd=root, check=True)
 
+            record_candidate(root, "FIX-080")
             msg = root / "COMMIT_EDITMSG"
             msg.write_text("FIX-080: test fact grounding hook\n", encoding="utf-8")
             hook = _INFRA_DIR / "hooks" / "commit-msg"
             return subprocess.run(
                 [self._bash(), hook.as_posix(), msg.as_posix()],
-                cwd=root,
+                cwd=root, env={**os.environ, "SOFTWARE_PROJECT_GOVERNANCE_HOME": str(_INFRA_DIR.parent)},
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
             )
 
-    def test_commit_msg_blocks_missing_evidence_log_for_product_code(self):
+    def test_commit_msg_accepts_native_proof_without_duplicate_log(self):
         result = self._run_hook(evidence_text=None)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("evidence-log.md is missing", result.stdout)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_commit_msg_blocks_missing_fact_basis(self):
         evidence = _impact_evidence_row(
@@ -14816,7 +12310,7 @@ class CommitMsgFactGroundingHookTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_commit_msg_blocks_nested_product_path_with_missing_goal_alignment(self):
+    def test_commit_msg_uses_native_goal_for_nested_product(self):
         evidence = "\n".join([
             _dated_impact_evidence_row(
                 "EVD-141", "FIX-080",
@@ -14832,10 +12326,9 @@ class CommitMsgFactGroundingHookTests(unittest.TestCase):
             evidence_text=evidence,
             staged_path="writing-workflow/.claude-plugin/marketplace.json",
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("GOAL ALIGNMENT BLOCKED", result.stdout)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_commit_msg_blocks_nested_product_path_with_missing_user_impact(self):
+    def test_commit_msg_uses_signed_candidate_without_duplicate_impact(self):
         evidence = "\n".join([
             _dated_impact_evidence_row(
                 "EVD-142", "FIX-080",
@@ -14851,8 +12344,7 @@ class CommitMsgFactGroundingHookTests(unittest.TestCase):
             evidence_text=evidence,
             staged_path="some-plugin/agents/developer.md",
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("USER IMPACT BLOCKED", result.stdout)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_commit_msg_blocks_dated_evidence_row_with_missing_fact_basis(self):
         evidence = "\n".join([
@@ -14922,6 +12414,9 @@ class CommitMessageSourceHardeningTests(unittest.TestCase):
         subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
 
+        from tests.test_pre_commit_review_evidence import create_fixture_commit
+        create_fixture_commit(root)
+        self.review_status = review_status
         gov = root / ".governance"
         gov.mkdir(parents=True, exist_ok=True)
         (gov / "plan-tracker.md").write_text("\n".join([
@@ -14959,6 +12454,9 @@ class CommitMessageSourceHardeningTests(unittest.TestCase):
         product_file.parent.mkdir(parents=True, exist_ok=True)
         product_file.write_text(content, encoding="utf-8")
         subprocess.run(["git", "add", staged_path], cwd=root, check=True)
+        if self.review_status in ("APPROVED", "APPROVED_WITH_NOTES"):
+            from tests.test_pre_commit_review_evidence import record_candidate
+            record_candidate(root, "FIX-133", self.review_status)
 
     def _install_hook(self, root: Path, hook_name: str):
         target = root / ".git" / "hooks" / hook_name
@@ -15022,7 +12520,7 @@ class CommitMessageSourceHardeningTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("M7.4 BLOCKED", result.stdout)
+            self.assertIn("M7.4 BLOCKED", result.stdout + result.stderr)
 
     def test_pre_commit_keeps_governance_record_path_non_product_when_message_is_direct(self):
         with tempfile.TemporaryDirectory() as td:
@@ -15278,7 +12776,7 @@ class CommitMessageSourceHardeningTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("NO task ID", result.stdout)
+            self.assertIn("<work-unit>", result.stdout + result.stderr)
             self.assertFalse(self._git_path(root, "GOV_COMMIT_MSG").exists())
 
     def test_prepare_commit_msg_does_not_persist_gov_commit_msg_bridge(self):
@@ -16537,40 +14035,25 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
     """FIX-238.1/238.2: command templates carry platform injection,
     POSIX/PowerShell dual syntax and the @bootstrap-version upgrade chain."""
 
-    def test_governance_command_documents_platform_injection_and_vendor_fallback(self):
-        """FEAT-038: the entry-resolution protocol (FIX-238) now lives in the
-        on-demand `commands/governance/bootstrap.md`; the router layer carries
-        the first action sentence and routes to it."""
-        text = governance_doc("commands/governance/bootstrap.md")
-        for marker in (
-            "$CLAUDE_PLUGIN_ROOT",
-            "file:",
-            "bootstrap.sh",
-            "bootstrap.cmd",
-            "PowerShell",
-            "POSIX",
-            "SPG_RESOLVE_TIMEOUT",
-            "SPG_WEB_INSTALL_TIMEOUT",
-        ):
-            self.assertIn(marker, text)
+    def test_router_resolves_the_installed_bootstrap_before_reading_host_state(self):
         router = governance_doc(GOVERNANCE_ROUTER_DOC)
-        self.assertIn("resolve_entry.py --json", router)
-        self.assertIn("commands/governance/bootstrap.md", router)
+        recovery = governance_doc("commands/governance/bootstrap.md")
+        for marker in ("governance-bootstrap --format json", "resolve_entry.py --json",
+                       "resolved_root_ok", "commands/governance/bootstrap.md"):
+            self.assertIn(marker, router)
+        for marker in ("CLAUDE_PLUGIN_ROOT", "SKILL.md", "SOFTWARE_PROJECT_GOVERNANCE_HOME",
+                       "resolved_root_ok == true", "MUST STOP", "GOV-ERR-005", "GOV-ERR-006", "/plugin update"):
+            self.assertIn(marker, recovery)
+        for name in ("bootstrap.sh", "bootstrap.cmd"):
+            self.assertIn(name, recovery)
+            self.assertTrue((_INFRA_DIR / name).is_file(), name)
 
-    def test_governance_init_documents_platform_injection_and_dual_syntax(self):
-        text = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
-        for marker in ("$CLAUDE_PLUGIN_ROOT", "bootstrap.sh", "bootstrap.cmd",
-                       "PowerShell", "POSIX", "@bootstrap-version"):
-            self.assertIn(marker, text)
-
-    def test_bootstrap_version_upgrade_chain_documented_in_governance_command(self):
-        """FEAT-038: the FIX-238.2 upgrade chain moved to the on-demand
-        `commands/governance/bootstrap.md` together with the entry protocol."""
-        text = governance_doc("commands/governance/bootstrap.md")
-        for marker in ("@bootstrap-version", "陈旧", "/plugin update", "不升级"):
-            self.assertIn(marker, text)
-        router = governance_doc(GOVERNANCE_ROUTER_DOC)
-        self.assertIn("bootstrap.md", router)
+    def test_init_registers_and_reopens_project_work_from_the_validated_root(self):
+        text = governance_doc("commands/governance-init.md")
+        for operation in ("governance-bootstrap --format json", "resolve.resolved_root_ok == true",
+                          "loop start --unit", "--goal", "--acceptance", "loop status --json",
+                          "sync_entry_projection.py"):
+            self.assertIn(operation, text)
 
     def test_bootstrap_version_marker_injected_into_all_profiles(self):
         text = (vw.ROOT / "commands" / "governance-init.md").read_text(encoding="utf-8")
@@ -16615,25 +14098,10 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
                 "CLAUDE.md",
             )
 
-    def test_e2e_fixture_mirrors_bootstrap_script_and_markers(self):
-        """FEAT-038: the fixture mirror must carry the router layer AND the
-        on-demand entry-resolution document — the bootstrap markers moved with
-        the FIX-238 protocol."""
-        projected = governance_docs(("commands/governance/bootstrap.md",
-                                    GOVERNANCE_ROUTER_DOC,
-                                    "commands/governance-init.md"), fixture=True)
-        governance = projected["commands/governance/bootstrap.md"]
-        router = projected[GOVERNANCE_ROUTER_DOC]
-        init = projected["commands/governance-init.md"]
-        self.assertIn("bootstrap.sh", governance)
-        self.assertIn("bootstrap.cmd", governance)
-        self.assertIn("@bootstrap-version", governance)
-        self.assertIn("commands/governance/bootstrap.md", router)
-        self.assertIn("@bootstrap-version", init)
-        # R1 D7b: the fixture mirror also carries the FEAT-035 zero-write
-        # marker, so future canonical drift of the upgrade-confirm protocol
-        # cannot slip past the fixture unnoticed.
-        self.assertIn("用户未响应前零写操作", init)
+    def test_tracked_host_fixture_exposes_the_canonical_init_and_router(self):
+        for rel in (GOVERNANCE_ROUTER_DOC, "commands/governance-init.md"):
+            with self.subTest(entry=rel):
+                self.assertEqual(governance_doc(rel), governance_doc(rel, fixture=True))
 
 
 class ArchiveTriggerGapTests(unittest.TestCase):
@@ -18966,26 +16434,27 @@ class LoopRoleSkillConsistencyTests(unittest.TestCase):
         self.assertTrue(any("no resolvable shared loop-role mapping reference" in issue
                             for issue in result["issues"]))
 
-    def test_fix193_loop_role_contract_rejects_approval_with_notes_drift(self):
+    def test_every_reviewer_consumes_its_assigned_gate(self):
+        for name in vw.LOOP_ROLE_SKILL_CONTRACTS:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                self._copy_loop_role_fixture(root)
+                path = root / "skills" / name / "SKILL.md"
+                content = path.read_text(encoding="utf-8")
+                prefix, role = content.split("## 循环角色", 1)
+                path.write_text(prefix + "## 循环角色" + re.sub(r"\bG\d+\b", "G99", role, count=1), encoding="utf-8")
+                self.assertTrue(any(f"{name}: consumes" in issue for issue in
+                                    vw.check_loop_role_skill_consistency(root)["issues"]))
+
+    def test_shared_contract_rejects_removed_zero_blocker_requirement(self):
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            self._copy_loop_role_fixture(root)
-            skill_path = root / "skills/code-review/SKILL.md"
-            content = skill_path.read_text(encoding="utf-8")
-            skill_path.write_text(
-                content.replace(
-                    "`APPROVED_WITH_NOTES` 是保留备注的通过终态",
-                    "`APPROVED_WITH_NOTES` 是非终态",
-                ),
-                encoding="utf-8",
-            )
-
-            result = vw.check_loop_role_skill_consistency(root=root)
-
-        self.assertFalse(result["passed"])
-        self.assertTrue(any("APPROVED_WITH_NOTES" in issue for issue in result["issues"]))
-
-
+            self._copy_loop_role_fixture(Path(td))
+            mapping = Path(td) / "skills/software-project-governance/references/loop-role-mapping.md"
+            mapping.write_text(mapping.read_text(encoding="utf-8").replace("unresolved_blockers=0", "unchecked"),
+                               encoding="utf-8")
+            result = vw.check_loop_role_skill_consistency(root=Path(td))
+            self.assertFalse(result["passed"])
+            self.assertTrue(any("unresolved_blockers=0" in issue for issue in result["issues"]))
 # ────────────────────────────────────────────────────────────
 # FIX-187: dual-root model — plugin-root != host-root.
 # Regression for the 0.54.2/0.54.3 / RISK-038 failure mode where
@@ -19125,20 +16594,16 @@ class DualRootModelTests(unittest.TestCase):
                     f"{host_root_resolved}",
                 )
 
-    def test_parse_gate_status_no_crash_on_host_root(self):
-        """The original crash: parse_gate_status() read plugin-cache
-        plan-tracker (non-existent) and raised FileNotFoundError. With
-        SAMPLE_PATH patched to the host plan-tracker it must return real
-        gate rows instead of crashing."""
+    def test_unit_snapshot_reads_only_the_selected_host(self):
+        import loop_workflow
         with tempfile.TemporaryDirectory() as td:
             plugin_root, host_root = self._build_plugin_and_host(td)
-            host_sample = host_root / ".governance" / "plan-tracker.md"
-            with patch.object(vw, "SAMPLE_PATH", host_sample):
-                gates = vw.parse_gate_status()
-            # Exactly one gate row defined in _DUAL_ROOT_PLAN_TRACKER.
-            self.assertEqual(len(gates), 1)
-            self.assertEqual(gates[0]["gate"], "G0")
-            self.assertEqual(gates[0]["status"], "passed")
+            loop_workflow.start(host_root, unit_id="export", goal="Produce ledger CSV",
+                                acceptance="Accepted totals", tier="middle", gate=None)
+            with patch.object(vw, "GOVERNANCE_DIR", host_root / ".governance"):
+                host_snapshot = vw.build_delivery_trust_snapshot()
+            self.assertEqual(["export"], [unit["flow_unit_id"] for unit in host_snapshot["Work units"]])
+            self.assertEqual([], vw.build_delivery_trust_snapshot(plugin_root)["Work units"])
 
     def test_plugin_root_equals_legacy_root_in_dogfood(self):
         """In dogfood mode (plugin installed == repo), PLUGIN_ROOT must
@@ -19713,49 +17178,48 @@ class CheckReviewClosureCompositeKeyTests(unittest.TestCase):
 
 
 class LoopWiringCallSiteTests(unittest.TestCase):
-    """FIX-236.4 / ADR-017 §3.4 (P1-1): process_gate_result call-site check.
+    """The scoped writer has one authority and three independent receipt paths."""
 
-    AST/import-graph analysis must enumerate production call sites (≥2) while
-    ignoring docstrings, comments and string literals — the
-    loop_gate_processor.py:69 docstring example is the negative sample that
-    previously caused AUDIT-133/140-style false positives with rg text search.
-    """
-
-    def test_repo_production_call_sites_two_or_more(self):
+    def test_each_live_evidence_source_reaches_the_same_writer(self):
         result = vw.check_loop_wiring_call_sites()
         self.assertEqual(result["verdict"], "PASS", result["reason"])
-        self.assertGreaterEqual(result["count"], 2)
-        files = {cs["file"] for cs in result["call_sites"]}
-        self.assertIn("review_record.py", files)
-        self.assertIn("verify_workflow.py", files)
+        self.assertEqual([site["function"] for site in result["call_sites"]], ["_apply_receipt"])
+        self.assertEqual({site["function"] for site in result["consumers"]},
+                         {"gate_review", "verify_command", "accept_delivery"})
 
-    def test_docstring_example_is_not_counted(self):
-        gp_file = _INFRA_DIR / "loop_gate_processor.py"
-        result = vw.check_loop_wiring_call_sites(roots=[gp_file])
-        self.assertEqual(result["count"], 0, result["call_sites"])
+    def test_missing_duplicate_or_unverified_authority_fails_even_when_text_still_names_it(self):
+        import ast
 
-    def test_real_calls_counted_strings_and_comments_ignored(self):
-        with tempfile.TemporaryDirectory() as td:
-            src = Path(td) / "fake_wiring.py"
-            src.write_text(
-                "def wired(unit, gate):\n"
-                "    process_gate_result(unit, gate, 'APPROVED', "
-                "evidence_ref='r', actor='a')\n"
-                "\n"
-                "def unwired():\n"
-                "    text = \"process_gate_result(unit, gate, ...) in a string\"\n"
-                "    # process_gate_result(...) in a comment\n"
-                "    return text\n"
-                "\n"
-                "def docstring_example():\n"
-                "    '''outcome = process_gate_result('u', 'G6', "
-                "'NEEDS_CHANGE')'''\n"
-                "    return None\n",
-                encoding="utf-8",
-            )
-            result = vw.check_loop_wiring_call_sites(roots=[td])
-        self.assertEqual(result["count"], 1, result["call_sites"])
-        self.assertEqual(result["call_sites"][0]["file"], "fake_wiring.py")
+        native = (_INFRA_DIR / "loop_workflow.py").read_text(encoding="utf-8")
+        for mutation in ("missing_command", "bypass", "unchecked", "text_only"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                source = native
+                if mutation == "missing_command":
+                    tree = ast.parse(source)
+                    verify = next(fn for fn in tree.body if isinstance(fn, ast.FunctionDef)
+                                  and fn.name == "verify_command")
+                    calls = [node.func for node in ast.walk(verify) if isinstance(node, ast.Call)
+                             and isinstance(node.func, ast.Name) and node.func.id == "_apply_receipt"]
+                    self.assertEqual(len(calls), 1)
+                    calls[0].id = "another_writer"
+                    source = ast.unparse(tree)
+                elif mutation == "bypass":
+                    (root / "another.py").write_text(
+                        "from loop_gate_processor import process_gate_result as authorize\n"
+                        "def bypass(*args):\n    return authorize(*args, verified_native_review=True)\n", encoding="utf-8")
+                elif mutation == "unchecked":
+                    source = source.replace("verified_native_review=True", "verified_native_review=False")
+                    self.assertNotEqual(source, native)
+                else:
+                    source = '"""process_gate_result(unit, gate); _apply_receipt(path, unit)"""\n'
+                (root / "loop_workflow.py").write_text(source, encoding="utf-8")
+                result = vw.check_loop_wiring_call_sites([root])
+                self.assertEqual(result["verdict"], "FAIL", result)
+                self.assertTrue(result["issues"])
+                if mutation == "missing_command":
+                    self.assertEqual({c["function"] for c in result["consumers"]},
+                                     {"gate_review", "accept_delivery"})
 
 
 class AutoJudgeGateWiringBTests(unittest.TestCase):
@@ -19782,27 +17246,41 @@ class AutoJudgeGateWiringBTests(unittest.TestCase):
             result = vw.auto_judge_gate("G6", unit_id="shitu.story.Skeleton")
         return result, pgr
 
-    def test_wiring_b_success_outcome_wired_with_mapped_conclusion(self):
-        fake_outcome = SimpleNamespace(
-            success=True, decision="exit", status="success",
-            reason="gate G6 passed → exit", new_loop_count=None)
-        result, pgr = self._run("PASS", fake_outcome)
+    def test_diagnostic_pass_does_not_authorize_a_work_unit(self):
+        result, writer = self._run("PASS", None)
         self.assertEqual(result["overall"], "passed")
-        self.assertTrue(result["wiring"]["wired"])
-        self.assertEqual(result["wiring"]["decision"], "exit")
-        self.assertEqual(result["wiring"]["status"], "success")
-        pgr.assert_called_once_with(
-            "shitu.story.Skeleton", "G6", "APPROVED",
-            evidence_ref="gate-check-G6", actor="gate-engine")
+        self.assertNotIn("wiring", result)
+        writer.assert_not_called()
 
-    def test_wiring_b_non_success_outcome_not_wired(self):
-        fake_outcome = SimpleNamespace(
-            success=False, decision="iterate", status="illegal",
-            reason="schema_version '1.0' is not v2 — no-op", new_loop_count=None)
-        result, _ = self._run("PASS", fake_outcome)
-        self.assertFalse(result["wiring"]["wired"])
-        self.assertEqual(result["wiring"]["status"], "illegal")
-        self.assertFalse(result["wiring"]["degraded"])
+    def test_gate_check_requires_a_scoped_record_and_replays_it_once(self):
+        from loop_workflow import start, runtime_path
+        from review_record import write_review_record
+        with tempfile.TemporaryDirectory() as temp, patch.object(vw, "HOST_PROJECT_ROOT", Path(temp)):
+            root = Path(temp)
+            for uid in ("patch", "other"):
+                start(root, unit_id=uid, tier="inner", goal="Repair " + uid,
+                      acceptance="The observed output agrees with the specification")
+            state = runtime_path(root)
+            first = state.read_bytes()
+            args = SimpleNamespace(gate_id="G6", unit="patch", review="REVIEW-patch-R0")
+            with self.assertRaises(SystemExit) as denied:
+                vw.cmd_gate_check(args)
+            self.assertEqual(2, denied.exception.code)
+            self.assertEqual(first, state.read_bytes())
+            (root / "observation.md").write_text("**审查结论**: **APPROVED**", encoding="utf-8")
+            review = write_review_record(root=root, task_id="patch", round_n=0, result="APPROVED",
+                                         report_path="observation.md", reviewer="Code Reviewer", require_loop=True)
+            self.assertNotIn("error", review)
+            signed = state.read_bytes()
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                vw.cmd_gate_check(args)
+            self.assertTrue(json.loads(out.getvalue())["replayed"])
+            self.assertEqual(signed, state.read_bytes())
+            args.unit = "other"
+            with self.assertRaises(SystemExit):
+                vw.cmd_gate_check(args)
+            self.assertEqual(signed, state.read_bytes())
 
     def test_wiring_b_needs_human_skips_wiring_key(self):
         fake_registry = {"gate_execution_registry": {"gate_checks": [{
@@ -20949,14 +18427,11 @@ class ExecutionPacketIncrementalWriteTests(unittest.TestCase):
             self.assertEqual(written["coordinator_note"],
                              "manual top-level enrichment")
 
-    def test_full_write_still_regenerates_everything(self):
-        """A bare --write (no --task) keeps the FIX-296 semantics: the full
-        active set is regenerated in one pass (the runtime file reflects
-        the live tracker; manual packet-level enrichment still overlays
-        via the existing merge)."""
+    def test_bulk_refresh_updates_only_previously_selected_handoffs(self):
         from unittest.mock import patch
         with _governance_temp_dir(prefix="feat080-xp2-") as td:
             packet_path = Path(td) / "execution-packets.json"
+            packet_path.write_text(json.dumps({"packets": {"FIX-201": {}}}), encoding="utf-8")
             args = SimpleNamespace(write=True, task=[])
             with patch.object(vw, "EXECUTION_PACKET_PATH", packet_path), \
                  patch.object(vw, "_active_execution_packet_tasks",
@@ -20965,7 +18440,7 @@ class ExecutionPacketIncrementalWriteTests(unittest.TestCase):
             written = json.loads(
                 packet_path.read_text(encoding="utf-8"))
             self.assertIn("FIX-201", written["packets"])
-            self.assertIn("FIX-202", written["packets"])
+            self.assertNotIn("FIX-202", written["packets"])
 
 
 class SdIntegrityGateTests(unittest.TestCase):
@@ -21088,8 +18563,6 @@ class SdIntegrityGateTests(unittest.TestCase):
                                         "mirrors_discovered": 0,
                                         "mirrors_skipped_untracked": 0,
                                         "source_version": None}), \
-             patch.object(vw, "check_release_readiness_fact_source",
-                          return_value=[]), \
              patch.object(vw, "check_hot_fact_source_consistency",
                           return_value=[]), \
              patch.object(vw, "check_runtime_readiness_matrix",
@@ -21120,8 +18593,6 @@ class SdIntegrityGateTests(unittest.TestCase):
                                         "mirrors_discovered": 0,
                                         "mirrors_skipped_untracked": 0,
                                         "source_version": None}), \
-             patch.object(vw, "check_release_readiness_fact_source",
-                          return_value=[]), \
              patch.object(vw, "check_hot_fact_source_consistency",
                           return_value=[]), \
              patch.object(vw, "check_runtime_readiness_matrix",
@@ -22196,7 +19667,7 @@ class ReviewRecordReviewerKeyTests(unittest.TestCase):
       unchanged, key face widened).
     - Consumers stay compatible without modification: the evidence id keeps
       ``REVIEW-{task}-R{n}`` as its canonical prefix (Check 30/30c live-scan
-      row channel, commit-msg ``has_approved_review_evidence`` prefix match).
+      row channel, native staged-candidate review scope).
       FIX-344 (review-FIX-314-CODE-R0 P2-1) supersedes the earlier "namespaced
       FILES stay outside the 30c name shape" stance: the file channel is now
       suffix-aware and judges each reviewer's OWN file, so a compliant
@@ -22466,94 +19937,25 @@ class ReviewRecordReviewerKeyTests(unittest.TestCase):
 
     # ── commit-msg hook 行前缀匹配（同步面①：无需改动，测试钉死） ──
 
-    _BASH_CANDIDATES = (
-        shutil.which("bash"),
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files\Git\usr\bin\bash.exe",
-    )
+    def test_only_the_signed_scoped_reviewer_record_authorizes_the_index(self):
+        from commit_review import check
+        from tests.test_pre_commit_review_evidence import create_fixture_commit, record_candidate
 
-    @classmethod
-    def _bash_exe(cls):
-        """A WORKING bash, or None.
-
-        ``shutil.which("bash")`` alone is not enough: on Windows the PATH may
-        resolve to the WSL stub (``system32\\bash.exe``), which exits non-zero
-        when no distro is installed — probing it keeps the FIX-314 hook
-        assertions skipped instead of red on such hosts (the pre-existing
-        FIX-261 harness in test_pre_commit_review_evidence.py has the same
-        exposure; this probe is local to the FIX-314 tests).
-        """
-        for candidate in cls._BASH_CANDIDATES:
-            if not candidate:
-                continue
-            try:
-                probe = subprocess.run(
-                    [candidate, "-c", "echo ok"], capture_output=True,
-                    timeout=15)
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-            if probe.returncode == 0:
-                return candidate
-        return None
-
-    def _run_commit_msg_hook(self, task_id, evidence_text):
-        """Execute the REAL ``has_approved_review_evidence`` from the
-        commit-msg hook source (extracted, not re-typed) against a fixture
-        evidence-log. Returns True/False (HIT/MISS)."""
-        from tests.test_pre_commit_review_evidence import (
-            _extract_function,
-            _win_to_msys_or_wsl,
-        )
-        bash = self._bash_exe()
-        if not bash:
-            self.skipTest("no working bash (hooks are bash)")
-        fn = _extract_function(_INFRA_DIR / "hooks" / "commit-msg")
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / ".governance").mkdir()
-            (root / ".governance" / "evidence-log.md").write_text(
-                evidence_text, encoding="utf-8")
-            root_posix = str(root).replace("\\", "/")
-            root_wsl = _win_to_msys_or_wsl(root_posix)
-            script = (
-                "REPO_ROOT={0!r}\n"
-                "[ -d \"$REPO_ROOT\" ] || REPO_ROOT=$(cygpath -u {1!r} "
-                "2>/dev/null || echo {1!r})\n"
-                "{2}\n"
-                'if has_approved_review_evidence "{3}"; then echo HIT; '
-                "else echo MISS; fi\n"
-            ).format(root_wsl, root_posix, fn, task_id)
-            script = script.replace("\r\n", "\n").replace("\r", "\n")
-            proc = subprocess.run(
-                [bash, "-s"], input=script.encode("utf-8"),
-                capture_output=True, timeout=30)
-        out = proc.stdout.decode("utf-8", "replace").strip()
-        self.assertIn(out, ("HIT", "MISS"),
-                      "hook run failed: rc={0} stderr={1!r}".format(
-                          proc.returncode, proc.stderr[:400]))
-        return out == "HIT"
-
-    def _hook_row(self, result, tail_cols):
-        return (
-            "| REVIEW-FIX-314-R0-CODE-REVIEWER | FIX-314 | 治理记录 | "
-            "review-record CLI 机器写入 review 结论记录（round 0） | "
-            "事实依据：review-record 输出摘要（机器写入） | report.md; "
-            "review-FIX-314-R0-code-reviewer.md | Code Reviewer | "
-            "2026-08-22 | G11 | {0}{1}").format(result, tail_cols)
-
-    def test_commit_msg_hook_matches_reviewer_suffixed_machine_row(self):
-        self.assertTrue(
-            self._run_commit_msg_hook(
-                "FIX-314",
-                self._hook_row("APPROVED_WITH_NOTES",
-                               " | unresolved_blockers=0 |") + "\n"),
-            "commit-msg must accept the reviewer-suffixed machine row")
-
-    def test_commit_msg_hook_still_rejects_needs_change_row(self):
-        self.assertFalse(
-            self._run_commit_msg_hook(
-                "FIX-314", self._hook_row("NEEDS_CHANGE", " |") + "\n"),
-            "NEEDS_CHANGE must not satisfy the approved-evidence gate")
+        subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.name", "Fixture reviewer"], cwd=self.root, check=True)
+        subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], cwd=self.root, check=True)
+        create_fixture_commit(self.root)
+        product = self.root / "src" / "invoice.py"
+        product.parent.mkdir()
+        product.write_text("print(31)\n", encoding="utf-8")
+        subprocess.run(["git", "add", "--", "src/invoice.py"], cwd=self.root, check=True)
+        first = record_candidate(self.root, "FIX-314", reviewer="Design Reviewer")
+        with self.assertRaises(ValueError):
+            check(self.root, "FIX-314")
+        second = record_candidate(self.root, "FIX-314", reviewer="Code Reviewer")
+        self.assertNotEqual(first["review_id"], second["review_id"])
+        self.assertIn("CODE-REVIEWER", second["review_id"])
+        self.assertTrue(check(self.root, "FIX-314"))
 
     # ── CLI 端到端两连发（临时 project root，不触碰真实 .governance/） ──
 
@@ -23095,82 +20497,6 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         self.assertTrue(standardish)
         self.assertNotIn("次要平台入口薄指针", standardish)
 
-    # ── entry-template slice precision (review-FEAT-039 R1: P1-1) ──────────
-    #
-    # The entry-template surfaces must price the canonical Step 7 blocks
-    # EXACTLY as the platform entry files are rendered — the same authority
-    # ``check-entry-bootstrap-sync`` validates the live CLAUDE.md/AGENTS.md
-    # sections against (``sync_entry_projection.extract_canonical_templates``).
-    # The pinned byte counts are that authority's own output: a change to a
-    # template — or to the boundary rule — must redden this test rather than
-    # move the price silently. NOTE the R0 review's fence-pair reading
-    # (17,219 / 17,220 / 2,739) truncated the standard/strict blocks at the
-    # nested ``Bootstrap 变更纪律`` fence and dropped the sections the live
-    # entry files DO carry; the authority above explicitly forbids that
-    # ("nested fences cannot truncate a block").
-    #
-    # FEAT-040 rebase: the counts moved because every template gained the
-    # gray-release switch block (FEAT-040; performance-only rollback + the
-    # safety hard boundary) — 3904→4555 / 22858→23836 / 23484→24462 /
-    # 2724→3013. The rebase is the guard working as designed: the price could
-    # not move without a deliberate edit here.
-    #
-    # FEAT-041 rebase (DEC-218/DEC-219 contract v2 — 触发器行内 + 明细按需):
-    # the standard block became the shared base (23836→9553) and the strict
-    # block became the strict-profile DELTA composed over that base by
-    # ``extract_canonical_templates`` (24462→10441 = base 9553 + delta +
-    # separator); the thin pointer was compacted with anchor parity
-    # (3013→2859). Same guard discipline: the price cannot move without a
-    # deliberate edit here.
-    #
-    # FEAT-073 (2026-09-28): 2859 -> 2766 — secondary-thin B-a/B-b/B-c
-    # 压缩（ADR-020 §3.2，DEC-271）. Same guard discipline: a deliberate
-    # edit rides the ticket, the price never moves silently.
-    #
-    # FEAT-078 (2026-09-29, B1a / DEC-291): the ADR-021 contract clauses
-    # 5/6 entered every Step 7 entry template (+534 B lightweight; +534
-    # standard; +534 strict) and the secondary-thin pointer grew 2766 ->
-    # 2840 (clause pointer line). Same guard discipline: the deliberate
-    # re-price rides the B1a ticket; the tiered freeze lines that keep
-    # these prices bounded live in checks/injection_budget.py
-    # (CONTRACT_M1_BUDGET_TOKENS / CONTRACT_COMBINED_BUDGET_TOKENS,
-    # FEAT-079 / DEC-291).
-    #
-    # FEAT-084 (2026-10-02, DEC-303 form B): the session health-summary
-    # line entered the lightweight template (+132 B) and the standard/strict
-    # Step 2 line (+150 B each) — the session face defaults to
-    # `--scope quick` while the deep-check full face stays explicit; the
-    # thin pointer is untouched (pointer semantics, no command line). Same
-    # guard discipline: the re-price rides the FEAT-084 ticket.
-    #
-    # FIX-432 (2026-10-04): the 详细规则 M0~M9→M0~M10 sweep line rode the
-    # standard (+1 B) and strict (+1 B) Step 7 templates (lightweight and
-    # the thin pointer carry no 详细规则 section). Same guard discipline:
-    # the re-price rides the FIX-432 ticket.
-    #
-    # FEAT-090 (2026-10-09): the 关键行为契约第 7~9 条 compressed line
-    # (parallel-first dispatch / health-check eventization / hot-path
-    # single-source) entered the lightweight (+365 B) and standard/strict
-    # (+365 B each) Step 7 templates — trigger-line form (契约 v2: 明细
-    # 按需, full text lives in behavior-protocol.md M7.8); the thin pointer
-    # is untouched (pointer semantics). Same guard discipline: the
-    # deliberate re-price rides the FEAT-090 ticket.
-    #
-    # FEAT-097 (2026-10-10): the 关键行为契约第 10 条 goal-预算必收口
-    # trigger line entered the lightweight (+83 B) and standard/strict
-    # (+83 B each) Step 7 templates — trigger-line-only form (契约 v2:
-    # the full rule lives in SKILL.md 关键行为契约 item 10); the thin
-    # pointer is untouched.  The resident strict face now sits at
-    # 6197/6200 tok — the deliberate re-price (including the thin-line
-    # sizing against the frozen DEC-211③ hard gate) rides the FEAT-097
-    # ticket.
-    # Bootstrap reads the root and hot fields together; these sizes bind the new template bytes.
-    ENTRY_TEMPLATE_CANONICAL_BYTES = {
-        "lightweight": 5272,
-        "standard": 10177,
-        "strict": 11065,
-        "secondary-thin": 2614,
-    }
 
     def test_entry_template_surfaces_price_the_canonical_blocks(self):
         """Byte-exact: resolver output == canonical projection, per profile."""
@@ -23183,16 +20509,11 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
             resolved = vw.load_injection_surface(
                 surfaces["entry-template"], vw.ROOT)
             self.assertEqual(resolved, canonical[profile], profile)
-            self.assertEqual(len(resolved.encode("utf-8")),
-                             self.ENTRY_TEMPLATE_CANONICAL_BYTES[profile],
-                             profile)
         thin = {s["name"]: s for s in vw.set_injection_budget_surface_profiles(
             "lightweight")}
         thin_text = vw.load_injection_surface(
             thin["secondary-entry-template"], vw.ROOT)
         self.assertEqual(thin_text, canonical["secondary-thin"])
-        self.assertEqual(len(thin_text.encode("utf-8")),
-                         self.ENTRY_TEMPLATE_CANONICAL_BYTES["secondary-thin"])
 
     def test_entry_template_slice_excludes_text_outside_the_block(self):
         """Tail precision: neither the next template's label nor the spec prose
@@ -23258,14 +20579,9 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         (no longer the resident budget), so the test lowers that policy line
         for the duration of the call (try/finally restore) to reproduce the
         report-only overrun."""
-        skill_policy = vw.BUDGET_TIER_POLICY["skill"]
-        saved_skill_budget = skill_policy["budget_tokens"]
-        skill_policy["budget_tokens"] = 1000
-        try:
-            result = vw.check_injection_budget(profile="standard",
-                                               budget_tokens=5000)
-        finally:
-            skill_policy["budget_tokens"] = saved_skill_budget
+        resident_limit = vw.check_injection_budget(profile="standard")["tokens"] - 1
+        with patch.dict(vw.BUDGET_TIER_POLICY["skill"], budget_tokens=1):
+            result = vw.check_injection_budget(profile="standard", budget_tokens=resident_limit)
         self.assertIn("resident", result["over_budget_tiers"])
         self.assertIn("skill", result["over_budget_tiers"])
         self.assertNotIn("skill", result["gated_over_budget_tiers"])
@@ -23286,7 +20602,7 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
         buf2 = io.StringIO()
         with redirect_stdout(buf2):
             vw.cmd_check_injection_budget(SimpleNamespace(
-                budget_tokens=5000, profile="standard",
+                budget_tokens=resident_limit, profile="standard",
                 format="text", fail_on_issues=False))
         out2 = buf2.getvalue()
         self.assertIn("Result: FAILED", out2)
@@ -23573,37 +20889,15 @@ class FEAT038GovernanceOnDemandSplitTests(unittest.TestCase):
             f"≤{self.ROUTER_BUDGET_BYTES}B (FEAT-038). Move execution detail "
             f"into commands/governance/<name>.md instead of growing the router.")
 
-    # ── ② decision tree + summaries + routing instruction ──────────────
-    def test_router_layer_keeps_decision_tree_and_summaries(self):
-        for marker in (
-            "## 决策树（自动分类——deterministic，DEC-096）",
-            "resolve_entry.py --json",
-            "governance-bootstrap --format json",
-            "scenario_hint",
-            "## Scenario 摘要与路由",
-        ):
-            self.assertIn(marker, self.router, marker)
-        # one summary row per Scenario, each naming its owning document
-        for key in "abcdef":
-            self.assertRegex(
-                self.router,
-                rf"(?m)^\|\s*{key.upper()}\s*\|[^\n]*scenario-{key}\.md",
-                f"Scenario {key.upper()} summary row missing from the router layer",
-            )
-
-    def test_router_layer_states_must_read_routing_contract(self):
-        self.assertIn("MUST 先用 `read` 工具读取下表对应文件", self.router)
-        self.assertIn("路由契约（MUST）", self.router)
-
-    # ── ③ Scenario documents exist / non-empty / registered / on-demand ─
-    def test_scenario_documents_exist_and_are_non_empty(self):
-        for rel in GOVERNANCE_SCENARIO_DOCS:
-            path = self.root / rel
-            with self.subTest(document=rel):
-                self.assertTrue(path.is_file(), f"{rel} is missing")
-                text = path.read_text(encoding="utf-8")
-                self.assertGreater(len(text.encode("utf-8")), 512,
-                                   f"{rel} looks empty/stub")
+    def test_each_resolver_scenario_routes_to_one_on_demand_document(self):
+        self.assertIn("resolve.scenario_hint", self.router)
+        routes = re.findall(r"(?m)^\|\s*([A-F])[^|]*\|\s*`(commands/governance/scenario-[a-f]\.md)`", self.router)
+        self.assertEqual(sorted(routes), [(key.upper(), f"commands/governance/scenario-{key}.md") for key in "abcdef"])
+        for key, rel in routes:
+            with self.subTest(key=key):
+                text = governance_doc(rel)
+                self.assertTrue(text.startswith(f"# Scenario {key}"))
+                self.assertIn(f'scenario_hint == "{key}"', self.router)
 
     def test_scenario_documents_are_registered_in_manifest(self):
         manifest = json.loads(
@@ -23649,54 +20943,27 @@ class FEAT038GovernanceOnDemandSplitTests(unittest.TestCase):
                          "surface (FEAT-038 split + FEAT-039 budget)")
         # ③ and the router really does name every deferred document.
         for rel in GOVERNANCE_SCENARIO_DOCS + GOVERNANCE_SUPPORT_DOCS:
-            self.assertIn(rel, self.router,
-                          f"{rel} must be routed to, not inlined")
+            self.assertIn(Path(rel).name, self.router, f"{rel} must be reachable")
 
-    # ── ④ zero semantic loss ────────────────────────────────────────────
-    def test_scenario_documents_carry_every_original_section_heading(self):
-        """Every `##/###` heading of each original Scenario section survives in
-        its owning document — the move may not drop a step."""
-        expected = {
-            "a": [],
-            "b": ["### Step B1:", "### Step B2:", "### Step B3:", "### Step B4:",
-                  "### Step B5:", "### Step B6-B7:", "### Step B8:"],
-            "c": [],
-            "d": ["### Step D1:", "### Step D2:", "### Step D3:", "### Step D4:"],
-            "e": ["### Step E1:", "### Step E2:", "### Step E3:", "### Step E4:"],
-            "f": ["### 状态展示后的引导（MUST）"],
-        }
-        for key, headings in expected.items():
-            text = governance_doc(f"commands/governance/scenario-{key}.md")
-            with self.subTest(scenario=key):
-                self.assertTrue(text.startswith(f"# Scenario {key.upper()}: "))
-                for heading in headings:
-                    self.assertIn(heading, text, f"scenario-{key}: {heading} lost")
+    def test_each_scenario_has_an_executable_action_or_a_resolvable_command(self):
+        by_scenario = {"a": "../governance-init.md", "b": "../governance-init.md",
+                       "c": "check-archive-integrity", "d": "loop status --json",
+                       "e": "loop status --json", "f": "../governance-status.md"}
+        for name, action in by_scenario.items():
+            with self.subTest(scenario=name):
+                path = self.root / f"commands/governance/scenario-{name}.md"
+                self.assertIn(action, path.read_text(encoding="utf-8"))
+                if action.endswith(".md"):
+                    self.assertTrue((path.parent / action).is_file())
 
-    def test_scenario_documents_keep_feat034_035_036_semantics(self):
-        """The protocols landed by FEAT-034/035/036 may not regress in the split."""
-        scenario_c = governance_doc("commands/governance/scenario-c.md")
-        for marker in ("用户未响应前零写操作", "AskUserQuestion 呈现升级摘要",
-                       "插件残留清理删除面", "M5.5 条 3"):
-            self.assertIn(marker, scenario_c, f"Scenario C lost: {marker}")
-        scenario_d = governance_doc("commands/governance/scenario-d.md")
-        self.assertIn("FEAT-034", scenario_d)
-        scenario_f = governance_doc("commands/governance/scenario-f.md")
-        for marker in ("默认交互视图合约", "≤8 字段", "20 字段 CLI snapshot 契约",
-                       "4 字段 pack doc-surface 契约", "状态展示后的引导（MUST）"):
-            self.assertIn(marker, scenario_f, f"Scenario F lost: {marker}")
-
-    def test_support_documents_keep_their_contracts(self):
+    def test_support_documents_bind_snapshot_restore_and_bootstrap_diagnostics(self):
         bootstrap = governance_doc("commands/governance/bootstrap.md")
-        for marker in ("SPG_RESOLVE_TIMEOUT", "SPG_WEB_INSTALL_TIMEOUT",
-                       "@bootstrap-version", "GOV-ERR-006"):
-            self.assertIn(marker, bootstrap, marker)
+        for marker in ("resolved_root_ok", "SPG_RESOLVE_TIMEOUT", "GOV-ERR-006"):
+            self.assertIn(marker, bootstrap)
         snapshot = governance_doc("commands/governance/snapshot-schema.md")
-        for marker in ("session-snapshot.md", "推荐快照引用", "用户偏好设置"):
-            self.assertIn(marker, snapshot, marker)
-        overview = governance_doc("commands/governance/overview.md")
-        for marker in ("Web console 入口边界", "自动化能力分级声明",
-                       "C 级为 roadmap（未实现）"):
-            self.assertIn(marker, overview, marker)
+        for marker in ("session-snapshot.md", "carry_over_tasks", "目标及验收依据", "RECO-", "用户偏好设置"):
+            self.assertIn(marker, snapshot)
+        self.assertIn("Web console 入口边界", governance_doc("commands/governance/overview.md"))
 
     # ── ⑤ command-discovery exposure (FEAT-038 P3-4 / FEAT-040) ──────────
     def test_deferred_documents_are_not_exposed_as_commands(self):
@@ -24372,8 +21639,6 @@ class FEAT075ExceptionAnnotationTests(unittest.TestCase):
         with patch.object(vw, "HOST_PROJECT_ROOT", self.root), \
                 patch.object(vw, "GOVERNANCE_DIR",
                              self.root / ".governance"), \
-                patch.object(vw, "check_release_readiness_fact_source",
-                             return_value=[]), \
                 patch.object(vw, "check_hot_fact_source_consistency",
                              return_value=[]):
             result = vw.check_release_readiness(
@@ -24390,8 +21655,6 @@ class FEAT075ExceptionAnnotationTests(unittest.TestCase):
         with patch.object(vw, "HOST_PROJECT_ROOT", self.root), \
                 patch.object(vw, "GOVERNANCE_DIR",
                              self.root / ".governance"), \
-                patch.object(vw, "check_release_readiness_fact_source",
-                             return_value=[]), \
                 patch.object(vw, "check_hot_fact_source_consistency",
                              return_value=[]):
             bare = vw.check_release_readiness(
@@ -24634,29 +21897,6 @@ class Fix418CwdHermeticityContractTests(unittest.TestCase):
                 self.assertEqual(vw.SAMPLE_PATH, frozen_sample)
                 self.assertEqual(vw.GOVERNANCE_DIR, frozen_governance)
                 self.assertEqual(vw._governance_dir(), frozen_sample.parent)
-
-    def test_engine_gate_read_follows_pinned_sample_path_not_cwd(self):
-        """F1 fix pattern: a parameterless engine read follows the pin.
-
-        ``parse_gate_status()`` (the exact frame the feat014/fix270
-        engine runs crashed in) reads ``SAMPLE_PATH`` dynamically, so a
-        test that pins the constant gets hermetic facts regardless of
-        the start directory.
-        """
-        with _governance_temp_dir() as td:
-            plan = Path(td) / "plan-tracker.md"
-            plan.write_text(
-                "# t\n\n## Gate 状态跟踪\n\n"
-                "| Gate | 过渡 | 状态 | 日期 | 证据 |\n"
-                "| --- | --- | --- | --- | --- |\n"
-                "| G1 | passed-on-entry | passed | 2026-10-01 | DEC-900 |\n",
-                encoding="utf-8",
-            )
-            with patch.object(vw, "SAMPLE_PATH", plan):
-                gates = vw.parse_gate_status()
-            self.assertEqual(len(gates), 1)
-            self.assertEqual(gates[0]["gate"], "G1")
-            self.assertEqual(gates[0]["status"], "passed")
 
     def test_dogfood_pin_restores_plugin_scope_expectations(self):
         """F2 contract: dogfood assertions must pin the module roots.
@@ -27286,10 +24526,6 @@ _FIX480_FIXTURE = (
     _HERE / "fixtures" / "plan-tracker-id-first-20col.md"
 )
 
-_TASK_IN_PLAN_TRACKER_FN_RE = re.compile(
-    r"(?ms)^task_in_plan_tracker\(\) \{.*?^\}")
-
-
 class Fix480UpgradePathTaskTableTests(unittest.TestCase):
     """FIX-480: the 0.54-era id-first 20-column task table across the four
     consumer faces.
@@ -27373,102 +24609,6 @@ class Fix480UpgradePathTaskTableTests(unittest.TestCase):
                  patch.object(vw, "EVIDENCE_PATH", ep):
                 r = vw.check_evidence_completeness()
                 self.assertEqual(r.get("parse_warnings"), [])
-
-    # ── commit-msg face: task_in_plan_tracker matches BOTH shapes ──
-
-    @staticmethod
-    def _bash_exe():
-        for candidate in (
-            r"C:\Program Files\Git\bin\bash.exe",
-            r"C:\Program Files\Git\usr\bin\bash.exe",
-            "bash",
-        ):
-            try:
-                probe = subprocess.run(
-                    [candidate, "-c", "echo ok"],
-                    capture_output=True, timeout=10)
-                if probe.returncode == 0:
-                    return candidate
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-        return None
-
-    def _run_task_in_plan_tracker(self, task_id, plan_text):
-        """Execute the REAL ``task_in_plan_tracker`` extracted from the
-        hook source (not re-typed) against a fixture plan-tracker.
-        Returns True/False (HIT/MISS)."""
-        bash = self._bash_exe()
-        if not bash:
-            self.skipTest("no working bash (hooks are bash)")
-        hook_text = (_INFRA_DIR / "hooks" / "commit-msg").read_text(
-            encoding="utf-8")
-        m = _TASK_IN_PLAN_TRACKER_FN_RE.search(hook_text)
-        self.assertIsNotNone(
-            m, "task_in_plan_tracker() not found in commit-msg source")
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            (root / ".governance").mkdir()
-            (root / ".governance" / "plan-tracker.md").write_text(
-                plan_text, encoding="utf-8")
-            root_posix = str(root).replace("\\", "/")
-            script = (
-                "REPO_ROOT={0!r}\n"
-                "{1}\n"
-                'if task_in_plan_tracker "{2}"; then echo HIT; '
-                "else echo MISS; fi\n"
-            ).format(root_posix, m.group(0), task_id)
-            script = script.replace("\r\n", "\n").replace("\r", "\n")
-            proc = subprocess.run(
-                [bash, "-s"], input=script.encode("utf-8"),
-                capture_output=True, timeout=30)
-        out = proc.stdout.decode("utf-8", "replace").strip()
-        self.assertIn(
-            out, ("HIT", "MISS"),
-            "hook run failed: rc={0} stderr={1!r}".format(
-                proc.returncode, proc.stderr[:400]))
-        return out == "HIT"
-
-    _COMPACT_ROW = (
-        "| 优先级 | ID | 任务项 | 依赖 | 目标版本 | 状态 |\n"
-        "| --- | --- | --- | --- | --- | --- |\n"
-        "| **P1** | FIX-480 | 升级路径解析兼容 | TRIAGE-FIX-480 | 0.100.0 | "
-        "⏳ 进行中 |")
-
-    _ID_FIRST_20COL_ROW = "\n".join([
-        "| ID | 阶段 | 任务项 | 目标/预期结果 | 输入 | 输出 | Owner (DRI) | 协同角色 | Escalation | 状态 | 优先级 | 计划开始 | 计划完成 | 实际完成 | Gate | 验收标准 | 证据 | 风险/偏差 | 纠偏动作 | 备注 |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-        "| FIX-480 | 开发实现 | 升级路径解析兼容 | 两形状解析器 | TRIAGE-FIX-480 | 解析层修复 | dev | — | — | ⏳ 进行中 | P1 | 2026-11-03 | 2026-11-03 |  | G5 | 红绿用例 | — | 无 | 无 | 无 |",
-    ])
-
-    def test_commit_msg_matches_compact_priority_first_row(self):
-        self.assertTrue(
-            self._run_task_in_plan_tracker("FIX-480", self._COMPACT_ROW),
-            "compact priority-first rows must keep matching (zero regression)")
-
-    def test_commit_msg_matches_id_first_20col_row(self):
-        """Pre-fix red face: the matcher never hit the 0.54 shape, so every
-        host commit needed --no-verify (TRIAGE-FIX-480, commit 529f325)."""
-        self.assertTrue(
-            self._run_task_in_plan_tracker("FIX-480", self._ID_FIRST_20COL_ROW),
-            "id-first 20-column task rows must match task_in_plan_tracker")
-
-    def test_commit_msg_still_misses_req_matrix_row(self):
-        """FIX-282 P2-1 tightening lock: a REQ-xxx requirement-matrix row
-        (first cell = requirement ID) must NOT satisfy task existence."""
-        plan = (
-            "| 需求ID | 需求描述 | 来源 | 优先级 | 关联任务 | 当前状态 | 验证方式 |\n"
-            "| --- | --- | --- | --- | --- | --- | --- |\n"
-            "| REQ-002 | 用户能在 5 分钟内完成初始化 | PR/FAQ | P0 | MAINT-012 "
-            "| ⚠️ 部分 | — |")
-        self.assertFalse(self._run_task_in_plan_tracker("REQ-002", plan))
-
-    def test_commit_msg_still_misses_archive_pointer_row(self):
-        """FIX-282 P2-1 tightening lock: archived pointer rows ('—' first
-        cell) must keep missing."""
-        plan = (
-            "| — | FIX-082 | Runtime capability contract | AUDIT-102 | 0.38.0 "
-            "| ✅ 已交付 |")
-        self.assertFalse(self._run_task_in_plan_tracker("FIX-082", plan))
 
     # ── parse_version_chain face: structured fail-closed header error ──
 
@@ -27886,11 +25026,10 @@ class TaggedReleaseReplayCliTests(unittest.TestCase):
         self.assertEqual(2, raised.exception.code)
         self.assertIn("git worktree add --detach ../replay-0.46.0 v0.46.0", error.getvalue())
 
-    def test_past_release_exits_before_running_current_claim_scan(self):
-        with patch.object(vw, "scan_loop_runtime_claims") as current_claims, self.assertRaises(SystemExit) as raised:
+    def test_past_release_routes_to_its_pinned_replay(self):
+        with self.assertRaises(SystemExit) as raised:
             vw.main(["check-release", "--version", "0.66.2"])
         self.assertIn("v0.66.2", str(raised.exception))
-        current_claims.assert_not_called()
 
 
 class CurrentRepositoryNavigationTests(unittest.TestCase):

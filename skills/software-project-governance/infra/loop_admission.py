@@ -183,7 +183,7 @@ def _tier_of(unit, fallback=None):
 
 
 def check_wip_budget(tier, *, runtime_file, budgets=None, actor="admission",
-                     unit_id=None, log_path=None, count_self=False):
+                     unit_id=None, log_path=None, count_self=False, enclosing_unit=None):
     """Check whether a new active unit may join ``tier`` (§5.4).
 
     Counts the currently-active units in ``tier`` (``runtime_status ==
@@ -222,6 +222,9 @@ def check_wip_budget(tier, *, runtime_file, budgets=None, actor="admission",
     runtime_path = Path(runtime_file) if not isinstance(runtime_file, Path) else runtime_file
     payload = _load_runtime(runtime_path)
 
+    from checks.flow_unit_runtime_v2 import native_origin_issue
+    if runtime_path.exists() and (origin := native_origin_issue(payload, runtime_path.name)):
+        return WIPResult(admitted=False, reason=origin, tier=tier, active_count=0, budget=budget)
     if not isinstance(payload, dict):
         # No runtime → no active units → budget trivially satisfied (fail-open).
         return WIPResult(
@@ -233,13 +236,19 @@ def check_wip_budget(tier, *, runtime_file, budgets=None, actor="admission",
 
     flow_units = payload.get("flow_units")
     active_count = 0
+    ancestors = set()
+    if payload.get("origin") == "native-loop":
+        enclosing = enclosing_unit or (_find_unit(payload, unit_id) or {}).get("parent_unit_id")
+        while enclosing and enclosing not in ancestors:
+            ancestors.add(enclosing)
+            enclosing = (_find_unit(payload, enclosing) or {}).get("parent_unit_id")
     if isinstance(flow_units, list):
         for unit in flow_units:
             if not isinstance(unit, dict):
                 continue
             if unit.get("runtime_status") not in _WIP_ACTIVE_STATUSES:
                 continue
-            if _tier_of(unit) != tier:
+            if unit.get("flow_unit_id") in ancestors or _tier_of(unit) != tier:
                 continue
             if count_self and unit_id is not None and unit.get("flow_unit_id") == unit_id:
                 continue  # exclude the unit being re-evaluated
@@ -325,6 +334,9 @@ def check_admission(unit_id, *, runtime_file, tier=None, budgets=None,
             reason="runtime file missing/corrupt; cannot admit unit {0!r}".format(unit_id),
             events=[],
         )
+    from checks.flow_unit_runtime_v2 import native_origin_issue
+    if origin := native_origin_issue(payload, runtime_path.name):
+        return AdmissionResult(admitted=False, reason=origin)
     unit = _find_unit(payload, unit_id)
     if unit is None:
         return AdmissionResult(
@@ -349,8 +361,8 @@ def check_admission(unit_id, *, runtime_file, tier=None, budgets=None,
             # silently admit the unit.
             blocking.append(dep_id)
             continue
-        dep_status = _gate_state_of(dep_unit).get("status")
-        if dep_status != "passed":
+        complete = dep_unit.get("runtime_status") == "completed"
+        if not complete:
             blocking.append(dep_id)
 
     if blocking:

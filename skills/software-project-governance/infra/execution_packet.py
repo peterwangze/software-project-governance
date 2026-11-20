@@ -3,13 +3,47 @@
 import json
 from datetime import datetime
 
-from contracts import QUALITY_BUDGET_DIMENSIONS
 
 
-def build_execution_packet(task):
+def read_goal_packets(governance_dir):
+    """Bound the documents consumed by the native host before parsing their bytes."""
+    import stat
+    from delivery_acceptance import _json_object, _plain_stat
+
+    path = governance_dir / "execution-packets.json"
+    try:
+        info = _plain_stat(path)
+    except FileNotFoundError:
+        return {}, "missing execution packets"
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError("expected a regular execution packet record")
+    limit = 4 * 1024 * 1024
+    with path.open("rb") as stream:
+        raw = stream.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("execution packets are too large")
+    data = json.loads(raw.decode("utf-8"), object_pairs_hook=_json_object)
+    packets = data.get("packets", data) if isinstance(data, dict) else None
+    if not isinstance(packets, dict):
+        raise ValueError("invalid execution packets")
+    return packets, ""
+
+
+def has_native_unit_identity(key, packet):
+    from loop_workflow import UNIT_ID
+
+    if not UNIT_ID.fullmatch(key) or not isinstance(packet, dict) or packet.get("task_id") != key:
+        return False
+    units = packet.get("work_units")
+    return isinstance(units, list) and any(
+        isinstance(unit, dict) and key in (unit.get("flow_unit_id"), unit.get("task_id")) for unit in units
+    )
+
+
+def build_execution_packet(task, *, contracts=(), quality_dimensions=()):
     scope = task.get("closure_path") or task.get("title") or task["task_id"]
     task_label = f"{task['task_id']} {task.get('title', '').strip()}".strip()
-    return {
+    scaffold = {
         "task_id": task["task_id"],
         "priority": task.get("priority", ""),
         "status": task.get("status", ""),
@@ -51,7 +85,7 @@ def build_execution_packet(task):
                     "evidence": f"TO_BE_DEFINED: latest {dimension} result or planned evidence location",
                     "exception": "",
                 }
-                for dimension in QUALITY_BUDGET_DIMENSIONS
+                for dimension in quality_dimensions
             }
         },
         "vertical_slice": {
@@ -71,7 +105,7 @@ def build_execution_packet(task):
             ],
             "auto_execute": [
                 "Run routine execution, local validation, focused code edits, and governance record updates when scope is known and reversible.",
-                "Commit and push normal single-task changes when validation, evidence, and review gates are satisfied.",
+                "Commit or publish only within the authorization recorded for this delivery.",
             ],
             "assumption_record": {
                 "assumption": "TO_BE_DEFINED: default choice used for a reversible non-critical ambiguity",
@@ -86,21 +120,23 @@ def build_execution_packet(task):
             f"Only change files required by this task row: {scope}",
             "Keep unrelated refactors, release version bumps, and fixture sync out of this task unless listed in the task scope.",
         ],
-        "required_evidence": [
-            "evidence-log entry with 事实依据, 目标对齐, 用户影响, and 结构化事实 JSON",
-            "validation commands with exit_code and concise output summary",
-            "independent review evidence or explicit degraded review evidence that does not claim full separation",
-        ],
-        "next_commands": [
-            "Use acceptance_contract.command once it specifies the host project's runnable check.",
-        ],
-        "done_definition": [
-            task.get("closure_path") or "Task closure path from plan-tracker is satisfied.",
-            "Code Reviewer or matching Reviewer has APPROVED the product-code change.",
-            "Commit and push are completed for this single task.",
-        ],
+        "required_evidence": ["The observed result of the receiver's acceptance operation, with the command and exit status."],
+        "next_commands": ["Run the host's acceptance_contract.command and compare the observed output."],
+        "done_definition": [task.get("acceptance") or scope],
         "source": "plan-tracker.md##当前活跃事项",
     }
+
+    for name in OPTIONAL_CONTRACTS:
+        if name not in contracts:
+            scaffold.pop(name)
+    if contracts:
+        scaffold["required_contracts"] = sorted(contracts)
+    if quality_dimensions:
+        scaffold["quality_budget"]["required_dimensions"] = list(quality_dimensions)
+    return scaffold
+
+
+OPTIONAL_CONTRACTS = ("product_success_contract", "quality_budget", "vertical_slice", "interruption_policy")
 
 
 def merge_intake_contract(scaffold, existing, plan_acceptance, governance_dir):
@@ -140,6 +176,21 @@ def merge_intake_contract(scaffold, existing, plan_acceptance, governance_dir):
             intake["demand_revisions"] = revisions.relative_to(governance_dir).as_posix()
         packet["intake"] = intake
 
+    if scaffold.get("required_contracts"):
+        required = existing.get("required_contracts", [])
+        if not isinstance(required, list) or not all(isinstance(name, str) for name in required):
+            raise ValueError(f"{task_id}: malformed required_contracts")
+        packet["required_contracts"] = sorted(set(required) | set(scaffold["required_contracts"]))
+    if "quality_budget" in scaffold and "quality_budget" in existing:
+        spec = scaffold["quality_budget"]
+        maintained = existing["quality_budget"]
+        if (not isinstance(maintained, dict) or not isinstance(maintained.get("dimensions"), dict)
+                or not isinstance(maintained.get("required_dimensions", []), list)
+                or not all(isinstance(name, str) for name in maintained.get("required_dimensions", []))):
+            raise ValueError(f"{task_id}: cannot merge new dimensions into a malformed quality budget")
+        packet["quality_budget"] = {**maintained, "dimensions": {**spec["dimensions"], **maintained["dimensions"]},
+                                    "required_dimensions": sorted(set(spec.get("required_dimensions", [])) |
+                                                                  set(maintained.get("required_dimensions", [])))}
     contract = packet["acceptance_contract"]
     if isinstance(contract, dict):
         placeholder = scaffold["acceptance_contract"]["expected_output"]
@@ -159,13 +210,48 @@ def merge_intake_contract(scaffold, existing, plan_acceptance, governance_dir):
 
 
 def generate_packet_document(tasks, *, task_ids, existing, governance_dir, build_packet):
+    from governance_readers import loop_state
+
+    view = loop_state(governance_dir.parent)
+    if view["state"] == "invalid":
+        raise ValueError(view["message"])
+    units_by_task = {}
+    tasks_by_id = {task["task_id"]: task for task in tasks}
+    for unit in view["units"]:
+        task_id = unit["task_id"] or unit["flow_unit_id"]
+        if task_ids is not None and task_id not in task_ids and unit["flow_unit_id"] in task_ids:
+            task_id = unit["flow_unit_id"]
+        if unit["runtime_status"] == "completed" and task_id not in tasks_by_id and not (task_ids and task_id in task_ids):
+            continue
+        units_by_task.setdefault(task_id, []).append(unit)
+        tasks_by_id.setdefault(task_id, {"task_id": task_id, "title": unit["goal"],
+                                          "status": unit["runtime_status"]})
+
     packets = {}
-    for task in tasks:
-        task_id = task["task_id"]
+    for task_id, task in tasks_by_id.items():
         if task_ids is not None and task_id not in task_ids:
             continue
-        packet = merge_intake_contract(build_packet(task), existing.get(task_id, {}),
+        scaffold = build_packet(task)
+        packet = merge_intake_contract(scaffold, existing.get(task_id, {}),
                                        task.get("acceptance", ""), governance_dir)
+        units = units_by_task.get(task_id, [])
+        if units:
+            packet["work_units"] = [
+                {field: unit[field] for field in ("flow_unit_id", "parent_unit_id", "task_id", "goal", "acceptance",
+                                                  "active_loop_tier", "gate_id", "loop_count", "next_action")}
+                for unit in units
+            ]
+            if len(units) == 1:
+                packet["goal"] = units[0]["goal"]
+                if packet["done_definition"] == scaffold["done_definition"]:
+                    packet["done_definition"] = [units[0]["acceptance"]]
+                acceptance_contract = packet["acceptance_contract"]
+                if isinstance(acceptance_contract, dict):
+                    expected = acceptance_contract.get("expected_output")
+                    if expected in (None, scaffold["acceptance_contract"]["expected_output"]):
+                        acceptance_contract["expected_output"] = units[0]["acceptance"]
+        elif packet.get("work_units"):
+            raise ValueError(f"{task_id}: the recorded work unit is missing")
         packet["task_id"] = task_id
         for field in ("priority", "status"):
             if field in task:

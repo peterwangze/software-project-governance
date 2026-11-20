@@ -1643,9 +1643,10 @@ class M0FixtureManifestTests(unittest.TestCase):
              if (match := re.match(r"^(\d+)\. \*\*", line))],
             list(range(1, 12)))
         self.assertIn("细则不可读即停止", section)
-        last = self.manifest["pin_revision"]["rebaseline"]["last"]
-        self.assertEqual(source["source_revision"], last["source_revision"])
-        self.assertTrue(last["prior"], "rebaseline must preserve old source pins")
+        records = self.manifest["pin_revision"]["rebaseline"]
+        latest = next(record for record in reversed([*records["history"], records["last"]])
+                      if any(prior["path"] == source["path"] for prior in record["prior"]))
+        self.assertEqual(source["source_blob"], latest["source_blobs"][source["path"]])
 
 
 if __name__ == "__main__":

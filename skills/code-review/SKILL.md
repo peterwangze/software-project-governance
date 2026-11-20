@@ -9,18 +9,7 @@ description: 审查代码、脚本或配置差异，按调用路径和项目契�
 
 ## 循环角色
 
-版本背景：本循环语义于 0.65.0 引入；本标题是稳定规范，不随版本号变更。
-
-**角色映射：** 在目标 Loop 模型中，本审查对应开发切片 Inner loop 的 `loop-exit-gate`。0.66.1 的当前运行能力仍是 experimental scaffolding；该映射不表示持久化 Loop runtime 已激活。
-
-当前可执行行为仅为 Coordinator M7.4 的 `NEEDS_CHANGE -> 返工 -> 复审`，以及 Check 30 对复审链终态、轮次连续性和熔断结果的校验。
-
-<!-- loop-runtime-target:{"claim_id":"LRC-CODE-PLANNED-001","target_version":"0.68.0","status":"planned_not_active"} -->
-持久化 back-edge、flow-unit `loop_count`、Inner fuse、PARO transition 与自动升级属于 0.68.0 规划，当前不生效。
-
-Reviewer 只审查并输出结论，不修改产品代码。Reviewer 必须输出 `APPROVED`、`APPROVED_WITH_NOTES`、`NEEDS_CHANGE` 或 `BLOCKED`；`APPROVED_WITH_NOTES` 是保留备注的通过终态，只能用于没有未解决 BLOCKING finding 的审查，不得包含未解决的 BLOCKING finding。`APPROVED_WITH_NOTES` 的审查输出与 REVIEW 证据 MUST 包含独立结构字段 `unresolved_blockers=0`；字段缺失、非零、非法或重复矛盾时不得通过，自然语言中偶然出现的 `blocking` 不构成该事实。`NEEDS_CHANGE`（及兼容输入 `NEEDS_CHANGES`）不是终态，Coordinator 必须在返工后发起下一轮复审。终态证据由 Check 30 的复审链消费：`APPROVED` 与 `APPROVED_WITH_NOTES` 可以通过并结束复审链；`BLOCKED` 结束链路但不是通过，必须 escalation；`NEEDS_CHANGE(S)`、未知或格式错误结论必须 fail-closed。超过复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
-
-依据 ADR §3.5（loop-engineering-architecture-0.65.0）。完整映射见 [共享循环角色映射](../software-project-governance/references/loop-role-mapping.md)。
+在内层 G6 沿真实调用方验证本轮改动，缺陷退还实现者。 独立 Reviewer 按[共享签核规则](../software-project-governance/references/loop-role-mapping.md)记录本轮回执与未解决阻断数。
 
 ## 输入与范围
 
@@ -45,7 +34,7 @@ Reviewer 只审查并输出结论，不修改产品代码。Reviewer 必须输�
 | 安全性 | 受影响的数据和权限边界、敏感信息、适用的安全要求 |
 | 可维护性 | 变更是否重复现有能力，是否增加职责或偏离项目设计 |
 | 性能 | 受影响路径的工作量、I/O 或资源使用，及对应预算 |
-| 测试覆盖 | 测试能否区分错误和正确实现，覆盖率按项目 profile 检查（standard ≥70%、strict ≥90%） |
+| 测试覆盖 | 测试能否区分错误和正确实现，项目对本次范围约定覆盖率时，复核其口径、阈值和此次实测 |
 
 AI 代码专项的五项也各给结论：生产路径残留 mock、硬编码结果、调用不存在的 API、未实现的 TODO、超出任务范围的实现。关键词命中只是定位线索。比如测试夹具中的 mock 需沿引用路径核对其用途。
 

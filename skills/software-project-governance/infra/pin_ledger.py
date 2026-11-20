@@ -627,9 +627,9 @@ DELIVERY_AMNESTY_ENTRIES = frozenset({
     ("skills/software-project-governance/infra/tests/test_task_row_update.py", 441, "0.86.0"),
     ("skills/software-project-governance/infra/tests/test_task_row_update.py", 586, "0.86.0"),
     ("skills/software-project-governance/infra/tests/test_task_row_update.py", 597, "0.86.0"),
-    ("skills/software-project-governance/infra/tests/test_closure_chain.py", 86, "0.86.0"),
-    ("skills/software-project-governance/infra/tests/test_triage_write_guard.py", 997, "0.86.0"),
-    ("skills/software-project-governance/infra/tests/test_triage_write_guard.py", 1143, "0.86.0"),
+    # pins re-anchor op-51ff95449e0547c682b6d89249a1916e (FIX-464): writer touched (skills/software-project-governance/infra/tests/test_closure_chain.py, 86, "0.86.0") — row left DELIVERY_AMNESTY_ENTRIES
+    # pins re-anchor op-8a567928c93447efb3c4f9d46e9af907 (FIX-464): writer touched (skills/software-project-governance/infra/tests/test_triage_write_guard.py, 997, "0.86.0") — row left DELIVERY_AMNESTY_ENTRIES
+    # pins re-anchor op-5d1478abb2854a35a2d46a95fc27aa5b (FIX-464): writer touched (skills/software-project-governance/infra/tests/test_triage_write_guard.py, 1143, "0.86.0") — row left DELIVERY_AMNESTY_ENTRIES
     # pins re-anchor op-0d25848adfe445ae9b8cb515b7f036ca (FIX-464): writer touched (skills/software-project-governance/infra/tests/test_static_version_pins.py, 166, "0.85.0") — row left DELIVERY_AMNESTY_ENTRIES
     ("skills/software-project-governance/infra/tests/test_release_projection.py", 35, "0.87.0"),
     ("skills/software-project-governance/infra/tests/test_provenance_domain.py", 323, "0.93.0"),

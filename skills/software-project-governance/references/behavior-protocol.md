@@ -14,7 +14,7 @@
 
 - 涉及 `protocol/`、`workflows/`、`adapters/`、`scripts/` 下的文件
 - 涉及推进或审查项目任务状态
-- 涉及 Gate 检查或阶段推进
+- 涉及本轮门禁或目标调整
 - 涉及审计执行（`core/audit-framework.md` 中 6 个审计维度的任意一个）
 - 涉及补充证据、决策或风险记录
 
@@ -52,7 +52,7 @@
 **快速通道路径**（文件路径模式匹配）：
 | 路径模式 | 操作类型 | Coordinator 动作 |
 |---------|---------|-----------------|
-| `.governance/plan-tracker.md` | 任务状态更新、优先级调整、阶段推进记录 | 直接 Edit |
+| `.governance/plan-tracker.md` | 任务目标、验收、优先级和来源 | 直接 Edit |
 | `.governance/evidence-log.md` | 证据条目追加（**REVIEW 行除外**——见下方纪律，FIX-260/REQ-107） | 直接 Edit |
 | `.governance/decision-log.md` | 决策记录追加 | 直接 Edit |
 | `.governance/risk-log.md` | 风险状态更新、新风险记录 | 直接 Edit |
@@ -98,7 +98,7 @@
 | `core/profiles.md` | 初始化项目时，用户询问 profile/规模，或切换 profile 时 |
 | `core/onboarding.md` | 已有项目接入时（进行中的项目） |
 | `references/interaction-boundary.md` | 不确定是自动执行还是询问用户时 |
-| `core/audit-framework.md` | 执行 Gate 检查时、完成阶段时、完成 Tier 时（按 DEC-052 分层执行模型）、完成 P0 任务时、重大变更后 |
+| `core/audit-framework.md` | 审查当前门或准备交付时、完成 Tier 时（按 DEC-052 分层执行模型）、完成 P0 任务时、重大变更后 |
 | `references/agent-failure-modes.md` | 检测到 Agent 行为异常时（协议跳过、选择性执行、虚假闭合、幻觉证据）——排查并执行应急动作 |
 | `references/methodology-routing.md` | Coordinator 需要按任务类型选择执行方法、证据要求和角色路由时读取 |
 
@@ -108,7 +108,7 @@
 
 | 目录 | 包含内容 |
 |-----------|----------|
-| `skills/stage-<name>/SKILL.md` | 11 个阶段子工作流——进入条件、活动 checklist（含交互边界标注）、交付物、退出条件、Gate 映射 |
+| `skills/stage-<name>/SKILL.md` | 领域活动方法、所需输入、实际交付物和适用条件 |
 | `skills/requirement-clarification/SKILL.md` | 需求澄清 checklist 技能 |
 | `skills/tech-review/SKILL.md` | 技术评审 checklist 技能 |
 | `skills/code-review/SKILL.md` | 代码审查标准技能 |
@@ -156,7 +156,7 @@
 
 所有治理记录 **MUST** 写入用户项目根目录下的 `.governance/` 中：
 
-- `.governance/plan-tracker.md` — 计划跟踪、项目配置、gate 状态、任务
+- `.governance/plan-tracker.md` — 计划跟踪、项目配置和任务。循环事实通过 `loop status` 获取
 - `.governance/evidence-log.md` — 证据记录
 - `.governance/decision-log.md` — 决策记录
 - `.governance/risk-log.md` — 风险记录
@@ -178,13 +178,7 @@
 - 同时支持既有显式记录（`commands`、`files_changed`、`diff_summary`、`review`）；无适用审查时在 `review` 中填写 `applicability: NOT_REQUIRED` 与 `reason`。仅记录脱敏输出或日志位置。
 - `目标对齐:` MUST 说明变更如何服务项目目标；`用户影响:` MUST 包含 `获得=`、`感知=`、`体验变化=`、`迁移指南=`。
 
-**AI Execution Packet（MANDATORY, 0.38.0+）**:
-- 活跃 P0/P1 任务开始前 MUST 读取 `.governance/execution-packets.json` 中对应 `task_id` 的短包。
-- 短包 MUST 包含 `goal`、`allowed_change_scope`、`required_evidence`、`next_commands`、`done_definition`。
-- 缺少短包时先运行 `python skills/software-project-governance/infra/verify_workflow.py execution-packet --write` 生成，再按任务事实修订。
-- `allowed_change_scope` 不得写成全仓任意修改；超出短包范围的修改必须拆任务或更新 plan-tracker。
-- `required_evidence` 必须包含 `事实依据` 和 `结构化事实`；`done_definition` 必须包含独立审查或明确降级审查结论。
-- `check-governance` Check 18c 是系统级看护，缺包或短包字段无效不得闭环。
+**外部执行包**：用户明确要求交接，或接收宿主依赖执行包中的范围、冻结目标与判据时，使用 `execution-packet --task <id> --write`。Check 18c 核对已交接的包。正式交接须限定修改范围，明确证据、操作与完成条件；需要独立审查时传递对应身份和候选。本地可运行验收或 Pi 原生单元调度直接使用已有的目标、验收和证据。契约另有质量阈值时记录适用维度及实际结果。
 
 **Decision log 字段**: 编号 | 日期 | 主题 | 背景 | 决策内容 | 备选方案 | 选择原因 | 影响范围 | 决策人 | 关联任务 | 后续动作
 
@@ -206,21 +200,21 @@
 - 人作为 DRI 时：agent 为协作者，人做关键决策
 - DRI 边界与 M5.3 关键决策分类对齐——DRI 决定非关键决策，Escalation 决定关键决策
 
-**Gate 检查**：每个无 DRI 的活跃任务 → Gate 有条件通过 + 创建纠正任务。
+活跃任务缺少 DRI 时，协调者先确认责任人，再派发本轮工作。
 
 ## M4. 会话生命周期（MANDATORY）
 
 ### M4.1 会话开始协议
 
-**时序（FEAT-034 首次交互前置）**：本次 `governance-bootstrap --format json` 同时提供根与热面，入口首次判根后复用同一结果。热数据就绪即呈现最小状态行并进入 AskUserQuestion；健康摘要按需后置，推进类动作前 MUST 补齐。详见 M5.5。
+**时序（FEAT-034 首次交互前置）**：本次 `governance-bootstrap --format json` 同时提供根与热面，入口首次判根后复用同一结果。按显示模式报告当前目标；出现须由用户裁决的事项时才进入 AskUserQuestion；健康摘要按需后置，推进类动作前 MUST 补齐。详见 M5.5。
 
-1. 从本次结果的 `project`、`gates` 取得项目配置和 Gate 状态。
+1. 从本次结果的 `project` 和 `loops` 取得项目配置及待续工作单元。
 2. **跨会话状态恢复（MANDATORY）**：读取 `.governance/session-snapshot.md`（如存在）。与 `.governance/plan-tracker.md` 对比：
    - snapshot 中标记为 "进行中" 且 plan-tracker 中仍为 "进行中" 的任务 → 这些是遗留任务，继续执行
    - snapshot 中标记为 "进行中" 但 plan-tracker 中为 "未开始" 的任务 → snapshot 已过期，忽略
    - snapshot 中标记为 "pending" 的决策 → 检查是否已在其他 session 中解决
    - 升级截止日期 ≤ 当前日期的风险 → 立即升级
-3. 向自己确认：当前阶段、最新 Gate 结论、活跃风险数、遗留任务
+3. 向自己确认：本单元目标、本轮待验条件、活跃风险、遗留任务
 4. 如有未解决的条件（passed-with-conditions），**MUST** 优先处理
 5. **健康摘要（R-D1a / REQ-145.1，bootstrap 自动运行——FEAT-034 起为后置深检；FEAT-084 起会话面默认 quick）**：运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only --scope quick`（DSH 支持 CLI；DEC-303 形态 B——quick 面段执行 + 排除面段 NOT_RUN 披露，段数以 FEAT-025 注册表为准；legacy 回退：`GOVERNANCE_LEGACY_BEHAVIOR=1` 时会话摘要命令改 `--summary-only` 无 scope 全量引擎；摘要为只读、只显示、不阻断），读取四态汇总行 `Governance: {N} issues (quick) | {p} passed / {f} failed / {nr} not-run / {c} cache-reused / {u} undetermined | …`——quick N 与 full N 是两个口径，不得混读（`(quick)` 标记由 QR-4 机守卫强制；full 面详略档契约以 SKILL.md 详略分档与 `_print_check_summary` 为准，`--level` 仅对 full 面生效）。按摘要驱动后续动作：
    - `Governance: [PASS]`／`0 issues (quick)`（N=0）→ 无动作，继续 bootstrap。
@@ -243,7 +237,7 @@
 - **agent**: {{AGENT_NAME_AND_VERSION}}
 
 ## 当前状态
-- **Stage**: {{CURRENT_STAGE}}
+- **工作单元和层级**: {{CURRENT_STAGE}}
 - **活跃并行阶段**: {{ACTIVE_PARALLEL_STAGES}}
 - **Current Gate**: {{GATE_ID}} — {{GATE_STATUS}}
 - **Profile**: {{PROFILE}}
@@ -287,9 +281,9 @@
 - 验证结果: [通过/失败/未运行]
 ```
 
-**Step 3: 下一步（AskUserQuestion, MANDATORY）**
+**Step 3：按目标授权决定后续动作**
 
-**MUST** 在每次会话结束前使用 AskUserQuestion。至少一个问题，每个问题 2-4 个选项。不以 AskUserQuestion 结束 = 协议违规。
+只有打算从已收口目标转入另一项未获授权的工作时，才向用户呈现候选并用 AskUserQuestion 取得决定。已有授权的父目标仍有子项时，直接回父单元验收或继续该目标内的工作。
 
 ## M5. AskUserQuestion 协议（MANDATORY）
 
@@ -339,25 +333,16 @@ AskUserQuestion 的结构化选项无法承载图片/附件/长自由文本。�
 
 用户回合侧的边界定义见 interaction-boundary.md「对话框应答回合（FIX-396）」——两侧条款互为镜像，任何一方变更 MUST 同步另一方。
 
-### M5.2 触发映射 — 默认：问。跳过是例外。
+### M5.2 触发映射
 
-**元规则（MANDATORY）**：默认在每个交互边界使用 AskUserQuestion。如果回复呈现了需要用户选择下一步行动的信息、标志着一个工作单元的结束或到达了一个自然的决策点——MUST 使用 AskUserQuestion。**跳过 AskUserQuestion 是例外，不是规则。** 以下触发映射列出了常见场景，但并非穷尽。有疑问时：问。
+现有事实和授权足以让执行者完成的动作直接开展。以下情形通过 AskUserQuestion 请有权限的人裁决。
 
-**MUST 使用 AskUserQuestion** 的场景（非穷尽）：
-
-| 触发场景 | 询问内容 |
-|---------|------------|
-| 会话结束 | "下一步优先做什么"，选项来自 plan tracker |
-| 多个可行路径 | "选择哪条路径"，附候选方案 |
-| 需求模糊 | "你的意图是 A 还是 B"，附可能的解释 |
-| P0 任务完成 | "确认 / 修改 / 拒绝" — 按 M7.4 step 5，所有 P0 任务和治理关键文件变更 MUST 在继续前通过 AskUserQuestion 触发交付物审查 |
-| 交付物需审查 | "确认 / 修改 / 拒绝" |
-| 风险处理决策 | "接受 / 缓解 / 转移 / 规避" |
-| 技术选型结论 | "确认方案 X 还是 Y"，附推荐理由 |
-| 关键决策点 | 按 M5.3 分类——停下来问 |
-| 风险升级触发 | "修复 / 记录例外 / 延期" — 当过期风险或已过升级截止日期 |
-| 审计发现（阻断/偏差） | "立即修复 / 排程为任务 / 接受风险" — 当审计发现阻断级或偏差级问题时 |
-| 破坏性 git 操作（仅 default-confirm 模式） | "Force push / reset --hard / branch -D?" — 按交互边界中的危险操作 |
+| 需要用户决定的事项 | 提供的依据 |
+| --- | --- |
+| 切换到未授权的独立目标 | 当前交付的实际结果、候选目标和依赖理由。 |
+| 原意或范围存在会改变成品的歧义 | 用户原话、相互冲突的具体使用结果。 |
+| 发布、回滚、不可逆操作或风险接受超出已有授权 | 实际候选、影响、可恢复性及可选动作。 |
+| 独立审查封锁、熔断或实际风险升级需用户裁决 | 当前单元和轮次、失败原件、返回点。 |
 
 ### M5.3 关键决策分类
 
@@ -370,7 +355,7 @@ AskUserQuestion 的结构化选项无法承载图片/附件/长自由文本。�
 - 风险接受（接受已知风险、绕过 Gate）
 - 外部依赖变更（新库、新服务、API 变更）
 - Profile/触发模式变更
-- **阶段跳跃（跳过 Gate）** — 需预先确认风险并记录 decision-log
+- **跨单元授权（跳过 Gate）** — 需预先确认风险并记录 decision-log
 
 **非关键决策** — 自动执行，不提问：
 - 已确认方向内的任务排序
@@ -412,38 +397,27 @@ AskUserQuestion 是交互边界的**默认行为**。以下是唯一有效的跳
 
 ### M5.5 首次交互前置与实质工作时间跟踪（FEAT-034 / AUDIT-154）
 
-会话 bootstrap 的交互时序纪律——快路径数据就绪后立即把第一次决策权交给用户，深检后置但不豁免：
+快路径确认当前单元及权限后，直接处理已有授权的任务。
 
-1. **快路径立即 ask（MUST）**：复用本次 `governance-bootstrap --format json` 返回的可信根和热面。就绪后 MUST **立即**呈现最小状态行（模式确认 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互。深检（`check-governance --summary-only --scope quick` 健康摘要、交叉验证、版本升级序列、归档检测）**不作为首次 ask 的前置条件**，后置为用户选择后按需执行。
+1. **需要用户决定时及时 ask（MUST）**：使用可信根与单元原件判断是否存在实际歧义、授权缺口或需用户接受的风险。存在时在本轮显示影响和可选动作，通过 AskUserQuestion 请求决定。仅作信息更新时按显示模式报告状态。健康深检可后置到相关写入或交付动作之前。
 2. **诚实语义（MUST）**：健康面未检查时（`health.state="deferred"`）状态行健康位显示「待检查」，MUST NOT 显示绿色通过或暗示已检查——deferred 不是 PASS。
 3. **深检后置 ≠ 深检可选（MUST）**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时，MUST 先补跑对应深检再继续——推进类深检面固定 full（FEAT-084/DEC-303）：健康摘要深检用 `check-governance --summary-only`（缺省 scope=full）或显式 `--scope full`，**quick 通过 ≠ 完整治理通过**（插件产品自检等排除面段不在 quick 面）；本条只重排深检时序，不削减 M6 Gate 义务、M8 验证义务与任何安全约束（fail-closed 第一动作不变）。
 4. **实质工作时间跟踪义务（arch 判定，AUDIT-154）**：禁止把"首次 ask 提前"单独当作治理提效结论——"先 ask 选完、用户再等数分钟深检"是虚假改善。治理开销评估 MUST 同时跟踪**进入实质工作时间**（time-to-substantive-work，`governance-cost-report`），与 TTFA（time-to-first-ask）成对报告。口径声明：`time_to_work` 是治理开销的 **lower bound**（DEC-205——ask 后的治理性 read/pwsh 计入 first_work_tool），不得把下界当无偏值使用；跨时点轨迹对比不可直接 diff（RISK-052）——效果验证用同快照内对比或新会话采样后重新生成对照。
 
 ## M6. Gate 行为（MANDATORY）
 
-### Gate 通过类型
+### 判定作用域
 
-| 类型 | 含义 | 条件 |
-|------|---------|-----------|
-| **passed** | 所有检查满足，进入下一阶段 | 不适用 |
-| **passed-with-conditions** | 核心检查通过，非阻塞项遗留 | 项目必须记录，在下一阶段结束前关闭，最多 3 项。仅 standard/strict profile。 |
-| **blocked** | 核心检查不满足，无法继续 | 必须更新风险记录，创建纠正动作 |
-| **passed-on-entry** | 中途接入项目预先确认 | 必须有说明完成情况的决策记录 |
+协调者以目标、稳定的工作单元、所属层和轮次派发。Gate 在该单元的进入、尝试或退出处检查适用的成品验收条件。只有该对象本轮的证据、适用的独立签核和所需授权才可支持放行；签核必须能定位工件。实际调用与父子关系沿用 [core/lifecycle.md](../core/lifecycle.md)。
 
-### 按 profile 的 Gate 裁剪规则
+| 观察到的结果 | 当前单元的动作 |
+| --- | --- |
+| 证据充分且审查通过 | 记录本轮退出结论，将工件和回执交给消费方。父单元验证自己的交付条件。 |
+| NEEDS_CHANGE | 用原失败样本返工，重新验证并独立复审。保留每轮工件与签核。 |
+| 未取得证据、回执冲突、无法独立审查 | 记录缺口、责任人和可执行的验证，使用 BLOCKED 或待验证。 |
+| 轮次耗尽、范围改变、风险接受或发布授权 | 停下并由有权者裁决，沿决策原件继续。 |
 
-| Profile | Gate 覆盖范围 |
-|---------|--------------|
-| **lightweight** | G1+G2 合并，G3-G5 跳过，G6+G7 合并，G8+G9 合并 |
-| **standard** | 全部 11 个 Gate，支持 passed-with-conditions |
-| **strict** | 全部 11 个 Gate，不允许 passed-with-conditions，每个 Gate 需要 ≥2 条证据 |
-
-### Gate 执行规则
-
-- Gate 未通过 → **MUST NOT** 声称进入下一阶段（在全工作流模式下）。独立子工作流或工具使用（按 main-workflow.md 场景匹配）仅需目标锚定和质量基线检查——gate 推进在独立模式下不强制执行。
-- 所有已完成事项 **MUST** 有证据
-- Gate 检查自行执行；仅在失败或条件通过时告知用户
-- 执行 Gate 检查时读取 `core/stage-gates.md` 获取详细 Gate 检查项
+Profile 调整证据深度。关键产品代码保留独立审查。进度面呈现用户可用的交付、当前尝试及其证据。检查目录见 `core/stage-gates.md`。
 
 ## M7. 执行连续性（MANDATORY）
 
@@ -462,7 +436,7 @@ AskUserQuestion 是交互边界的**默认行为**。以下是唯一有效的跳
 | **仅关键决策停下** | 自动执行非关键决策；仅 M5.3 关键列表使用 AskUserQuestion | standard、strict profile |
 | **所有决策都停下** | 每个 M5.2 触发点使用 AskUserQuestion | lightweight profile、首次用户 |
 
-Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决策停下来"或"所有决策都问我"来覆盖。会话 bootstrap 的首次交互时序按 M5.5 执行（快路径立即 ask、深检后置、实质工作时间成对跟踪）。
+Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决策停下来"或"所有决策都问我"来覆盖。会话 bootstrap 就绪后按 M5.5 使用已有授权；出现实际决策时才提问。
 
 ### M7.2 禁止的中断
 
@@ -557,7 +531,7 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
           `python skills/software-project-governance/infra/verify_workflow.py review-record --task {task_id} --round {n} --result {结论} --report {reviewer报告路径} [--reviewer {名称}] [--scope full|delta] [--delta-base {前轮报告路径或diff锚}]`
           review-{task}-R{n}.md 文件与 evidence 行由 CLI 机器写入（唯一路径）；NEEDS_CHANGE 时 CLI 自动产出 `next_round`/`prev_report` 复审义务字段——跨会话可从证据直接推导待复审项，复审触发不依赖 Coordinator 记忆。`--scope` 记录本轮审查注入面（FEAT-091：R2+ 复审默认 `delta`，注入面=修复 diff+前轮报告+验收标准，见 T1「R2 复审注入面」；缺省 `full` 向后兼容；`--delta-base` 记录 delta 锚点，仅 `--scope delta` 时有意义）。手写 REVIEW-{id} 证据行 = 流程违规（M1.2 快速通道豁免已收窄）；CLI 不可用（工具缺失/执行失败）时 fail-closed：修复环境后重试，不得降级为手写。Check 30c 对无机器来源标记的 REVIEW 记录与缺 `next_round` 的 NEEDS_CHANGE 记录 FAIL（FEAT-089 / DEC-146 ② 升级批兑现：豁免后机器标记覆盖率达 100% 且生效日后 ≥2 个发布版本，0.97.0 起单向升级，棘轮不回退）；无日期记录 WARN（V6d 收紧——无法证明生效日前的记录不再静默逃逸，WARN 不计入 all_issues）；2026-08-22 生效日当日两条残留手写行（REVIEW-FIX-256/FIX-258-CODE-R0）经 DEC 豁免清单登记吸收（DEC-146 ②/DEC-321——不回写不改写历史行、禁补录）；豁免清单由不可伪造 JSON 侧记录钉住 hash（DEC-146 ④——清单漂移即 FAIL）。
 
-   > **最小契约投影（FIX-253/REQ-112；FIX-260 扩展）**：本节 T1-T4、step 4.6 (C8)（审查结论必机录——FIX-260/REQ-107，压缩形式由 DSH persona 契约块第 4 行携带，`check-injection-contract` 锚含 `review-record`）、step 6 与 interaction-boundary.md 任务排序规则的压缩形式由 SKILL.md「关键行为契约」段与 DSH persona（agent-presets/governance/agent.cordis.yml.template）携带；`check-injection-contract` 锚点守护同步。修改本节关键词（复审/NEEDS_CHANGE/review-record/task-priority-analysis/依赖理由/三要素/推荐卡）时 MUST 同步注入面，否则 check FAIL。关键行为契约第 5/6 条（推荐必标需求源/发现即闭环——FEAT-078/ADR-021，canonical 全文见本节末尾）的压缩形式同样由 SKILL.md「关键行为契约」段、DSH persona 契约块与 governance-init.md Step 7 入口模板携带（secondary-thin 薄指针与 AGENTS.md.template 携带指针），修改该两条文本时 MUST 同步全部注入面并 re-run check-injection-budget。**step 6c 交互基线（DEC-143，R0-W1b 修订）**：step 6c 原「否则可自主执行推荐项并在完成后再次推荐」分支按 DEC-143 废止——任务完成后的推荐统一按「自动推荐 + 用户确认」呈现（选项含推荐候选与「自主执行推荐项」，由用户确认或改选，而非 agent 默认自主执行）；「当且仅当推荐项涉及关键决策（M5.3）时强制 AskUserQuestion」的既有规则不变。step 6c 经 FEAT-072/DEC-266 升级为三要素推荐卡呈现（AskUserQuestion 前正文卡 + 短选项与卡片一一对应），上述 DEC-143「自动推荐 + 用户确认」基线不变。step 6 另补一句「推荐为空 → 呈现结构化空原因（禁止机械枚举）」（注入面已先行，出处状态见 §6.2 注）。
+   > **最小契约投影**：C1–C11 在主 SKILL、DSH persona 及注入入口保持一致。跨目标选择才用 task-priority-analysis 与三要素推荐卡。独立复审回到同一候选，结论由 review-record 记录。
 
    **FIX-224 确定性触发器（M5.1b 风格——不依赖 Coordinator 自觉）**：
      当 Coordinator 收到 Reviewer 的审查结论时，MUST 先按 (C8) 通过 `review-record` CLI 机器持久化结论，再检测以下触发条件并执行对应动作，不得跳过：
@@ -586,10 +560,10 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
      例如: "SYSGAP-002 + SYSGAP-004 + SYSGAP-005: behavior-protocol.md M7.4/M7.5 增强（三个任务共享同一文件的修改范围）"
    - **禁止**"顺带"/"also"/"顺便"关键词——commit 只做它声称做的事
    - 如果多个独立变更 → 拆分为独立 commit，每 commit 对应单个 task
-6. **继续（FIX-223 增强版）** — 任务完成后 MUST 执行下一步推荐流程，不得直接结束会话或停止交互：
+6. **回父目标或选择新工作** — 只有打算从已收口目标转入另一项未获授权的工作时，才向用户呈现候选并用 AskUserQuestion 取得决定。已有授权的父目标仍有子项时，直接回父单元验收或继续该目标内的工作。 已受理工作全部完成时向用户交付实际结果。以下推荐步骤只用于用户要求安排新的工作或需选择另一个未授权目标的情形。
    - **a. 依赖分析（MUST，FIX-237.5 升级；FIX-262 机器化）**：读 plan-tracker 优先级表的 `依赖` 列，识别刚完成任务解除阻塞了哪些后续任务（即依赖中包含刚完成任务 ID 的任务）；**MUST 运行 `task-priority-analysis` 子命令（FIX-226）**获取依赖排序候选——不存在"如果存在"豁免（工具缺失或失败时按 fail-closed 处理并升级，不得跳过分析）。运行后 MUST 将调用快照记录到 evidence-log（FIX-237.5 证据化）：**优先机器路径**——`task-priority-analysis --evidence-task {task_id}` 自动写入 `RECO-{task_id}` 机器快照行（FIX-262/REQ-108，Check 34 S1 的关联锚）；机器路径不可用时按 EVD-898/899/901/903 先例手写"完成必推荐调用快照"行并绑定 `{task_id} 完成触发`。**session-snapshot 的"下次会话优先级"节 MUST 引用至少一个快照行 ID（RECO-{task} 或 EVD-{n}）**——可验证由推荐快照派生而非自由手写（REQ-108 信号 4，Check 34 S2/S3：缺引用 WARN、悬空引用 FAIL）。
    - **b. 推荐下一步（FEAT-072/DEC-266）**：
-      - MUST 基于 6a 的 task-priority-analysis 输出，从 unblocked 任务及当前最高优先级未完成任务中，结合版本依赖链和当前项目阶段，选择最合理的 1~3 个候选下一步；MUST 核验候选的依赖状态，不得将仍受阻任务表述为可直接执行。
+      - MUST 基于 6a 的 task-priority-analysis 输出，从 unblocked 任务及当前最高优先级未完成任务中，结合版本依赖链、工作单元的目标和阻塞，选择最合理的 1~3 个候选下一步；MUST 核验候选的依赖状态，不得将仍受阻任务表述为可直接执行。
       - 每项候选 MUST 给出可追溯到本次依赖分析输出的依赖理由，说明为何现在推荐该项；依赖理由 MUST NOT 替代该项的服务目标、解决问题或方案要点。
       - 推荐为空时，MUST 呈现结构化空原因，MUST NOT 机械枚举未完成事项或虚构候选。
    - **c. 呈现并确认（DEC-143 交互基线；FEAT-072/DEC-266 三要素推荐卡）**：
@@ -598,7 +572,7 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
       - SHOULD 简洁呈现每张卡；方案要点只需支持用户选择，不展开为完整实施计划。
       - MUST 通过 AskUserQuestion 呈现短选项，推荐项选项 MUST 与正文卡一一对应，并包括「自主执行推荐项」和「暂停」，由用户确认或改选；MUST NOT 默认自主执行。
       - 缺失信息会影响范围、执行路径或风险判断时，MUST 明示「执行前需澄清」，用户选择该项后 MUST 先澄清再执行；「自主执行推荐项」不得豁免该要求。
-      - 推荐为空时 MUST NOT 提供不存在的推荐项或「自主执行推荐项」，仍 MUST 呈现结构化空原因并请求用户确认后续处理，MUST NOT 直接结束会话。
+      - 推荐为空时说明依据和结构化空原因，已完成的工作可直接交付。
       - **session-snapshot 投影（SHOULD，FEAT-072/DEC-266）**：session-snapshot「下次会话优先级」节 SHOULD 为每候选保留轻量投影行（`{任务标识/短名}｜目标：…；问题：…；方案：…｜依据：{RECO 引用}｜待澄清：{如有}`），复用已生成卡不重新研究；下次会话实际呈现推荐时仍须按现行协议取得有效分析，不得把旧 RECO 当作当前状态。bootstrap next_actions 不纳入本投影；next_actions 原文进入完成推荐交互时仍须遵守本条（6c）。
    - **d. 不得直接结束**：除非 plan-tracker 中无未完成任务，或用户明确选择"暂停"，否则 MUST NOT 在任务完成后直接结束会话。
 
@@ -880,29 +854,9 @@ discover / inspect / consult / validate 是四类**行为语义**，不是要求
 - 任务级触发入口位于 SKILL.md「Agent 分发路由」表后一行：「新任务/事务分解后 → 探索适用性判断（EXP-01，详见 `references/behavior-protocol.md` M10）」——只携带触发条件与本节链接，MUST NOT 复制条款（A9）。引文与 SKILL.md 实文逐字同步，由 `check-cross-references` 的 quote_sync 守卫机检（FIX-432 F-4）：任一侧单独改动即 FAIL。
 - 触发入口属注入面文本，MUST 经 `check-injection-budget` 实际注入路径检查：超预算时收缩文本重测，MUST NOT 以抬升预算替代收缩（A12 / DEC-313(7)）。
 
-## 阶段快速参考
+## 运行与强度参考
 
-| # | 阶段 | 目标 | Gate |
-|---|-------|------|------|
-| 1 | 立项 | 定义问题、目标、范围、成功标准 | G1 |
-| 2 | 调研 | 调查、竞品分析、可行性 | G2 |
-| 3 | 选型 | 技术选型、PoC 验证 | G3 |
-| 4 | 基础设施 | 开发环境、仓库、基础 CI | G4 |
-| 5 | 架构设计 | 系统设计、模块拆分、技术评审 | G5 |
-| 6 | 开发 | 编码、单元测试、代码审查 | G6 |
-| 7 | 测试 | 集成、系统、性能、安全测试 | G7 |
-| 8 | CI/CD | 流水线、自动化、质量门控 | G8 |
-| 9 | 发布 | 发布计划、changelog、回滚方案 | G9 |
-| 10 | 运营 | 监控、反馈、优化 | G10 |
-| 11 | 维护 | Bug 修复、规则更新、复盘 | G11 |
-
-## Profile 快速参考
-
-| Profile | 阶段数 | Gate 强度 | 证据要求 | 适用场景 |
-|---------|--------|--------------|----------|----------|
-| lightweight | 5 个核心（合并） | 合并，简化 | 最低 | 个人项目、MVP |
-| standard | 全部 11 个 | 标准，支持条件通过 | 标准 | 团队项目 |
-| strict | 全部 11 个 | 增强，不允许条件通过 | 双倍证据 | 大型项目、合规项目 |
+`core/lifecycle.md` 说明工作单元、角色回执和分层返工。`core/profiles.md` 定义证据深度和干预边界；用户目标、已有阻塞及当前合格条件在各 profile 中持续有效。
 
 ## 替换边界
 

@@ -1,234 +1,144 @@
 {
-  "$schema": "https://example.com/software-project-governance/lifecycle-registry-v1.json",
-  "schema_version": "1.0",
+  "$schema": "https://example.com/software-project-governance/lifecycle-registry-v2.json",
+  "schema_version": "2.0",
   "workflow": "software-project-governance",
-  "workflow_version": "0.50.3",
   "introduced_for": "0.51.0",
   "project_type_gate_presets_introduced_for": "0.53.0",
   "source_of_truth": true,
-  "registry_mode": "schema-only-no-runtime-activation",
-  "active_lifecycle_mode": "classic-phase-gate",
-  "default_lifecycle_mode": "classic-phase-gate",
+  "registry_mode": "loop-unit-gates",
+  "active_lifecycle_mode": "loop-engineering",
+  "default_lifecycle_mode": "loop-engineering",
   "runtime_activation": {
-    "flow_unit_status_runtime": false,
-    "project_migration": false,
-    "declarative_gate_engine": false,
-    "classic_registry_execution": true,
-    "release_bump": false
+    "flow_unit_status_runtime": true,
+    "unit_scoped_gate_execution": true
   },
-  "no_overclaim_boundary": [
-    "Declarative gate engine registry enables classic G1-G11 registry execution only.",
-    "Declarative gate engine registry does not activate flow-unit runtime behavior.",
-    "Declarative gate engine registry does not migrate projects.",
-    "Declarative gate engine registry preserves classic G1-G11 behavior.",
-    "Declarative gate engine registry automation commands are metadata only and are not executed by gate judgment.",
-    "Declarative gate engine registry does not make dynamic-flow-gate the default lifecycle mode.",
-    "Declarative gate engine registry does not close RISK-036.",
-    "Declarative gate engine registry does not close RISK-037.",
-    "Declarative gate engine registry does not claim 1.0.0 production-ready."
-  ],
   "lifecycle_modes": [
     {
-      "id": "classic-phase-gate",
-      "title": "Classic Phase-Gate",
-      "status": "active-compatibility-preset",
+      "id": "loop-engineering",
       "active": true,
       "default": true,
-      "compatibility_preset": true,
-      "runtime_behavior": "existing-g1-g11",
-      "flow_unit_behavior": "not-active",
-      "stage_sequence": [
-        "initiation",
-        "research",
-        "selection",
-        "infrastructure",
-        "architecture",
-        "development",
-        "testing",
-        "ci-cd",
-        "release",
-        "operations",
-        "maintenance"
-      ],
-      "gate_sequence": [
-        "G1",
-        "G2",
-        "G3",
-        "G4",
-        "G5",
-        "G6",
-        "G7",
-        "G8",
-        "G9",
-        "G10",
-        "G11"
-      ]
-    },
-    {
-      "id": "dynamic-flow-gate",
-      "title": "Dynamic Flow-Gate",
-      "status": "schema-only-inactive",
-      "active": false,
-      "default": false,
-      "compatibility_preset": false,
-      "runtime_behavior": "declared-only",
-      "flow_unit_behavior": "schema-only",
-      "stage_sequence": [
-        "initiation",
-        "research",
-        "selection",
-        "infrastructure",
-        "architecture",
-        "development",
-        "testing",
-        "ci-cd",
-        "release",
-        "operations",
-        "maintenance"
-      ],
-      "gate_sequence": [
-        "G1",
-        "G2",
-        "G3",
-        "G4",
-        "G5",
-        "G6",
-        "G7",
-        "G8",
-        "G9",
-        "G10",
-        "G11"
-      ]
+      "topology_source": "loop-engineering-registry.json",
+      "workflow_source": "lifecycle.md",
+      "runtime_command": "loop"
     }
   ],
   "stage_vocabulary": [
     {
       "id": "initiation",
-      "number": 1,
       "label": "Initiation and goal definition",
-      "gate_out": "G1",
       "allowed_subphases": [
         "project-charter",
         "scope-boundary",
         "risk-baseline"
-      ]
+      ],
+      "related_gate": "G1"
     },
     {
       "id": "research",
-      "number": 2,
       "label": "Research and competitive analysis",
-      "gate_out": "G2",
       "allowed_subphases": [
         "market-research",
         "technical-research",
         "user-research"
-      ]
+      ],
+      "related_gate": "G2"
     },
     {
       "id": "selection",
-      "number": 3,
       "label": "Technical selection and solution preview",
-      "gate_out": "G3",
       "allowed_subphases": [
         "candidate-evaluation",
         "poc",
         "decision-record"
-      ]
+      ],
+      "related_gate": "G3"
     },
     {
       "id": "infrastructure",
-      "number": 4,
       "label": "Environment and infrastructure",
-      "gate_out": "G4",
       "allowed_subphases": [
         "dev-environment",
         "repo-setup",
         "ci-baseline"
-      ]
+      ],
+      "related_gate": "G4"
     },
     {
       "id": "architecture",
-      "number": 5,
       "label": "Architecture design",
-      "gate_out": "G5",
       "allowed_subphases": [
         "backlog",
         "chapter-brief",
         "story-outline",
         "technical-design",
         "design-review"
-      ]
+      ],
+      "related_gate": "G5"
     },
     {
       "id": "development",
-      "number": 6,
       "label": "Development implementation",
-      "gate_out": "G6",
       "allowed_subphases": [
         "implementation",
         "playable-slice",
         "code-review",
         "unit-smoke"
-      ]
+      ],
+      "related_gate": "G6"
     },
     {
       "id": "testing",
-      "number": 7,
       "label": "Testing and quality assurance",
-      "gate_out": "G7",
       "allowed_subphases": [
         "test-plan",
         "quality-validation",
         "regression",
         "release-candidate"
-      ]
+      ],
+      "related_gate": "G7"
     },
     {
       "id": "ci-cd",
-      "number": 8,
       "label": "Safety net and CI/CD",
-      "gate_out": "G8",
       "allowed_subphases": [
         "automation",
         "quality-gate",
         "deployment-pipeline"
-      ]
+      ],
+      "related_gate": "G8"
     },
     {
       "id": "release",
-      "number": 9,
       "label": "Release",
-      "gate_out": "G9",
       "allowed_subphases": [
         "release-plan",
         "release-candidate",
         "released",
         "rollback-ready"
-      ]
+      ],
+      "related_gate": "G9"
     },
     {
       "id": "operations",
-      "number": 10,
       "label": "Operations and feedback",
-      "gate_out": "G10",
       "allowed_subphases": [
         "released",
         "operations-feedback",
         "telemetry",
         "user-feedback"
-      ]
+      ],
+      "related_gate": "G10"
     },
     {
       "id": "maintenance",
-      "number": 11,
       "label": "Maintenance and evolution",
-      "gate_out": "G11",
       "allowed_subphases": [
         "maintenance-fix",
         "loop-rework",
         "retrospective",
         "next-round-planning"
-      ]
+      ],
+      "related_gate": "G11"
     }
   ],
   "subphase_vocabulary": [
@@ -292,278 +202,67 @@
   "gate_references": [
     {
       "gate_id": "G1",
-      "from_stage": "initiation",
-      "to_stage": "research",
+      "activity": "initiation",
       "source": "skills/software-project-governance/core/stage-gates.md#G1"
     },
     {
       "gate_id": "G2",
-      "from_stage": "research",
-      "to_stage": "selection",
+      "activity": "research",
       "source": "skills/software-project-governance/core/stage-gates.md#G2"
     },
     {
       "gate_id": "G3",
-      "from_stage": "selection",
-      "to_stage": "infrastructure",
+      "activity": "selection",
       "source": "skills/software-project-governance/core/stage-gates.md#G3"
     },
     {
       "gate_id": "G4",
-      "from_stage": "infrastructure",
-      "to_stage": "architecture",
+      "activity": "infrastructure",
       "source": "skills/software-project-governance/core/stage-gates.md#G4"
     },
     {
       "gate_id": "G5",
-      "from_stage": "architecture",
-      "to_stage": "development",
+      "activity": "architecture",
       "source": "skills/software-project-governance/core/stage-gates.md#G5"
     },
     {
       "gate_id": "G6",
-      "from_stage": "development",
-      "to_stage": "testing",
+      "activity": "development",
       "source": "skills/software-project-governance/core/stage-gates.md#G6"
     },
     {
       "gate_id": "G7",
-      "from_stage": "testing",
-      "to_stage": "ci-cd",
+      "activity": "testing",
       "source": "skills/software-project-governance/core/stage-gates.md#G7"
     },
     {
       "gate_id": "G8",
-      "from_stage": "ci-cd",
-      "to_stage": "release",
+      "activity": "ci-cd",
       "source": "skills/software-project-governance/core/stage-gates.md#G8"
     },
     {
       "gate_id": "G9",
-      "from_stage": "release",
-      "to_stage": "operations",
+      "activity": "release",
       "source": "skills/software-project-governance/core/stage-gates.md#G9"
     },
     {
       "gate_id": "G10",
-      "from_stage": "operations",
-      "to_stage": "maintenance",
+      "activity": "operations",
       "source": "skills/software-project-governance/core/stage-gates.md#G10"
     },
     {
       "gate_id": "G11",
-      "from_stage": "maintenance",
-      "to_stage": "initiation",
+      "activity": "maintenance",
       "source": "skills/software-project-governance/core/stage-gates.md#G11"
-    }
-  ],
-  "allowed_transitions": [
-    {
-      "id": "classic-G1",
-      "from_stage": "initiation",
-      "to_stage": "research",
-      "gate_references": [
-        "G1"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G2",
-      "from_stage": "research",
-      "to_stage": "selection",
-      "gate_references": [
-        "G2"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G3",
-      "from_stage": "selection",
-      "to_stage": "infrastructure",
-      "gate_references": [
-        "G3"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G4",
-      "from_stage": "infrastructure",
-      "to_stage": "architecture",
-      "gate_references": [
-        "G4"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G5",
-      "from_stage": "architecture",
-      "to_stage": "development",
-      "gate_references": [
-        "G5"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G6",
-      "from_stage": "development",
-      "to_stage": "testing",
-      "gate_references": [
-        "G6"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G7",
-      "from_stage": "testing",
-      "to_stage": "ci-cd",
-      "gate_references": [
-        "G7"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G8",
-      "from_stage": "ci-cd",
-      "to_stage": "release",
-      "gate_references": [
-        "G8"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G9",
-      "from_stage": "release",
-      "to_stage": "operations",
-      "gate_references": [
-        "G9"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G10",
-      "from_stage": "operations",
-      "to_stage": "maintenance",
-      "gate_references": [
-        "G10"
-      ],
-      "transition_type": "classic-forward"
-    },
-    {
-      "id": "classic-G11",
-      "from_stage": "maintenance",
-      "to_stage": "initiation",
-      "gate_references": [
-        "G11"
-      ],
-      "transition_type": "classic-next-round"
-    },
-    {
-      "id": "testing-to-development-rework",
-      "from_stage": "testing",
-      "to_stage": "development",
-      "gate_references": [
-        "G7"
-      ],
-      "transition_type": "flow-unit-loop"
-    },
-    {
-      "id": "release-to-testing-rework",
-      "from_stage": "release",
-      "to_stage": "testing",
-      "gate_references": [
-        "G9"
-      ],
-      "transition_type": "flow-unit-loop"
-    },
-    {
-      "id": "operations-feedback-to-maintenance-loop",
-      "from_stage": "operations",
-      "to_stage": "maintenance",
-      "gate_references": [
-        "G10",
-        "G11"
-      ],
-      "transition_type": "flow-unit-feedback-loop"
     }
   ],
   "loop_policy": {
     "scope": "per-flow-unit",
-    "runtime_activation": false,
-    "allowed_loop_types": [
-      "validation-retry",
-      "defect-rework",
-      "release-candidate-fix",
-      "operations-feedback",
-      "maintenance-follow-up"
-    ],
-    "blocked_dependency_rule": "A blocked flow unit blocks only declared downstream dependents.",
-    "sibling_completion_rule": "Passing one flow unit gate does not imply sibling flow units have passed.",
-    "loop_counter_policy": "schema-only-recorded-by-future-runtime"
-  },
-  "flow_unit_schema": {
-    "schema_only": true,
-    "status_activation": "not-active-in-0.51.0",
-    "required_fields": [
-      "flow_unit_id",
-      "title",
-      "unit_type",
-      "project_type",
-      "lifecycle_mode",
-      "current_stage",
-      "current_subphase",
-      "gate_lane",
-      "gate_references",
-      "allowed_next_transitions",
-      "dependencies",
-      "blockers",
-      "evidence_refs",
-      "loop_state",
-      "runtime_status_source"
-    ],
-    "optional_fields": [
-      "owner",
-      "risk_level",
-      "quality_budget",
-      "acceptance_template",
-      "rollup_weight",
-      "release_target"
-    ],
-    "allowed_unit_types": [
-      "chapter",
-      "level",
-      "asset",
-      "engine-system",
-      "story",
-      "module",
-      "screen",
-      "api-surface",
-      "command",
-      "adapter",
-      "skill",
-      "manifest",
-      "script",
-      "job",
-      "release-candidate",
-      "hotfix"
-    ],
-    "allowed_gate_lanes": [
-      "backlog",
-      "design",
-      "development",
-      "testing",
-      "release-candidate",
-      "released",
-      "operations-feedback",
-      "maintenance",
-      "blocked"
-    ],
-    "field_definitions": {
-      "flow_unit_id": "Stable machine-readable id within the host project.",
-      "current_stage": "One of the stage_vocabulary ids.",
-      "current_subphase": "One of the declared subphase ids.",
-      "gate_references": "Classic G1-G11 gate references that frame the evidence expectations.",
-      "runtime_status_source": "Identifies the source of the unit's runtime state."
-    }
+    "runtime_activation": true,
+    "topology_source": "loop-engineering-registry.json",
+    "read_command": "loop status --unit <id> --json",
+    "blocked_dependency_rule": "Unresolved child work blocks the parent exit; independent units can continue.",
+    "sibling_completion_rule": "Evidence covers only the named unit, gate and round."
   },
   "project_type_hooks": {
     "game": {
@@ -1457,13 +1156,10 @@
   },
   "gate_execution_registry": {
     "introduced_for": "0.54.0",
-    "status": "active-classic-compatibility",
-    "classic_registry_execution": true,
-    "execution_scope": "classic-g1-g11-only",
+    "status": "unit-scoped",
+    "execution_scope": "flow-unit",
     "automation_commands_are_metadata_only": true,
-    "project_migration": false,
-    "dynamic_flow_gate_default": false,
-    "notes": "auto_judge_gate reads this registry for classic G1-G11 check execution. Project-type overrides are metadata and validation contracts only; they do not migrate projects or activate dynamic-flow-gate as default.",
+    "notes": "Checks enumerate the evidence expected from the domain activity. The loop command chooses the applicable gate, verifies the independently reviewed round, and applies the result to its work unit.",
     "gate_checks": [
       {
         "gate_id": "G1",
@@ -1511,7 +1207,7 @@
           "archive_aware": false
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G1",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G1 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -1585,7 +1281,7 @@
           "archive_aware": false
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G2",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G2 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -1645,7 +1341,7 @@
           "archive_aware": false
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G3",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G3 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -1703,7 +1399,7 @@
           "archive_aware": false
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G4",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G4 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -1772,7 +1468,7 @@
           "archive_aware": false
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G5",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G5 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -1829,7 +1525,7 @@
           "archive_aware": false
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G6",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G6 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -1887,7 +1583,7 @@
           "archive_aware": false
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G7",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G7 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -1961,7 +1657,7 @@
           "archive_aware": false
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G8",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G8 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -2020,7 +1716,7 @@
           "archive_aware": false
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G9",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G9 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -2029,7 +1725,9 @@
           "confirmation_required_for_override": true
         },
         "severity": "high",
-        "project_type_overrides": {}
+        "project_type_overrides": {},
+        "applies_when": "explicit-version-release",
+        "delivery_acceptance": "A delivery goal without a release version consumes its independently verified product receipt, current artifact and contract; only a versioned release uses the release checklist below."
       },
       {
         "gate_id": "G10",
@@ -2077,7 +1775,7 @@
           "archive_aware": true
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G10",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G10 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },
@@ -2135,7 +1833,7 @@
           "archive_aware": true
         },
         "automation_command": {
-          "command": "python skills/software-project-governance/infra/verify_workflow.py gate G11",
+          "command": "python skills/software-project-governance/infra/verify_workflow.py loop gate --unit <id> --gate G11 --review <review-id>",
           "execution_policy": "metadata-only-not-executed-by-gate-judgment",
           "side_effect_boundary": "Declared for operator visibility only; auto_judge_gate must not execute shell commands from registry."
         },

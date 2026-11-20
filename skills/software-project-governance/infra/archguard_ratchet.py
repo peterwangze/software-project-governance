@@ -140,7 +140,6 @@ DEFAULT_MANAGED_MODULES: Dict[str, Dict[str, str]] = {
 # debt would otherwise lose its owner on task closure.
 _OWNER_TASK_MAP: Tuple[Tuple[str, str], ...] = (
     ("checks/review_domain.py", "REFACTOR-migrate-review-domain"),
-    ("checks/loop_runtime_claims", "REFACTOR-migrate-review-domain"),
     ("checks/", "REFACTOR-domains-batch1"),
     ("release/", "REFACTOR-domains-batch1"),
     ("loop_", "REFACTOR-domains-batch1"),

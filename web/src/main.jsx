@@ -33,8 +33,8 @@ const webConsoleCommand = 'python skills/software-project-governance/infra/verif
 const webConsoleUrl = 'http://127.0.0.1:5173/';
 
 const routeConfig = [
+  { id: 'status', label: 'Work units', icon: Gauge },
   { id: 'local', label: 'Local Setup', icon: Home },
-  { id: 'status', label: 'Status', icon: Gauge },
   { id: 'evidence', label: 'Evidence & Risks', icon: FileCheck2 },
   { id: 'advanced', label: 'Advanced', icon: Boxes }
 ];
@@ -46,7 +46,7 @@ const advancedRoutes = [
 ];
 
 function App() {
-  const [activeRoute, setActiveRoute] = useState('local');
+  const [activeRoute, setActiveRoute] = useState('status');
   const [advancedRoute, setAdvancedRoute] = useState('Remote Validation');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -105,7 +105,8 @@ function App() {
         onNotice={showNotice}
       />
       <main className="workspace">
-        <TopBar routeTitle={routeTitle} data={data} onNotice={showNotice} />
+        <TopBar routeTitle={routeTitle} data={data} onNotice={showNotice} onRefresh={refresh}
+          refreshing={refreshing} onRisks={() => setActiveRoute('evidence')} />
         <MobileNav activeRoute={activeRoute} onRouteChange={setActiveRoute} />
         {error && (
           <div className="error-banner" role="alert">
@@ -131,7 +132,7 @@ function App() {
             onNavigate={setActiveRoute}
           />
         )}
-        {activeRoute === 'status' && <StatusPage data={data} onRefresh={refresh} refreshing={refreshing} />}
+        {activeRoute === 'status' && <StatusPage data={data} />}
         {activeRoute === 'evidence' && <EvidencePage data={data} />}
         {activeRoute === 'advanced' && (
           <AdvancedPage active={advancedRoute} onChange={setAdvancedRoute} onNotice={showNotice} />
@@ -215,8 +216,25 @@ function NavButton({ route, active, onClick }) {
   );
 }
 
-function TopBar({ routeTitle, data, onNotice }) {
+function TopBar({ routeTitle, data, onNotice, onRefresh, refreshing, onRisks }) {
   const projectName = data?.project_name ?? '—';
+  if (routeTitle === 'Work units') {
+    const riskCount = data?.open_risks?.length ?? 0;
+    return (
+      <header className="work-header">
+        <span className="muted">{projectName}</span>
+        <div className="page-title">
+          <h1>{routeTitle}</h1>
+          <div className="work-actions">
+            {riskCount > 0 && <button className="link-action" type="button" onClick={onRisks}>{riskCount} open risks</button>}
+            <button className="link-action" type="button" onClick={onRefresh} disabled={refreshing}>
+              <Activity size={16} />{refreshing ? 'Refreshing…' : 'Refresh data'}
+            </button>
+          </div>
+        </div>
+      </header>
+    );
+  }
   return (
     <header className="topbar">
       <div className="project-select">
@@ -240,7 +258,9 @@ function TopBar({ routeTitle, data, onNotice }) {
           Project settings
         </button>
       </div>
-      <h1>{routeTitle}</h1>
+      <div className="page-title">
+        <h1>{routeTitle}</h1>
+      </div>
     </header>
   );
 }
@@ -292,7 +312,6 @@ function LocalSetup({ data, onAdvanced, onRefresh, refreshing, onNavigate }) {
         <EvidenceTable compact={false} data={data} onNavigate={onNavigate} />
       </div>
       <div className="content-stack side-stack">
-        <SnapshotPanel data={data} onNavigate={onNavigate} />
         <EnvironmentPanel data={data} />
         <VerifyPanel onRefresh={onRefresh} refreshing={refreshing} />
         <Panel title="Advanced" className="quiet-panel">
@@ -358,66 +377,65 @@ function EntryPanel() {
   );
 }
 
-function StatusPage({ data, onRefresh, refreshing }) {
-  const timeline = useMemo(() => {
-    if (!data) return [];
-    const gates = data.gates ?? [];
-    const latestGate = gates.length ? gates[gates.length - 1] : null;
-    const overview = data.overview ?? {};
-    return [
-      { label: 'Project', value: data.project_name ?? '—', tone: 'success' },
-      { label: 'Release version', value: data.release_version ?? '—', tone: 'success' },
-      { label: 'Stage', value: overview.current_stage ? String(overview.current_stage).slice(0, 40) : '—', tone: 'success' },
-      { label: 'Latest gate', value: latestGate ? `${latestGate.gate} ${latestGate.status}` : '—', tone: latestGate?.status === 'passed' ? 'success' : 'warning' },
-      { label: 'Tasks', value: overview.completed && overview.total ? `${overview.completed}/${overview.total}` : '—', tone: 'success' },
-      { label: 'Open risks', value: String(data.open_risks?.length ?? 0), tone: data.open_risks?.length ? 'warning' : 'success' }
-    ];
-  }, [data]);
-
+function StatusPage({ data }) {
+  const loops = data?.loops;
+  const failureTitle = loops?.units?.length ? 'Evidence needs attention' : 'Loop record unavailable';
   return (
-    <section className="page-grid status-layout">
-      <div className="content-stack primary-stack">
-        <SnapshotPanel expanded data={data} />
-        <Panel title="Governance timeline">
-          <div className="timeline">
-            {timeline.map((item) => (
-              <div className="timeline-row" key={item.label}>
-                <span className={`status-dot ${item.tone}`} />
-                <span>{item.label}</span>
-                <strong>{item.value}</strong>
-              </div>
-            ))}
-          </div>
-        </Panel>
-        <Panel title="Gate status (G1–G11)">
-          <div className="timeline">
-            {(data?.gates ?? []).map((g) => (
-              <div className="timeline-row" key={g.gate}>
-                <span className={`status-dot ${g.status === 'passed' || g.status === 'passed-on-entry' ? 'success' : 'warning'}`} />
-                <span>{g.gate}</span>
-                <strong>{g.status} · {g.date}</strong>
-              </div>
-            ))}
-            {!(data?.gates?.length) && <p className="muted">No gate data.</p>}
-          </div>
-        </Panel>
-      </div>
-      <div className="content-stack side-stack">
-        <VerifyPanel onRefresh={onRefresh} refreshing={refreshing} />
-        <EnvironmentPanel data={data} />
-      </div>
+    <section className="single-page status-layout">
+        {(loops?.state === 'invalid' || !loops?.units?.length) && (
+          <Panel title={loops?.state === 'invalid' ? failureTitle : 'No work units'}>
+            <p className="muted" role={loops?.state === 'invalid' ? 'alert' : 'status'}>
+              {loops?.message ?? 'Loop status unavailable.'}
+            </p>
+          </Panel>
+        )}
+        {loops?.units?.map((unit) => <WorkUnit key={unit.flow_unit_id} unit={unit} />)}
     </section>
+  );
+}
+
+function WorkUnit({ unit }) {
+  const blockers = unit.blockers ?? [];
+  const review = unit.last_review;
+  const returnTo = unit.return_to;
+  const evidence = unit.evidence_refs.filter((ref) => ref !== review?.evidence_ref);
+  const gateTone = ['failed', 'blocked', 'escalated', 'unverified'].includes(unit.gate_status) ? 'warning' : 'neutral';
+  return (
+    <article className="panel work-unit">
+      <header className="unit-heading">
+        <div className="unit-identity">
+          <span>{unit.active_loop_tier ? `${unit.active_loop_tier} loop` : unit.runtime_status} · round {unit.loop_count}</span>
+          <h2>{unit.title || unit.flow_unit_id}</h2>
+          <code>{unit.flow_unit_id}{unit.parent_unit_id && ` · parent ${unit.parent_unit_id}`}</code>
+        </div>
+      </header>
+      <dl className="unit-facts">
+        {unit.goal && unit.goal !== unit.title && <><dt>Goal</dt><dd>{unit.goal}</dd></>}
+        {unit.acceptance && <><dt>Acceptance</dt><dd>{unit.acceptance}</dd></>}
+        <dt>Next action</dt><dd>{unit.next_action}</dd>
+        <dt>Local gate</dt><dd><span className={`value-chip ${gateTone}`}>{unit.gate_id} · {unit.gate_status}</span></dd>
+        {returnTo && <><dt>Return after rework</dt><dd>{returnTo.tier} loop · {returnTo.gate} · round {returnTo.loop_count}</dd></>}
+        {unit.previous_unit_id && <><dt>Previous iteration</dt><dd>{unit.previous_unit_id}
+          {unit.previous_review ? <> · {unit.previous_review.gate} · round {unit.previous_review.iteration} · {unit.previous_review.result}<br />{unit.previous_review.evidence_ref}</> : ' · acceptance unverified'}
+        </dd></>}
+        {review ? <><dt>{unit.state === 'invalid' ? 'Recorded decision (unverified)' : 'Last review'}</dt><dd>{review.gate} · round {review.iteration} · {review.result}<br />{review.evidence_ref}</dd></>
+          : unit.last_gate_result && <><dt>Last decision</dt><dd>{unit.last_gate_result}</dd></>}
+        {blockers.length > 0 && <><dt>Blocked by</dt><dd>{blockers.join(', ')}</dd></>}
+        {unit.waiting_on.length > 0 && <><dt>Waiting on</dt><dd>{unit.waiting_on.join(', ')}</dd></>}
+        {unit.open_children.length > 0 && <><dt>Open child units</dt><dd>{unit.open_children.join(', ')}</dd></>}
+        {evidence.length > 0 && <><dt>Evidence</dt><dd>{evidence.join(', ')}</dd></>}
+      </dl>
+    </article>
   );
 }
 
 function EvidencePage({ data }) {
   return (
     <section className="single-page">
-      <EvidenceTable compact={false} data={data} onNavigate={() => {}} />
+      <EvidenceTable compact={false} data={data} />
       <div className="evidence-summary">
         <MetricCard label="Evidence records" value={String(data?.evidence_count ?? 0)} tone="success" />
         <MetricCard label="Open risks" value={String(data?.open_risks?.length ?? 0)} tone="warning" />
-        <MetricCard label="Gates tracked" value={String(data?.gates?.length ?? 0)} tone="success" />
       </div>
       {(data?.open_risks?.length ?? 0) > 0 && (
         <Panel title="Open risks">
@@ -470,7 +488,6 @@ function AdvancedPage({ active, onChange, onNotice }) {
         <div className="advanced-list">
           <AdvancedRow label="Execution surface" value="CLI / agent client (not this dashboard)" />
           <AdvancedRow label="Boundary" value="Read-only summary here; actions run in CLI" />
-          <AdvancedRow label="Open risks" value="RISK-036 / RISK-037" />
         </div>
         <div className="panel-footer">
           <button
@@ -513,65 +530,6 @@ function CheckRow({ item }) {
   );
 }
 
-function SnapshotPanel({ expanded = false, data, onNavigate }) {
-  const items = useMemo(() => {
-    if (!data) return [];
-    const gates = data.gates ?? [];
-    const latestGate = gates.length ? gates[gates.length - 1] : null;
-    const gatePassed = latestGate?.status === 'passed';
-    const riskCount = data.open_risks?.length ?? 0;
-    const evCount = data.evidence_count ?? 0;
-    return [
-      {
-        label: latestGate ? `Gate ${latestGate.gate} ${latestGate.status}` : 'Gate status',
-        detail: gatePassed ? 'No blocking stage issue' : 'Gate not passed',
-        tone: gatePassed ? 'success' : 'warning',
-        value: gatePassed ? 'Passed' : 'Review',
-        icon: Shield
-      },
-      {
-        label: 'Risks open',
-        detail: riskCount ? `${riskCount} tracked boundary(ies) remain` : 'No open risks',
-        tone: riskCount ? 'warning' : 'success',
-        value: String(riskCount),
-        icon: AlertTriangle
-      },
-      {
-        label: 'Evidence',
-        detail: evCount ? `${evCount} records in evidence-log` : 'No evidence',
-        tone: 'success',
-        value: evCount ? 'Tracked' : 'Empty',
-        icon: FileCheck2
-      }
-    ];
-  }, [data]);
-
-  return (
-    <Panel title="Delivery Trust Snapshot" className={expanded ? 'snapshot expanded' : 'snapshot'}>
-      <div className="snapshot-list">
-        {items.map((item) => {
-          const Icon = item.icon;
-          return (
-            <div className="snapshot-row" key={item.label}>
-              <Icon className={item.tone} size={26} />
-              <div>
-                <strong>{item.label}</strong>
-                <span>{item.detail}</span>
-              </div>
-              <span className={`value-chip ${item.tone}`}>{item.value}</span>
-            </div>
-          );
-        })}
-        {items.length === 0 && <p className="muted">Loading snapshot…</p>}
-      </div>
-      <button className="link-row" type="button" onClick={() => onNavigate?.('status')}>
-        View full status
-        <ChevronRight size={18} />
-      </button>
-    </Panel>
-  );
-}
-
 function EnvironmentPanel({ data }) {
   const rows = useMemo(() => {
     const base = [
@@ -602,7 +560,7 @@ function VerifyPanel({ onRefresh, refreshing }) {
     <Panel title="Verify locally">
       <div className="command-box">
         <Terminal size={17} />
-        <code>python ... verify_workflow.py status</code>
+        <code>python ... verify_workflow.py loop status</code>
       </div>
       <div className="command-box secondary-command">
         <Terminal size={17} />
@@ -637,10 +595,10 @@ function EvidenceTable({ compact, data, onNavigate }) {
         ))}
         {rows.length === 0 && <p className="muted">No recent evidence.</p>}
       </div>
-      <button className="link-row" type="button" onClick={() => onNavigate?.('evidence')}>
+      {onNavigate && <button className="link-row" type="button" onClick={() => onNavigate('evidence')}>
         Open Evidence & Risks
         <ChevronRight size={18} />
-      </button>
+      </button>}
     </Panel>
   );
 }

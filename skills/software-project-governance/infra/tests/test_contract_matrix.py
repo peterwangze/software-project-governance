@@ -30,8 +30,8 @@ if str(_INFRA_DIR) not in sys.path:
 from contract_matrix import generator as cmg  # noqa: E402
 
 # Independently pin the public size when the snapshot is regenerated.
-FROZEN_CLI_KEY_COUNT = 108
-FROZEN_CHECK_SEGMENT_COUNT = 73
+FROZEN_CLI_KEY_COUNT = 105
+FROZEN_CHECK_SEGMENT_COUNT = 72
 
 
 @lru_cache(maxsize=1)

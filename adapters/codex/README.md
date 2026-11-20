@@ -10,6 +10,8 @@ Codex is a Tier 1 loading target in 0.47.0. The current repository provides a Co
 - workflow entry: `skills/software-project-governance/SKILL.md`
 - runtime records: the target project's `.governance/`
 
+Codex 从已发现的技能定位运行器。读取 `AGENTS.md` 后在项目根按单元 ID 继续本轮修改、审查或验收。启动、返工及复审的命令见[工作单元运行协议](../../skills/software-project-governance/core/lifecycle.md)。
+
 ## 适配目标
 
 让 Codex 类 coding agent 在执行项目任务时，以统一流程资产为约束，避免直接基于临时上下文做局部最优决策。
@@ -86,8 +88,8 @@ Codex App 当前会话仍不能替代 Codex Desktop marketplace-management lifec
 2. 读取协议层：`skills/software-project-governance/core/protocol/workflow-schema.md`、`skills/software-project-governance/core/protocol/plugin-contract.md`、`skills/software-project-governance/core/protocol/external-command-contract.md`
 3. 读取规则层：`core/*.md`
 4. 读取模板层：`core/templates/*.md`
-5. 按当前阶段读取子工作流和 skill：`skills/<skill-name>/SKILL.md`
-6. 读取样例：`.governance/plan-tracker.md`
+5. 用 `loop status --unit <id> --json` 读取目标、验收条件和当前循环，按本轮活动加载 `skills/<skill-name>/SKILL.md`。
+6. 从该单元读取门禁所需原件和接下来的动作。
 
 </details>
 

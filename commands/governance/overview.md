@@ -49,23 +49,7 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 ---
 
-## 文件变更清单
 
-### 新增
-- `/governance` 路由层（原「本文件」——拆分后本清单随概览移入，路由层为 `/governance` 命令入口）
-
-### 修改
-- `skills/software-project-governance/SKILL.md` M3 节——将 `/governance-init` 引用更新为 `/governance`
-- `commands/governance-init.md`——添加路由说明
-- `commands/governance-status.md`——添加路由说明
-- `commands/governance-verify.md`——添加路由说明
-- `commands/governance-update.md`——标记为 DEPRECATED，路由到统一命令
-
-### 不变
-- `skills/software-project-governance/core/onboarding.md`——Scenario B 的参考协议
-- `"<plugin_home>/infra/verify_workflow.py"` 为 Scenario E 诊断引擎，沿用本次确认的技能目录。
-
----
 
 ## 产品代码 vs 治理记录边界（完整表）
 
@@ -82,27 +66,9 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 
 ---
 
-## Agent Team 路由表（完整版——核心 9 条）
+## Agent Team 路由
 
-> FEAT-038 拆分自路由层「Coordinator 激活」节（逐字搬移）。
-
-### Agent Team 路由表（核心 9 条）
-
-| 任务类型 | 执行 Agent | 后置审查 |
-|---------|-----------|---------|
-| Debug/修 Bug | Developer + Maintenance | Code Reviewer |
-| 新功能/产品代码修改 | Developer | Code Reviewer |
-| 治理基础设施/工作流本体修改 | Governance Developer | Code Reviewer 或 Design Reviewer |
-| 架构/选型/设计 | Architect | Design Reviewer |
-| 需求分析/调研 | Analyst | Requirement Reviewer |
-| 测试设计/执行 | QA | Test Reviewer |
-| 发布管理/版本规划 | Release | Release Reviewer |
-| CI/部署 | DevOps | — |
-| 复盘/维护 | Maintenance | Retro Reviewer（如涉及规则变更） |
-
-完整路由表（19 行）见 `skills/software-project-governance/SKILL.md`。
-
----
+在 `skills/software-project-governance/SKILL.md` 的「Agent 分发路由」找到本轮成品需要的角色，使用对应的 `agents/<role>.md` 和技能。保持同一单元的验收条件和现有权限。
 
 ## Sub-agent 调度（完整说明）
 
@@ -123,7 +89,7 @@ Web console 是可选的本地伴随状态面板，也是用户手动 `/governan
 ### 交互规则
 
 - **AskUserQuestion 是唯一合法用户提问方式**——MUST NOT 内联文字提问
-- **关键决策永远停下来**：范围变更/架构决策/发布决策/风险接受/外部依赖变更/模式变更/阶段跳跃
+- **关键决策永远停下来**：范围变更/架构决策/发布决策/风险接受/外部依赖变更/模式变更/切换尚未完成的目标
 - **非关键决策自动执行**：任务排序/证据格式/git commit/治理记录更新/实现细节/Gate 自评(通过时)
 - **M7.4 任务完成协议**：完成 → evidence → check-governance → audit → 再开新任务
 - **M7.5 先入账再动手**：任何新任务 MUST 先出现在 plan-tracker 中

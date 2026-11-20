@@ -1,6 +1,6 @@
 ---
 name: governance-status
-description: 项目治理状态展示（Scenario F 快捷方式）：阶段/Gate/任务/风险摘要
+description: 项目治理状态展示（Scenario F 快捷方式）：工作单元、层级、轮次及风险
 ---
 
 # governance-status（DSH 投影）

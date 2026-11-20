@@ -13,13 +13,13 @@
 - **agent**: {{AGENT_NAME_AND_VERSION}}
 
 ## 当前状态
-- **current_stage**: {{STAGE_NUMBER_AND_NAME}}
-- **current_gate**: {{GATE_ID}} (状态: {{STATUS}})
+- **carry_over_tasks**: {{待继续的任务与工作单元 ID}}
+- **目标及验收依据**: {{用户目标与工件位置}}
 - **trigger_mode**: {{TRIGGER_MODE}}
 - **permission_mode**: {{PERMISSION_MODE}}
 
 ## 遗留任务
-| 任务 ID | 描述 | 完成百分比 | 阻塞原因 | 优先级 |
+| 任务 ID | 描述 | 最新可复验结果 | 阻塞原因 | 优先级 |
 |---------|-------------|-----------|------------|----------|
 
 ## 待确认决策

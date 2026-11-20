@@ -874,6 +874,10 @@ class ChangeTriageCliTests(unittest.TestCase):
             f"| **{self.planned}** | **规划** |")
         (self.gov / "plan-tracker.md").write_text(tracker, encoding="utf-8")
 
+        from loop_workflow import start
+        start(self.root, unit_id="FIX-100", tier="inner", goal="Establish input",
+              acceptance="The input specified by FIX-100 is available")
+
     def _run_cli(self, *extra):
         # FEAT-080 (B3, DEC-290(5)): --demand-source is required at the
         # argparse layer (intake window closed) — the helper injects the
@@ -883,6 +887,8 @@ class ChangeTriageCliTests(unittest.TestCase):
                 "change-triage", "--project-root", str(self.root)]
         if "--demand-source" not in extra:
             argv += ["--demand-source", "machine-signal"]
+        if "--acceptance" not in extra:
+            argv.extend(["--acceptance", "Observe the requested behavior in the scoped file"])
         return subprocess.run(
             argv + list(extra),
             capture_output=True, text=True, encoding="utf-8", timeout=60,
@@ -1156,6 +1162,10 @@ class ChangeTriageProjectVersionCliTests(unittest.TestCase):
         (self.gov / "plan-tracker.md").write_text(
             _OLD_HOST_TRACKER, encoding="utf-8")
 
+        from loop_workflow import start
+        start(self.root, unit_id="FIX-100", tier="inner", goal="Establish input",
+              acceptance="The input specified by FIX-100 is available")
+
     def _run_cli(self, *extra):
         # FEAT-080 (B3): inject the now-required --demand-source default so
         # this FIX-288 face keeps judging its OWN version-fact-source step.
@@ -1163,6 +1173,8 @@ class ChangeTriageProjectVersionCliTests(unittest.TestCase):
                 "change-triage", "--project-root", str(self.root)]
         if "--demand-source" not in extra:
             argv += ["--demand-source", "machine-signal"]
+        if "--acceptance" not in extra:
+            argv.extend(["--acceptance", "Observe the requested behavior in the scoped file"])
         return subprocess.run(
             argv + list(extra),
             capture_output=True, text=True, encoding="utf-8", timeout=60,
@@ -2200,10 +2212,16 @@ class PriorArtGateCliTests(unittest.TestCase):
             f"| **{self.planned}** | **规划** |")
         (self.gov / "plan-tracker.md").write_text(tracker, encoding="utf-8")
 
+        from loop_workflow import start
+        start(self.root, unit_id="FIX-100", tier="inner", goal="Establish input",
+              acceptance="The input specified by FIX-100 is available")
+
     def _run_cli(self, *extra):
         argv = [sys.executable, str(_INFRA_DIR / "verify_workflow.py"),
                 "change-triage", "--project-root", str(self.root),
                 "--demand-source", "machine-signal"]
+        if "--acceptance" not in extra:
+            argv.extend(["--acceptance", "Observe the requested behavior in the scoped file"])
         return subprocess.run(
             argv + list(extra),
             capture_output=True, text=True, encoding="utf-8", timeout=60,

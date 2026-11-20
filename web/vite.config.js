@@ -5,16 +5,21 @@ import react from '@vitejs/plugin-react';
 // governance API server on 5174. In production, `web/server.py` serves both
 // the API and the built dist/ on a single port.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'governance-api',
+      apply: 'serve',
+      config(config) {
+        const apiPort = config.server.port + 1;
+        return { server: { proxy: { '/api': `http://127.0.0.1:${apiPort}` } } };
+      },
+    },
+  ],
   server: {
     host: '127.0.0.1',
     port: 5173,
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:5174',
-        changeOrigin: true,
-      },
-    },
+    strictPort: true,
   },
   build: {
     outDir: 'dist',

@@ -306,9 +306,9 @@ Related Code / Rules: {相关文件、规则、测试}
 **Output**:
 ```
 - Fix / retro / improvement artifacts
-- 5-Why + same-class scan + prevention mechanism
+- Observed failure, supported cause, and relevant recurrence evidence
 - Validation results
-- Proposed evidence-log entry with 5-Why summary
+- Reproduction and observed outcome for the receiving work unit
 - Proposed risk-log / decision-log entry when risk or rule posture changes
 ```
 

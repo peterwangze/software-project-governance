@@ -1,6 +1,6 @@
 ---
 name: governance-verify
-description: 治理健康检查（Scenario E 快捷方式）：证据缺口/Gate 不一致/风险过期诊断+修复
+description: 治理健康检查（Scenario E 快捷方式）：证据缺口/单元回执不一致/风险过期诊断+修复
 ---
 
 # governance-verify（DSH 投影）

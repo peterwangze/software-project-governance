@@ -9,6 +9,8 @@ pi is a Tier 1 loading target. pi natively loads `AGENTS.md` and `CLAUDE.md` con
 - extension bridge: `adapters/pi/extension`（ask_user_question + dispatch_agent 两桥，接线可选）
 - runtime records: the target project's `.governance/`
 
+Pi 的 `dispatch_agent` 从项目运行记录读取当前单元。按已有任务或唯一活跃单元匹配，多个候选时沿用执行包的 `work_unit_id`，将原始目标、验收条件和下一动作交给子代理。启动、返工及复审的命令见[工作单元运行协议](../../skills/software-project-governance/core/lifecycle.md)。
+
 ## Load · 加载模型
 
 接线机制 = **settings 路径数组**（用户裁决①：其他用户代价/耦合/影响最小——零包改动、不动版本投影面）。在 `~/.pi/agent/settings.json` 追加（幂等，已存在不重复加；路径数组支持绝对路径，同名冲突 keep-first）：

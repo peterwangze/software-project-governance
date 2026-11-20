@@ -507,11 +507,13 @@ def fold_state(events):
 
 
 def _gate_bucket_of(status_cell: str) -> str:
-    """Gate bucket via the peer leaf's live caliber (function-local import
-    — anti-drift; the engine-free boundary keeps this import off the
-    cold-load face)."""
-    from bootstrap_aggregate import _gate_bucket
-    return _gate_bucket(status_cell)
+    """Interpret historical ledger gate rows while rebuilding their projection."""
+    value = (status_cell or "").strip().lower().strip("`*").strip()
+    if value in {"passed", "passed-on-entry", "passed-with-conditions", "pass"}:
+        return "passed"
+    if value in {"failed", "fail"}:
+        return "failed"
+    return "pending" if value == "pending" else "other"
 
 
 # ── the transactional writer ────────────────────────────────────────────────

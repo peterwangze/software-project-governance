@@ -113,9 +113,9 @@
     },
     "agent_runtime_e2e": {
       "status": "passed",
-      "command": "GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180; gemini --prompt \"Read the local governance bootstrap and answer with exactly these machine-readable fields if the workflow is loaded: E2E_PLATFORM=gemini; E2E_AGENT=<workflow role>; E2E_STAGE=<current stage>; E2E_MODE=<trigger x permission>. Do not modify files.\" --approval-mode plan --output-format text",
+      "command": "GEMINI_CLI_TRUST_WORKSPACE=true python skills/software-project-governance/infra/verify_workflow.py agent-runtime-e2e --agent gemini --timeout 180",
       "verified_on": "2026-06-11",
-      "evidence": "Real Gemini CLI target-cwd PASS from project/e2e-test-project after setting headless workspace trust; output included E2E_PLATFORM=gemini, E2E_AGENT=Coordinator, E2E_STAGE=initiation, E2E_MODE=always-on x default-confirm."
+      "evidence": "Historical target-cwd observation from 2026-06-11 under the previous response contract. Real Gemini CLI target-cwd PASS from project/e2e-test-project after setting headless workspace trust; output included E2E_PLATFORM=gemini, E2E_AGENT=Coordinator, E2E_STAGE=initiation, E2E_MODE=always-on x default-confirm."
     },
     "auth_preflight": {
       "status": "blocked",

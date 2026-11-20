@@ -21,56 +21,34 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-INFRA = ROOT / "skills" / "software-project-governance" / "infra"
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+INFRA = PLUGIN_ROOT / "skills" / "software-project-governance" / "infra"
 
-# The read model is independent of the CLI. An unavailable engine only
-# degrades context discovery; the plan, evidence and risks keep their grammar.
 sys.path.insert(0, str(INFRA))
-readers = None
-try:
-    import governance_readers as readers
-    import verify_workflow as _vw
-
-    def _discover_governance_context(root):
-        return _vw.discover_governance_context(root)
-
-    _IMPORT_OK = True
-    _IMPORT_ERROR = None
-except Exception as exc:
-    _IMPORT_OK = False
-    _IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
-
-    def _discover_governance_context(root):
-        return {
-            "status": "NOT_FOUND",
-            "detected_item": "not found",
-            "source_facts": [],
-            "blocker_state": "no blocker open risk",
-            "next_action": "context discovery unavailable (import fallback)",
-            "auto_continue": True,
-            "interrupt_boundary": "AskUserQuestion before critical decisions",
-        }
+import governance_readers as readers
+from bootstrap_aggregate import parse_risk_summary
 
 # ---------------------------------------------------------------------------
 # Local helpers (not in verify_workflow)
 # ---------------------------------------------------------------------------
 
-def _parse_recent_evidence(text, limit=8):
-    """Top N most recent evidence rows (file is newest-first)."""
-    rows = []
+def _evidence_summary(text, limit=8):
+    """Count all appended records and return the last records, newest first."""
+    count = 0
+    rows = deque(maxlen=limit)
     for line in text.split("\n"):
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
         cells = readers.governance_table_cells(stripped)
-        if len(cells) < 4:
+        if not cells or not readers.is_evidence_id(cells[0]):
             continue
-        first = cells[0]
-        if not readers.is_evidence_id(first):
+        count += 1
+        if len(cells) < 4:
             continue
         # Columns: EVD-ID | task | category | item | detail... | ref | owner | date | gate | status
         # Defensive slicing — some rows are very wide with embedded pipes in detail.
@@ -89,67 +67,33 @@ def _parse_recent_evidence(text, limit=8):
             "status": status,
             "date": date,
         })
-        if len(rows) >= limit:
-            break
-    return rows
-
-
-def _parse_open_risks_with_deadline():
-    """Open risks with description + deadline from risk-log.md."""
-    risk_path = ROOT / ".governance" / "risk-log.md"
-    if not risk_path.is_file():
-        return []
-    risks = []
-    for line in risk_path.read_text(encoding="utf-8").split("\n"):
-        stripped = line.strip()
-        if not stripped.startswith("| RISK-"):
-            continue
-        cells = readers.governance_table_cells(stripped)
-        if len(cells) < 9:
-            continue
-        if cells[8] != "打开":
-            continue
-        desc = cells[2] if len(cells) > 2 else cells[0]
-        deadline = cells[10] if len(cells) > 10 else ""
-        risks.append({
-            "id": cells[0],
-            "description": desc[:120],
-            "status": cells[8],
-            "deadline": deadline,
-        })
-    return risks
+    return count, list(reversed(rows))
 
 
 def _release_version_from_manifest():
     """Best-effort release version from the canonical manifest (not plan-tracker)."""
-    manifest = ROOT / "skills" / "software-project-governance" / "core" / "manifest.json"
+    manifest = PLUGIN_ROOT / "skills" / "software-project-governance" / "core" / "manifest.json"
     if not manifest.is_file():
         return None
     try:
-        import json as _json
-        data = _json.loads(manifest.read_text(encoding="utf-8"))
+        data = json.loads(manifest.read_text(encoding="utf-8"))
         return data.get("version")
     except Exception:
         return None
 
 
-def build_governance_payload():
+def build_governance_payload(root):
     """Assemble the real governance facts for the dashboard."""
     payload = {
-        "project_root": str(ROOT),
-        "project_name": ROOT.name,
-        "import_ok": _IMPORT_OK,
+        "project_root": str(root),
+        "project_name": root.name,
+        "loops": readers.loop_state(root),
     }
-    if not _IMPORT_OK:
-        payload["import_error"] = _IMPORT_ERROR
-
     try:
-        if readers is None:
-            payload["error"] = f"governance readers unavailable: {_IMPORT_ERROR}"
-            return payload
-        plan_path = _vw.SAMPLE_PATH if _IMPORT_OK else ROOT / ".governance" / "plan-tracker.md"
-        plan = plan_path.read_text(encoding="utf-8")
+        plan_path = root / ".governance" / "plan-tracker.md"
+        plan = plan_path.read_text(encoding="utf-8") if plan_path.is_file() else ""
         config = readers.project_config(plan)
+        payload["project_name"] = readers.project_name(plan, config, root)
         # Workflow version lives in plan-tracker ## 项目配置 (governance runtime state).
         payload["workflow_version"] = config.get("工作流版本", "unknown")
         payload["trigger_mode"] = config.get("触发模式", "unknown")
@@ -158,20 +102,17 @@ def build_governance_payload():
         # Release version lives in the canonical manifest (shipped code version).
         payload["release_version"] = _release_version_from_manifest()
 
-        payload["gates"] = readers.gate_status(plan)
-        payload["overview"] = readers.overview(plan)
-        payload["context"] = _discover_governance_context(str(ROOT))
-
-        ev_path = ROOT / ".governance" / "evidence-log.md"
+        ev_path = root / ".governance" / "evidence-log.md"
         if ev_path.is_file():
             ev_text = ev_path.read_text(encoding="utf-8")
-            payload["evidence_count"] = readers.count_evidence_rows(ev_text)
-            payload["recent_evidence"] = _parse_recent_evidence(ev_text, 8)
+            payload["evidence_count"], payload["recent_evidence"] = _evidence_summary(ev_text)
         else:
             payload["evidence_count"] = 0
             payload["recent_evidence"] = []
 
-        payload["open_risks"] = _parse_open_risks_with_deadline()
+        risk_path = root / ".governance" / "risk-log.md"
+        risk_text = risk_path.read_text(encoding="utf-8") if risk_path.is_file() else ""
+        payload["open_risks"] = parse_risk_summary(risk_text, include_rows=True)["rows"]
     except FileNotFoundError as exc:
         payload["error"] = f"governance file missing: {exc.filename or exc}"
     except Exception as exc:  # pragma: no cover - defensive
@@ -183,7 +124,7 @@ def build_governance_payload():
 # HTTP server
 # ---------------------------------------------------------------------------
 
-DIST_DIR = ROOT / "web" / "dist"
+DIST_DIR = PLUGIN_ROOT / "web" / "dist"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -211,10 +152,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/governance":
-            self._send_json(build_governance_payload())
+            self._send_json(build_governance_payload(self.server.project_root))
             return
         if path == "/api/health":
-            self._send_json({"status": "ok", "project_root": str(ROOT)})
+            self._send_json({"status": "ok", "project_root": str(self.server.project_root)})
             return
         # Static fallback (production single-port serve of web/dist).
         if DIST_DIR.is_dir():
@@ -256,11 +197,13 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="SPG local Web console API server.")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=5174)
+    p.add_argument("--project-root", type=Path, default=Path.cwd())
     args = p.parse_args(argv)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server.project_root = args.project_root.resolve()
     print(f"SPG API server: http://{args.host}:{args.port}/api/governance")
-    print(f"Project root: {ROOT}")
+    print(f"Project root: {server.project_root}")
     print(f"Static dist: {'available' if DIST_DIR.is_dir() else 'not built (dev mode via Vite)'}")
     print("Boundary: read-only local companion dashboard; does not execute agent tasks.")
     try:

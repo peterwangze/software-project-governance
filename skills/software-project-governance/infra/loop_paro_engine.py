@@ -779,6 +779,17 @@ def _apply_side_effects(unit, to_phase, event, *, is_activation, loop_count,
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _commit_lock(runtime_path):
+    from loop_event_log import _cross_process_lock
+    return _cross_process_lock(runtime_path.with_suffix(".cas"))
+
+
+def _replace_unit(runtime_path, current, unit):
+    identity = unit["flow_unit_id"]
+    current["flow_units"] = [unit if u.get("flow_unit_id") == identity else u for u in current["flow_units"]]
+    _atomic_replace_bytes(runtime_path, _serialize(current))
+
+
 def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
                      side_effects=None, max_retries=0, event_log=None,
                      event_log_path=None, actor=None):
@@ -854,6 +865,9 @@ def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
         # ── Step 1: READ (unlocked — the compute runs outside the critical
         # section per §3.3). ─────────────────────────────────────────────────
         payload = _load_runtime(runtime_path)
+        from checks.flow_unit_runtime_v2 import native_origin_issue
+        if isinstance(payload, dict) and (origin := native_origin_issue(payload, runtime_path.name)):
+            return TransitionResult(status=STATUS_ILLEGAL, unit_id=unit_id, to_phase=to_phase, reason=origin)
         if not isinstance(payload, dict):
             return TransitionResult(
                 status=STATUS_ERROR, unit_id=unit_id, to_phase=to_phase,
@@ -924,22 +938,12 @@ def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
         _loop_state_of(new_unit)["cas_version"] = new_unit_cas
 
         # Build the new payload (replace this unit in-place, preserve order).
-        new_payload = dict(payload)
-        new_units = []
-        for u in payload.get("flow_units", []):
-            if isinstance(u, dict) and u.get("flow_unit_id") == unit_id:
-                new_units.append(new_unit)
-            else:
-                new_units.append(u)
-        new_payload["flow_units"] = new_units
-        new_bytes = _serialize(new_payload)
-
         # ── Step 4: WRITE — atomic, lock-guarded CAS critical section. ──────
         # The lock is held ONLY across re-read-check-replace. The compute above
         # ran unlocked, so two writers that both read version V reach here
         # concurrently; the lock serializes them so exactly one commits V+1 and
         # the other observes the bumped version → CONFLICT (no lost updates).
-        with lock:
+        with lock, _commit_lock(runtime_path):
             on_disk = _load_runtime(runtime_path)
             if not isinstance(on_disk, dict):
                 return TransitionResult(
@@ -947,6 +951,8 @@ def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
                     from_phase=from_phase, from_cas_version=expected_version,
                     reason="runtime file became unreadable before commit",
                 )
+            if origin := native_origin_issue(on_disk, runtime_path.name):
+                return TransitionResult(status=STATUS_ILLEGAL, unit_id=unit_id, reason=origin)
             on_disk_unit = _find_unit(on_disk, unit_id)
             if on_disk_unit is None:
                 return TransitionResult(
@@ -969,7 +975,7 @@ def apply_transition(unit_id, to_phase, event=None, *, runtime_file,
                             on_disk_version, expected_version)
                     ),
                 )
-            _atomic_replace_bytes(runtime_path, new_bytes)
+            _replace_unit(runtime_path, on_disk, new_unit)
 
         # ── FEAT-007: state-first/event-second (ADR-014 §5.2 point 3). ───────
         # The state file is committed (above) BEFORE the event is appended. A
@@ -1044,6 +1050,9 @@ def activate_unit(unit_id, *, runtime_file, tier, fuse_max_rounds,
     while True:
         attempt += 1
         payload = _load_runtime(runtime_path)
+        from checks.flow_unit_runtime_v2 import native_origin_issue
+        if isinstance(payload, dict) and (origin := native_origin_issue(payload, runtime_path.name)):
+            return TransitionResult(status=STATUS_ILLEGAL, unit_id=unit_id, to_phase=PLAN, reason=origin)
         if not isinstance(payload, dict):
             return TransitionResult(
                 status=STATUS_ERROR, unit_id=unit_id, to_phase=PLAN,
@@ -1106,23 +1115,15 @@ def activate_unit(unit_id, *, runtime_file, tier, fuse_max_rounds,
                 )
             _loop_state_of(new_unit)["cas_version"] = 0  # enforce the invariant
 
-        new_payload = dict(payload)
-        new_units = []
-        for u in payload.get("flow_units", []):
-            if isinstance(u, dict) and u.get("flow_unit_id") == unit_id:
-                new_units.append(new_unit)
-            else:
-                new_units.append(u)
-        new_payload["flow_units"] = new_units
-        new_bytes = _serialize(new_payload)
-
-        with lock:
+        with lock, _commit_lock(runtime_path):
             on_disk = _load_runtime(runtime_path)
             if not isinstance(on_disk, dict):
                 return TransitionResult(
                     status=STATUS_ERROR, unit_id=unit_id, to_phase=PLAN,
                     reason="runtime file became unreadable before commit",
                 )
+            if origin := native_origin_issue(on_disk, runtime_path.name):
+                return TransitionResult(status=STATUS_ILLEGAL, unit_id=unit_id, reason=origin)
             on_disk_unit = _find_unit(on_disk, unit_id)
             if on_disk_unit is None:
                 return TransitionResult(
@@ -1142,7 +1143,7 @@ def activate_unit(unit_id, *, runtime_file, tier, fuse_max_rounds,
                         "(another writer activated this unit first)".format(on_disk_cas)
                     ),
                 )
-            _atomic_replace_bytes(runtime_path, new_bytes)
+            _replace_unit(runtime_path, on_disk, new_unit)
 
         # ── FEAT-007: state-first/event-second (ADR-014 §5.2 point 3). ───────
         # Append the phase_enter event AFTER the activation commits.
@@ -1230,6 +1231,10 @@ def recover_state(runtime_file, event_log=None):
             runtime_found=False,
             issues=["runtime file missing or corrupt: {0}".format(runtime_path)],
         )
+
+    from checks.flow_unit_runtime_v2 import native_origin_issue
+    if origin := native_origin_issue(payload, runtime_path.name):
+        return RecoveryResult(runtime_found=False, issues=[origin])
 
     flow_units = payload.get("flow_units")
     if not isinstance(flow_units, list):

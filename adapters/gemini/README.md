@@ -4,6 +4,8 @@
 
 Gemini CLI is a Tier 1 loading guide target in 0.47.0. The current loading model is a thin `GEMINI.md` project context pointer to the shared workflow entry, not a separate Gemini-specific workflow implementation.
 
+Gemini 从 `GEMINI.md` 或已配置的技能入口找到共享协议，在项目根以同一 ID 接续本轮证据。启动、返工及复审的命令见[工作单元运行协议](../../skills/software-project-governance/core/lifecycle.md)。
+
 ## 当前定位
 
 当前阶段不复制第二套 workflow 规则，而是提供一组可复跑 adapter 资产：

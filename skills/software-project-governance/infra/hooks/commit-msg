@@ -6,26 +6,6 @@
 
 set -e
 
-# --- Product code detection (shared by Steps 10-12) ---
-# Detects whether staged files include product code (as opposed to governance records).
-# Usage: if is_product_code "$file_list"; then ... fi
-# Returns 0 (true) if product code detected, 1 (false) otherwise.
-# Definition: aligned with SKILL.md "产品代码 vs 治理记录边界" and M1.2.
-is_product_code() {
-    local files="$1"
-    local file
-    while IFS= read -r file; do
-        [ -z "$file" ] && continue
-        case "$file" in
-            .governance|.governance/*)
-                continue ;;
-            skills/*|agents/*|commands/*|core/*|infra/*|references/*|adapters/*|.claude-plugin/*|.codex-plugin/*|.agents/*|*/skills/*|*/agents/*|*/commands/*|*/core/*|*/infra/*|*/references/*|*/adapters/*|*/.claude-plugin/*|*/.codex-plugin/*|*/.agents/*)
-                return 0 ;;
-        esac
-    done <<< "$files"
-    return 1
-}
-
 task_evidence_lines() {
     local task_id="$1"
     local evidence_file="$REPO_ROOT/.governance/evidence-log.md"
@@ -45,73 +25,6 @@ task_evidence_lines() {
             }
         }
     ' "$evidence_file" 2>/dev/null
-}
-
-has_approved_review_evidence() {
-    local task_id="$1"
-    local evidence_file="$REPO_ROOT/.governance/evidence-log.md"
-    [ -f "$evidence_file" ] || return 1
-
-    # FIX-261: two accepted pass forms (POSIX ERE alternation branches):
-    #   (a) legacy end-column — the APPROVED-family token is the LAST column
-    #       (handwritten row convention; unchanged, backward compatible);
-    #   (b) review-record machine row — 11-column row ending
-    #       "| APPROVED_WITH_NOTES | unresolved_blockers=0 |"
-    #       (infra/review_record.py _evidence_row; FIX-193 four-state: only
-    #       APPROVED_WITH_NOTES carries the structured blockers tail, and it
-    #       must be exactly 0. NEEDS_CHANGE/BLOCKED match neither branch.)
-    local row_prefix="^\|[[:space:]]*REVIEW-[^|]*$task_id[^|]*\|[[:space:]]*$task_id[[:space:]]*\|.*"
-    local tail_legacy="\|[[:space:]]*(APPROVED_WITH_NOTES|APPROVED|通过|批准)[[:space:]]*\|[[:space:]]*$"
-    local tail_machine="\|[[:space:]]*APPROVED_WITH_NOTES[[:space:]]*\|[[:space:]]*unresolved_blockers=0[[:space:]]*\|[[:space:]]*$"
-    # LC_ALL=C: multibyte locale (e.g. LC_CTYPE=C.UTF-8) 下 4 字节 UTF-8/emoji 会使
-    # [^|]*/.* 字符类遍历失败导致假阴性；LC_ALL=C 强制字节模式，结果 locale 无关（FIX-239）。
-    LC_ALL=C grep -Eq "${row_prefix}(${tail_legacy}|${tail_machine})" "$evidence_file" 2>/dev/null
-}
-
-# --- Step 3 support: tolerant plan-tracker task-row matcher (FIX-282 / DEC-171) ---
-# plan-tracker task rows are conventionally bold on the priority column
-# ("| **P2** | ...") and, per DEC-171 evidence, also on the task-ID column
-# ("| **P1** | **REL-071** |"). The pre-FIX-282 literal grep '| $TASK_ID |'
-# never matched bold-ID rows, so legitimate commits were blocked — REL-071's
-# M-5 transition commit (afb959d) had to bypass via --no-verify (DEC-171).
-# Match: a table row whose FIRST cell is a priority (P{n}, optionally bold)
-# and whose SECOND cell is exactly TASK_ID (optionally bold), tolerating
-# optional whitespace around each cell. M7.5 semantics preserved: an absent
-# task row still misses, so Step 3's FAIL is unchanged and a typo'd or
-# unplanned ID cannot slip through.
-# Task_ID comes from Step 1's extraction (^[A-Z]+-[0-9]+), so it contains no
-# ERE metacharacters. The pattern deliberately uses only the grep-ERE /
-# Python-re equivalence subset (literal classes [|]/[*]/[0-9], '*', '+',
-# '{0,2}' — no POSIX classes, no backslash escapes), so
-# infra/tests/test_hooks.py can drive the literal pattern extracted from
-# this hook source (FIX-282 binding requirement).
-# Support scope (P2-2 + FIX-480): TWO golden shapes —
-#   (a) 0.99 compact: the plan-tracker template (core/templates/
-#       plan-tracker.md) and all three profiles' _PROFILE_TASK_COLUMNS put
-#       the priority cell first, task ID second (FIX-282 / DEC-171).
-#   (b) 0.54-era id-first 20-col: the v0.54.1 template puts the ID first
-#       (FIX-480 upgrade path — TRIAGE-FIX-480: the python_game host's
-#       every commit had to --no-verify because shape (a) alone never
-#       matched its rows). The shape-(b) guard is structural and
-#       ASCII-only (the test_hooks equivalence subset forbids non-ASCII
-#       in the pattern): the row must ALSO carry an ISO date
-#       ([0-9]{4}-[0-9]{2}-[0-9]{2}, the 计划开始/计划完成/实际完成
-#       cells on the 20-col template). That keeps the FIX-282 P2-1
-#       tightening intact: REQ-xxx requirement-matrix rows, archived
-#       '— '-led pointer rows, gate rows ('| G1 | …') and description-cell
-#       mentions carry no ISO date and still MISS — an absent task row
-#       still misses, so a typo'd or unplanned ID cannot slip through.
-# Task_ID comes from Step 1's extraction (^[A-Z]+-[0-9]+), so it contains no
-# ERE metacharacters. The pattern deliberately uses only the grep-ERE /
-# Python-re equivalence subset (literal classes [|]/[*]/[0-9], '*', '+',
-# '{0,2}'/'{4}'/'{2}' — no POSIX classes, no backslash escapes, no
-# non-ASCII), so infra/tests/test_hooks.py can drive the literal pattern
-# extracted from this hook source (FIX-282 binding requirement).
-task_in_plan_tracker() {
-    local task_id="$1"
-    local plan_file="$REPO_ROOT/.governance/plan-tracker.md"
-    [ -f "$plan_file" ] || return 1
-    LC_ALL=C grep -Eq "(^ *[|] *[*]{0,2}P[0-9]+[*]{0,2} *[|] *[*]{0,2}${task_id}[*]{0,2} *[|])|(^ *[|] *[*]{0,2}${task_id}[*]{0,2} *[|].*[0-9]{4}-[0-9]{2}-[0-9]{2}.*)" "$plan_file" 2>/dev/null
 }
 
 # --- Step 12 support: source-verified fabrication scan (FIX-445) ---
@@ -1044,9 +957,9 @@ if [ -n "$INSTALLED_HOOK" ] && [ "$SELF_HOOK" = "$INSTALLED_HOOK" ] && [ -f "$SO
     fi
 fi
 
-# --- Check if governance is initialized ---
-if [ ! -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
-    # Not initialized — allow commit without governance checks
+# Installed hooks also run in ordinary repositories. An existing governance
+# directory (including a tracked directory removed from the working tree) owns this host.
+if [ ! -d "$REPO_ROOT/.governance" ] && ! git cat-file -e HEAD:.governance 2>/dev/null; then
     exit 0
 fi
 
@@ -1064,186 +977,39 @@ fi
 COMMIT_MSG=$(cat "$1" 2>/dev/null || true)
 
 if [ -z "$COMMIT_MSG" ]; then
-    echo "⚠️  GOVERNANCE (commit-msg): Cannot read commit message. Skipping checks."
+    echo "GOVERNANCE BLOCKED: cannot read the current commit message" >&2
+    exit 1
+fi
+
+# Governance records remain writable during intake or recovery. Every other
+# staged host artifact belongs to the same task-scoped product review contract.
+if git -C "$REPO_ROOT" diff --cached --quiet -- . ':(exclude,top).governance'; then
     exit 0
+else
+    rc=$?
+    [ "$rc" = 1 ] || exit "$rc"
 fi
 
-# --- Step 1: Extract task ID from commit message ---
-FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
-TASK_ID=$(echo "$FIRST_LINE" | grep -oE '^[A-Z]+-[0-9]+' || true)
-
-# --- Step 2: Task ID must be present ---
-if [ -z "$TASK_ID" ]; then
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║  GOVERNANCE BLOCKED: Commit message has NO task ID.         ║"
-    echo "║                                                            ║"
-    echo "║  Every commit MUST reference a plan-tracker task.           ║"
-    echo "║  Format: 'AUDIT-XXX: description' or 'FIX-XXX: description' ║"
-    echo "║                                                            ║"
-    echo "║  Action: Add task to plan-tracker, then use its ID.         ║"
-    echo "║  Emergency bypass: git commit --no-verify                   ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
-    exit 1
+FIRST_LINE=${COMMIT_MSG%%$'\n'*}
+TASK_ID=${FIRST_LINE%%:*}
+if ! [[ "$TASK_ID" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    echo "M7.4 BLOCKED: use '<work-unit>: <description>' for the staged product change" >&2
+    exit 2
 fi
-
-# --- Step 3: Task MUST exist in plan-tracker ---
-# FIX-282 / DEC-171: tolerant matcher — literal '| $TASK_ID |' never matched
-# bold task-ID rows ("| **P1** | **REL-071** |"), causing false BLOCKs
-# (REL-071 M-5 transition used the --no-verify emergency bypass). The
-# matcher accepts bold/plain priority and bold/plain task-ID cells; absent
-# task rows still FAIL (M7.5 semantics unchanged).
-if ! task_in_plan_tracker "$TASK_ID"; then
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║  GOVERNANCE BLOCKED: Task '$TASK_ID' not in plan-tracker.  ║"
-    echo "║                                                            ║"
-    echo "║  You are committing work that was never planned.            ║"
-    echo "║  This violates M7.5: Pre-Task Protocol.                     ║"
-    echo "║                                                            ║"
-    echo "║  Action: Add '$TASK_ID' to .governance/plan-tracker.md      ║"
-    echo "║          THEN retry the commit.                             ║"
-    echo "║  Emergency bypass: git commit --no-verify                  ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
-    exit 1
+checker="$SPG_RESOLVED_HOME/infra/commit_review.py"
+if [ ! -f "$checker" ]; then
+    echo "M7.4 BLOCKED: cannot locate the installed work-unit receipt checker" >&2
+    exit 2
 fi
-
-# --- Step 4: Check evidence exists (WARN only — don't block) ---
-if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-    if ! grep -qE "$TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null; then
-        echo ""
-        echo "⚠️  GOVERNANCE: Task '$TASK_ID' has no evidence yet."
-        echo "   Commit allowed, but MUST add evidence this session."
-        echo ""
-    fi
-fi
-
-# --- Step 4.5: Task-to-task evidence chain (跨任务防护) ---
-# When starting a NEW task, verify previous task's evidence is complete
-if [ -f "$REPO_ROOT/.governance/evidence-log.md" ] && [ -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
-    PREV_TASK=$(git log -1 --format=%s 2>/dev/null | grep -oE '^[A-Z]+-[0-9]+' || true)
-    if [ -n "$PREV_TASK" ] && [ "$PREV_TASK" != "$TASK_ID" ]; then
-        # This is a different task from the last commit — check if previous is clean
-        if ! grep -qE "$PREV_TASK" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null; then
-            echo ""
-            echo "╔══════════════════════════════════════════════════════════════╗"
-            echo "║  M7.4 DEBT: Previous task '$PREV_TASK' has NO evidence.    ║"
-            echo "║                                                            ║"
-            echo "║  You are starting '$TASK_ID' while '$PREV_TASK' is          ║"
-            echo "║  incomplete. Each task MUST be fully closed before moving   ║"
-            echo "║  to the next. Evidence → check-governance → audit.          ║"
-            echo "║                                                            ║"
-            echo "║  Commit allowed, but MUST fix '$PREV_TASK' evidence first.  ║"
-            echo "╚══════════════════════════════════════════════════════════════╝"
-            echo ""
-        fi
-    fi
-fi
-
-# --- Step 5: Check if commit message references work in progress ---
-if grep -qiE "wip|work in progress|临时|tmp|temp" <<< "$COMMIT_MSG"; then
-    echo ""
-    echo "⚠️  GOVERNANCE: Commit message indicates WIP/TEMP work."
-    echo "   This is fine for local branches but should be squashed before merge."
-    echo ""
-fi
-
-# --- Compute product code status for Steps 10-12 ---
-# git diff --cached returns the same result as in pre-commit because the commit
-# hasn't happened yet — the staged files are identical between the two hooks.
-CHANGED_FILES=$(git diff --cached --name-only 2>/dev/null || true)
-IS_PRODUCT_CODE=0
-if [ -n "$CHANGED_FILES" ] && is_product_code "$CHANGED_FILES"; then
-    IS_PRODUCT_CODE=1
-fi
-
-# ── Step 10: Goal Alignment BLOCK (SYSGAP-023) ──
-# Only for product code changes. Checks evidence-log for 目标对齐: field.
-# BLOCKING if plan-tracker has 项目目标 but evidence-log has no 目标对齐: for task.
-if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
-    if [ -f "$REPO_ROOT/.governance/plan-tracker.md" ] && [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-        HAS_PROJECT_GOAL=$(grep -c '\*\*项目目标\*\*:' "$REPO_ROOT/.governance/plan-tracker.md" 2>/dev/null || true)
-        if [ "$HAS_PROJECT_GOAL" -gt 0 ]; then
-            # Check if evidence-log has 目标对齐: for this task
-            if ! task_evidence_lines "$TASK_ID" | grep -q "目标对齐[:：]"; then
-                echo ""
-                echo "╔══════════════════════════════════════════════════════════════╗"
-                echo "║  GOAL ALIGNMENT BLOCKED: Task '$TASK_ID' has NO            ║"
-                echo "║  target alignment (目标对齐:) in evidence-log.             ║"
-                echo "║                                                            ║"
-                echo "║  Every 影响分析 entry MUST include 目标对齐: field         ║"
-                echo "║  (min 30 chars) explaining how this change aligns          ║"
-                echo "║  with the project goal.                                    ║"
-                echo "║                                                            ║"
-                echo "║  Action: Add 目标对齐: <description> to evidence-log       ║"
-                echo "║          entry for this task, then retry commit.           ║"
-                echo "║  Emergency bypass: git commit --no-verify                  ║"
-                echo "╚══════════════════════════════════════════════════════════════╝"
-                echo ""
-                exit 1
-            fi
-        else
-            echo ""
-            echo "╔══════════════════════════════════════════════════════════════╗"
-            echo "║  GOVERNANCE WARN: plan-tracker missing 项目目标 field.     ║"
-            echo "║                                                            ║"
-            echo "║  目标对齐: enforcement skipped (no project goal to         ║"
-            echo "║  align against). Consider adding 项目目标 to plan-tracker. ║"
-            echo "║                                                            ║"
-            echo "║  Commit allowed — WARN only.                               ║"
-            echo "╚══════════════════════════════════════════════════════════════╝"
-            echo ""
-        fi
-    fi
-fi
-
-# ── Step 11: User Impact BLOCK (SYSGAP-024) ──
-# Only for product code changes. Checks evidence-log for 用户影响: field.
-# BLOCKING if missing.
-if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
-    if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-        if ! task_evidence_lines "$TASK_ID" | grep -q "用户影响[:：]"; then
-            echo ""
-            echo "╔══════════════════════════════════════════════════════════════╗"
-            echo "║  USER IMPACT BLOCKED: Task '$TASK_ID' has NO               ║"
-            echo "║  user impact analysis (用户影响:) in evidence-log.         ║"
-            echo "║                                                            ║"
-            echo "║  Every 影响分析 entry MUST include 用户影响: field         ║"
-            echo "║  with sub-fields: 获得= / 感知= / 体验变化= / 迁移指南=   ║"
-            echo "║                                                            ║"
-            echo "║  Action: Add 用户影响: 获得=... 感知=... to evidence-log   ║"
-            echo "║          entry for this task, then retry commit.           ║"
-            echo "║  Emergency bypass: git commit --no-verify                  ║"
-            echo "╚══════════════════════════════════════════════════════════════╝"
-            echo ""
-            exit 1
-        fi
-    fi
-fi
+py=python
+command -v "$py" >/dev/null 2>&1 || py=python3
+"$py" -X utf8 "$checker" "$REPO_ROOT" "$TASK_ID" || exit $?
 
 # ── Step 12: Fact Grounding BLOCK (FIX-080) ──
-# Only for product code changes. Checks evidence-log for 事实依据: field and
-# blocks obvious ungrounded closure language.
-if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
-    if [ ! -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-        echo ""
-        echo "╔══════════════════════════════════════════════════════════════╗"
-        echo "║  FACT GROUNDING BLOCKED: evidence-log.md is missing.        ║"
-        echo "║                                                            ║"
-        echo "║  Product-code commits MUST have persistent evidence with    ║"
-        echo "║  事实依据: before they can be committed.                   ║"
-        echo "║                                                            ║"
-        echo "║  Action: Create .governance/evidence-log.md and add         ║"
-        echo "║          事实依据: <files/commands/evidence> for this task. ║"
-        echo "║  Emergency bypass: git commit --no-verify                  ║"
-        echo "╚══════════════════════════════════════════════════════════════╝"
-        echo ""
-        exit 1
-    fi
-
-    TASK_EVD_LINES=$(task_evidence_lines "$TASK_ID" || true)
+# Validate affirmative factual assertions already recorded for this task.
+# The immutable signed product receipt supplies evidence when there is no supplemental row.
+TASK_EVD_LINES=$(task_evidence_lines "$TASK_ID" || true)
+if [ -n "$TASK_EVD_LINES" ]; then
     if ! echo "$TASK_EVD_LINES" | grep -q "事实依据[:：]"; then
         echo ""
         echo "╔══════════════════════════════════════════════════════════════╗"
@@ -1282,91 +1048,47 @@ fi
 # ── Step 13: Breaking Change Migration Guide BLOCK (SYSGAP-024) ──
 # Only for product code changes. If 体验变化=是 and 迁移指南=不需要 → BLOCKED.
 # Also BLOCKED if migration guide path provided but does not exist.
-if [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
-    if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
-        # Get the 用户影响: line for this task
-        USER_IMPACT_LINE=$(task_evidence_lines "$TASK_ID" | grep "用户影响[:：]" | head -1 || true)
-        if [ -n "$USER_IMPACT_LINE" ]; then
-            # Check: 体验变化=是 + 迁移指南=不需要
-            if echo "$USER_IMPACT_LINE" | grep -q "体验变化=是" && echo "$USER_IMPACT_LINE" | grep -q "迁移指南=不需要"; then
-                echo ""
-                echo "╔══════════════════════════════════════════════════════════════╗"
-                echo "║  BREAKING CHANGE BLOCKED: Task '$TASK_ID' declares        ║"
-                echo "║  体验变化=是 (breaking change) but 迁移指南=不需要.        ║"
-                echo "║                                                            ║"
-                echo "║  Breaking changes MUST provide a migration guide.          ║"
-                echo "║  If truly no migration needed, explain why in the          ║"
-                echo "║  迁移指南= field with reasoning.                          ║"
-                echo "║                                                            ║"
-                echo "║  Action: Update evidence-log to provide migration steps    ║"
-                echo "║          or explain why no migration is needed.            ║"
-                echo "║  Emergency bypass: git commit --no-verify                  ║"
-                echo "╚══════════════════════════════════════════════════════════════╝"
-                echo ""
-                exit 1
-            fi
-            # Check: 体验变化=是 + migration guide path that doesn't exist
-            if echo "$USER_IMPACT_LINE" | grep -q "体验变化=是"; then
-                MIGRATION_PATH=$(echo "$USER_IMPACT_LINE" | sed -n 's/.*迁移指南=\([^,，[:space:]]*\).*/\1/p' | head -1 || true)
-                if [ -n "$MIGRATION_PATH" ] && [ "$MIGRATION_PATH" != "不需要" ]; then
-                    if [ ! -f "$REPO_ROOT/$MIGRATION_PATH" ] && [ ! -f "$MIGRATION_PATH" ]; then
-                        echo ""
-                        echo "╔══════════════════════════════════════════════════════════════╗"
-                        echo "║  MIGRATION GUIDE MISSING: Task '$TASK_ID' references      ║"
-                        echo "║  迁移指南=$MIGRATION_PATH but the file does not exist.     ║"
-                        echo "║                                                            ║"
-                        echo "║  Action: Create the migration guide file or fix the path.  ║"
-                        echo "║  Emergency bypass: git commit --no-verify                  ║"
-                        echo "╚══════════════════════════════════════════════════════════════╝"
-                        echo ""
-                        exit 1
-                    fi
+if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
+    # Get the 用户影响: line for this task
+    USER_IMPACT_LINE=$(task_evidence_lines "$TASK_ID" | grep "用户影响[:：]" | head -1 || true)
+    if [ -n "$USER_IMPACT_LINE" ]; then
+        # Check: 体验变化=是 + 迁移指南=不需要
+        if echo "$USER_IMPACT_LINE" | grep -q "体验变化=是" && echo "$USER_IMPACT_LINE" | grep -q "迁移指南=不需要"; then
+            echo ""
+            echo "╔══════════════════════════════════════════════════════════════╗"
+            echo "║  BREAKING CHANGE BLOCKED: Task '$TASK_ID' declares        ║"
+            echo "║  体验变化=是 (breaking change) but 迁移指南=不需要.        ║"
+            echo "║                                                            ║"
+            echo "║  Breaking changes MUST provide a migration guide.          ║"
+            echo "║  If truly no migration needed, explain why in the          ║"
+            echo "║  迁移指南= field with reasoning.                          ║"
+            echo "║                                                            ║"
+            echo "║  Action: Update evidence-log to provide migration steps    ║"
+            echo "║          or explain why no migration is needed.            ║"
+            echo "║  Emergency bypass: git commit --no-verify                  ║"
+            echo "╚══════════════════════════════════════════════════════════════╝"
+            echo ""
+            exit 1
+        fi
+        # Check: 体验变化=是 + migration guide path that doesn't exist
+        if echo "$USER_IMPACT_LINE" | grep -q "体验变化=是"; then
+            MIGRATION_PATH=$(echo "$USER_IMPACT_LINE" | sed -n 's/.*迁移指南=\([^,，[:space:]]*\).*/\1/p' | head -1 || true)
+            if [ -n "$MIGRATION_PATH" ] && [ "$MIGRATION_PATH" != "不需要" ]; then
+                if [ ! -f "$REPO_ROOT/$MIGRATION_PATH" ] && [ ! -f "$MIGRATION_PATH" ]; then
+                    echo ""
+                    echo "╔══════════════════════════════════════════════════════════════╗"
+                    echo "║  MIGRATION GUIDE MISSING: Task '$TASK_ID' references      ║"
+                    echo "║  迁移指南=$MIGRATION_PATH but the file does not exist.     ║"
+                    echo "║                                                            ║"
+                    echo "║  Action: Create the migration guide file or fix the path.  ║"
+                    echo "║  Emergency bypass: git commit --no-verify                  ║"
+                    echo "╚══════════════════════════════════════════════════════════════╝"
+                    echo ""
+                    exit 1
                 fi
             fi
         fi
     fi
 fi
 
-# ── Step 14: Product Code Review Evidence BLOCK (FIX-036/FIX-133) ──
-# This message-dependent gate is authoritative here because commit-msg reads
-# the actual commit message from $1. pre-commit must not use stale
-# COMMIT_EDITMSG/GOV_COMMIT_MSG for this check.
-if [ -n "$TASK_ID" ] && [ -n "$CHANGED_FILES" ] && [ "$IS_PRODUCT_CODE" -eq 1 ]; then
-    TASK_PREFIX=$(echo "$TASK_ID" | grep -oE '^[A-Z]+')
-    case "$TASK_PREFIX" in
-        SYSGAP|AUDIT|FIX|MAINT|CLEANUP|DESIGN|INIT|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|PLAN)
-            NEEDS_REVIEW=1 ;;
-        REVIEW|EVD|DEC|RISK|GOV)
-            NEEDS_REVIEW=0 ;;
-        *)
-            NEEDS_REVIEW=0 ;;
-    esac
-
-    if [ "$NEEDS_REVIEW" -eq 1 ]; then
-        if ! has_approved_review_evidence "$TASK_ID"; then
-            PC_FILES=$(echo "$CHANGED_FILES" | head -5 | tr '\n' ' ')
-            PC_FILE_COUNT=$(echo "$CHANGED_FILES" | grep -c . 2>/dev/null || echo "0")
-            if [ "$PC_FILE_COUNT" -gt 5 ]; then
-                PC_FILES="$PC_FILES... (+$((PC_FILE_COUNT - 5)) more)"
-            fi
-
-            echo ""
-            echo "╔══════════════════════════════════════════════════════════════╗"
-            echo "║  M7.4 BLOCKED: Product code changes without review evidence ║"
-            echo "║                                                            ║"
-            echo "║  Task: $TASK_ID"
-            echo "║  Changed files: $PC_FILES"
-            echo "║  These are product code paths. Review evidence is          ║"
-            echo "║  MANDATORY before commit (M7.4 + M1.1).                    ║"
-            echo "║                                                            ║"
-            echo "║  Action: spawn Code Reviewer → get APPROVED → add evidence ║"
-            echo "║  Emergency bypass: git commit --no-verify                  ║"
-            echo "╚══════════════════════════════════════════════════════════════╝"
-            echo ""
-            exit 1
-        fi
-    fi
-fi
-
-# All checks passed
 exit 0

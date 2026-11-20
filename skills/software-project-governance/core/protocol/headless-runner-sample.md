@@ -23,7 +23,7 @@ headless runner 至少接受以下输入：
 
 - `workflow_id`
 - `entry_task`
-- `stage`
+- `stage` 用于选择活动。恢复、阻断和运行裁决使用当前 `loop status --unit <id>`。
 - `goal`
 - `mode`
 

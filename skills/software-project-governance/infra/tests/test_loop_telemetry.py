@@ -1,34 +1,9 @@
-"""Tests for loop_telemetry.py — FEAT-008 (0.69.0 production telemetry).
-
-These are the **load-bearing honesty-contract tests** for ADR-015. Each
-constructs a known event sequence and asserts exact numeric results — proving
-both correctness AND the unknown-when-insufficient rule (AUDIT-133 / EVD-707):
-
-  - Every metric is either a real number measured from defined events, or
-    ``unknown`` with a reason — never a proxy, never a fabricated zero.
-  - Zero completed units → ``unknown`` (NOT ``0``).
-  - Unresolved fuse trips → reported as ``open_fuse_trips`` count (NOT MTTR=0).
-  - Deployment frequency counts ``loop_exit`` (unit completion), NOT release
-    passes.
-  - Change failure rate's denominator is COMPLETED UNITS, not total loops
-    (the AUDIT-133-forbidden ``fuse_trips/total_loops`` proxy).
-  - compute_metrics is PURE: no I/O, no ``datetime.now()``, deterministic.
-
-FEAT-044 (0.88.0 E3) adds the waiting-tax test pins: round-budget
-parametrization, the N-idle-rounds heartbeat report, the interrupt + minimal-
-instruction recovery payload (all in loop_engine.py), and the
-``compute_stall_report`` telemetry view — including the cross-module mirror
-guard (telemetry threshold == engine default) and the report→heartbeat→
-recovery pipeline. FEAT-063 alignment is pinned: heartbeats/streaks are
-reports, never stop proofs.
-
-Run:
-    python -m pytest skills/software-project-governance/infra/tests/test_loop_telemetry.py -v
-"""
+"""Real unit events drive rework, waiting, completion and heartbeat observations."""
 
 import argparse
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -128,256 +103,45 @@ def _stall_unit(uid, day=23):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class KnownSequenceComputeTests(unittest.TestCase):
-    """ADR §8.2 #1 — the canonical end-to-end numeric proof."""
-
-    def test_known_sequence_compute_exact_metrics(self):
-        """3 units: A exits (2 iterations, 1h); B fuse→resolve; C withdrawn.
-
-        Asserts exact lead-time, CFR, time-to-restore, deployment-frequency.
-        """
-        # Unit A: phase_enter @ 00:00 → loop_exit @ 02:00 (lead = 7200s).
-        unit_a = [
-            _ev("A", "phase_enter", _ts(0), 0, None, to_phase="plan"),
-            _ev("A", "back_edge", _ts(1), 1, 0,
-                from_phase="reflect", to_phase="plan", loop_count=1),
-            _ev("A", "loop_exit", _ts(2), 2, 1,
-                from_phase="reflect", to_phase="exit", loop_count=1),
-        ]
-        # Unit B: phase_enter @ 00:00 → fuse_trip @ 01:00 → escalation_resolved @ 03:00.
-        unit_b = [
-            _ev("B", "phase_enter", _ts(0), 0, None, to_phase="plan"),
-            _ev("B", "fuse_trip", _ts(1), 1, 0,
-                from_phase="reflect", to_phase="escalate", loop_count=2),
-            _ev("B", "escalation_resolved", _ts(3), 2, 1,
-                from_phase="escalate", to_phase="plan"),
-        ]
-        # Unit C: phase_enter → unit_withdrawn (failure).
-        unit_c = [
-            _ev("C", "phase_enter", _ts(0), 0, None, to_phase="plan"),
-            _ev("C", "unit_withdrawn", _ts(0, 30), 1, 0,
-                from_phase="plan", to_phase="withdrawn", loop_count=0),
-        ]
-        events = unit_a + unit_b + unit_c
+class RecordedObservationsTests(unittest.TestCase):
+    def test_completion_and_rework_trace_to_events(self):
+        events = _active_to_exit_unit("A", _ts(0), _ts(2), back_edges=1)
+        events[1]["evidence_ref"] = "review-r0.md"
+        events.append(_ev("B", "gate_result", _ts(3), 2, 1, payload={"result": "APPROVED"}))
         report = lt.compute_metrics(events)
+        self.assertEqual(report.flow["unit_completions"].value, 1)
+        self.assertEqual(report.flow["rework_events"].value, 1)
+        self.assertEqual(report.flow["lead_time"].value, 7200)
+        self.assertEqual(report.flow["cycle_time"].value, 3600)
+        self.assertEqual(report.observations[0]["evidence_ref"], "review-r0.md")
+        self.assertEqual({row["unit_id"] for row in report.observations}, {"A"})
+        self.assertFalse(hasattr(report, "dora"))
 
-        # Lead time for changes = median of {A's lead} = 7200s (1 sample).
-        ltc = report.dora["lead_time_for_changes"]
-        self.assertEqual(ltc.status, "measured")
-        self.assertEqual(ltc.value, 7200.0)
-        self.assertEqual(ltc.percentiles["p90"], 7200.0)  # 1 sample
-
-        # Change failure rate = (B + C) / (A + B + C) = 2/3.
-        cfr = report.dora["change_failure_rate"]
-        self.assertEqual(cfr.status, "measured")
-        self.assertAlmostEqual(cfr.value, 2 / 3, places=6)
-
-        # Time to restore = B's fuse→resolve = 7200s (01:00 → 03:00).
-        ttr = report.dora["time_to_restore"]
-        self.assertEqual(ttr.status, "measured")
-        self.assertEqual(ttr.value, 7200.0)
-
-        # Deployment frequency (unit-completion) = 1 (only A exited).
-        df = report.dora["deployment_frequency"]
-        self.assertEqual(df.status, "measured")
-        self.assertEqual(df.value, 1)
-
-        # Cycle time: A has 2 iterations (round 00:00→01:00=3600s, round
-        # 01:00→02:00=3600s) → median 3600s.
-        ct = report.flow["cycle_time"]
-        self.assertEqual(ct.status, "measured")
-        self.assertEqual(ct.value, 3600.0)
-        self.assertEqual(ct.sample_size, 2)
-
-        # Iteration-count distribution: terminal units A(loop_count=1),
-        # B(loop_count=2), C(loop_count=0) → median of {1,2,0} = 1.
-        ic = report.flow["iteration_count_distribution"]
-        self.assertEqual(ic.status, "measured")
-        self.assertEqual(ic.value["median"], 1)
-
-        # Open fuse trips = 0 (B's fuse was resolved).
-        self.assertEqual(report.diagnostics["open_fuse_trips"], 0)
-
-        # computed_at = latest event timestamp (deterministic, NOT now()).
-        self.assertEqual(report.computed_at, "2026-07-23T03:00:00Z")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test 2 — zero completions → unknown (NOT 0)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class UnknownWhenNoCompletionsTests(unittest.TestCase):
-    """ADR §8.2 #2 — empty/no-completion window → every DORA metric unknown."""
-
-    def test_empty_event_list_all_dora_unknown(self):
-        """Empty event list → all DORA metrics unknown, no fabricated zeros."""
+    def test_missing_log_is_unknown_and_has_no_synthetic_timestamp(self):
         report = lt.compute_metrics([])
-        for name, mv in report.dora.items():
-            self.assertEqual(mv.status, "unknown",
-                             f"{name} must be unknown on empty events, got {mv.status}")
-            self.assertIsNone(mv.value,
-                              f"{name} unknown value must be None, got {mv.value}")
-            self.assertTrue(mv.reason,
-                            f"{name} unknown must carry a reason")
+        self.assertIsNone(report.computed_at)
+        self.assertTrue(all(metric.status == "unknown" and metric.value is None and metric.reason
+                            for metric in report.flow.values()))
 
-    def test_no_loop_exit_all_dora_unknown(self):
-        """Events present but none reach loop_exit → DORA metrics unknown."""
+    def test_explicit_block_resolution_and_unresolved_fuse(self):
         events = [
-            _ev("X", "phase_enter", _ts(0), 0, None, to_phase="plan"),
-            _ev("X", "fuse_trip", _ts(1), 1, 0,
-                from_phase="reflect", to_phase="escalate", loop_count=1),
+            _ev("A", "phase_enter", _ts(0), 0, None),
+            _ev("A", "unit_blocked", _ts(1), 1, 0),
+            _ev("A", "phase_enter", _ts(3), 2, 1),
+            _ev("B", "fuse_trip", _ts(2), 4, 3),
         ]
         report = lt.compute_metrics(events)
+        self.assertEqual(report.flow["blocked_wait_time"].value, 7200)
+        self.assertEqual(report.flow["blocked_wait_time"].sample_size, 1)
+        self.assertEqual(report.observations[0]["resolution_event"], "phase_enter")
+        self.assertIsNone(report.observations[1]["wait_seconds"])
+        self.assertEqual(report.observations[1]["unit_id"], "B")
 
-        # deployment_frequency: 0 loop_exit → unknown.
-        df = report.dora["deployment_frequency"]
-        self.assertEqual(df.status, "unknown")
-        self.assertIsNone(df.value)
-        self.assertIn("loop_exit", df.reason)
-
-        # change_failure_rate: 0 terminal events? No — fuse_trip IS terminal.
-        # So CFR is measured here (1 failure / 1 unit = 1.0), NOT unknown.
-        # The unknown-CFR case is specifically "0 terminal events".
-        cfr = report.dora["change_failure_rate"]
-        self.assertEqual(cfr.status, "measured")
-        self.assertAlmostEqual(cfr.value, 1.0)
-
-    def test_zero_completions_never_returns_zero(self):
-        """The load-bearing anti-fabrication test: no metric returns 0 on /0."""
-        events = [
-            _ev("Y", "phase_enter", _ts(0), 0, None, to_phase="plan"),
-        ]  # active unit, no terminal event
-        report = lt.compute_metrics(events)
-        cfr = report.dora["change_failure_rate"]
-        # 0 terminal events → unknown, value None, NOT 0.0.
-        self.assertEqual(cfr.status, "unknown")
-        self.assertIsNone(cfr.value)
-        self.assertIn("no completed units", cfr.reason)
-        df = report.dora["deployment_frequency"]
-        self.assertEqual(df.status, "unknown")
-        self.assertIsNone(df.value)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test 3 — no resolved fuses → time_to_restore unknown, open_fuse_trips reported
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TimeToRestoreTests(unittest.TestCase):
-    """ADR §8.2 #3 — unresolved fuses reported as count, NOT imputed MTTR=0."""
-
-    def test_unresolved_fuse_trip_unknown_with_open_count(self):
-        """fuse_trip without escalation_resolved → unknown + open_fuse_trips=N."""
-        events = [
-            _ev("F", "phase_enter", _ts(0), 0, None, to_phase="plan"),
-            _ev("F", "fuse_trip", _ts(1), 1, 0,
-                from_phase="reflect", to_phase="escalate", loop_count=1),
-        ]
-        report = lt.compute_metrics(events)
-        ttr = report.dora["time_to_restore"]
-        self.assertEqual(ttr.status, "unknown")
-        self.assertIsNone(ttr.value)
-        self.assertIn("no resolved fuse trips", ttr.reason)
-        # Unresolved trips are counted separately, NOT imputed as MTTR=0.
-        self.assertEqual(report.diagnostics["open_fuse_trips"], 1)
-
-    def test_no_fuse_trips_at_all_unknown_zero_open(self):
-        """No fuse trips → time_to_restore unknown, open_fuse_trips=0."""
-        events = _active_to_exit_unit("G", _ts(0), _ts(1), back_edges=0)
-        report = lt.compute_metrics(events)
-        ttr = report.dora["time_to_restore"]
-        self.assertEqual(ttr.status, "unknown")
-        self.assertIsNone(ttr.value)
-        self.assertEqual(report.diagnostics["open_fuse_trips"], 0)
-
-    def test_two_open_fuses_counted_correctly(self):
-        """Multiple unresolved fuses across units → open_fuse_trips aggregates."""
-        events = []
-        for uid, start_h in (("P", 0), ("Q", 0)):
-            events.append(_ev(uid, "phase_enter", _ts(start_h), 0, None, to_phase="plan"))
-            events.append(_ev(uid, "fuse_trip", _ts(start_h + 1), 1, 0,
-                             from_phase="reflect", to_phase="escalate", loop_count=1))
-        report = lt.compute_metrics(events)
-        self.assertEqual(report.diagnostics["open_fuse_trips"], 2)
-        self.assertEqual(report.dora["time_to_restore"].status, "unknown")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test 4 — CFR denominator is COMPLETED UNITS, not total loops (anti-proxy)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class ChangeFailureRateAntiProxyTests(unittest.TestCase):
-    """ADR §8.2 #4 — the anti-proxy test. Encodes AUDIT-133 directly.
-
-    A unit that iterates 5 times then exits successfully + a unit that fuses on
-    iteration 1 → CFR = 1/2 (one failure of two completed units), NOT 1/6
-    (which would be the fuse_trips/total_loops proxy).
-    """
-
-    def test_cfr_denominator_is_units_not_loops(self):
-        # Unit H: 5 back_edges (5 iterations) then loop_exit (SUCCESS).
-        unit_h = _active_to_exit_unit("H", _ts(0, day=20), _ts(6, day=20),
-                                      back_edges=5, day=20)
-        # Unit I: 1 fuse_trip (FAILURE) on iteration 1.
-        unit_i = [
-            _ev("I", "phase_enter", _ts(0, day=20), 0, None, to_phase="plan"),
-            _ev("I", "fuse_trip", _ts(1, day=20), 1, 0,
-                from_phase="reflect", to_phase="escalate", loop_count=1),
-        ]
-        events = unit_h + unit_i
-        report = lt.compute_metrics(events)
-
-        cfr = report.dora["change_failure_rate"]
-        self.assertEqual(cfr.status, "measured")
-        # 1 failure (I) / 2 completed units (H + I) = 0.5
-        self.assertAlmostEqual(cfr.value, 0.5)
-        # NOT the proxy: fuse_trips(1)/total_loops(6 from H's 5 + I's 1) = 0.1667
-        self.assertNotAlmostEqual(cfr.value, 1 / 6, places=2)
-        self.assertEqual(cfr.percentiles["successes"], 1)
-        self.assertEqual(cfr.percentiles["failures"], 1)
-        self.assertEqual(cfr.sample_size, 2)  # denominator = units, not loops
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test 5 — deployment frequency is loop_exit, not release count
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class DeploymentFrequencyNotReleaseTests(unittest.TestCase):
-    """ADR §8.2 #5 — deployment frequency counts loop_exit, not release passes."""
-
-    def test_deployment_frequency_counts_loop_exit_not_release(self):
-        """3 loop_exit events + a release marker → deployment_frequency = 3.
-
-        A release-gate-pass marker (the AUDIT-133-forbidden proxy source) does
-        NOT inflate the count. The scope_note states it is unit-completion.
-        """
-        events = []
-        for uid, hr in (("A", 0), ("B", 1), ("C", 2)):
-            events.append(_ev(uid, "phase_enter", _ts(hr), 0, None, to_phase="plan"))
-            events.append(_ev(uid, "loop_exit", _ts(hr + 1), 1, 0,
-                             from_phase="reflect", to_phase="exit", loop_count=0))
-        # A "release" style event the proxy would have counted — but it is a
-        # gate_result, NOT a loop_exit. compute_metrics must ignore it.
-        events.append(_ev("A", "gate_result", _ts(3), 2, 1,
-                          from_phase="reflect", to_phase="exit",
-                          payload={"gate_id": "G9-Release-Gate", "gate_result": "PASS"}))
-        report = lt.compute_metrics(events)
-
-        df = report.dora["deployment_frequency"]
-        self.assertEqual(df.status, "measured")
-        self.assertEqual(df.value, 3)  # 3 loop_exit, NOT 3+1 release marker
-        self.assertEqual(df.sample_size, 3)
-        # The scope_note makes the unit-completion scoping explicit.
-        self.assertIn("unit-completion", report.scope_note)
-        self.assertIn("NOT", report.scope_note)  # "NOT ... release cadence"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test 6 — window filtering (7d vs 30d vs all)
-# ═══════════════════════════════════════════════════════════════════════════
+    def test_same_second_resolution_is_observed_zero(self):
+        report = lt.compute_metrics([_ev("A", "fuse_trip", _ts(1), 4, 3),
+                                     _ev("A", "escalation_resolved", _ts(1), 5, 4)])
+        self.assertEqual(report.flow["blocked_wait_time"].value, 0)
+        self.assertEqual(report.flow["blocked_wait_time"].status, "measured")
 
 
 class WindowFilteringTests(unittest.TestCase):
@@ -391,28 +155,28 @@ class WindowFilteringTests(unittest.TestCase):
 
         # all-time: both units' exits counted.
         rep_all = lt.compute_metrics(events)
-        self.assertEqual(rep_all.dora["deployment_frequency"].value, 2)
+        self.assertEqual(rep_all.flow["unit_completions"].value, 2)
 
         # 7d window (latest event is day 20): only the recent unit (day 20) is
         # within 7 days of day 20 → 1 exit.
         rep_7d = lt.compute_metrics(events, window="7d")
         self.assertEqual(rep_7d.window, "7d")
-        self.assertEqual(rep_7d.dora["deployment_frequency"].value, 1)
+        self.assertEqual(rep_7d.flow["unit_completions"].value, 1)
 
         # 30d window: day 20 is within 30d of day 20; day 1 is 19 days before
         # day 20 → also within 30d → both. (20 - 1 = 19 < 30.)
         rep_30d = lt.compute_metrics(events, window="30d")
-        self.assertEqual(rep_30d.dora["deployment_frequency"].value, 2)
+        self.assertEqual(rep_30d.flow["unit_completions"].value, 2)
 
         # Explicit [start, end) date window covering only day 1.
         rep_explicit = lt.compute_metrics(events, window=("2026-07-01", "2026-07-02"))
         self.assertEqual(rep_explicit.window, "2026-07-01..2026-07-02")
-        self.assertEqual(rep_explicit.dora["deployment_frequency"].value, 1)
+        self.assertEqual(rep_explicit.flow["unit_completions"].value, 1)
 
         # window=None == all-time.
         rep_none = lt.compute_metrics(events, window=None)
         self.assertEqual(rep_none.window, "all")
-        self.assertEqual(rep_none.dora["deployment_frequency"].value, 2)
+        self.assertEqual(rep_none.flow["unit_completions"].value, 2)
 
     def test_window_excludes_old_events_from_counts(self):
         """An old exit outside the 7d window does not count."""
@@ -421,8 +185,8 @@ class WindowFilteringTests(unittest.TestCase):
         anchor = [_ev("ANCHOR", "phase_enter", _ts(0, day=20), 0, None, to_phase="plan")]
         events = old + anchor
         rep = lt.compute_metrics(events, window="7d")
-        # The OLD exit (day 1) is excluded; ANCHOR has no exit → unknown.
-        self.assertEqual(rep.dora["deployment_frequency"].status, "unknown")
+        # The selected unit has no recorded exit within the window.
+        self.assertEqual(rep.flow["unit_completions"].value, 0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -547,7 +311,7 @@ class PercentileComputationTests(unittest.TestCase):
         # lead times: 3600, 7200, 10800 → median 7200, p90 = 0.9*2=1.8 rank →
         # between idx1(7200) & idx2(10800): 7200 + 0.8*(10800-7200) = 10080.
         report = lt.compute_metrics(events)
-        ltc = report.dora["lead_time_for_changes"]
+        ltc = report.flow["lead_time"]
         self.assertEqual(ltc.status, "measured")
         self.assertEqual(ltc.value, 7200.0)  # median
         self.assertAlmostEqual(ltc.percentiles["p90"], 10080.0)
@@ -555,104 +319,6 @@ class PercentileComputationTests(unittest.TestCase):
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Test 9 — terminal-event precedence (fuse→withdraw → withdrawn; fuse→resolve→exit → exit)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TerminalEventPrecedenceTests(unittest.TestCase):
-    """ADR §8.2 #9 / Design Review P1-2 — classify by the LAST terminal event."""
-
-    def test_fuse_then_withdraw_classified_as_withdrawn(self):
-        """A unit that fuse-tripped then was withdrawn → counted as withdrawn (final)."""
-        events = [
-            _ev("W", "phase_enter", _ts(0), 0, None, to_phase="plan"),
-            _ev("W", "fuse_trip", _ts(1), 1, 0,
-                from_phase="reflect", to_phase="escalate", loop_count=1),
-            _ev("W", "unit_withdrawn", _ts(2), 2, 1,
-                from_phase="escalate", to_phase="withdrawn", loop_count=1),
-        ]
-        report = lt.compute_metrics(events)
-        # One completed unit (W), classified as FAILURE (its last terminal is
-        # unit_withdrawn). CFR = 1/1 = 1.0. It is NOT counted twice even though
-        # it has two terminal events.
-        cfr = report.dora["change_failure_rate"]
-        self.assertEqual(cfr.status, "measured")
-        self.assertAlmostEqual(cfr.value, 1.0)
-        self.assertEqual(cfr.sample_size, 1)  # counted ONCE
-        self.assertEqual(cfr.percentiles["failures"], 1)
-        # The fuse_trip's escalation never resolved → open_fuse_trips=1 still
-        # reported (the withdraw doesn't resolve the fuse).
-        self.assertEqual(report.diagnostics["open_fuse_trips"], 1)
-
-    def test_fuse_then_resolve_then_exit_classified_as_exit(self):
-        """A unit that fuse-tripped then resolved then exited → counted as exit (passed)."""
-        events = [
-            _ev("E", "phase_enter", _ts(0), 0, None, to_phase="plan"),
-            _ev("E", "fuse_trip", _ts(1), 1, 0,
-                from_phase="reflect", to_phase="escalate", loop_count=1),
-            _ev("E", "escalation_resolved", _ts(2), 2, 1,
-                from_phase="escalate", to_phase="plan"),
-            _ev("E", "loop_exit", _ts(4), 3, 2,
-                from_phase="reflect", to_phase="exit", loop_count=1),
-        ]
-        report = lt.compute_metrics(events)
-        # Classified as SUCCESS (last terminal = loop_exit). CFR = 0/1 = 0.0.
-        cfr = report.dora["change_failure_rate"]
-        self.assertEqual(cfr.status, "measured")
-        self.assertAlmostEqual(cfr.value, 0.0)
-        self.assertEqual(cfr.percentiles["successes"], 1)
-        # The fuse was resolved → contributes a time_to_restore sample, and no
-        # open fuse trip.
-        self.assertEqual(report.dora["time_to_restore"].status, "measured")
-        self.assertEqual(report.dora["time_to_restore"].value, 3600.0)  # 01:00→02:00
-        self.assertEqual(report.diagnostics["open_fuse_trips"], 0)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test 10 — back-edge frequency correct
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class BackEdgeFrequencyTests(unittest.TestCase):
-    """ADR §8.2 #10 — back-edge events per unit per window."""
-
-    def test_back_edge_frequency_per_unit(self):
-        """2 units, 3 back_edges total → 3/2 = 1.5 per unit per window."""
-        events = []
-        events += _active_to_exit_unit("B1", _ts(0), _ts(4), back_edges=2)  # 2 back_edges
-        events += _active_to_exit_unit("B2", _ts(0, day=22), _ts(1, day=22), back_edges=1)  # 1
-        report = lt.compute_metrics(events)
-        be = report.flow["back_edge_frequency"]
-        self.assertEqual(be.status, "measured")
-        self.assertEqual(be.sample_size, 3)  # 3 back_edge events
-        self.assertAlmostEqual(be.value, 3 / 2)  # 3 back_edges / 2 units
-        self.assertEqual(be.unit, "per_unit_per_window")
-
-    def test_zero_back_edges_non_empty_window_is_measured_zero(self):
-        """A non-empty window with zero back-edges is a REAL 0, not unknown.
-
-        This is the load-bearing distinction (ADR-015 §3.4): "0 back-edges
-        across N active units" means no iteration is happening — a real signal.
-        Only an empty window (zero units) is unknown.
-        """
-        events = _active_to_exit_unit("Z", _ts(0), _ts(1), back_edges=0)
-        report = lt.compute_metrics(events)
-        be = report.flow["back_edge_frequency"]
-        self.assertEqual(be.status, "measured")
-        self.assertEqual(be.value, 0.0)
-        # A measured metric carries an empty reason (the honesty marker lives in
-        # the status field, ADR-015 §9.5 risk 2).
-        self.assertEqual(be.reason, "")
-
-    def test_empty_window_back_edge_unknown(self):
-        """No units at all → back_edge_frequency unknown."""
-        report = lt.compute_metrics([])
-        be = report.flow["back_edge_frequency"]
-        self.assertEqual(be.status, "unknown")
-        self.assertIsNone(be.value)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test 11 — malformed timestamps counted, not raised (robustness)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -670,9 +336,8 @@ class MalformedTimestampTests(unittest.TestCase):
         # Must not raise.
         report = lt.compute_metrics(events)
         self.assertEqual(report.diagnostics["malformed_timestamps"], 1)
-        # The malformed loop_exit is excluded → deployment_frequency unknown
-        # (the only loop_exit had an unparseable timestamp).
-        self.assertEqual(report.dora["deployment_frequency"].status, "unknown")
+        # The only exit has an unparseable timestamp and is excluded.
+        self.assertEqual(report.flow["unit_completions"].value, 0)
 
     def test_non_dict_events_skipped(self):
         """Non-dict entries in the event list are skipped, not raised."""
@@ -684,7 +349,7 @@ class MalformedTimestampTests(unittest.TestCase):
                 from_phase="reflect", to_phase="exit", loop_count=0),
         ]
         report = lt.compute_metrics(events)
-        self.assertEqual(report.dora["deployment_frequency"].value, 1)
+        self.assertEqual(report.flow["unit_completions"].value, 1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -693,6 +358,39 @@ class MalformedTimestampTests(unittest.TestCase):
 
 
 class CLILoopTelemetryTests(unittest.TestCase):
+    def test_native_rework_and_closure_use_the_selected_project(self):
+        cli = str(_INFRA_DIR / "verify_workflow.py")
+        with tempfile.TemporaryDirectory() as work, tempfile.TemporaryDirectory() as empty:
+            def run(*args, expected=0):
+                result = subprocess.run([sys.executable, "-X", "utf8", cli, "--project-root", work, *args],
+                                        cwd=empty, capture_output=True, encoding="utf-8")
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                return result.stdout
+
+            def telemetry(*options):
+                return json.loads(run("loop-telemetry", "--json", *options))
+
+            script = Path(work) / "greeting.py"
+            script.write_text("print('wrong')", encoding="utf-8")
+            run("loop", "start", "--unit", "greeting", "--tier", "inner", "--goal", "Say hello",
+                "--acceptance", "The command prints hello", "--check-command",
+                json.dumps([sys.executable, str(script)]), "--expect-output", "hello")
+            self.assertEqual(json.loads(run("loop", "verify", "--unit", "greeting", expected=2))["decision"], "iterate")
+            self.assertEqual(telemetry()["flow"]["unit_completions"]["value"], 0)
+            script.write_text("print('hello')", encoding="utf-8")
+            self.assertEqual(json.loads(run("loop", "verify", "--unit", "greeting"))["decision"], "exit")
+            report = telemetry()
+            self.assertEqual(report["flow"]["rework_events"]["value"], 1)
+            self.assertEqual(report["flow"]["unit_completions"]["value"], 1)
+            self.assertEqual([row["event_type"] for row in report["observations"]], ["back_edge", "loop_exit"])
+            for row in report["observations"]:
+                self.assertTrue((Path(work) / ".governance" / row["evidence_ref"]).is_file())
+            self.assertNotIn("dora", report)
+            self.assertTrue(all(metric["status"] == "unknown"
+                                for metric in telemetry("--target", empty)["flow"].values()))
+            self.assertIn("Loop observations: available", run("check-loop-health", "--fail-on-issues"))
+            self.assertIn("Loop observations: unknown", run("check-loop-health", "--target", empty))
+
     """ADR §8.2 #10 — cmd_loop_telemetry reads the event log and delegates."""
 
     def test_cli_reads_event_log_and_delegates(self):
@@ -717,10 +415,10 @@ class CLILoopTelemetryTests(unittest.TestCase):
                 vw.cmd_loop_telemetry(args)
         text = out.getvalue()
         self.assertIn("Loop Telemetry", text)
-        self.assertIn("deployment_frequency", text.lower())
+        self.assertIn("unit_completions: 1 count", text)
         # The report resolved HOST_PROJECT_ROOT (the temp root) — the unit's
         # loop_exit is counted, proving the file was read from <root>/.governance.
-        self.assertIn("unit-completion", text)
+        self.assertIn("loop-event-log.jsonl", text)
 
     def test_cli_json_mode_emits_valid_json(self):
         """--json mode emits parseable JSON with the expected structure."""
@@ -737,16 +435,11 @@ class CLILoopTelemetryTests(unittest.TestCase):
             out = io.StringIO()
             with redirect_stdout(out):
                 vw.cmd_loop_telemetry(args)
-        # Extract the JSON block (after the header line).
-        text = out.getvalue()
-        start = text.find("{")
-        self.assertGreater(start, -1, "JSON output must contain a '{'")
-        payload = json.loads(text[start:])
-        self.assertIn("dora", payload)
-        self.assertIn("flow", payload)
+        payload = json.loads(out.getvalue())
+        self.assertNotIn("dora", payload)
         self.assertEqual(payload["window"], "all")
-        # Empty event log (only an active unit) → all DORA metrics unknown.
-        self.assertEqual(payload["dora"]["deployment_frequency"]["status"], "unknown")
+        self.assertEqual(payload["flow"]["unit_completions"]["value"], 0)
+        self.assertEqual(payload["flow"]["blocked_wait_time"]["status"], "unknown")
 
     def test_cli_resolves_host_root_when_target_absent(self):
         """Without --target, cmd_loop_telemetry resolves HOST_PROJECT_ROOT (RISK-040)."""
@@ -761,7 +454,7 @@ class CLILoopTelemetryTests(unittest.TestCase):
                                  from_version=None, actor="t", to_phase="plan",
                                  timestamp="2026-07-23T00:00:00Z"),
             ], log_path=log)
-            with patch("resolve_entry.resolve_host_root", return_value=root):
+            with patch.object(vw, "HOST_PROJECT_ROOT", root):
                 args = argparse.Namespace(target=None, window="all", json=False)
                 out = io.StringIO()
                 with redirect_stdout(out):
@@ -794,7 +487,7 @@ class LoopHealthTelemetryWiringTests(unittest.TestCase):
         # The advisory telemetry key exists; with no event log it is
         # "unavailable" (graceful), and crucially it does NOT block.
         self.assertIn("telemetry", result)
-        self.assertEqual(result["telemetry"]["status"], "unavailable")
+        self.assertEqual(result["telemetry"]["status"], "unknown")
         self.assertEqual(result["summary"]["blocking_count"], 0)
 
     def test_telemetry_computes_when_event_log_present(self):
@@ -824,8 +517,8 @@ class LoopHealthTelemetryWiringTests(unittest.TestCase):
             result = lh.check_loop_health(target=str(root), plugin_home=str(root))
         tele = result["telemetry"]
         self.assertEqual(tele["status"], "available")
-        self.assertEqual(tele["dora"]["deployment_frequency"].status, "measured")
-        self.assertEqual(tele["dora"]["deployment_frequency"].value, 1)
+        self.assertEqual(tele["flow"]["unit_completions"]["status"], "measured")
+        self.assertEqual(tele["flow"]["unit_completions"]["value"], 1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

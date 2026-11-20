@@ -9,7 +9,6 @@
   - parse_completed_task_ids: >= 11 parts, status at parts[10]
   - parse_evidence_task_ids:  | EVD-xxx | <TASK-ID> | ..., parts[2]
   - parse_open_risks:         >= 10 parts, status at parts[9]
-  - parse_gate_status:        >= 5 parts (split[1:-1]), [0]=gate [2]=status
 
 Run:
     python -m pytest skills/software-project-governance/infra/tests/e2e/test_governance_init.py -v
@@ -86,7 +85,8 @@ class ProjectSkeleton:
             return vw.check_risk_staleness()
 
     def run_gate_check(self):
-        with patch.object(vw, "SAMPLE_PATH", self._plan), \
+        with patch.object(vw, "GOVERNANCE_DIR", self.gov), \
+             patch.object(vw, "SAMPLE_PATH", self._plan), \
              patch.object(vw, "EVIDENCE_PATH", self._evidence), \
              patch.object(vw, "RISK_PATH", self._risk):
             return vw.check_gate_consistency()
@@ -196,68 +196,34 @@ class EvidenceLogStateTests(unittest.TestCase):
 
 class GateConsistencyTests(unittest.TestCase):
 
-    def test_gate_passed_with_evidence(self):
-        plan = """# 计划跟踪
+    def test_new_project_rechecks_failed_unit_and_rejects_damaged_receipt(self):
+        import json
+        import subprocess
+        import loop_workflow
 
-## Gate 状态跟踪
-
-| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |
-| --- | --- | --- | --- | --- |
-| G1 | 立项 | passed | 2026-04-01 | EVD-001 |
-
-## 任务跟踪
-
-%s
-%s
-%s
-""" % (_THEAD, _TSEP, task_row("GATE-001"))
-        evidence = evd_row("EVD-001", "GATE-001")
-        with ProjectSkeleton() as ps:
-            ps.write_plan(plan); ps.write_evidence(evidence)
-            issues = ps.run_gate_check()
-            missing = [i for i in issues
-                       if i.get("type") == "completed_tasks_missing_evidence"]
-            self.assertEqual(len(missing), 0)
-
-    def test_gate_passed_without_task_done(self):
-        plan = """# 计划跟踪
-
-## Gate 状态跟踪
-
-| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |
-| --- | --- | --- | --- | --- |
-| G1 | 立项 | passed | 2026-04-01 | EVD-001 |
-
-## 任务跟踪
-
-%s
-%s
-%s
-""" % (_THEAD, _TSEP, task_row("GATE-001", "进行中"))
-        evidence = evd_row("EVD-001", "GATE-001")
-        with ProjectSkeleton() as ps:
-            ps.write_plan(plan); ps.write_evidence(evidence)
-            issues = ps.run_gate_check()
-            self.assertIsInstance(issues, list)
-
-    def test_passed_on_entry(self):
-        plan = """# 计划跟踪
-
-## Gate 状态跟踪
-
-| Gate | 阶段转换 | 状态 | 通过日期 | 关键证据 |
-| --- | --- | --- | --- | --- |
-| G1 | 立项 | passed-on-entry | 2026-04-01 | - |
-| G2 | 调研 | passed-on-entry | 2026-04-01 | - |
-| G3 | 开发 | pending | - | - |
-"""
-        with ProjectSkeleton() as ps:
-            ps.write_plan(plan)
-            with patch.object(vw, "SAMPLE_PATH", ps._plan):
-                gates = vw.parse_gate_statuses()
-                self.assertEqual(len(gates), 3)
-                poe = [g for g in gates if g["status"] == "passed-on-entry"]
-                self.assertEqual(len(poe), 2)
+        with ProjectSkeleton() as project:
+            cli = [sys.executable, str(_INFRA_DIR / "verify_workflow.py"), "--project-root",
+                   str(project.root), "loop"]
+            check = [sys.executable, "-c", "from pathlib import Path; print(Path('answer').read_text())"]
+            subprocess.run([*cli, "start", "--unit", "sum", "--tier", "inner", "--goal", "Sum ledger rows",
+                            "--acceptance", "Rows sum to seven", "--check-command", json.dumps(check),
+                            "--expect-output", "7"], check=True, capture_output=True)
+            (project.root / "answer").write_text("6", encoding="utf-8")
+            subprocess.run([*cli, "verify", "--unit", "sum"], capture_output=True)
+            state = json.loads(loop_workflow.runtime_path(project.root).read_bytes())
+            history = state["flow_units"][0]["gate_history"]
+            self.assertEqual([record["decision"] for record in history], ["iterate"])
+            self.assertEqual(project.run_gate_check(), [])
+            (project.root / "answer").write_text("7", encoding="utf-8")
+            subprocess.run([*cli, "verify", "--unit", "sum"], check=True, capture_output=True)
+            state = json.loads(loop_workflow.runtime_path(project.root).read_bytes())
+            history = state["flow_units"][0]["gate_history"]
+            self.assertEqual([record["decision"] for record in history], ["iterate", "exit"])
+            self.assertEqual(project.run_gate_check(), [])
+            (project.gov / history[0]["evidence_ref"]).write_bytes(b"modified")
+            issues = project.run_gate_check()
+            self.assertTrue(any(issue["type"] == "loop_receipt" and "sum" in issue["detail"]
+                                for issue in issues), issues)
 
     def test_orphan_evidence(self):
         plan = "\n".join([

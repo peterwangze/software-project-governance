@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
@@ -547,6 +548,7 @@ def write_golden_samples(path: Path = GOLDEN_PATH) -> list[str]:
             completed = subprocess.run(
                 [sys.executable, str(_ENGINE_PATH)] + resolved,
                 capture_output=True, text=True, encoding="utf-8",
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                 errors="replace", timeout=300, check=False, cwd=str(_REPO_ROOT),
             )
             sections.append(

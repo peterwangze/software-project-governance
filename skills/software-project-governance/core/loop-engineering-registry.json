@@ -6,16 +6,36 @@
   "introduced_for": "0.65.0",
   "requires_lifecycle_registry_min_version": "1.0",
   "source_of_truth": true,
-  "registry_mode": "schema-only-no-runtime-activation",
+  "registry_mode": "native-loop-execution",
   "workflow_model": "loop-engineering",
-  "no_overclaim_boundary": [
-    "Loop-engineering registry is schema/declaration only; it declares the loop topology, fuses, and pause points.",
-    "Loop-engineering registry does not activate any runtime loop instrumentation in 0.65.0.",
-    "Loop-engineering registry does not modify the classic G1-G11 gate judgment behavior.",
-    "Loop-engineering registry does not auto-fire any back-edge; every back-edge requires explicit authorization.",
-    "Loop-engineering registry does not close RISK-037 (loop-engineering completeness); this slice (FX-188) declares the registry and a read-only loader only.",
-    "Loop-engineering registry does not claim 1.0.0 production-ready."
-  ],
+  "middle_delivery_paths": {
+    "delivery": ["G5", "G7", "G9"],
+    "release": ["G5", "G7", "G8", "G9"]
+  },
+  "iteration_paths": {
+    "setup": ["G2", "G3", "G4"],
+    "inner": ["G6"],
+    "middle": ["G5", "G7", "G8", "G9"],
+    "outer": ["G10", "G11"]
+  },
+  "optional_entry_gates": {"setup": ["G1"], "inner": ["G7"]},
+  "child_completion_gates": ["G4", "G6", "G7", "G9", "G11"],
+  "reviewer_gates": {
+    "requirement reviewer": ["G1", "G2"],
+    "design reviewer": ["G3", "G4", "G5"],
+    "tech reviewer": ["G3", "G5"],
+    "code reviewer": ["G6"],
+    "test reviewer": ["G7"],
+    "release reviewer": ["G8", "G9"],
+    "retro reviewer": ["G10", "G11"]
+  },
+  "rework_targets": {
+    "G3": ["setup", "G2"],
+    "G4": ["setup", "G3"],
+    "G7": ["inner", "G6"],
+    "G9": ["middle", "G7"],
+    "G11": ["outer", "G10"]
+  },
   "loop_gate_semantics": [
     {
       "gate_id": "G1",

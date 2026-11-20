@@ -1000,6 +1000,30 @@ def _read_file_text(target: Path) -> str:
 # ── The five-step write flow (arch round-2 §1) ──────────────────────────────
 
 
+def _require_row_exit(target, task_id, to_state, project_root, locks=None):
+    """Tie a terminal governance row to its own project and original exit receipt."""
+    if to_state not in {"completed", "committed"}:
+        return
+    # Bare tables are storage fixtures. A real governance directory on the
+    # target path identifies its owner even for direct library calls.
+    owner = next((parent.parent for parent in target.absolute().parents
+                  if parent.name == ".governance"), None)
+    project = project_root or owner
+    if project is None:
+        return
+    project = Path(project).resolve()
+    if (not target.resolve().is_relative_to(project)
+            or (owner is not None and owner.resolve() != project)):
+        raise ValueError("target table is outside its governance project root")
+    from checks.loop_receipts import require_task_exit
+    from loop_workflow import runtime_path
+
+    runtime = runtime_path(project)
+    if locks is not None and runtime.is_file():
+        locks.enter_context(_write_lock(runtime))
+    require_task_exit(project, task_id)
+
+
 def execute_update(
     *,
     target: Path,
@@ -1012,6 +1036,7 @@ def execute_update(
     expected_revision: Optional[int] = None,
     schema_version: int = DEFAULT_SCHEMA_VERSION,
     ledger: Optional[Path] = None,
+    project_root: Optional[Path] = None,
     now_fn=None,
 ) -> WriterResult:
     """One governed row flip: the five-step flow, returning a WriterResult.
@@ -1132,13 +1157,14 @@ def execute_update(
             detail="target unreadable ({0}): {1}".format(
                 type(exc).__name__, exc))
 
-    try:
-        lock = _write_lock(target)
-    except LockContention as exc:
-        return WriterResult(
-            operation_id=operation_id, code="lock_contention",
-            detail=str(exc))
-    with lock:
+    with contextlib.ExitStack() as locks:
+        try:
+            _require_row_exit(target, task_id, to_state, project_root, locks)
+            locks.enter_context(_write_lock(target))
+        except LockContention as exc:
+            return WriterResult(operation_id=operation_id, code="lock_contention", detail=str(exc))
+        except (OSError, ValueError) as exc:
+            return _validation_result(operation_id, "cross_record_violation", str(exc))
         # Step 3 re-reads the world UNDER the lock (the pre-lock read above
         # was advisory; this one is the truth the write is judged against).
         try:
@@ -1958,6 +1984,7 @@ def _dry_run(
     refs: Tuple[EvidenceRef, ...],
     operation_id: str,
     schema_version: int,
+    project_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Full pre-flight with ZERO writes and ZERO locks (validation-only).
 
@@ -2005,6 +2032,7 @@ def _dry_run(
             refusal = {"code": "illegal_transition", "detail": str(exc)}
     if refusal is None:
         try:
+            _require_row_exit(target, task_id, to_state, project_root)
             row_index, row_line = locate_task_row(text, task_id)
             current = detect_row_state(row_line)
             if current is None:
@@ -2025,7 +2053,7 @@ def _dry_run(
                     "row_before": row_line,
                     "row_after": candidate,
                 }
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             refusal = {"code": "cross_record_violation", "detail": str(exc)}
     payload["would_execute"] = refusal is None
     if refusal is not None:
@@ -2255,8 +2283,19 @@ def _execute(args: argparse.Namespace,
     ``parser`` is used only for usage-level refusals (``parser.error`` keeps
     the argparse exit-2 + usage-text contract identical on both paths).
     """
-    target = Path(args.file)
+    explicit = getattr(args, "project_root", None)
+    project = Path(explicit).resolve() if explicit else None
+    target = project / args.file if project else Path(args.file)
+    if project is None:
+        for parent in target.absolute().parents:
+            if (parent / ".governance").is_dir():
+                project = parent
+                break
+            if (parent / ".git").exists():
+                break
     ledger = Path(args.ledger) if args.ledger else None
+    if ledger is not None and explicit:
+        ledger = project / ledger
 
     try:
         refs = _parse_refs(args.refs)
@@ -2370,7 +2409,8 @@ def _execute(args: argparse.Namespace,
         payload = _dry_run(
             target=target, task_id=args.task, from_state=args.from_state,
             to_state=args.to_state, reason=args.reason, refs=refs,
-            operation_id=operation_id, schema_version=args.schema_version)
+            operation_id=operation_id, schema_version=args.schema_version,
+            project_root=project)
         _emit({"mode": "dry-run", **payload}, args.json)
         return ExitCode.OK if payload["would_execute"] \
             else _disposition_exit_code(payload["refusal"]["code"])
@@ -2380,7 +2420,7 @@ def _execute(args: argparse.Namespace,
         to_state=args.to_state, reason=args.reason, evidence_refs=refs,
         operation_id=args.operation_id,
         expected_revision=args.expected_revision,
-        schema_version=args.schema_version, ledger=ledger)
+        schema_version=args.schema_version, ledger=ledger, project_root=project)
     replayed = (result.detail or "").startswith("replay of operation")
     result_face = {
         "operation_id": result.operation_id,

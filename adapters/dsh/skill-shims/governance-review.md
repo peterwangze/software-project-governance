@@ -1,6 +1,6 @@
 ---
 name: governance-review
-description: 触发独立审查（手动快捷方式）：对指定阶段/类型产出物派发 Reviewer Agent
+description: 触发独立审查（手动快捷方式）：对指定工作单元本轮产物派发 Reviewer Agent
 ---
 
 # governance-review（DSH 投影）

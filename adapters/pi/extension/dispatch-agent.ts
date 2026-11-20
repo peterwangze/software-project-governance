@@ -19,6 +19,7 @@
 
 import type { AgentToolResult, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { dispatchUnit } from "./work-unit.ts";
 
 import {
 	cleanupTempDir,
@@ -33,6 +34,7 @@ import { listRoleDefinitions, pluginRoot, readTextFile, resolveRepoPath } from "
 // ── Tool schema (design §1b.2 — dispatch-template placeholders as params) ──
 
 const GovDispatchParams = Type.Object({
+	work_unit_id: Type.Optional(Type.String({ description: "Current unit from the execution packet; supply it when several active units match." })),
 	role_definition_path: Type.String({
 		description:
 			"Path to the role definition markdown, e.g. agents/developer.md. " +
@@ -75,6 +77,7 @@ const GovDispatchParams = Type.Object({
 });
 
 type GovDispatchParamsValue = {
+	work_unit_id?: string;
 	role_definition_path: string;
 	task_skill_path?: string;
 	task_prompt: string;
@@ -227,6 +230,13 @@ export function governanceDispatchAgentTool(pluginRootOverride?: string): ToolDe
 				stopReason: run?.stopReason,
 			});
 
+			let unitContext: string;
+			try {
+				unitContext = await dispatchUnit(root, cwd, params.task_prompt, params.work_unit_id);
+			} catch (error) {
+				return dispatchResult(String(error), makeDetails([]), true);
+			}
+
 			// 3. write composed prompt to a private temp file (tmpdir + 0600)
 			const tmp = await writePromptToTempFile(
 				params.role_definition_path.replace(/[^\w.-]+/g, "_") || "role",
@@ -251,7 +261,7 @@ export function governanceDispatchAgentTool(pluginRootOverride?: string): ToolDe
 				// F-3: always machine-block the bridge tools in the nested child
 				// (inherited global extension wiring would otherwise re-declare them).
 				args.push("--exclude-tools", "ask_user_question,dispatch_agent");
-				args.push(`Task:\n${params.task_prompt}`);
+				args.push([unitContext && `Work unit: ${unitContext}`, `Task:\n${params.task_prompt}`].filter(Boolean).join("\n"));
 
 				// 5. spawn + parse JSONL, stream onUpdate (official L324-331 pattern)
 				const run = await runNestedPi(args, {

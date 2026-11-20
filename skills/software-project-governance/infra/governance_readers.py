@@ -1,7 +1,161 @@
-"""Pure Markdown readers shared by the CLI, bootstrap and local dashboard."""
+"""Read models shared by the CLI, session bootstrap and local dashboard."""
 
 import json
 import re
+from collections import defaultdict
+from pathlib import Path
+
+
+def loop_state(root):
+    """Read and validate one committed snapshot for every unit in this project."""
+    from checks.flow_unit_runtime_v2 import missing_runtime_issue, validate_native_loop_payload
+
+    root = Path(root)
+    path = root / ".governance" / "flow-unit-runtime.json"
+    summary = {"total_units": 0, "active_loops": 0,
+               "by_tier": dict.fromkeys(("setup", "inner", "middle", "outer"), 0)}
+    view = {"state": "empty", "runtime_found": False, "no_global_stage": True,
+            "units": [], "summary": summary}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        if issue := missing_runtime_issue(path):
+            return dict(view, state="invalid", message=issue, issues=[issue])
+        view["message"] = "No work units recorded. Start a unit with loop start."
+        return view
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        return dict(view, state="invalid", runtime_found=True, message=f"Cannot read {path.name}: {exc}")
+
+    view["runtime_found"] = True
+    try:
+        issues = validate_native_loop_payload(state, display=path.name)
+    except (TypeError, ValueError, KeyError, RecursionError) as exc:
+        issues = [f"Invalid loop runtime: {exc}"]
+    if issues:
+        return dict(view, state="invalid", message=issues[0], issues=issues)
+
+    units = state["flow_units"]
+    issues_by_id = {}
+    receipts = {}
+    ledger = None
+    for unit in units:
+        history = unit.get("gate_history") or []
+        if not history:
+            continue
+        key, latest = unit["flow_unit_id"], history[-1]
+        receipts[key] = latest
+        from checks.loop_receipts import verify_attempt
+        try:
+            if ledger is None and latest["evidence_ref"].startswith("review-"):
+                from authority_ledger import LedgerWriter
+                ledger = LedgerWriter(path.parent)
+            verify_attempt(root, unit, latest, len(history) - 1, ledger=ledger)
+        except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
+            issues_by_id[key] = f"{key}: restore or verify {latest['evidence_ref']} ({exc})"
+    if issues_by_id:
+        # An exit consumes the exit receipts of its dependencies and children.
+        # Propagate missing trust through those links without rereading receipts.
+        consumers = defaultdict(set)
+        completed = {u["flow_unit_id"] for u in units if u["runtime_status"] == "completed"}
+        for unit in units:
+            key, parent = unit["flow_unit_id"], unit.get("parent_unit_id")
+            if parent in completed:
+                consumers[key].add(parent)
+            if key in completed:
+                for dependency in unit["dependencies"]:
+                    consumers[dependency].add(key)
+        pending = [(key, key) for key in issues_by_id]
+        while pending:
+            key, original = pending.pop()
+            for dependent in consumers[key]:
+                if dependent not in issues_by_id:
+                    issues_by_id[dependent] = f"{dependent}: prerequisite evidence is unverified. {issues_by_id[original]}"
+                    pending.append((dependent, original))
+    unfinished = {unit["flow_unit_id"] for unit in units if unit["runtime_status"] != "completed"} | set(issues_by_id)
+    children = defaultdict(list)
+    for unit in units:
+        if unit.get("parent_unit_id") and unit["flow_unit_id"] in unfinished:
+            children[unit["parent_unit_id"]].append(unit["flow_unit_id"])
+
+    for unit in units:
+        loop = unit["loop_state"]
+        gate = unit["gate_state"]
+        tier = loop["active_loop_tier"]
+        active = loop["active_loop"]
+        if active:
+            summary["active_loops"] += 1
+            summary["by_tier"][tier] += 1
+        waiting = [key for key in unit["dependencies"] if key in unfinished]
+        open_children = children[unit["flow_unit_id"]]
+        returns = loop.get("return_to") or []
+        unit_id = unit["flow_unit_id"]
+        previous = unit.get("previous_unit_id")
+        issue = issues_by_id.get(unit_id)
+        receipt = receipts.get(unit_id)
+        return_to = returns[-1] if returns else None
+        view["units"].append({
+            "flow_unit_id": unit_id, "title": unit.get("title") or unit["goal"],
+            "task_id": unit.get("task_id"), "unit_type": unit.get("unit_type", "work-unit"),
+            "previous_unit_id": previous, "previous_review": receipts.get(previous) if previous not in issues_by_id else None,
+            "release_version": unit.get("release_version"),
+            "delivery_goal": unit.get("delivery_goal"),
+            "entry_tier": unit.get("entry_tier"), "has_acceptance_command": bool(unit.get("acceptance_command")),
+            "parent_unit_id": unit.get("parent_unit_id"), "goal": unit.get("goal"),
+            "acceptance": unit.get("acceptance"), "runtime_status": "unverified" if issue else unit["runtime_status"],
+            "active_loop": active, "active_loop_tier": tier,
+            "loop_count": loop["loop_count"], "agent_phase": loop["agent_phase"],
+            "fuse_tripped": loop["fuse"]["tripped"], "gate_id": gate["gate_id"],
+            "gate_status": "unverified" if issue else gate["status"], "last_gate_result": loop["last_gate_result"],
+            "last_review": receipt, "return_to": return_to,
+            "evidence_refs": gate["evidence_refs"], "blockers": unit["blockers"],
+            "dependencies": unit["dependencies"], "waiting_on": waiting,
+            "open_children": open_children,
+            "next_action": issue or _unit_action(unit, waiting, open_children, return_to),
+            **({"state": "invalid", "recorded_runtime_status": unit["runtime_status"],
+                "recorded_gate_status": gate["status"]} if issue else {}),
+        })
+    summary["total_units"] = len(view["units"])
+    view["state"] = "ready" if view["units"] else "empty"
+    if issues_by_id:
+        view.update(state="invalid", issues=list(issues_by_id.values()), message="One or more work units have unverifiable evidence.")
+    if not view["units"]:
+        view["message"] = "No work units recorded. Start a unit with loop start."
+    return view
+
+
+def _unit_action(unit, waiting, open_children, return_to):
+    loop, gate = unit["loop_state"], unit["gate_state"]
+    if loop["fuse"]["tripped"] or gate["status"] == "escalated":
+        return "Resolve the escalation before continuing this unit."
+    if unit["blockers"] or unit["runtime_status"] == "blocked" or gate["status"] == "blocked":
+        return "Resolve the blocker and record the evidence."
+    if unit["runtime_status"] == "withdrawn":
+        return "Withdrawn."
+    if unit["runtime_status"] == "completed":
+        return "Work unit complete."
+    if waiting:
+        return "Resume after verifying dependencies: " + ", ".join(waiting) + "."
+    if open_children:
+        from loop_engine import gate_requires_children
+        if gate_requires_children(gate["gate_id"]):
+            return f"Wait for child work before {gate['gate_id']}: " + ", ".join(open_children) + "."
+    if not loop["active_loop"]:
+        return "Activate the unit when its prerequisites are met."
+    if unit.get("delivery_goal") and gate["gate_id"] == "G9":
+        return "Verify the delivered product on the user’s path. Have the host check its independent acceptance receipt and open work."
+    if unit.get("release_version") and gate["gate_id"] == "G9":
+        return f"Obtain independent release review and authorization for {unit['release_version']}."
+    if unit.get("acceptance_command"):
+        return f"Run loop verify --unit {unit['flow_unit_id']} against its acceptance command."
+    actions = {
+        "plan": "Plan this iteration against the acceptance criteria.",
+        "act": "Carry out the planned change.",
+        "observe": "Check the result and collect acceptance evidence.",
+        "reflect": "Review the evidence against this unit’s gate.",
+    }
+    if (gate["status"] == "failed" or return_to) and loop["agent_phase"] == "plan":
+        return "Rework the recorded finding and repeat its acceptance check."
+    return actions[loop["agent_phase"]]
 
 
 def _section_lines(text, heading, *, prefix=False):
@@ -27,6 +181,14 @@ def config_from_lines(lines):
 
 def project_config(text):
     return config_from_lines(_section_lines(text, "## 项目配置"))
+
+
+def project_name(plan, config, root):
+    title = re.search(r"^#\s+(.+?)\s*$", plan, re.MULTILINE)
+    for name in (config.get("项目名称"), title and title.group(1)):
+        if name and not re.fullmatch(r"<[^>]+>", name):
+            return name
+    return Path(root).name
 
 
 _PLAN_TOKEN = re.compile(r"`+|[|{\[]")

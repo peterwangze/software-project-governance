@@ -501,7 +501,7 @@ class Check38ContractTests(unittest.TestCase):
         src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
         block38 = "┌─ Check 38: CI Evidence (FIX-267)"
         self.assertIn(block38, src)
-        self.assertLess(src.index("┌─ Check 37: Gate Sequence for Release"),
+        self.assertLess(src.index("┌─ Check 37: Release work-unit evidence"),
                         src.index(block38))
         self.assertLess(src.index(block38),
                         src.index("┌─ Governance Health Summary"))
@@ -512,7 +512,7 @@ class Check38ContractTests(unittest.TestCase):
         src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
         markers = ["┌─ Check 35: Snapshot Freshness",
                    "┌─ Check 36: Risk Mitigation Closure",
-                   "┌─ Check 37: Gate Sequence for Release",
+                   "┌─ Check 37: Release work-unit evidence",
                    "┌─ Check 38: CI Evidence"]
         idx = [src.index(m) for m in markers]
         self.assertEqual(idx, sorted(idx), "Check 35/36/37/38 out of order")

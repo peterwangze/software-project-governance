@@ -13,12 +13,12 @@ Aggregated faces (single output, ≤2K token / ≤8KB projection):
                   DEC-096 / DEC-080; reused via import, never re-derived).
 * ``migration`` — version-comparison FLAG only (active_version vs the
                   plan-tracker record). Never executes a migration.
-* ``project`` / ``gates`` / ``tasks`` / ``risks`` / ``recent`` — a LEAN
+* ``project`` / ``loops`` / ``tasks`` / ``risks`` / ``recent`` — a LEAN
                   status projection parsed line-wise from the hot governance
                   files. Configuration and overview share the pure CLI readers. Other
                   regexes/table shapes deliberately MIRROR the
                   proven engine calibers (``parse_project_config`` /
-                  ``parse_gate_status`` / ``parse_active_risks`` /
+                  ``parse_active_risks`` /
                   ``parse_recent_decisions`` and resolve_entry's plan-tracker
                   version regex) the same way resolve_entry mirrors the
                   engine — disclosed here so the two readers stay in sync by
@@ -92,7 +92,7 @@ from pathlib import Path
 import resolve_entry  # peer leaf — the dual-root authority (DEC-096)
 import task_priority  # peer leaf — pure dependency analysis (FIX-226)
 
-REPORT_SCHEMA = "governance-bootstrap/1"
+REPORT_SCHEMA = "governance-bootstrap/2"
 TASK_ID = "FEAT-033"
 
 DEFAULT_BUDGET_MS = 3000
@@ -132,7 +132,6 @@ PROFILE_CAPS = {
 #: resolve_entry cannot be the importer here either; see module docstring).
 _PLAN_TRACKER_VERSION_RE = re.compile(r"工作流版本[**:\s]+(\d+\.\d+\.\d+)")
 
-_GATE_SECTION_PREFIX = "## Gate 状态跟踪"
 _ID_TOKEN_RE = re.compile(r"^[A-Z]+-\d+$")
 
 #: Engine-identical separator-row shape (``_status_table_stream``): the ONLY
@@ -223,26 +222,6 @@ def _section_lines(text, section_prefix):
             yield line
 
 
-def _table_rows(lines):
-    """Split markdown table lines into cell lists (header + separator kept
-    distinguishable: returns (header_cells | None, [data_cell_lists]))."""
-    from governance_readers import plan_table_cells
-    header = None
-    rows = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped.startswith("|"):
-            continue
-        cells = plan_table_cells(stripped)
-        if all(set(c) <= {"-", ":", " "} for c in cells):
-            continue  # separator row
-        if header is None:
-            header = cells
-            continue
-        rows.append(cells)
-    return header, rows
-
-
 def parse_project_config(text):
     """Bootstrap accepts suffixed headings and strips trailing value whitespace."""
     from governance_readers import config_from_lines
@@ -255,65 +234,6 @@ def parse_overview_row(text):
     from governance_readers import overview_from_lines
     lines = _section_lines(text, "## 项目总览")
     return overview_from_lines(line.strip() for line in lines)
-
-
-#: Bootstrap-local gate bucket contract (R0 P2-2) — the CLOSED vocabulary of
-#: the domain's gate status word forms (engine ``parse_gate_status`` cells;
-#: state names shared with checks/gate_domain), matched EXACTLY after a
-#: whitespace/backtick/emphasis strip + lowercase. NOT a substring scan: a
-#: future superset word form that merely CONTAINS one of these tokens (the
-#: review's mis-bucket vector, e.g. a hypothetical "unpassed") falls through
-#: to ``other`` instead of silently joining a bucket. The engine-side
-#: predicate is not importable here (engine-free boundary — module
-#: docstring), and checks/gate_domain's conservative interlock classifier
-#: merges ``failed`` into ``pending`` — a different contract than this count
-#: face — so the vocabulary mirror is declared here instead of imported.
-_GATE_PASSED_STATES = frozenset((
-    "passed", "passed-on-entry", "passed-with-conditions", "pass"))
-_GATE_PENDING_STATES = frozenset(("pending",))
-_GATE_FAILED_STATES = frozenset(("failed", "fail"))
-
-
-def _gate_bucket(status_cell):
-    """Bucket a gate status cell for the counts face (contract above)."""
-    s = (status_cell or "").strip().lower().strip("`*").strip()
-    if s in _GATE_PASSED_STATES:
-        return "passed"
-    if s in _GATE_PENDING_STATES:
-        return "pending"
-    if s in _GATE_FAILED_STATES:
-        return "failed"
-    return "other"
-
-
-def parse_gate_summary(text):
-    """Mirror of verify_workflow.parse_gate_status, aggregated to counts.
-
-    The ≤2K-token projection carries counts + the first pending gate id —
-    not the full table (the engine ``status`` command remains the full-face
-    dependency).
-    """
-    counts = {"total": 0, "passed": 0, "pending": 0, "failed": 0, "other": 0}
-    next_gate = None
-    header, rows = _table_rows(_section_lines(text, _GATE_SECTION_PREFIX))
-    if header is None:
-        return dict(counts, next_gate=None)
-    gate_idx, status_idx = 0, None
-    for pos, name in enumerate(header):
-        if name.lower() == "status" or name == "状态":
-            status_idx = pos
-            break
-    if status_idx is None:
-        status_idx = 2  # engine caliber: parts[2] is the status column
-    for cells in rows:
-        if len(cells) <= max(gate_idx, status_idx):
-            continue
-        counts["total"] += 1
-        bucket = _gate_bucket(cells[status_idx])
-        counts[bucket] += 1
-        if next_gate is None and bucket == "pending":
-            next_gate = cells[gate_idx]
-    return dict(counts, next_gate=next_gate)
 
 
 #: Bootstrap-local risk status caliber (FIX-397④) — the CLOSED vocabulary
@@ -400,7 +320,7 @@ def _resolve_risk_status(cells, status_pos):
     return status, "unknown"
 
 
-def parse_risk_summary(text, today=None):
+def parse_risk_summary(text, today=None, *, include_rows=False):
     """The risks face: risk-log NON-CLOSED row count + escalation recency.
 
     FIX-397④ caliber — the vocabulary and tolerance contracts live in the
@@ -436,6 +356,8 @@ def parse_risk_summary(text, today=None):
     summary = {"open": 0, "escalation_overdue": 0, "escalation_soon": 0,
                "overdue_ids": [], "unknown_count": 0,
                "unknown_statuses": []}
+    if include_rows:
+        summary["rows"] = []
     for header, rows in _iter_positional_tables(text):
         if "编号" not in header or "当前状态" not in header:
             continue
@@ -462,6 +384,10 @@ def parse_risk_summary(text, today=None):
                         {"id": rid, "status": _clip(status.strip(), 40)})
             deadline = (cells[deadline_pos].strip()
                         if deadline_pos is not None else "")
+            if include_rows:
+                description = cells[header.index("风险/阻塞描述")] if "风险/阻塞描述" in header else rid
+                summary["rows"].append({"id": rid, "description": description,
+                                        "status": status, "deadline": deadline})
             days_left = None
             # FIX-422: only a PURE ISO date participates — a re-review
             # stream / multi-date / long-text cell yields no deadline
@@ -780,9 +706,6 @@ def task_stats_face(report):
 class _Builder:
     """Phase orchestrator with the wall-clock budget check between phases."""
 
-    plan_text: str = ""
-    report: object = None
-    payload: dict = field(default_factory=dict)
     deferred: list = field(default_factory=list)
     deadline: float = 0.0
 
@@ -793,7 +716,7 @@ class _Builder:
             raise _BudgetExhausted()
 
 
-def _build_payload(host_root, envelope, budget_ms, profile, started):
+def _build_payload(host_root, envelope, budget_ms, profile, started, *, include_session_closure=True):
     caps = PROFILE_CAPS[profile]
     payload = {
         "schema": REPORT_SCHEMA,
@@ -809,26 +732,16 @@ def _build_payload(host_root, envelope, budget_ms, profile, started):
     plan_path = gov_dir / "plan-tracker.md"
     builder = _Builder(deadline=started + budget_ms / 1000.0)
 
-    if not envelope["governance_initialized"]:
-        payload["notes"] = [
-            ".governance/plan-tracker.md not found — governance faces are "
-            "absent (not failed); run /governance to initialize or onboard."]
-        payload["health"] = _health_face()
-        payload["behavior"] = _behavior().behavior_face()
-        payload["next_actions"] = [
-            "运行 /governance 初始化或接入项目治理（当前 .governance/ 缺失）"]
-        payload["deferred"] = []
-        payload["duration_ms"] = int((time.monotonic() - started) * 1000)
-        return payload
-
     plan_text = _read_text(plan_path)
 
     try:
+        from governance_readers import loop_state, project_name
+        builder.check_budget("loops")
+        payload["loops"] = loop_state(host_root)
         builder.check_budget("project")
         config = parse_project_config(plan_text)
         project = {
-            "name": _clip(config.get("项目名称") or "N/A"),
-            "stage": _clip(config.get("当前阶段", "")),
+            "name": _clip(project_name(plan_text, config, host_root)),
             "profile": _clip(config.get("Profile", "")),
             "trigger_mode": _clip(config.get("触发模式", "")),
             "permission_mode": _clip(config.get("操作权限模式")
@@ -836,22 +749,17 @@ def _build_payload(host_root, envelope, budget_ms, profile, started):
             "workflow_version": _clip(config.get("工作流版本", "")),
         }
         if caps["overview"]:
-            project["overview"] = parse_overview_row(plan_text)
-        if project["name"] == "N/A" and project.get("overview", {}).get(
-                "project"):
-            # engine _status_project_name caliber: config name first,
-            # overview row as fallback.
-            project["name"] = _clip(project["overview"]["project"])
+            overview = parse_overview_row(plan_text)
+            project["overview"] = {key: overview[key] for key in ("project", "latest_retro") if key in overview}
         payload["project"] = project
 
-        builder.check_budget("gates")
-        payload["gates"] = parse_gate_summary(plan_text)
-
-        builder.check_budget("tasks")
-        face, report = candidates_face(
-            plan_text, caps["candidates"])
-        payload["tasks"] = task_stats_face(report)
-        builder.report = report
+        loops = payload["loops"]
+        has_open_units = any(unit["runtime_status"] != "completed" for unit in loops["units"])
+        if plan_text and not has_open_units and loops["state"] != "invalid":
+            builder.check_budget("tasks")
+            face, report = candidates_face(plan_text, caps["candidates"])
+            payload["tasks"] = task_stats_face(report)
+            payload["candidates"] = face
 
         builder.check_budget("risks")
         risk_text = _read_text(gov_dir / "risk-log.md")
@@ -869,8 +777,6 @@ def _build_payload(host_root, envelope, budget_ms, profile, started):
                                                     limit=caps["recent"]),
             }
 
-        builder.check_budget("candidates")
-        payload["candidates"] = face
     except _BudgetExhausted:
         pass
 
@@ -881,14 +787,12 @@ def _build_payload(host_root, envelope, budget_ms, profile, started):
     # face as ONE new key. It does governance-file I/O, so it takes its own
     # budget check — on exhaustion the section lands in ``deferred``
     # (fail-safe disclosure), never a guessed metric.
-    closure_face = None
-    try:
-        builder.check_budget("behavior.session_closure")
-        closure_face = session_closure_face(gov_dir)
-    except _BudgetExhausted:
-        pass
-    if closure_face is not None:
-        payload["behavior"]["session_closure"] = closure_face
+    if include_session_closure:
+        try:
+            builder.check_budget("behavior.session_closure")
+            payload["behavior"]["session_closure"] = session_closure_face(gov_dir)
+        except _BudgetExhausted:
+            pass
     payload["next_actions"] = _next_actions(payload, envelope)
     payload["deferred"] = builder.deferred
     payload["duration_ms"] = int((time.monotonic() - started) * 1000)
@@ -907,6 +811,9 @@ def _health_face():
 
 def _next_actions(payload, envelope):
     actions = []
+    loops = payload.get("loops", {})
+    if loops.get("state") in {"invalid", "empty"}:
+        actions.append(loops["message"])
     if envelope["scenario_hint"] in ("A", "B"):
         actions.append("运行 /governance 完成初始化或接入（scenario %s）"
                        % envelope["scenario_hint"])
@@ -983,8 +890,7 @@ def _read_text(path):
 _EMERGENCY_CLIP = 120
 
 _PROJECTION_CLAMP_NOTE = (
-    "projection clamp (≤8KB output budget): %s — disclosed trim, all other "
-    "content unchanged")
+    "projection clamp (≤8KB output budget): %s")
 
 
 def _payload_bytes(payload):
@@ -1002,6 +908,17 @@ def _clamp_strings(node, limit=_EMERGENCY_CLIP):
         return {key: _clamp_strings(value, limit)
                 for key, value in node.items()}
     return node
+
+
+def _unit_recovery_order(unit):
+    if unit.get("state") == "invalid":
+        return 0
+    if unit.get("runtime_status") in ("completed", "withdrawn"):
+        return 3
+    if (unit.get("return_to") or unit.get("blockers") or unit.get("fuse_tripped")
+            or unit.get("runtime_status") == "blocked" or unit.get("gate_status") in ("failed", "blocked", "escalated")):
+        return 1
+    return 2
 
 
 def _enforce_projection_budget(payload, limit=MAX_JSON_BYTES):
@@ -1057,6 +974,35 @@ def _enforce_projection_budget(payload, limit=MAX_JSON_BYTES):
     if not over():
         return payload
 
+    loops = payload.get("loops") or {}
+    units = loops.get("units") or []
+    if units:
+        if len(loops.get("issues", [])) > 1:
+            loops["issues"] = loops["issues"][:1]
+            disclose("first evidence issue shown; loop status --json lists each affected unit")
+        original_count = len(units)
+        loops["omitted_units"] = original_count
+        loops["units"] = []
+        disclose("work unit text and lists shortened; see loop status --json for full details")
+        for unit in sorted(units, key=_unit_recovery_order):
+            preview = dict(unit)
+            for key in ("title", "goal", "acceptance"):
+                if preview.get(key):
+                    preview[key] = _clip(preview[key], 100)
+            for key in ("blockers", "waiting_on", "open_children", "dependencies", "evidence_refs"):
+                preview[key] = preview[key][-2:]
+            preview["blockers"] = [_clip(blocker, 80) for blocker in preview["blockers"]]
+            loops["units"].append(preview)
+            loops["omitted_units"] -= 1
+            if over():
+                loops["units"].pop()
+                loops["omitted_units"] += 1
+                break
+        if not over():
+            return payload
+    if loops.get("issues"):
+        loops["issues"] = loops["issues"][:1]
+
     saved_notes = list(notes)
     payload.pop("notes", None)
     trimmed = _clamp_strings(payload)
@@ -1070,11 +1016,49 @@ def _enforce_projection_budget(payload, limit=MAX_JSON_BYTES):
 # ── rendering ────────────────────────────────────────────────────────────────
 
 
+def format_loop_lines(loops, *, limit=None):
+    """Render the same current gate, evidence, relationships and recovery action in text clients."""
+    lines = []
+    units = loops.get("units", ())
+    visible_units = units if limit is None else sorted(units, key=_unit_recovery_order)[:limit]
+    for unit in visible_units:
+        review = unit.get("last_review") or {}
+        evidence = review.get("evidence_ref") or ", ".join(unit["evidence_refs"]) or "none recorded"
+        blockers = [*unit["blockers"], *unit["waiting_on"]]
+        details = []
+        if blockers:
+            details.append("blocked by " + ", ".join(blockers))
+        if unit["open_children"]:
+            details.append("open child units " + ", ".join(unit["open_children"]))
+        if return_to := unit.get("return_to"):
+            details.append(f"return to {return_to['tier']} {return_to['gate']}")
+        if review:
+            label = "recorded decision (unverified)" if unit.get("state") == "invalid" else "last review"
+            details.append(f"{label} {review['gate']} R{review['iteration']} {review['result']}")
+        if previous := unit.get("previous_unit_id"):
+            predecessor = unit.get("previous_review")
+            verdict = (f"{predecessor['gate']} R{predecessor['iteration']} {predecessor['result']} "
+                       f"{predecessor['evidence_ref']}" if predecessor else "acceptance unverified")
+            details.append(f"previous unit {previous}: {verdict}")
+        lines.append("%s [%s, round %s] %s — %s" % (
+            unit["flow_unit_id"], unit["active_loop_tier"] or unit["runtime_status"], unit["loop_count"],
+            _clip(" ".join((unit.get("goal") or unit["title"]).splitlines()), 160), unit["next_action"]))
+        lines.append("  acceptance: %s | gate %s: %s | evidence: %s%s" % (
+            unit.get("acceptance") or "unspecified", unit["gate_id"], unit["gate_status"],
+            evidence, " | " + " | ".join(details) if details else ""))
+    if loops.get("message"):
+        lines.append(loops["message"])
+    omitted = loops.get("omitted_units", 0) + len(units) - len(visible_units)
+    if omitted:
+        lines.append("%s further unit(s): run loop status --json" % omitted)
+    return lines
+
+
 def format_text(payload):
     """≤40-line human summary (the --format text face)."""
     resolve = payload.get("resolve") or {}
     project = payload.get("project") or {}
-    gates = payload.get("gates") or {}
+    loops = payload.get("loops") or {}
     tasks = payload.get("tasks") or {}
     risks = payload.get("risks") or {}
     candidates = payload.get("candidates") or {}
@@ -1086,22 +1070,20 @@ def format_text(payload):
         % (resolve.get("host_project_root"), resolve.get("scenario_hint"),
            resolve.get("active_version"), migration.get("plan_version"),
            migration.get("status", "unknown")),
-        "project: %s | %s | profile=%s trigger=%s permission=%s"
-        % (project.get("name"), project.get("stage"),
-           project.get("profile"), project.get("trigger_mode"),
+        "project: %s | profile=%s trigger=%s permission=%s"
+        % (project.get("name"), project.get("profile"), project.get("trigger_mode"),
            project.get("permission_mode")),
-        "gates: passed %s/%s (pending %s, failed %s); next %s"
-        % (gates.get("passed"), gates.get("total"), gates.get("pending"),
-           gates.get("failed"), gates.get("next_gate") or "—"),
-        "tasks: total %s completed %s unblocked %s blocked %s "
+    ]
+    lines.extend(format_loop_lines(loops, limit=6))
+    if tasks:
+        lines.append("tasks: total %s completed %s unblocked %s blocked %s "
         "(P0 pending %s)"
         % (tasks.get("total"), tasks.get("completed"),
            tasks.get("unblocked"), tasks.get("blocked"),
-           tasks.get("p0_pending")),
-        "risks: open %s (overdue %s, soon %s)"
-        % (risks.get("open"), risks.get("escalation_overdue"),
-           risks.get("escalation_soon")),
-    ]
+           tasks.get("p0_pending")))
+    if risks:
+        lines.append("risks: open %s (overdue %s, soon %s)"
+                     % (risks.get("open"), risks.get("escalation_overdue"), risks.get("escalation_soon")))
     if risks.get("unknown_count"):
         disclosed = ", ".join(
             u.get("id", "?") for u in (risks.get("unknown_statuses") or []))
@@ -1119,8 +1101,6 @@ def format_text(payload):
         lines.append("candidates: none — %s (%s)"
                      % (candidates["empty_reason"].get("kind"),
                         candidates["empty_reason"].get("message", "")))
-    else:
-        lines.append("candidates: n/a")
     for note in payload.get("notes") or []:
         lines.append("note: %s" % note)
     lines.append("health: %s — %s"
@@ -1134,7 +1114,7 @@ def format_text(payload):
         (payload.get("behavior") or {}).get("session_closure"))
     if closure_line:
         lines.append(closure_line)
-    next_actions = payload.get("next_actions") or []
+    next_actions = [action for action in payload.get("next_actions", ()) if action != loops.get("message")]
     if next_actions:
         lines.append("next:")
         for i, action in enumerate(next_actions, 1):
@@ -1215,10 +1195,14 @@ def cmd_governance_bootstrap(args):
         sys.exit(1)
 
     payload = _build_payload(Path(envelope["host_project_root"]), envelope,
-                             budget_ms, profile, started)
+                             budget_ms, profile, started,
+                             include_session_closure=not getattr(args, "_status_fast_path", False))
     payload = _enforce_projection_budget(payload)
 
     if getattr(args, "format", "json") == "json":
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(format_text(payload))
+
+    if (payload.get("loops") or {}).get("state") == "invalid":
+        sys.exit(2)

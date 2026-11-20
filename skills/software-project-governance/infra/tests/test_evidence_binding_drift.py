@@ -1,32 +1,4 @@
-"""Regression guard for the C-10 evidence-binding drift face (FEAT-069).
-
-FEAT-068 Code Review R0 finding F-1: ``check_evidence_binding_drift`` and its
-renderer (``checks/evidence_domain.py`` C-10 enforcement logic) shipped with
-ZERO pytest coverage — only a %TEMP% manual smoke existed. This file closes
-that gap with the eight-branch matrix the review mandated. Every test method
-carries an ``R0 F-1 #N`` anchor comment naming the branch it guards.
-
-Also guards, in the same batch (FEAT-069):
-  - R0 F-2 — the MIGRATION version-prefix boundary tightening
-    (``MIGRATION-<ver>`` must anchor its FOLLOWING delimiter; a strict prefix
-    of a longer row version must never bind — the old ``\\b`` tail false-bound
-    across version segments, a fail-open direction).
-  - E-6 compatibility surface — the C-10 evidence binding is stamp-agnostic
-    (a runtime binds the ``MIGRATION-<its own stamp>`` row) and the evidence
-    row prefix regex accepts the bumped ``MIGRATION_VERSION`` stamp.
-  - ADR-RB-2 two-face goal-layer contract gate (factory WARN form): face ①
-    host-activation precondition + face ② sensitive-action gate judge.
-    FIX-431: 发布间隙态（无活跃 P0/P1 unit）→ 两 face 判 N/A 不发 WARN；
-    有活跃 unit 的运行期判定链（PASS/WARN/BLOCK）零变化——正负用例同册守护。
-
-ALL tests use ``tempfile.TemporaryDirectory`` — the real ``.governance/`` is
-NEVER touched. Assertions are content-based only (no wall-clock; RISK-048).
-
-Run:
-    python -m pytest skills/software-project-governance/infra/tests/test_evidence_binding_drift.py -v
-or:
-    python -m unittest skills.software-project-governance.infra.tests.test_evidence_binding_drift -v
-"""
+"""Goal-layer product contract activation and sensitive action checks."""
 
 import io
 import json
@@ -44,18 +16,8 @@ if str(_INFRA_DIR) not in sys.path:
 
 import verify_workflow as vw  # noqa: E402
 import checks.evidence_domain as ed  # noqa: E402
-import loop_migration as lm  # noqa: E402
-from loop_migration_plan import (  # noqa: E402
-    build_migration_plan,
-    confirm_decomposition,
-    plan_to_payload,
-)
 
 
-# ─── Shared fixtures ─────────────────────────────────────────────────────────
-
-# A known-good product_success_contract (same shape the Check 18d tests in
-# test_verify_workflow.py use — it passes _validate_product_success_contract).
 VALID_CONTRACT = {
     "user": "AI-assisted product owner using the governance workflow for release planning",
     "job_to_be_done": "Keep AI coding work tied to explicit user outcomes before implementation starts",
@@ -76,7 +38,6 @@ VALID_CONTRACT = {
 
 _DEMO_TASK_ID = "FIX-099"
 
-_MIGRATION_STAMP = lm.MIGRATION_VERSION  # E-6: stamp-agnostic fixtures
 
 
 def _plan_tracker_text(goal_face=True, with_active_task=True):
@@ -105,23 +66,6 @@ def _plan_tracker_text(goal_face=True, with_active_task=True):
     return "\n".join(lines) + "\n"
 
 
-def _evidence_log_text(with_migration_row=True, migration_row=None):
-    """Minimal evidence-log; the MIGRATION row mirrors loop_migration's shape."""
-    lines = [
-        "| 编号 | 事项 | 说明 |",
-        "| --- | --- | --- |",
-        "| EVD-001 | init | seeded evidence log |",
-    ]
-    if with_migration_row:
-        if migration_row is None:
-            migration_row = (
-                "| MIGRATION-{0} | FX-191 | migrated classic-phase-gate -> "
-                "loop-engineering | backup=migration-{0}-test |".format(
-                    _MIGRATION_STAMP))
-        lines.append(migration_row)
-    return "\n".join(lines) + "\n"
-
-
 def _seed_gov(gov_dir, plan_text=None, evidence_text=None):
     """Create the .governance dir and write the plan/evidence faces."""
     gov_dir.mkdir(parents=True, exist_ok=True)
@@ -129,32 +73,9 @@ def _seed_gov(gov_dir, plan_text=None, evidence_text=None):
         plan_text if plan_text is not None else _plan_tracker_text(),
         encoding="utf-8")
     (gov_dir / "evidence-log.md").write_text(
-        evidence_text if evidence_text is not None else _evidence_log_text(),
+        evidence_text if evidence_text is not None else "# Evidence Log\n",
         encoding="utf-8")
     return gov_dir
-
-
-def _build_valid_runtime(gov_dir, migration_version=_MIGRATION_STAMP,
-                         flatten_dependencies=False):
-    """Build a contract-valid v2 runtime payload via the REAL planner.
-
-    Same chain apply uses: build_migration_plan → confirm_decomposition →
-    plan_to_payload. Fully content-deterministic for a fixed fixture text.
-    Seeds the plan/evidence faces first so the planner can read them.
-    """
-    _seed_gov(gov_dir)
-    host_root = str(gov_dir.parent)
-    plan_text = (gov_dir / "plan-tracker.md").read_text(encoding="utf-8")
-    plan = build_migration_plan(host_root, None, plan_tracker_text=plan_text)
-    confirmed = confirm_decomposition(plan)
-    payload = plan_to_payload(
-        confirmed, migration_version=migration_version,
-        migration_timestamp="2026-09-27T00:00:00Z",
-    )
-    if flatten_dependencies:
-        for unit in payload["flow_units"]:
-            unit["dependencies"] = []
-    return payload
 
 
 class _HostFixture:
@@ -209,270 +130,15 @@ def _warn_types(block):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestEvidenceBindingDriftEightBranches(unittest.TestCase):
-    """check_evidence_binding_drift — the R0 F-1 eight-branch matrix."""
-
-    def test_branch1_not_applicable_when_runtime_absent(self):
-        # R0 F-1 #1 (not-applicable): no flow-unit-runtime.json → the machine
-        # face is absent (pre-switch host) → applicable=False, zero issues.
-        with tempfile.TemporaryDirectory() as td:
-            with _HostFixture(td, runtime=None):
-                block = ed.check_evidence_binding_drift()
-        self.assertFalse(block["applicable"])
-        self.assertTrue(block["pass"])
-        self.assertEqual(block["fail"], [])
-        self.assertEqual(block["warn"], [])
-        self.assertIsNone(block["runtime_path"])
-
-    def test_branch2_valid_runtime_passes_clean(self):
-        # R0 F-1 #2 (有效 PASS): valid runtime + its MIGRATION row + plan
-        # re-derivation in sync → applicable=True, zero fail, zero warn.
-        with tempfile.TemporaryDirectory() as td:
-            runtime = _build_valid_runtime(Path(td) / ".governance")
-            with _HostFixture(td, runtime=runtime):
-                block = ed.check_evidence_binding_drift()
-        self.assertTrue(block["applicable"])
-        self.assertTrue(block["pass"])
-        self.assertEqual(block["fail"], [],
-                         "unexpected fails: {0}".format(block["fail"]))
-        self.assertEqual(block["warn"], [],
-                         "unexpected warns: {0}".format(block["warn"]))
-
-    def test_branch3_missing_migration_row_fails(self):
-        # R0 F-1 #3 (缺 MIGRATION 行 FAIL): runtime claims its stamp but the
-        # evidence face carries no MIGRATION row → evidence_binding_missing.
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
-            runtime = _build_valid_runtime(gov)
-            with _HostFixture(td, runtime=runtime,
-                              evidence_text=_evidence_log_text(
-                                  with_migration_row=False)):
-                block = ed.check_evidence_binding_drift()
-        self.assertFalse(block["pass"])
-        self.assertIn("evidence_binding_missing", _fail_types(block))
-
-    def test_branch4_bad_plan_hash_fails(self):
-        # R0 F-1 #4 (坏 hash FAIL): migration_plan_hash not 64-hex →
-        # runtime_face_missing_machine_credential (产物版本绑定缺失).
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
-            runtime = _build_valid_runtime(gov)
-            runtime["migration_plan_hash"] = "deadbeef"
-            with _HostFixture(td, runtime=runtime):
-                block = ed.check_evidence_binding_drift()
-        self.assertFalse(block["pass"])
-        self.assertIn("runtime_face_missing_machine_credential",
-                      _fail_types(block))
-        hash_fails = [issue for issue in block["fail"]
-                      if "migration_plan_hash" in issue.get("detail", "")]
-        self.assertTrue(hash_fails,
-                        "hash detail missing: {0}".format(block["fail"]))
-
-    def test_branch5_dangling_dependency_fails(self):
-        # R0 F-1 #5 (悬空依赖 FAIL): a dependency outside the unit set →
-        # runtime_unit_corrupt with the 悬空依赖 detail.
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
-            runtime = _build_valid_runtime(gov, flatten_dependencies=True)
-            runtime["flow_units"][0]["dependencies"] = ["ghost-unit"]
-            with _HostFixture(td, runtime=runtime):
-                block = ed.check_evidence_binding_drift()
-        self.assertFalse(block["pass"])
-        self.assertIn("runtime_unit_corrupt", _fail_types(block))
-        dangling = [issue for issue in block["fail"]
-                    if "悬空依赖" in issue.get("detail", "")]
-        self.assertTrue(dangling,
-                        "dangling-dep detail missing: {0}".format(
-                            block["fail"]))
-
-    def test_branch6_gate_schema_none_guard_suppresses_drift_warn(self):
-        # R0 F-1 #6 (gate_schema None-guard): the real v2 payload does NOT
-        # persist a top-level gate_schema — the None-guard must suppress the
-        # gate_schema_drift WARN (策略版本经 plan hash 传递绑定). Contrast arm:
-        # a present-but-stale gate_schema DOES warn, proving the suppression
-        # is the None-guard and not a dead branch.
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
-            runtime = _build_valid_runtime(gov)
-            self.assertNotIn("gate_schema", runtime)  # real payload shape
-            with _HostFixture(td, runtime=runtime):
-                block = ed.check_evidence_binding_drift()
-            self.assertNotIn("gate_schema_drift", _warn_types(block))
-            # Contrast: a stale top-level gate_schema warns.
-            runtime_stale = json.loads(json.dumps(runtime))
-            runtime_stale["gate_schema"] = "loop-gate-schema-v1@stale0000"
-            with _HostFixture(td, runtime=runtime_stale):
-                block_stale = ed.check_evidence_binding_drift()
-        self.assertIn("gate_schema_drift", _warn_types(block_stale))
-
-    def test_branch7_unit_set_drift_warns_without_fail(self):
-        # R0 F-1 #7 (unit_set_drift WARN): runtime unit set differs from the
-        # re-derived plan (legal plan-tracker evolution, runtime not re-synced)
-        # → WARN-grade drift, pass stays True.
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
-            runtime = _build_valid_runtime(gov, flatten_dependencies=True)
-            self.assertGreaterEqual(len(runtime["flow_units"]), 1)
-            runtime["flow_units"][0]["flow_unit_id"] = "renamed-away-unit"
-            with _HostFixture(td, runtime=runtime):
-                block = ed.check_evidence_binding_drift()
-        self.assertTrue(block["pass"])
-        self.assertIn("unit_set_drift", _warn_types(block))
-        self.assertNotIn("runtime_unit_corrupt", _fail_types(block))
-
-    def test_branch8_plan_read_failure_warns(self):
-        # R0 F-1 #8 (plan 读取失败 WARN): the plan face is unreadable → the
-        # drift comparison degrades to a WARN (计划面重派生失败), never a FAIL.
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
-            runtime = _build_valid_runtime(gov)
-            with _HostFixture(td, plan_bytes=b"\xff\xfe-not-valid-utf8-\xff",
-                              runtime=runtime):
-                block = ed.check_evidence_binding_drift()
-        self.assertTrue(block["pass"])
-        drift_warns = [issue for issue in block.get("warn", [])
-                       if "计划面重派生失败" in issue.get("detail", "")]
-        self.assertTrue(drift_warns,
-                        "plan-read-failure warn missing: {0}".format(
-                            block["warn"]))
-
-
-class TestEvidenceBindingDriftRenderer(unittest.TestCase):
-    """F-1 covers 检查+渲染器 — the Check 3b renderer face is guarded too."""
-
-    def test_renderer_pass_shape_and_zero_count(self):
-        with tempfile.TemporaryDirectory() as td:
-            runtime = _build_valid_runtime(Path(td) / ".governance")
-            with _HostFixture(td, runtime=runtime):
-                buf = io.StringIO()
-                with redirect_stdout(buf):
-                    count = ed.render_evidence_binding_drift_block(7)
-        self.assertEqual(count, 7)  # PASS adds no issues
-        self.assertIn("[PASS] Machine-maintained faces match legal "
-                      "writers (C-10).", buf.getvalue())
-
-    def test_renderer_counts_fail_and_renders_warn_without_count(self):
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
-            runtime = _build_valid_runtime(gov, flatten_dependencies=True)
-            runtime["migration_plan_hash"] = "deadbeef"  # FAIL face
-            runtime["flow_units"][0]["flow_unit_id"] = "renamed-away-unit"
-            with _HostFixture(td, runtime=runtime):
-                buf = io.StringIO()
-                with redirect_stdout(buf):
-                    count = ed.render_evidence_binding_drift_block(1)
-        self.assertEqual(count, 2)  # +1 FAIL (bad hash); the WARN adds none
-        self.assertIn("[FAIL] runtime_face_missing_machine_credential",
-                      buf.getvalue())
-        self.assertIn("[WARN] unit_set_drift", buf.getvalue())
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # R0 F-2 — MIGRATION version-prefix boundary
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestF2MigrationPrefixBoundary(unittest.TestCase):
-    """R0 F-2: ``MIGRATION-<ver>\\b`` could false-bind ACROSS version
-    segments (runtime ver "0.65" vs row MIGRATION-0.65.0 → the old regex
-    matched and silently skipped the evidence_binding_missing FAIL — a
-    fail-open direction). The tightened anchor requires a FOLLOWING
-    delimiter (table pipe / whitespace / end-of-line)."""
-
-    def _block_for(self, runtime_version, migration_row):
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
-            runtime = _build_valid_runtime(gov)
-            runtime["migration_version"] = runtime_version
-            with _HostFixture(
-                    td, runtime=runtime,
-                    evidence_text=_evidence_log_text(
-                        with_migration_row=True, migration_row=migration_row)):
-                return ed.check_evidence_binding_drift()
-
-    def test_f2_version_prefix_of_longer_row_does_not_bind(self):
-        # Positive tightening case: a version PREFIX of the row version must
-        # NOT satisfy the evidence binding (the old \\b false-bound here).
-        block = self._block_for(
-            "0.65",
-            "| MIGRATION-0.65.0 | FX-191 | migrated classic-phase-gate -> "
-            "loop-engineering | backup=migration-0.65.0-test |")
-        self.assertIn("evidence_binding_missing", _fail_types(block))
-
-    def test_f2_exact_version_row_still_binds(self):
-        # Negative (regression) case: the legitimate exact-version bind must
-        # keep working after the tightening.
-        block = self._block_for(
-            "0.65.0",
-            "| MIGRATION-0.65.0 | FX-191 | migrated classic-phase-gate -> "
-            "loop-engineering | backup=migration-0.65.0-test |")
-        self.assertNotIn("evidence_binding_missing", _fail_types(block))
-
-    def test_f2_overrun_segment_does_not_bind(self):
-        # A row carrying a LONGER version (0.65.01) never satisfies a 0.65.0
-        # runtime — segment overrun is rejected, not truncated.
-        block = self._block_for(
-            "0.65.0",
-            "| MIGRATION-0.65.01 | FX-191 | migrated classic-phase-gate -> "
-            "loop-engineering | backup=x |")
-        self.assertIn("evidence_binding_missing", _fail_types(block))
-
-    def test_f2_row_at_end_of_line_still_binds(self):
-        # A MIGRATION row with no trailing pipe (bare end-of-line) still
-        # binds — the delimiter class includes end-of-line.
-        block = self._block_for("0.65.0", "| MIGRATION-0.65.0")
-        self.assertNotIn("evidence_binding_missing", _fail_types(block))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # E-6 — MIGRATION_VERSION stamp compatibility surface
 # ═══════════════════════════════════════════════════════════════════════════
 
-
-class TestE6MigrationStampCompatibility(unittest.TestCase):
-    """E-6 (fullchain §7): the semantic stamp may be bumped (0.65.0 →
-    0.90.0). These guards pin the compatibility surface the bump relies on —
-    stamp-agnostic binding and row-shape acceptance. TestRollbackMigration
-    exercises the persisted rollback stamp across a version change."""
-
-    def test_e6_c10_binding_is_stamp_agnostic(self):
-        # A runtime binds the MIGRATION-<its own stamp> row, whatever the
-        # constant currently is — old stamped runtimes keep binding.
-        with tempfile.TemporaryDirectory() as td:
-            gov = Path(td) / ".governance"
-            runtime = _build_valid_runtime(gov, migration_version="9.9.9")
-            with _HostFixture(
-                    td, runtime=runtime,
-                    evidence_text=_evidence_log_text(
-                        with_migration_row=True,
-                        migration_row="| MIGRATION-9.9.9 | FX-191 | migrated "
-                                      "classic-phase-gate -> loop-engineering "
-                                      "| backup=b |")):
-                block = ed.check_evidence_binding_drift()
-        self.assertNotIn("evidence_binding_missing", _fail_types(block))
-
-    def test_e6_evidence_row_prefix_regex_accepts_current_stamp(self):
-        # loop_migration._EVIDENCE_ROW_PREFIX_RE must keep accepting the
-        # MIGRATION/ROLLBACK rows for the CURRENT stamp (bump-safe). The
-        # regex is applied to the extracted FIRST CELL of the markdown row
-        # (mirror of _count_evidence_rows' consumption shape).
-        def _first_cell(row_line):
-            stripped = row_line.strip()
-            if stripped.startswith("|"):
-                cells = [c.strip() for c in stripped.split("|")]
-                return next((c for c in cells if c), "")
-            return stripped
-
-        migration_row = "| MIGRATION-{0} | FX-191 | migrated | backup=b |".format(
-            lm.MIGRATION_VERSION)
-        self.assertIsNotNone(
-            lm._EVIDENCE_ROW_PREFIX_RE.match(_first_cell(migration_row)),
-            migration_row)
-        rollback_row = ("| ROLLBACK-{0} | FX-191 | rolled back | "
-                        "restored_from=b |").format(lm.MIGRATION_VERSION)
-        self.assertIsNotNone(
-            lm._EVIDENCE_ROW_PREFIX_RE.match(_first_cell(rollback_row)),
-            rollback_row)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ADR-RB-2 — two-face goal-layer contract gate (factory WARN form)
@@ -513,7 +179,7 @@ class TestRB2ActivationPrecondition(unittest.TestCase):
             "title": "Demo unit",
             "priority": "P1",
             "status": "📋 待启动",
-        })["product_success_contract"]
+        }, contracts=["product_success_contract"])["product_success_contract"]
         self.assertIn("TO_BE_DEFINED", template["user"])  # template sanity
         with tempfile.TemporaryDirectory() as td:
             with _HostFixture(
@@ -704,7 +370,7 @@ class TestRB2RendererBlock(unittest.TestCase):
             "title": "Demo unit",
             "priority": "P1",
             "status": "📋 待启动",
-        })["product_success_contract"]
+        }, contracts=["product_success_contract"])["product_success_contract"]
         with tempfile.TemporaryDirectory() as td:
             with _HostFixture(
                     td, plan_text=_plan_tracker_text(goal_face=True),

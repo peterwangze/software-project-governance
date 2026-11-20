@@ -59,6 +59,7 @@ if str(_INFRA_DIR) not in sys.path:
 
 import closure_chain as cc  # noqa: E402
 import loop_event_log  # noqa: E402
+import loop_workflow  # noqa: E402
 import task_row_update as tru  # noqa: E402
 import write_guard_state as wgs  # noqa: E402  (FIX-383 ledger constants)
 
@@ -201,6 +202,11 @@ def _build_workspace(root):
     (gov / "agent-locks.json").write_text(
         json.dumps(_LOCKS_SEED, ensure_ascii=False, indent=4) + "\n",
         encoding="utf-8")
+    loop_workflow.start(root, unit_id=TASK, tier="inner", goal="Sum two line items",
+                        acceptance="The displayed total is seven",
+                        check_command=[sys.executable, "-c", "print(2 + 5)"], expect_output="7")
+    if loop_workflow.verify_command(root, TASK)["decision"] != "exit":
+        raise AssertionError("fixture ticket did not obtain its command receipt")
     return gov
 
 

@@ -282,54 +282,6 @@ class LegacyFixtureAggregateTests(unittest.TestCase):
         self.assertTrue(current_fail, r["violations"])
 
 
-class LatestCandidateTagIgnoredTest(unittest.TestCase):
-    """P2-3 隔离修正：L-C 检查针对 roadmap 中不存在的 tag（未发布版本）→
-    candidate FAIL 保持（read 隔离于 tempdir，不读活数据）。"""
-
-    _ROADMAP_NO_TARGET = (
-        "## 版本规划\n\n"
-        "| 版本 | 状态 | 预计日期 |\n"
-        "| --- | --- | --- |\n"
-        "| 0.77.0 | 已发布 | 2026-08-25 |\n"
-    )
-
-    def test_no_roadmap_candidate_still_fails(self):
-        """P2-3：隔离 fixture（roadmap 无 v9.9.9）→ candidate FAIL 保持——
-        released_history_exempt=False（不依赖活数据；不读本仓真实
-        plan-tracker）。"""
-        import tempfile
-        with tempfile.TemporaryDirectory() as td:
-            tracker = Path(td) / "plan-tracker.md"
-            tracker.write_text(self._ROADMAP_NO_TARGET, encoding="utf-8")
-            with mock.patch.object(vw, "SAMPLE_PATH", tracker):
-                r = vw.check_gate_sequence_for_release(
-                    gates=_gates(), published_tags=[{"tag": "v9.9.9",
-                                                     "date": "2026-08-22"}])
-        self.assertEqual(r["verdict"], "FAIL")
-        self.assertEqual(r["violations"][0]["rule"], "G-s2")
-        self.assertEqual(r["stats"]["released_history_exempt"], False)
-
-
-def _gates():
-    """router 风格 lightweight gate 表（G4 pending，G5 发布）。"""
-    return [
-        {"gate": "G1", "transition": "立项→调研", "status": "passed-on-entry",
-         "date": "2026-08-18", "evidence": "EV-001"},
-        {"gate": "G2", "transition": "调研+选型→设计", "status": "passed-on-entry",
-         "date": "2026-08-18", "evidence": "EV-001"},
-        {"gate": "G3", "transition": "设计→开发", "status": "passed-on-entry",
-         "date": "2026-08-18", "evidence": "EV-001"},
-        {"gate": "G4", "transition": "开发+测试→CI", "status": "pending",
-         "date": "", "evidence": ""},
-        {"gate": "G5", "transition": "CI→发布", "status": "pending",
-         "date": "", "evidence": ""},
-        {"gate": "G6", "transition": "发布→运营", "status": "pending",
-         "date": "", "evidence": ""},
-        {"gate": "G7", "transition": "运营→维护", "status": "pending",
-         "date": "", "evidence": ""},
-    ]
-
-
 # ── F-1/F-3（DESIGN R0）：live 路径状态列终态谓词 ──────────────────────
 
 def _evidence_review_row(evd_id, task_ref, conclusion, tail=""):

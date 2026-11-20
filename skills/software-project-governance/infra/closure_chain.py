@@ -1779,6 +1779,9 @@ def run_chain(spec: ChainSpec, *, root: Path, task: str,
     if not isinstance(task, str) or not task.strip():
         raise ValueError("run_chain: task id required")
     task = task.strip()
+    if spec.chain_id == "standard-ticket-closure":
+        from checks.loop_receipts import require_task_exit
+        require_task_exit(root, task)
     inputs = dict(inputs) if inputs else {}
     if reopen_of is not None:
         linkage = _resolve_reopen_linkage(root, reopen_of, closure_id)

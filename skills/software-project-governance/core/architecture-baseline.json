@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "ad3b66d16f62ec42eaa39499116109eaaf98095b",
+    "git_head": "d351609ea0afac7645262e23c8de08f29a9f8852",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 27154,
+    "anchor_loc": 26948,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -30,13 +30,12 @@
         "path": "checks/capability_registry.py"
       },
       {
-        "count": 4,
+        "count": 3,
         "kind": "vw_call",
         "lines": [
           45,
-          49,
-          53,
-          57
+          90,
+          94
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/capability_registry.py"
@@ -440,6 +439,11 @@
         "admitted_by": "FEAT-019",
         "layer": "L5",
         "note": "cross-cutting guard; CLI surface ≈ L5; internal imports: stdlib only + lazy contract_matrix consumer edge (unmanaged until its own slice - owner task FIX-303, F-6 transfer)"
+      },
+      "infra/claim_negation.py": {
+        "admitted_by": "FIX-509",
+        "layer": "L0",
+        "note": "Pure lexical matcher; domain callers supply the noun-claim vocabulary."
       },
       "infra/contracts.py": {
         "admitted_by": "FIX-303",

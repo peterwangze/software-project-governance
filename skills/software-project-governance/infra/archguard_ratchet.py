@@ -115,6 +115,11 @@ DEFAULT_MANAGED_MODULES: Dict[str, Dict[str, str]] = {
                 "stdlib only + lazy contract_matrix consumer edge (unmanaged "
                 "until its own slice - owner task FIX-303, F-6 transfer)",
     },
+    "infra/claim_negation.py": {
+        "layer": "L0",
+        "admitted_by": "FIX-509",
+        "note": "Pure lexical matcher; domain callers supply the noun-claim vocabulary.",
+    },
     "infra/contracts.py": {
         "layer": "L0",
         "admitted_by": "FIX-303",

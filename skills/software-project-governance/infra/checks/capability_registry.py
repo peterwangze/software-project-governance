@@ -3,7 +3,7 @@
 Scope (DEC-083 Phase 2 / REQ-103): capability-registry.json schema validation
 (FIX-116). Same registry-schema-check pattern as the manifest domain
 (Phase 1). Shared helpers (_is_valid_string_list,
-_line_has_scoped_claim_negation, _display_path, ROOT) are reached through a
+_display_path, ROOT) are reached through a
 deferred module reference (the _vw() helper, same pattern as manifest.py) so
 that verify_workflow.py can import this module at load time without an import
 cycle. _manifest_artifact_entries is imported directly from the sibling
@@ -45,8 +45,45 @@ def _is_valid_string_list(value):
     return _vw()._is_valid_string_list(value)
 
 
+_GENERAL_NOUN_CLAIMS = (
+    "official approval",
+    "marketplace approval",
+    "universal runtime support",
+    "full runtime support",
+    "universal/full runtime support",
+    "external first-session pilot success",
+    "external first-session pilot pass",
+    "external first-session pilot passed",
+    "codex desktop marketplace-management e2e pass",
+    "codex desktop marketplace-management e2e passed",
+    "automatic best-tool selection",
+    "automatic best-tool selection pass",
+    "automatic best-tool selection passed",
+    "automatic best-tool selection available",
+    "automatic best-tool selection verified",
+    "universal plugin/skill/tool availability",
+    "universal plugin/skill/tool availability pass",
+    "universal plugin/skill/tool availability passed",
+    "universal plugin/skill/tool availability available",
+    "universal plugin/skill/tool availability verified",
+    "catalog entry runtime pass",
+    "catalog entry runtime passed",
+    "catalog entry runtime available",
+    "catalog entry runtime verified",
+    "1.0.0 production-ready",
+    "1.0.0 production-ready claim",
+    "risk-036 closed",
+    "risk-037 closed",
+    "risk-036 closure achieved",
+    "risk-037 closure achieved",
+    "declarative gate engine active",
+    "dynamic-flow-gate default",
+)
+
+
 def _line_has_scoped_claim_negation(line, phrase):
-    return _vw()._line_has_scoped_claim_negation(line, phrase)
+    from claim_negation import is_claim_negated
+    return is_claim_negated(line, phrase, _GENERAL_NOUN_CLAIMS)
 
 
 def _display_path(path, root=None):

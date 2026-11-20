@@ -9908,7 +9908,7 @@ def check_cross_references():
         for i, line in enumerate(source_lines[source], 1):
             if f.suffix == ".py":
                 # Python: ROOT / "relative/path"  pattern
-                for m in re.finditer(r'ROOT\s*/\s*"([^"]+)"', line):
+                for m in re.finditer(r'\bROOT\s*/\s*"([^"]+)"', line):
                     target = m.group(1)
                     if Path(target).suffix:
                         refs[source].append((target, i))

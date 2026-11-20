@@ -25080,5 +25080,37 @@ class CurrentRepositoryNavigationTests(unittest.TestCase):
             self.assertTrue(any("当前目录导航" in issue for issue in issues))
 
 
+class ReleaseChangelogScopeTests(unittest.TestCase):
+    def test_plugin_references_scan_root_without_matching_a_host_root_suffix(self):
+        with tempfile.TemporaryDirectory() as td:
+            plugin = Path(td)
+            source = plugin / "skills/software-project-governance/infra/verify_workflow.py"
+            source.parent.mkdir(parents=True)
+            source.write_text(
+                'changelog = ROOT / "project/CHANGELOG.md" if plugin else HOST_PROJECT_ROOT / "CHANGELOG.md"\n',
+                encoding="utf-8",
+            )
+            with patch.object(vw, "ROOT", plugin):
+                result = vw.check_cross_references()
+                self.assertEqual(["project/CHANGELOG.md"], [row["target"] for row in result["dangling"]])
+                (plugin / "project").mkdir()
+                (plugin / "project/CHANGELOG.md").write_text("# Plugin changes\n", encoding="utf-8")
+                self.assertEqual([], vw.check_cross_references()["dangling"])
+
+    def test_external_release_requires_the_hosts_own_default_changelog(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(vw, "HOST_PROJECT_ROOT", Path(td)):
+            host = Path(td)
+            version = "1.2.3"
+
+            def changelog():
+                return vw.check_release_readiness(version=version, require_changelog=True)["details"]["changelog"]
+
+            missing = changelog()
+            self.assertFalse(missing["pass"])
+            self.assertTrue(any("missing changelog" in issue for issue in missing["issues"]))
+            (host / "CHANGELOG.md").write_text(f"## [{version}]\n", encoding="utf-8")
+            self.assertTrue(changelog()["pass"])
+
+
 if __name__ == "__main__":
     unittest.main()

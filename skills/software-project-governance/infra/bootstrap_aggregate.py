@@ -15,7 +15,8 @@ Aggregated faces (single output, ≤2K token / ≤8KB projection):
                   plan-tracker record). Never executes a migration.
 * ``project`` / ``gates`` / ``tasks`` / ``risks`` / ``recent`` — a LEAN
                   status projection parsed line-wise from the hot governance
-                  files. The regexes/table shapes deliberately MIRROR the
+                  files. Configuration and overview share the pure CLI readers. Other
+                  regexes/table shapes deliberately MIRROR the
                   proven engine calibers (``parse_project_config`` /
                   ``parse_gate_status`` / ``parse_active_risks`` /
                   ``parse_recent_decisions`` and resolve_entry's plan-tracker
@@ -69,8 +70,8 @@ Budget + honesty contract:
 Boundary (same discipline as governance_cost.py / archguard_ratchet.py):
 this module MUST NOT import ``verify_workflow`` (ArchGuard R2 — zero new
 reverse edges; the engine only wires dispatch). Its own import face is
-stdlib-only (ArchGuard R6 cold-import budget) plus the two engine-free
-peer leaves ``resolve_entry`` and ``task_priority``.
+stdlib-only (ArchGuard R6 cold-import budget) plus engine-free
+peer leaves including ``resolve_entry`` and ``task_priority``.
 
 Usage:
     python <plugin_home>/infra/verify_workflow.py governance-bootstrap \\
@@ -225,13 +226,14 @@ def _section_lines(text, section_prefix):
 def _table_rows(lines):
     """Split markdown table lines into cell lists (header + separator kept
     distinguishable: returns (header_cells | None, [data_cell_lists]))."""
+    from governance_readers import plan_table_cells
     header = None
     rows = []
     for line in lines:
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        cells = [c.strip() for c in stripped.split("|")[1:-1]]
+        cells = plan_table_cells(stripped)
         if all(set(c) <= {"-", ":", " "} for c in cells):
             continue  # separator row
         if header is None:
@@ -242,31 +244,17 @@ def _table_rows(lines):
 
 
 def parse_project_config(text):
-    """Mirror of verify_workflow.parse_project_config (`## 项目配置`)."""
-    config = {}
-    for line in _section_lines(text, "## 项目配置"):
-        m = re.match(r"- \*\*(.+?)\*\*:\s*(.+)", line)
-        if m:
-            config[m.group(1)] = m.group(2).strip()
-    return config
+    """Bootstrap accepts suffixed headings and strips trailing value whitespace."""
+    from governance_readers import config_from_lines
+    values = config_from_lines(_section_lines(text, "## 项目配置"))
+    return {key: value.strip() for key, value in values.items()}
 
 
 def parse_overview_row(text):
-    """Mirror of verify_workflow.parse_overview (first `## 项目总览` row)."""
-    for line in _section_lines(text, "## 项目总览"):
-        stripped = line.strip()
-        if not stripped.startswith("|"):
-            continue
-        parts = [p.strip() for p in stripped.split("|")[1:-1]]
-        if len(parts) >= 8 and parts[0] != "项目" and not all(
-                set(p) <= {"-", " "} for p in parts):
-            return {
-                "project": parts[0], "current_stage": parts[1],
-                "total": parts[2], "completed": parts[3],
-                "blocked": parts[4], "risks": parts[5],
-                "latest_gate": parts[6], "latest_retro": parts[7],
-            }
-    return {}
+    """Bootstrap also accepts indented table rows and suffixed headings."""
+    from governance_readers import overview_from_lines
+    lines = _section_lines(text, "## 项目总览")
+    return overview_from_lines(line.strip() for line in lines)
 
 
 #: Bootstrap-local gate bucket contract (R0 P2-2) — the CLOSED vocabulary of

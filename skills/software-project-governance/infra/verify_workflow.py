@@ -403,28 +403,8 @@ def _git_files(args):
 
 
 def _split_markdown_table_row(line):
-    """Split a markdown table row while ignoring pipes inside inline code."""
-    stripped = line.strip()
-    if not stripped.startswith("|"):
-        return []
-    cells = []
-    buf = []
-    in_code = False
-    i = 1 if stripped.startswith("|") else 0
-    end = len(stripped) - 1 if stripped.endswith("|") else len(stripped)
-    while i < end:
-        ch = stripped[i]
-        if ch == "`":
-            in_code = not in_code
-            buf.append(ch)
-        elif ch == "|" and not in_code:
-            cells.append("".join(buf).strip())
-            buf = []
-        else:
-            buf.append(ch)
-        i += 1
-    cells.append("".join(buf).strip())
-    return cells
+    from governance_readers import markdown_table_cells
+    return markdown_table_cells(line)
 
 
 PLATFORM_ENTRY_FILES = {
@@ -3999,12 +3979,8 @@ def _parse_plan_workflow_model(plan_text):
 
 
 def _count_evidence_rows(evidence_text):
-    count = 0
-    for line in evidence_text.splitlines():
-        cells = _split_markdown_table_row(line)
-        if cells and re.match(r"^(?:EVD-\d+|REVIEW-[A-Z]+-\d+)", cells[0]):
-            count += 1
-    return count
+    from governance_readers import count_evidence_rows
+    return count_evidence_rows(evidence_text)
 
 
 def build_dynamic_lifecycle_migration_preview(target=None):
@@ -7363,76 +7339,18 @@ def _extract_section(content, heading, stop_headings=None):
 
 
 def parse_project_config(path=None):
-    """Parse project configuration section from sample."""
-    content = (Path(path) if path is not None else SAMPLE_PATH).read_text(encoding="utf-8")
-    config = {}
-    in_section = False
-    for line in content.split("\n"):
-        if line.strip() == "## 项目配置":
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if in_section:
-            m = re.match(r"- \*\*(.+?)\*\*:\s*(.+)", line)
-            if m:
-                config[m.group(1)] = m.group(2)
-    return config
+    from governance_readers import project_config
+    return project_config((Path(path) if path is not None else SAMPLE_PATH).read_text(encoding="utf-8"))
 
 
 def parse_gate_status():
-    """Parse Gate status table from sample."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    gates = []
-    in_section = False
-    for line in content.split("\n"):
-        # FIX-287④: tolerate bracketed heading variants (e.g. `## Gate 状态跟踪（G1-G11）`).
-        if line.strip().startswith("## Gate 状态跟踪"):
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if in_section and line.startswith("|"):
-            parts = [p.strip() for p in line.split("|")[1:-1]]
-            if len(parts) >= 5 and parts[0] != "Gate" and not all(
-                set(p.strip()) <= {"-", " "} for p in parts
-            ):
-                gates.append({
-                    "gate": parts[0],
-                    "transition": parts[1],
-                    "status": parts[2],
-                    "date": parts[3],
-                    "evidence": parts[4] if len(parts) > 4 else "",
-                })
-    return gates
+    from governance_readers import gate_status
+    return gate_status(SAMPLE_PATH.read_text(encoding="utf-8"))
 
 
 def parse_overview():
-    """Parse project overview table from sample."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    in_section = False
-    for line in content.split("\n"):
-        if line.strip() == "## 项目总览":
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if in_section and line.startswith("|"):
-            parts = [p.strip() for p in line.split("|")[1:-1]]
-            if len(parts) >= 8 and parts[0] != "项目" and not all(
-                set(p.strip()) <= {"-", " "} for p in parts
-            ):
-                return {
-                    "project": parts[0],
-                    "current_stage": parts[1],
-                    "total": parts[2],
-                    "completed": parts[3],
-                    "blocked": parts[4],
-                    "risks": parts[5],
-                    "latest_gate": parts[6],
-                    "latest_retro": parts[7],
-                }
-    return {}
+    from governance_readers import overview
+    return overview(SAMPLE_PATH.read_text(encoding="utf-8"))
 
 
 def _normalize_task_status(status_text):
@@ -12723,55 +12641,8 @@ def _task_priority_from_table_parts(parts):
 
 
 def _split_governance_table_row(line):
-    """Split a Markdown table row while preserving pipes inside JSON cells.
-
-    FIX-373: a ``"`` inside a code span is literal text and must NOT open
-    the JSON-string state — an unguarded quote flipped ``in_string`` on,
-    which in turn suppressed the code-span backtick toggle (backtick branch
-    requires ``not in_string``), pinned the state to end-of-line and folded
-    every remaining pipe (live: EVD-248 row folded 10 data cells -> 5).
-    """
-    parts = []
-    current = []
-    depth = 0
-    in_string = False
-    in_code_span = False
-    escape = False
-
-    for ch in line:
-        if ch == "`" and not in_string:
-            in_code_span = not in_code_span
-            current.append(ch)
-            continue
-
-        if in_string:
-            current.append(ch)
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"' and not in_code_span:
-            in_string = True
-            current.append(ch)
-        elif ch in "{[":
-            depth += 1
-            current.append(ch)
-        elif ch in "}]":
-            if depth > 0:
-                depth -= 1
-            current.append(ch)
-        elif ch == "|" and depth == 0 and not in_code_span:
-            parts.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-
-    parts.append("".join(current))
-    return parts
+    from governance_readers import split_governance_table_row
+    return split_governance_table_row(line)
 
 
 # Standalone task-ID table cell (e.g. ``FIX-222`` / ``**REL-070**``). Single
@@ -12782,12 +12653,8 @@ _TASK_ID_CELL_RE = re.compile(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$")
 
 
 def _governance_table_cells(line):
-    cells = [p.strip() for p in _split_governance_table_row(line.strip())]
-    if cells and cells[0] == "":
-        cells = cells[1:]
-    if cells and cells[-1] == "":
-        cells = cells[:-1]
-    return cells
+    from governance_readers import governance_table_cells
+    return governance_table_cells(line)
 
 
 # Date-cell content shape (FIX-374): ``YYYY-MM-DD`` / ``YYYY/MM/DD`` as

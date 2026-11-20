@@ -6,7 +6,7 @@ Reads the real `.governance/` files and exposes a JSON API at
 built `web/dist/` static assets for production single-port use.
 
 This is a stdlib-only HTTP server (no new npm/pip dependencies). It reuses the
-parser functions from `verify_workflow.py` so the dashboard shows real data
+shared Markdown readers and CLI context discovery so the dashboard shows real data
 instead of hardcoded mock values.
 
 Run standalone:
@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,104 +27,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INFRA = ROOT / "skills" / "software-project-governance" / "infra"
 
-# ---------------------------------------------------------------------------
-# Reuse the real parsers from verify_workflow (import-first, fallback local).
-# ---------------------------------------------------------------------------
-
+# The read model is independent of the CLI. An unavailable engine only
+# degrades context discovery; the plan, evidence and risks keep their grammar.
+sys.path.insert(0, str(INFRA))
+readers = None
 try:
-    sys.path.insert(0, str(INFRA))
-    import verify_workflow as _vw  # type: ignore  # noqa: F401
-
-    def _parse_project_config():
-        return _vw.parse_project_config()
-
-    def _parse_gate_status():
-        return _vw.parse_gate_status()
-
-    def _parse_overview():
-        return _vw.parse_overview()
+    import governance_readers as readers
+    import verify_workflow as _vw
 
     def _discover_governance_context(root):
         return _vw.discover_governance_context(root)
 
-    def _count_evidence(text):
-        return _vw._count_evidence_rows(text)
-
-    def _table_cells(line):
-        return _vw._governance_table_cells(line)
-
     _IMPORT_OK = True
     _IMPORT_ERROR = None
-except Exception as exc:  # pragma: no cover - fallback path
+except Exception as exc:
     _IMPORT_OK = False
     _IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
-    SAMPLE_PATH = ROOT / ".governance" / "plan-tracker.md"
-
-    def _parse_project_config():
-        config = {}
-        content = SAMPLE_PATH.read_text(encoding="utf-8")
-        in_section = False
-        for line in content.split("\n"):
-            if line.strip() == "## 项目配置":
-                in_section = True
-                continue
-            if in_section and line.startswith("## "):
-                break
-            if in_section:
-                m = re.match(r"- \*\*(.+?)\*\*:\s*(.+)", line)
-                if m:
-                    config[m.group(1)] = m.group(2)
-        return config
-
-    def _parse_gate_status():
-        gates = []
-        content = SAMPLE_PATH.read_text(encoding="utf-8")
-        in_section = False
-        for line in content.split("\n"):
-            if line.strip() == "## Gate 状态跟踪":
-                in_section = True
-                continue
-            if in_section and line.startswith("## "):
-                break
-            if in_section and line.startswith("|"):
-                parts = [p.strip() for p in line.split("|")[1:-1]]
-                if len(parts) >= 5 and parts[0] != "Gate" and not all(
-                    set(p.strip()) <= {"-", " "} for p in parts
-                ):
-                    gates.append({
-                        "gate": parts[0],
-                        "transition": parts[1],
-                        "status": parts[2],
-                        "date": parts[3],
-                        "evidence": parts[4] if len(parts) > 4 else "",
-                    })
-        return gates
-
-    def _parse_overview():
-        content = SAMPLE_PATH.read_text(encoding="utf-8")
-        in_section = False
-        for line in content.split("\n"):
-            if line.strip() == "## 项目总览":
-                in_section = True
-                continue
-            if in_section and line.startswith("## "):
-                break
-            if in_section and line.startswith("|"):
-                parts = [p.strip() for p in line.split("|")[1:-1]]
-                if len(parts) >= 8 and parts[0] != "项目" and not all(
-                    set(p.strip()) <= {"-", " "} for p in parts
-                ):
-                    return {
-                        "project": parts[0],
-                        "current_stage": parts[1],
-                        "total": parts[2],
-                        "completed": parts[3],
-                        "blocked": parts[4],
-                        "risks": parts[5],
-                        "latest_gate": parts[6],
-                        "latest_retro": parts[7],
-                    }
-        return {}
 
     def _discover_governance_context(root):
         return {
@@ -138,17 +55,6 @@ except Exception as exc:  # pragma: no cover - fallback path
             "interrupt_boundary": "AskUserQuestion before critical decisions",
         }
 
-    def _count_evidence(text):
-        return len(re.findall(r"^(?:EVD-\d+|REVIEW-[A-Z]+-\d+)", text, re.MULTILINE))
-
-    def _table_cells(line):
-        cleaned = line.strip()
-        for _ in range(2):
-            cleaned = cleaned[1:] if cleaned.startswith("|") else cleaned
-            cleaned = cleaned[:-1] if cleaned.endswith("|") else cleaned
-        return [c.strip() for c in cleaned.split("|")]
-
-
 # ---------------------------------------------------------------------------
 # Local helpers (not in verify_workflow)
 # ---------------------------------------------------------------------------
@@ -160,11 +66,11 @@ def _parse_recent_evidence(text, limit=8):
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        cells = _table_cells(stripped)
+        cells = readers.governance_table_cells(stripped)
         if len(cells) < 4:
             continue
         first = cells[0]
-        if not re.match(r"^(EVD-\d+|REVIEW-[A-Z]+-\d+)", first):
+        if not readers.is_evidence_id(first):
             continue
         # Columns: EVD-ID | task | category | item | detail... | ref | owner | date | gate | status
         # Defensive slicing — some rows are very wide with embedded pipes in detail.
@@ -198,7 +104,7 @@ def _parse_open_risks_with_deadline():
         stripped = line.strip()
         if not stripped.startswith("| RISK-"):
             continue
-        cells = _table_cells(stripped)
+        cells = readers.governance_table_cells(stripped)
         if len(cells) < 9:
             continue
         if cells[8] != "打开":
@@ -238,7 +144,12 @@ def build_governance_payload():
         payload["import_error"] = _IMPORT_ERROR
 
     try:
-        config = _parse_project_config()
+        if readers is None:
+            payload["error"] = f"governance readers unavailable: {_IMPORT_ERROR}"
+            return payload
+        plan_path = _vw.SAMPLE_PATH if _IMPORT_OK else ROOT / ".governance" / "plan-tracker.md"
+        plan = plan_path.read_text(encoding="utf-8")
+        config = readers.project_config(plan)
         # Workflow version lives in plan-tracker ## 项目配置 (governance runtime state).
         payload["workflow_version"] = config.get("工作流版本", "unknown")
         payload["trigger_mode"] = config.get("触发模式", "unknown")
@@ -247,14 +158,14 @@ def build_governance_payload():
         # Release version lives in the canonical manifest (shipped code version).
         payload["release_version"] = _release_version_from_manifest()
 
-        payload["gates"] = _parse_gate_status()
-        payload["overview"] = _parse_overview()
+        payload["gates"] = readers.gate_status(plan)
+        payload["overview"] = readers.overview(plan)
         payload["context"] = _discover_governance_context(str(ROOT))
 
         ev_path = ROOT / ".governance" / "evidence-log.md"
         if ev_path.is_file():
             ev_text = ev_path.read_text(encoding="utf-8")
-            payload["evidence_count"] = _count_evidence(ev_text)
+            payload["evidence_count"] = readers.count_evidence_rows(ev_text)
             payload["recent_evidence"] = _parse_recent_evidence(ev_text, 8)
         else:
             payload["evidence_count"] = 0

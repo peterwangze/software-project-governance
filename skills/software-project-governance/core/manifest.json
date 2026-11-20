@@ -167,6 +167,10 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/governance_readers.py",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/infra/checks/__init__.py",
         "type": "file"
       },

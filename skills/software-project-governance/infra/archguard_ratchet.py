@@ -103,6 +103,11 @@ ASSERTED_EDGE_COUNT = 12
 # admitted by the R0 leftover batch (FIX-303 / F-5) so its zero-internal-
 # dependency claim is machine-judged instead of self-attested.
 DEFAULT_MANAGED_MODULES: Dict[str, Dict[str, str]] = {
+    "infra/governance_readers.py": {
+        "layer": "L2",
+        "admitted_by": "FIX-508",
+        "note": "Shared Markdown readers for project plans, evidence and risks; no internal dependencies.",
+    },
     "infra/archguard_ratchet.py": {
         "layer": "L5",
         "admitted_by": "FEAT-019",

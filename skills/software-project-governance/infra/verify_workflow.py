@@ -554,12 +554,7 @@ PROJECTION_SNIPPETS = {
         "check-agent-adapters --runtime",
     ],
     ROOT / "adapters/claude/adapter-manifest.json": [
-        "adapter_id",
-        "workflow_id",
-        "native_entry",
-        "runtime_e2e",
-        "runtime_capabilities",
-        "launcher",
+        "adapter_id", "workflow_id", "native_entry", "runtime_e2e", "runtime_capabilities", "launcher",
     ],
     ROOT / "adapters/claude/launch.py": [
         'MANIFEST_PATH = ROOT / "adapters/claude/adapter-manifest.json"',
@@ -582,12 +577,7 @@ PROJECTION_SNIPPETS = {
         "agent-runtime-e2e --agent codex",
     ],
     ROOT / "adapters/codex/adapter-manifest.json": [
-        "adapter_id",
-        "workflow_id",
-        "native_entry",
-        "runtime_e2e",
-        "runtime_capabilities",
-        "launcher",
+        "adapter_id", "workflow_id", "native_entry", "runtime_e2e", "runtime_capabilities", "launcher",
     ],
     ROOT / "adapters/codex/launch.py": [
         'MANIFEST_PATH = ROOT / "adapters/codex/adapter-manifest.json"',
@@ -909,8 +899,14 @@ REQUIRED_SNIPPETS = {
         "native_entry",
         "launcher",
     ],
-    ROOT / "adapters/claude/launch.py": PROJECTION_SNIPPETS[ROOT / "adapters/claude/launch.py"],
-    ROOT / "adapters/manifest_report.py": PROJECTION_SNIPPETS[ROOT / "adapters/manifest_report.py"],
+    ROOT / "adapters/claude/launch.py": [
+        'MANIFEST_PATH = ROOT / "adapters/claude/adapter-manifest.json"',
+        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Claude")',
+    ],
+    ROOT / "adapters/manifest_report.py": [
+        "{platform} Adapter Launcher", 'print("read_order:")', 'print("native_entry:")',
+        'print("runtime_e2e:")', 'print("validation:")',
+    ],
     ROOT / "adapters/codex/README.md": [
         "Tier 1",
         "## Load",
@@ -928,7 +924,10 @@ REQUIRED_SNIPPETS = {
         "workflow_id",
         "launcher",
     ],
-    ROOT / "adapters/codex/launch.py": PROJECTION_SNIPPETS[ROOT / "adapters/codex/launch.py"],
+    ROOT / "adapters/codex/launch.py": [
+        'MANIFEST_PATH = ROOT / "adapters/codex/adapter-manifest.json"',
+        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Codex")',
+    ],
     ROOT / "adapters/gemini/README.md": [
         "## 兼容要求",
         "## Gemini 路线判断",

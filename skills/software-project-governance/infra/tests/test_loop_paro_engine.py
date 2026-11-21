@@ -36,6 +36,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -876,65 +877,65 @@ class ValidatorExtensionTests(unittest.TestCase):
 
 
 class ThreadingCASTests(unittest.TestCase):
-    """Multiple threads apply_transition to the same unit → no lost updates.
+    """Verify CAS results against the version each writer actually read (ADR-014 §3.5)."""
 
-    This is the LOAD-BEARING proof that the CAS mechanism is correct under
-    concurrency (ADR-014 §3.5: "Two processes that both read cas_version=7 and
-    both try to write: the second's write sees on-disk cas_version=8 ... and
-    fails the conflict check ... No lost updates").
+    def _assert_snapshot_race(self, pool, runtime_path, reader_count):
+        snapshots_read = threading.Barrier(reader_count, timeout=30)
 
-    Setup: N threads each try to advance a unit from plan→act. Because all N
-    read cas=0 but only ONE can commit at cas=1 (the on-disk version check
-    fails for the other N-1 after the first commit), the outcome is exactly:
-      - exactly ONE thread gets STATUS_SUCCESS with new_cas_version=1;
-      - the other N-1 get STATUS_CONFLICT;
-      - the on-disk cas_version is exactly 1 (no lost update, no double bump).
-    """
+        def after_read(unit, event):
+            # apply_transition has validated plan/v0 but has not acquired the commit lock.
+            snapshots_read.wait()
+            return unit
+
+        writers = [
+            pool.submit(paro.apply_transition, "shitu.story.Skeleton", "act",
+                        runtime_file=runtime_path, side_effects=after_read)
+            for _ in range(reader_count)
+        ]
+        results = [writer.result(timeout=30) for writer in writers]
+        outcomes = [(r.status, r.from_phase, r.from_cas_version, r.new_cas_version)
+                    for r in results]
+        self.assertCountEqual(
+            outcomes,
+            [(paro.STATUS_SUCCESS, "plan", 0, 1)]
+            + [(paro.STATUS_CONFLICT, "plan", 0, None)] * (reader_count - 1),
+            msg=[(r.status, r.reason) for r in results],
+        )
+
+        payload = json.loads(runtime_path.read_text(encoding="utf-8"))
+        unit, = payload["flow_units"]
+        self.assertEqual(unit["flow_unit_id"], "shitu.story.Skeleton")
+        self.assertEqual(unit["loop_state"]["agent_phase"], "act")
+        self.assertEqual(unit["loop_state"]["cas_version"], 1)
 
     def test_many_threads_one_success_rest_conflict(self):
-        tmpdir = tempfile.mkdtemp(prefix="paro_thread_")
-        runtime_path = _write_payload(tmpdir, _activated_payload())
-        unit_id = "shitu.story.Skeleton"
+        with tempfile.TemporaryDirectory(prefix="paro_thread_") as tmpdir:
+            runtime_path = _write_payload(tmpdir, _activated_payload())
+            with ThreadPoolExecutor(max_workers=12) as pool:
+                self._assert_snapshot_race(pool, runtime_path, reader_count=12)
 
-        N = 12
-        results = [None] * N
-        barrier = threading.Barrier(N)
+    def test_late_reader_sees_committed_phase(self):
+        with tempfile.TemporaryDirectory(prefix="paro_thread_") as tmpdir:
+            runtime_path = _write_payload(tmpdir, _activated_payload())
+            allow_late_read = threading.Event()
 
-        def worker(idx):
-            barrier.wait()  # release all threads simultaneously
-            results[idx] = paro.apply_transition(
-                unit_id, "act", {"reason": "thread-{0}".format(idx)},
-                runtime_file=runtime_path,
-            )
+            def read_after_commit():
+                self.assertTrue(allow_late_read.wait(timeout=30), "timed out waiting for commit")
+                return paro.apply_transition("shitu.story.Skeleton", "act", runtime_file=runtime_path)
 
-        threads = [threading.Thread(target=worker, args=(i,)) for i in range(N)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
+            with ThreadPoolExecutor(max_workers=12) as pool:
+                late_reader = pool.submit(read_after_commit)
+                try:
+                    self._assert_snapshot_race(pool, runtime_path, reader_count=11)
+                    committed_bytes = runtime_path.read_bytes()
+                finally:
+                    allow_late_read.set()
+                result = late_reader.result(timeout=30)
 
-        # All threads must have completed.
-        self.assertEqual(results.count(None), 0, "a thread did not record a result")
-
-        statuses = [r.status for r in results]
-        successes = [r for r in results if r.status == paro.STATUS_SUCCESS]
-        conflicts = [r for r in results if r.status == paro.STATUS_CONFLICT]
-
-        self.assertEqual(len(successes), 1,
-                         "exactly ONE thread must succeed; got {0} (statuses={1})".format(
-                             len(successes), statuses))
-        self.assertEqual(successes[0].new_cas_version, 1)
-        self.assertEqual(len(conflicts), N - 1,
-                         "the other {0} threads must CONFLICT; got {1}".format(
-                             N - 1, len(conflicts)))
-
-        # The on-disk version must be exactly 1 (one commit, no lost update,
-        # no double-counted bump).
-        payload = json.loads(runtime_path.read_text(encoding="utf-8"))
-        u = [x for x in payload["flow_units"] if x["flow_unit_id"] == unit_id][0]
-        self.assertEqual(u["loop_state"]["cas_version"], 1,
-                         "on-disk cas_version must be exactly 1 (no lost update)")
-        self.assertEqual(u["loop_state"]["agent_phase"], "act")
+            self.assertEqual(result.status, paro.STATUS_ILLEGAL, result.reason)
+            self.assertEqual((result.from_phase, result.from_cas_version), ("act", 1))
+            self.assertIsNone(result.new_cas_version)
+            self.assertEqual(runtime_path.read_bytes(), committed_bytes)
 
     def test_distinct_transitions_under_contention_commit_each_once(self):
         """A serial chain driven under thread contention commits each step exactly once.

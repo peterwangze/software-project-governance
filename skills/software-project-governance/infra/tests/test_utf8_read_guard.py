@@ -176,7 +176,10 @@ class Utf8ReadSimulationTests(unittest.TestCase):
         ``Get-Content`` path reproduces the mojibake while the explicit
         ``-Encoding UTF8`` read does not — the guard is the rule."""
         import tempfile
-        ps = self._ps()
+        # Windows PowerShell 5.1 uses the system ANSI codepage for bare reads.
+        # PowerShell 7 uses UTF-8 even on the same GBK host.
+        legacy = shutil.which("powershell.exe") if sys.platform == "win32" else None
+        ps = legacy or self._ps()
         codepage = _ps_codepage(ps)
         if codepage != 936:
             self.skipTest(

@@ -1601,9 +1601,14 @@ class CompositionRowContractTests(unittest.TestCase):
 # ── the live oracle: real installed dsh, real Config schemas ────────────────
 def _live_probe():
     """(install, node) when the real oracle is reachable, else (None, None)."""
-    install = dsh_compat.locate_dsh_install()
+    oracle = os.environ.get("SPG_TEST_DSH_INSTALL_DIR")
+    env = {**os.environ, "DSH_INSTALL_DIR": oracle} if oracle else os.environ
+    install = dsh_compat.locate_dsh_install(env=env)
     node = shutil.which("node")
     if install.get("status") != "OK" or not node:
+        if oracle:
+            raise RuntimeError(f"Configured DSH oracle unavailable: {oracle}; "
+                               f"node={node}; {install.get('reason')}")
         return None, None
     return install, node
 
@@ -2067,7 +2072,11 @@ class InstalledSchemaTests(unittest.TestCase):
         # must never be reported as a finding.
         report = dsh_compat.check_dsh_preset_compat(
             root=_REPO_ROOT, env={}, install=_LIVE_INSTALL, node=_LIVE_NODE)
-        self.assertIn(report["verdict"], {"PASS", "NOT_RUN"}, report)
+        if os.environ.get("SPG_TEST_DSH_INSTALL_DIR"):
+            self.assertEqual(report["verdict"], "PASS", report)
+            self.assertGreater(report["rows_checked"], 0, report)
+        else:
+            self.assertIn(report["verdict"], {"PASS", "NOT_RUN"}, report)
         self.assertEqual(report["issues"], [], report["issues"])
         paths = [entry["path"] for entry in report["compositions"]]
         self.assertEqual(
@@ -3341,12 +3350,19 @@ class PublicEntryDecodeBoundaryTests(unittest.TestCase):
                                    "preset.yml", "render-provenance.json", "skill-root.txt"])
 
     # ── N-1: the guard must refuse when the profile is unresolvable ────────
-    _PROFILE_VARS = ("USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH")
-
     _DRIVER = (
         "import contextlib, importlib.util, io, json, os, sys\n"
         "from pathlib import Path\n"
         "root = Path(sys.argv[1]); entry = sys.argv[2]; dsh_home = sys.argv[3]\n"
+        "try:\n"
+        "    Path.home()\n"
+        "except RuntimeError:\n"
+        "    pass\n"
+        "else:\n"
+        "    print('profile resolves')\n"
+        "    sys.exit(0)\n"
+        "from tempfile import TemporaryFile\n"
+        "with TemporaryFile(dir=dsh_home): pass\n"
         "spec = importlib.util.spec_from_file_location("
         "'L', root / 'adapters' / 'dsh' / 'launch.py')\n"
         "module = importlib.util.module_from_spec(spec); "
@@ -3372,9 +3388,8 @@ class PublicEntryDecodeBoundaryTests(unittest.TestCase):
         "'output': stream.getvalue()}))\n"
     )
 
-    @staticmethod
-    def _profileless_env(dsh_home):
-        """Only what a process needs to start — no profile at all."""
+    def _run_profileless_entry(self, root, entry, dsh_home):
+        """Run the launcher only after its own interpreter proves it has no home."""
         env = {}
         for key in ("PATH", "SystemRoot", "windir", "PATHEXT", "TEMP", "TMP",
                     "COMSPEC", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
@@ -3384,13 +3399,39 @@ class PublicEntryDecodeBoundaryTests(unittest.TestCase):
         env["DSH_HOME"] = str(dsh_home)
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONDONTWRITEBYTECODE"] = "1"
-        return env
+        if sys.platform == "linux":
+            # HOME is absent, so Python consults NSS for the real process UID.
+            # A private account database keeps the host passwd/group intact.
+            import ctypes.util
+            import sysconfig
+            multiarch = sysconfig.get_config_var("MULTIARCH") or ""
+            packaged = Path("/usr/lib") / multiarch / "libnss_wrapper.so"
+            library = (str(packaged) if packaged.is_file()
+                       else ctypes.util.find_library("nss_wrapper"))
+            if library:
+                other_uid = 1 if os.getuid() == 0 else 0
+                passwd, group = root.parent / "passwd", root.parent / "group"
+                passwd.write_text(f"fixture:x:{other_uid}:{other_uid}::/:/bin/false\n",
+                                  encoding="ascii")
+                group.write_text(f"fixture:x:{other_uid}:\n", encoding="ascii")
+                env.update(LD_PRELOAD=library, NSS_WRAPPER_PASSWD=str(passwd),
+                           NSS_WRAPPER_GROUP=str(group))
+        proc = subprocess.run(
+            [sys.executable, "-c", self._DRIVER, str(root), entry, str(dsh_home)],
+            cwd=str(root), env=env, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=300)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        if proc.stdout.strip() == "profile resolves":
+            if "NSS_WRAPPER_PASSWD" in env:
+                self.fail("Path.home() resolved despite the isolated NSS database: " + proc.stderr)
+            self.skipTest("Path.home() resolves without profile variables; Linux needs libnss-wrapper")
+        return json.loads(proc.stdout)
 
     def test_unresolvable_profile_is_refused_not_raised(self):
         """N-1 reverse case: the guard's `Path.home()` must not escape.
 
-        With every profile variable absent, ``Path.home()`` raises
-        ``RuntimeError``. The guard needs it only to *compare* against, so an
+        With no profile environment or matching user record, ``Path.home()``
+        raises ``RuntimeError``. The guard needs it only to *compare* against, so an
         unresolvable profile has to become a fail-closed refusal — not a
         traceback out of a public entry point, which is what this test pins.
         Removing the `try/except` in `write_side_refusal` turns this red.
@@ -3399,39 +3440,15 @@ class PublicEntryDecodeBoundaryTests(unittest.TestCase):
         environment the launcher sees; `DSH_HOME` is a fresh %TEMP% directory
         and nothing may be written into it.
         """
-        # The premise: this environment really does raise (otherwise the case
-        # would be vacuous and would silently stop testing anything).
-        saved = {name: os.environ.pop(name, None) for name in self._PROFILE_VARS}
-        try:
-            raised = False
-            try:
-                Path.home()
-            except RuntimeError:
-                raised = True
-        finally:
-            for name, value in saved.items():
-                if value is not None:
-                    os.environ[name] = value
-        if not raised:
-            self.skipTest(
-                "Path.home() resolves even with every profile variable "
-                "cleared — the unresolvable-profile case is NOT_RUN here")
-
         with _scratch("spg-test-n1-") as td:
             root = self._copy_repo(Path(td) / "repo")
             for entry in ("install_preset", "uninstall_preset", "main"):
+                home = Path(td) / f"home-{entry}"
+                home.mkdir()
+                before = sorted(p.name for p in home.rglob("*"))
+                payload = self._run_profileless_entry(root, entry, home)
+                after = sorted(p.name for p in home.rglob("*"))
                 with self.subTest(entry=entry):
-                    home = Path(td) / f"home-{entry}"
-                    home.mkdir()
-                    before = sorted(p.name for p in home.rglob("*"))
-                    proc = subprocess.run(
-                        [sys.executable, "-c", self._DRIVER, str(root), entry,
-                         str(home)],
-                        cwd=str(root), env=self._profileless_env(home),
-                        capture_output=True, text=True, encoding="utf-8",
-                        errors="replace", timeout=300)
-                    payload = json.loads(proc.stdout.strip().splitlines()[-1])
-                    after = sorted(p.name for p in home.rglob("*"))
                     self.assertIsNone(payload["raised"],
                                       f"{entry} raised: {payload['raised']}")
                     self.assertFalse(payload["traceback"], payload["output"])
@@ -3445,32 +3462,12 @@ class PublicEntryDecodeBoundaryTests(unittest.TestCase):
         # N-1's smoke half: `smoke_preset()` fingerprints the real home, so an
         # unresolvable profile must be a REFUSED exit, not a `RuntimeError`
         # escaping a public entry point.
-        saved = {name: os.environ.pop(name, None) for name in self._PROFILE_VARS}
-        try:
-            raised = False
-            try:
-                Path.home()
-            except RuntimeError:
-                raised = True
-        finally:
-            for name, value in saved.items():
-                if value is not None:
-                    os.environ[name] = value
-        if not raised:
-            self.skipTest("Path.home() resolves here — NOT_RUN")
-
         with _scratch("spg-test-n1-smoke-") as td:
             root = self._copy_repo(Path(td) / "repo")
             home = Path(td) / "home"
             home.mkdir()
             before = sorted(p.name for p in home.rglob("*"))
-            proc = subprocess.run(
-                [sys.executable, "-c", self._DRIVER, str(root), "smoke",
-                 str(home)],
-                cwd=str(root), env=self._profileless_env(home),
-                capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=300)
-            payload = json.loads(proc.stdout.strip().splitlines()[-1])
+            payload = self._run_profileless_entry(root, "smoke", home)
             after = sorted(p.name for p in home.rglob("*"))
         self.assertIsNone(payload["raised"], payload["raised"])
         self.assertFalse(payload["traceback"], payload["output"])

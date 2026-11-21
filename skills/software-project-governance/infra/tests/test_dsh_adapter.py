@@ -1148,39 +1148,6 @@ class DshAdapterTests(unittest.TestCase):
             result["issues"],
         )
 
-    def test_verify_preset_loading_carries_the_row_schema_gate(self):
-        # The 0.1.5 regression class: the row carried `text` while the installed
-        # @deepseek-ai/dsh-persona declares `prefix: z.string().required()`, and
-        # the loader rejected the WHOLE preset mount. This verifier — the repo's
-        # own "preset loading" gate on the --smoke path — used to read the
-        # composition only for customSkillDirs and never parsed a row.
-        launch = _load_launch_module()
-        with _sandbox_td() as td:
-            preset = Path(td) / "preset"
-            preset.mkdir()
-            (preset / "agent.cordis.yml").write_text(
-                "- id: persona\n"
-                "  name: '@deepseek-ai/dsh-persona'\n"
-                "  config:\n"
-                "    text: 'the pre-fix key'\n",
-                encoding="utf-8",
-            )
-            result = launch.verify_preset_loading(preset)
-        row_validation = result.get("row_validation")
-        self.assertIsNotNone(row_validation, result)
-        if row_validation["verdict"] == "NOT_RUN":
-            # No node and/or no discoverable dsh install: the row check is
-            # NOT_RUN by policy (never a silent PASS, never a FAIL).
-            self.skipTest("installed-schema oracle unavailable: "
-                          f"{row_validation['reason']}")
-        self.assertEqual(row_validation["verdict"], "FAIL", row_validation)
-        self.assertEqual(result["verdict"], "FAIL")
-        self.assertTrue(
-            any("persona" in issue and "prefix" in issue
-                for issue in result["issues"]),
-            result["issues"],
-        )
-
     def test_smoke_verifier_preserves_schema_failure_without_live_install(self):
         """Isolating the live oracle must never isolate away its FAIL result."""
         launch = _load_launch_module()
@@ -2227,6 +2194,48 @@ class BootstrapCrlfEolFIX440Tests(unittest.TestCase):
                                                 source_root=_REPO_ROOT)
             self.assertEqual(second["unchanged"], ["AGENTS.md"])
             self.assertEqual((workspace / "AGENTS.md").read_bytes(), data)
+
+
+class InstalledDshAdapterTests(unittest.TestCase):
+    """Run the public verifier against installed schemas outside the render fixture."""
+
+    def test_verify_preset_loading_carries_the_row_schema_gate(self):
+        # The 0.1.5 regression class: the row carried `text` while the installed
+        # @deepseek-ai/dsh-persona declares `prefix: z.string().required()`, and
+        # the loader rejected the WHOLE preset mount. This verifier — the repo's
+        # own "preset loading" gate on the --smoke path — used to read the
+        # composition only for customSkillDirs and never parsed a row.
+        launch = _load_launch_module()
+        oracle = os.environ.get("SPG_TEST_DSH_INSTALL_DIR")
+        with _sandbox_td() as td:
+            preset = Path(td) / "preset"
+            preset.mkdir()
+            (preset / "agent.cordis.yml").write_text(
+                "- id: persona\n"
+                "  name: '@deepseek-ai/dsh-persona'\n"
+                "  config:\n"
+                "    text: 'the pre-fix key'\n",
+                encoding="utf-8",
+            )
+            env = {"DSH_HOME": td}
+            if oracle:
+                env["DSH_INSTALL_DIR"] = oracle
+            with patch.dict(os.environ, env):
+                result = launch.verify_preset_loading(preset)
+        row_validation = result.get("row_validation")
+        self.assertIsNotNone(row_validation, result)
+        if not oracle and row_validation["verdict"] == "NOT_RUN":
+            # No node and/or no discoverable dsh install: the row check is
+            # NOT_RUN by policy (never a silent PASS, never a FAIL).
+            self.skipTest("installed-schema oracle unavailable: "
+                          f"{row_validation['reason']}")
+        self.assertEqual(row_validation["verdict"], "FAIL", row_validation)
+        self.assertEqual(result["verdict"], "FAIL")
+        self.assertTrue(
+            any("persona" in issue and "prefix" in issue
+                for issue in result["issues"]),
+            result["issues"],
+        )
 
 
 class SmokeResultReportingTests(unittest.TestCase):

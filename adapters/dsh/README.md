@@ -2,6 +2,8 @@
 
 DSH 是 Tier 1 加载平台。治理预设加载[共享治理技能](../../skills/software-project-governance/SKILL.md)与角色。安装、升级和项目接入由本适配器维护。
 
+DSH 保持已授权直修路径。可复现问题由执行者修复并重放原失败样本，验收者用同一单元执行独立成品验证。启动、返工及复审的命令见[工作单元运行协议](../../skills/software-project-governance/core/lifecycle.md)。
+
 ## 使用
 
 在 DSH 和 pnpm 可用的环境中，选一种包来源加入实际使用的 profile，随后重启该 profile。以下以 `web` 为例。GitHub 来源需要 Git 和网络，运行 Python 启动器需要 Python 3。

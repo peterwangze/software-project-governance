@@ -1,7 +1,7 @@
 {
   "faces": {
     "check_segments": {
-      "count": 73,
+      "count": 72,
       "ids": [
         "1",
         "2",
@@ -65,7 +65,6 @@
         "30",
         "30b",
         "30c",
-        "31",
         "32",
         "33",
         "34",
@@ -134,13 +133,12 @@
         "30": "Review Closure State Machine (FIX-174)",
         "30b": "Loop wiring call sites",
         "30c": "Review Machine Provenance (FIX-260)",
-        "31": "Loop Runtime Claim Gate (FIX-197)",
         "32": "Change-Control Triage (FIX-237.4)",
         "33": "Injection Contract (FIX-253/REQ-112)",
         "34": "Completion Recommendation (FIX-262)",
         "35": "Snapshot Freshness (FIX-268)",
         "36": "Risk Mitigation Closure (FIX-265)",
-        "37": "Gate Sequence for Release (FIX-266)",
+        "37": "Release work-unit evidence",
         "38": "CI Evidence (FIX-267)",
         "39": "R1 Completion Gate (FIX-274)",
         "4": "Evidence Quality",
@@ -162,14 +160,10 @@
         "cmd_check_interruption_policy": [
           "check-interruption-policy",
           "check-user-interruption-policy"
-        ],
-        "cmd_dynamic_lifecycle_migration": [
-          "dynamic-flow-gate-migration",
-          "dynamic-lifecycle-migration"
         ]
       },
-      "handler_count": 105,
-      "key_count": 108,
+      "handler_count": 103,
+      "key_count": 105,
       "keys": [
         "agent-locks-acquire",
         "agent-runtime-e2e",
@@ -211,7 +205,6 @@
         "check-locks",
         "check-loop-health",
         "check-loop-role-skills",
-        "check-loop-runtime-claims",
         "check-mainstream-agent-loading",
         "check-manifest-consistency",
         "check-plugin-freshness",
@@ -233,8 +226,6 @@
         "decision-append",
         "demand-source-revise",
         "dsh-doctor",
-        "dynamic-flow-gate-migration",
-        "dynamic-lifecycle-migration",
         "e2e-check",
         "enforcement-check",
         "evidence-append",
@@ -259,7 +250,7 @@
         "locks-amend",
         "locks-extend",
         "locks-release",
-        "loop-engineering-migration",
+        "loop",
         "loop-rollup",
         "loop-telemetry",
         "next-candidates",
@@ -418,7 +409,13 @@
           "call_sites": {
             "$seq": "list"
           },
+          "consumers": {
+            "$seq": "list"
+          },
           "count": "int",
+          "issues": {
+            "$seq": "list"
+          },
           "reason": "str",
           "verdict": "str"
         }
@@ -457,14 +454,14 @@
   },
   "generated": {
     "generator_relpath": "skills/software-project-governance/infra/contract_matrix/generator.py",
-    "git_head": "eeadc5793896c718177c3bc4c8292d5192f2b960",
+    "git_head": "36f0b633e3f446e721d3e35b7ba04bd30d936f54",
     "python": {
       "family": "3.14",
       "implementation": "cpython",
       "platform": "win32",
       "version": "3.14.3"
     },
-    "timestamp_utc": "2026-11-18T09:00:34+00:00"
+    "timestamp_utc": "2026-11-20T17:02:43+00:00"
   },
   "python_family_pins": [
     {

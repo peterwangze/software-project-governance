@@ -101,6 +101,7 @@ class ExecutionPacketBudgetTests(unittest.TestCase):
         self.assertNotIn("budget", written["packets"]["FIX-202"])
 
     def test_budget_written_for_full_regeneration(self):
+        self.packet_path.write_text(json.dumps({"packets": {"FIX-201": {}, "FIX-202": {}}}), encoding="utf-8")
         self._run(write=True, task=[], budget=80)
         written = json.loads(self.packet_path.read_text(encoding="utf-8"))
         for task_id in ("FIX-201", "FIX-202"):
@@ -123,7 +124,7 @@ class ExecutionPacketBudgetTests(unittest.TestCase):
         no --write, so nothing touches .governance)."""
         engine = _INFRA_DIR / "verify_workflow.py"
         run = lambda *extra: subprocess.run(  # noqa: E731
-            [sys.executable, str(engine), "execution-packet", *extra],
+            [sys.executable, str(engine), "--project-root", self.tmpdir, "execution-packet", *extra],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=120, cwd=str(_INFRA_DIR.parents[2]))
         ok = run("--task", "FEAT-092-NOSUCH", "--budget", "64")
@@ -141,12 +142,14 @@ class ExecutionPacketBudgetTests(unittest.TestCase):
     # ── 2. 缺省不写 — no budget key without --budget ──────────────────────
 
     def test_default_generation_omits_budget(self):
-        payload = vw.generate_execution_packets(existing={})
+        with mock.patch.object(vw, "_active_execution_packet_tasks", _fake_tasks):
+            payload = vw.generate_execution_packets(existing={}, governance_dir=self.packet_path.parent / ".governance")
+        self.assertEqual(set(payload["packets"]), {"FIX-201", "FIX-202"})
         for packet in payload["packets"].values():
             self.assertNotIn("budget", packet)
 
     def test_write_without_budget_omits_field(self):
-        self._run(write=True, task=[], budget=...)  # attr omitted entirely
+        self._run(write=True, task=["FIX-201", "FIX-202"], budget=...)  # attr omitted entirely
         written = json.loads(self.packet_path.read_text(encoding="utf-8"))
         for task_id in ("FIX-201", "FIX-202"):
             self.assertNotIn("budget", written["packets"][task_id])
@@ -233,6 +236,41 @@ class ExecutionPacketWriteTests(unittest.TestCase):
     def packet(self, task_id="FIX-201"):
         return json.loads(self.path.read_text(encoding="utf-8"))["packets"][task_id]
 
+    def test_native_unit_only_creates_a_budget_for_an_explicit_handoff(self):
+        from loop_workflow import start
+        start(self.root, unit_id="invoice", goal="Display the payable amount",
+              acceptance="The invoice prints USD 31", tier="inner", gate="G6",
+              check_command=[sys.executable, "invoice.py"], expect_output="USD 31")
+        plan = self.path.parent / "plan-tracker.md"
+        with mock.patch.object(vw, "SAMPLE_PATH", plan):
+            self.assertEqual(vw.check_execution_packets()["required_tasks"], [])
+            self.assertEqual(vw.check_quality_budget()["required_tasks"], [])
+        subprocess.run(self.command, check=True, capture_output=True)
+        self.assertFalse(self.path.exists())
+        subprocess.run([*self.command, "--task", "invoice", "--quality-dimension", "performance"],
+                       check=True, capture_output=True)
+        document = json.loads(self.path.read_text(encoding="utf-8"))
+        handoff = document["packets"]["invoice"]
+        self.assertEqual(handoff["goal"], "Display the payable amount")
+        self.assertEqual(handoff["work_units"][0]["acceptance"], "The invoice prints USD 31")
+        self.assertEqual(handoff["required_contracts"], ["quality_budget"])
+        self.assertNotIn("product_success_contract", handoff)
+        budget = handoff["quality_budget"]
+        self.assertEqual(list(budget["dimensions"]), ["performance"])
+        with mock.patch.object(vw, "SAMPLE_PATH", plan):
+            self.assertFalse(vw.check_quality_budget()["pass"])
+            budget["dimensions"]["performance"] = {
+                "threshold": "Invoice render duration below 100 ms at p95",
+                "validation": "python bench_invoice.py --json",
+                "status": "PASS", "evidence": "p95 23 ms recorded in out/benchmark.json",
+            }
+            self.path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(vw.check_quality_budget()["entries"][0]["status"], "PASS")
+            del handoff["quality_budget"]
+            self.path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertFalse(vw.check_execution_packets()["pass"])
+            self.assertFalse(vw.check_quality_budget()["pass"])
+
     def test_host_intake_seeds_existing_scaffold_and_preserves_manual_contract(self):
         run = lambda args: subprocess.run(args, cwd=self.root, check=True, capture_output=True)
         run(self.command + ["--task", "FIX-201"])
@@ -287,7 +325,7 @@ class ExecutionPacketWriteTests(unittest.TestCase):
         }), encoding="utf-8")
         plan = gov / "plan-tracker.md"
         text = plan.read_text(encoding="utf-8")
-        run = lambda: subprocess.run(self.command, cwd=self.root, check=True, capture_output=True)
+        run = lambda: subprocess.run([*self.command, "--task", "FIX-201", "--task", "FIX-202"], cwd=self.root, check=True, capture_output=True)
         run()
         self.assertEqual(self.packet()["intake"], {"record": "change-triage/FIX-201.json"})
         self.assertTrue(self.packet()["acceptance_contract"]["expected_output"].startswith("TO_BE_DEFINED"))
@@ -318,7 +356,7 @@ class ExecutionPacketWriteTests(unittest.TestCase):
         for bad in ("{", "null", json.dumps({"task_id": "FIX-303", "schema_version": 1, "files": []})):
             with self.subTest(bad=bad):
                 path.write_text(bad, encoding="utf-8")
-                result = subprocess.run(self.command, capture_output=True)
+                result = subprocess.run([*self.command, "--task", "FIX-202"], capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(path.name.encode(), result.stderr)
                 self.assertEqual(self.path.read_bytes(), original)
@@ -330,14 +368,14 @@ class ExecutionPacketWriteTests(unittest.TestCase):
         lockfile = self.path.parent / vw.governance_store.LOCK_DIR_NAME / (self.path.name + ".lock")
 
         def read_locked(path, **kwargs):
-            self.assertEqual(path, self.path)
-            self.assertTrue(lockfile.is_file())
+            if path == self.path:
+                self.assertTrue(lockfile.is_file())
             return read_text(path, **kwargs)
 
         with mock.patch.object(Path, "read_text", autospec=True, side_effect=read_locked) as read, \
              mock.patch.object(vw, "build_execution_packet", wraps=vw.build_execution_packet) as build:
             self.write("FIX-201", "FIX-404")
-        self.assertEqual(read.call_count, 1)
+        self.assertEqual(sum(call.args[0] == self.path for call in read.call_args_list), 1)
         self.assertEqual([c.args[0]["task_id"] for c in build.call_args_list], ["FIX-201"])
         stored = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertEqual(set(stored), {"version", "generated_at", "packets"})
@@ -369,9 +407,9 @@ class ExecutionPacketWriteTests(unittest.TestCase):
     def test_preview_of_other_task_refuses_malformed_packet_without_hiding_diagnostics(self):
         raw = b'{"packets":{"FIX-202":"broken"}}'
         self.path.write_bytes(raw)
-        with mock.patch.object(vw, "_active_execution_packet_tasks", _fake_tasks):
+        with mock.patch.object(vw, "SAMPLE_PATH", self.path.parent / "plan-tracker.md"):
             report = vw.check_execution_packets(self.path)
-        self.assertEqual(report["entries"][1],
+        self.assertEqual(report["entries"][0],
                          {"task_id": "FIX-202", "status": "FAIL", "issues": ["packet must be object"]})
         with self.assertRaises(SystemExit):
             self.write("FIX-201", write=False)

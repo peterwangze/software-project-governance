@@ -1,8 +1,6 @@
 # Changelog
 
-本文件自 0.88.0 起在仓库根承载 `software-project-governance` 的版本变更记录（REL-087 M-1 triage-normalized 锁面交付物）。
-
-> **双位过渡披露（M-3 裁决落定——2026-09-25）**：0.87.0 及更早的全部历史版本记录见 [`project/CHANGELOG.md`](project/CHANGELOG.md)。**canonical = `project/CHANGELOG.md`**（REVIEW-REL-086-CODE-M3 裁决①：REQUIRED_SNIPPETS/version-consistency 判定/manifest 三面全锚定 project 面），根面 `changelog.md` 定位为**根面投影**（RECO/发布可见性）；0.88.0 段双位同文维持；根面已入 canonical manifest（M-5 批）；0.89 候选=生成式投影或双位 sync check（F-10）。
+完整版本记录与最新变更见[项目变更日志](project/CHANGELOG.md)。下文保留 0.88.0 发布时的历史快照。
 
 ## [0.88.0] - 2026-09-25
 

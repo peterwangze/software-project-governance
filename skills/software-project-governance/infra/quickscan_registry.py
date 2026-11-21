@@ -61,9 +61,8 @@ FEAT-019 先例：主文件 +18 行；本切片对主文件零修改）。禁止
    - **24**：``check_version_consistency()`` → ``version_checks.check_version_consistency(ROOT,
      GOVERNANCE_DIR.parent)`` 同时吃插件版本资产与宿主 ``.governance/plan-tracker.md``
      的 ``工作流版本`` 投影；
-   - **31**：``checks/loop_runtime_claims.py`` 的 ``_owner_roots()`` 显式返回
-     ``("product_root", …)`` 与 ``("host_root", host_root, HOT_PATHS)`` 两组根，
-     且 ``scan_mode ∈ {"product_release","installed_host"}``。
+
+
 2. **28o ArchGuard 根巧合**：ArchGuard 四门的树锚是 ``ROOT``（插件包根）；dogfood
    下 ``ROOT == HOST_PROJECT_ROOT``，通用树遍历会扫到 ``.governance/**`` 的代码
    文件——这是根巧合，不是声明依赖，故 ``input_deps`` 只声明 ``plugin:tree``，
@@ -156,9 +155,6 @@ EXCLUSION_REASON_CODES = {
     ),
     "PLUGIN_TREE_SCAN": (
         "插件包树扫描或插件 infra AST 扫描作为事实源（ArchGuard 四门 + loop wiring call sites）"
-    ),
-    "PLUGIN_CLAIM_ATTESTATION": (
-        "插件树扫描 + identity attestation 作为事实源（loop runtime claim gate）"
     ),
 }
 
@@ -451,16 +447,9 @@ SEGMENTS = (
         "plugin:asset:docs/requirements/composable-governance-packs-0.44.0.md",
         "plugin:asset:skills/*/SKILL.md",
     ), _excluded("PLUGIN_PACKAGE_ASSET")),
-    # ── C3 待判定 ①：事实源根 = 混合（宿主治理热文件 + 宿主 git + 插件 command 契约文档）──
     SegmentSpec("28g", "context", (
-        "host:governance:.governance/plan-tracker.md",
-        "host:governance:.governance/session-snapshot.md",
-        "host:governance:.governance/evidence-log.md",
-        "host:governance:.governance/risk-log.md",
         "host:governance:.governance/flow-unit-runtime.json",
-        "host:git:status --short --untracked-files=all",
-        "host:git:log --oneline -5",
-        "plugin:asset:commands/governance.md",
+        "plugin:asset:commands/governance/scenario-f.md",
         "plugin:asset:commands/governance-status.md",
     ), _RETAIN),
     SegmentSpec("28h", "capability", (
@@ -575,14 +564,8 @@ SEGMENTS = (
         "host:governance:.governance/review-*.md",
         "plugin:tree:skills/software-project-governance/infra/**",
     ), _RETAIN),
-    SegmentSpec("31", "loop", (
-        "plugin:tree:skills/software-project-governance/**",
-        "plugin:asset:skills/software-project-governance/core/loop-runtime-claim-allowlist.json",
-        "plugin:asset:skills/software-project-governance/core/loop-runtime-claim-authority.json",
-        "plugin:asset:skills/software-project-governance/references/loop-role-mapping.md",
-        "plugin:attestation:identity attestation fixture snapshot",
-        "host:governance:.governance/**",
-    ), _excluded("PLUGIN_CLAIM_ATTESTATION")),
+
+
     SegmentSpec("32", "triage", (
         "host:governance:.governance/plan-tracker.md",
         "host:governance:.governance/evidence-log.md",
@@ -652,16 +635,9 @@ C3_ADJUDICATION = {
         "root": FACT_SOURCE_MIXED,
         "review": "FX-195 §136 C3 行 + 代码核验",
         "basis": (
-            "check_governance_context() → discover_governance_context()："
-            "_parse_plan_context_tasks/_parse_snapshot_context_tasks/_parse_evidence_context_tasks/"
-            "_parse_context_open_risks 经 _context_file(root,…) 读 "
-            ".governance/plan-tracker.md、.governance/session-snapshot.md、"
-            ".governance/evidence-log.md、.governance/risk-log.md；"
-            "_parse_git_status_context_tasks / _parse_recent_commit_context_facts 经 _run_context_git 跑 "
-            "git status --short --untracked-files=all 与 git log --oneline -5；"
-            "discover_flow_unit_runtime_context 读 .governance/flow-unit-runtime.json —— 宿主治理会话态主体；"
-            "插件面部分 = 函数尾 docs 列表 root/commands/governance.md + root/commands/governance-status.md "
-            "的契约 token 校验。故事实源根 = 混合（宿主主导）→ 保留。",
+            "_context_root 定位宿主，loop_state 读取 .governance/flow-unit-runtime.json。"
+            "_read_text_normalized 核对 commands/governance/scenario-f.md 指向 commands/governance-status.md；"
+            "_display_path 在缺失入口时给出同一来源。",
         ),
     },
     "28j": {

@@ -85,7 +85,7 @@ def _sandbox_tmp(prefix="quickscan-fixture-"):
 EVAL_C1_EXCLUDED = (
     "7", "10", "11", "12", "15", "24", "28b", "28d", "28e", "28f", "28h",
     "28i", "28k", "28n", "28o", "28p", "28q", "28r", "28t", "28u",
-    "28v", "28w", "30b", "31", "33",
+    "28v", "28w", "30b", "33",
 )
 EVAL_C3_SEGMENTS = ("28g", "28j", "28l", "29")
 
@@ -448,8 +448,8 @@ class Acceptance5C3AdjudicationTests(unittest.TestCase):
     def test_c3_g_governance_context_reads_host_hot_files_and_plugin_command_docs(self):
         spec = qr.segment("28g")
         self.assertEqual(spec.fact_source_root, qr.FACT_SOURCE_MIXED)
-        self.assertIn("host:governance:.governance/plan-tracker.md", spec.input_deps)
-        self.assertIn("plugin:asset:commands/governance.md", spec.input_deps)
+        self.assertIn("host:governance:.governance/flow-unit-runtime.json", spec.input_deps)
+        self.assertIn("plugin:asset:commands/governance/scenario-f.md", spec.input_deps)
 
     def test_c3_j_and_l_capability_context_are_plugin_face_and_not_product_gated(self):
         """Code evidence: both read plugin assets only — and FIX-270 does not gate them."""
@@ -481,7 +481,7 @@ class Acceptance5C3AdjudicationTests(unittest.TestCase):
             basis = " | ".join(qr.C3_ADJUDICATION[check_id]["basis"])
             self.assertEqual(_undefined_basis_symbols(basis, sources), (), check_id)
             symbols.update(_UNDERSCORE_SYMBOL_RE.findall(basis))
-        self.assertGreaterEqual(len(symbols), 8, "basis symbol check is vacuous")
+        self.assertTrue({"_context_root", "_read_text_normalized", "_display_path"} <= symbols)
 
     def test_c3_basis_symbol_checker_catches_a_mistyped_engine_symbol(self):
         """Negative control: F-10's own example — plausible but nonexistent name."""
@@ -527,7 +527,6 @@ class QuickFacePolicyTests(unittest.TestCase):
         expected = {
             "7": "PLUGIN_GIT_FACT_SOURCE",
             "15": "PLUGIN_GIT_FACT_SOURCE",
-            "31": "PLUGIN_CLAIM_ATTESTATION",
             "28o": "PLUGIN_TREE_SCAN",
             "28p": "PLUGIN_TREE_SCAN",
             "28q": "PLUGIN_TREE_SCAN",
@@ -559,7 +558,6 @@ class QuickFacePolicyTests(unittest.TestCase):
                 "PLUGIN_GIT_FACT_SOURCE",
                 "PLUGIN_PACKAGE_ASSET",
                 "PLUGIN_TREE_SCAN",
-                "PLUGIN_CLAIM_ATTESTATION",
             },
         )
         for code, text in qr.EXCLUSION_REASON_CODES.items():
@@ -594,12 +592,11 @@ class DiscoveryDisclosureTests(unittest.TestCase):
         that Phase-2 closure never selects it for a governance-data change.
         """
         disclosed = qr.dual_root_disclosures()
-        self.assertEqual(disclosed, ("24", "31"))
+        self.assertEqual(disclosed, ("24",))
         self.assertTrue(all(qr.exclusion_reason_code(c) for c in disclosed))
         self.assertTrue(all(qr.fact_source_root(c) == qr.FACT_SOURCE_MIXED for c in disclosed))
         self.assertEqual(qr.fact_source_root("28o"), qr.FACT_SOURCE_PLUGIN)
         self.assertEqual(qr.fact_source_root("24"), qr.FACT_SOURCE_MIXED)
-        self.assertEqual(qr.fact_source_root("31"), qr.FACT_SOURCE_MIXED)
 
 
 class CarrierDisciplineTests(unittest.TestCase):

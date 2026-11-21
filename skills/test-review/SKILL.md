@@ -9,18 +9,7 @@ description: 独立审查测试策略、用例与运行回执能否证明验收�
 
 ## 循环角色
 
-版本背景：本循环语义于 0.65.0 引入；本标题是稳定规范，不随版本号变更。
-
-**角色映射：** 在目标 Loop 模型中，本审查对应质量子迭代的 `loop-body` + `loop-exit-gate`。0.66.1 的当前运行能力仍是 experimental scaffolding；该映射不表示持久化 Loop runtime 已激活。
-
-当前可执行行为仅为 Coordinator M7.4 的 `NEEDS_CHANGE -> 返工 -> 复审`，以及 Check 30 对复审链终态、轮次连续性和熔断结果的校验。
-
-<!-- loop-runtime-target:{"claim_id":"LRC-TEST-PLANNED-001","target_version":"0.68.0","status":"planned_not_active"} -->
-持久化 `testing-to-development-rework` back-edge、flow-unit `loop_count`、Middle fuse、PARO transition 与自动升级属于 0.68.0 规划，当前不生效。
-
-Reviewer 只审查并输出结论，不修改产品代码。Reviewer 必须输出 `APPROVED`、`APPROVED_WITH_NOTES`、`NEEDS_CHANGE` 或 `BLOCKED`；`APPROVED_WITH_NOTES` 是保留备注的通过终态，只能用于没有未解决 BLOCKING finding 的审查，不得包含未解决的 BLOCKING finding。`APPROVED_WITH_NOTES` 的审查输出与 REVIEW 证据 MUST 包含独立结构字段 `unresolved_blockers=0`；字段缺失、非零、非法或重复矛盾时不得通过，自然语言中偶然出现的 `blocking` 不构成该事实。`NEEDS_CHANGE`（及兼容输入 `NEEDS_CHANGES`）不是终态，Coordinator 必须在返工后发起下一轮复审。终态证据由 Check 30 的复审链消费：`APPROVED` 与 `APPROVED_WITH_NOTES` 可以通过并结束复审链；`BLOCKED` 结束链路但不是通过，必须 escalation；`NEEDS_CHANGE(S)`、未知或格式错误结论必须 fail-closed。超过复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`。
-
-依据 ADR §3.5（loop-engineering-architecture-0.65.0）。完整映射见 [共享循环角色映射](../software-project-governance/references/loop-role-mapping.md)。
+在内层 G7 独立重放用户路径与失败样本，结果交给上级交付的验收者。 独立 Reviewer 按[共享签核规则](../software-project-governance/references/loop-role-mapping.md)记录本轮回执与未解决阻断数。
 
 ## 审查对象与方法
 
@@ -30,7 +19,7 @@ Reviewer 只审查并输出结论，不修改产品代码。Reviewer 必须输�
 | --- | --- |
 | 覆盖完整性 | 从用户实际入口把验收条件逐项追到断言及结果，检查契约要求的边界和异常。给出一个能让错误实现仍通过测试的具体输入时，说明遗漏的行为及影响。 |
 | 测试独立性 | 确认测试数据、环境和依赖可隔离。检查测试替身是否替代了当前要验证的行为，结果是否依赖前次运行。 |
-| 性能与安全 | 按[测试阶段的量化判定](../stage-testing/SKILL.md#量化判定)核对目标上下限、单位、采样和基线的可比性。核对项目要求的安全证据和已知关键风险。正式 G7 逐项复核完整门禁。 |
+| 性能与安全 | 按[测试阶段的量化判定](../stage-testing/SKILL.md#量化判定)核对目标上下限、单位、采样和基线的可比性。核对项目要求的安全证据和已知关键风险。在 G7 对照当前成品的冻结判据，给出可重放的实际观察。 |
 | 可维护性 | 确认后续执行者能从现有入口复验关键用例，输出可区分失败、跳过和实测通过。 |
 
 ## 审查结论

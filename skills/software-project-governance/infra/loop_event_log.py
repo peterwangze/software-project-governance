@@ -285,7 +285,7 @@ def append_event(event, *, log_path=None):
         # the load-bearing safety for the multi-process append test (two
         # separate interpreters racing). The thread lock above only serializes
         # same-process threads; the file lock serializes separate processes.
-        with _cross_process_lock(path):
+        with _cross_process_lock(path, best_effort=True):
             # "a" mode: O_APPEND on POSIX; the Windows C runtime also honors
             # append mode (each write goes to end-of-file). One write() call
             # for the whole line + newline = atomic at the line level.
@@ -293,7 +293,7 @@ def append_event(event, *, log_path=None):
                 handle.write(line)
 
 
-def _cross_process_lock(path):
+def _cross_process_lock(path, *, best_effort=False):
     """Return a context manager acquiring an exclusive cross-process lock.
 
     Guards a companion ``<path>.lock`` file. On POSIX uses ``fcntl.flock``
@@ -301,9 +301,8 @@ def _cross_process_lock(path):
     with retry). The lock file is created if absent. The lock is released on
     context exit (the lock file is left in place — it is reused for the life
     of the log; this avoids a create/delete race). Never blocks forever: the
-    Windows path retries ``LK_NBLCK`` with a bounded backoff, falling back to
-    best-effort (unlocked append) only after the budget is exhausted (the
-    single-write-call atomicity is the backstop).
+    Windows path retries ``LK_NBLCK`` with a bounded backoff and raises on
+    timeout. Only an append-only event writer opts into the unlocked fallback.
     """
     import contextlib
 
@@ -315,7 +314,7 @@ def _cross_process_lock(path):
 
         @contextlib.contextmanager
         def _win_lock():
-            fd = _acquire_win_lock(lock_path)
+            fd = _acquire_win_lock(lock_path, best_effort=best_effort)
             try:
                 yield
             finally:
@@ -334,6 +333,8 @@ def _cross_process_lock(path):
     try:
         import fcntl
     except ImportError:  # pragma: no cover - POSIX always has fcntl
+        if not best_effort:
+            raise OSError("exclusive process locks are unavailable")
         import contextlib
 
         @contextlib.contextmanager
@@ -358,14 +359,13 @@ def _cross_process_lock(path):
     return _posix_lock()
 
 
-def _acquire_win_lock(lock_path, *, attempts=40, base_delay=0.005):
+def _acquire_win_lock(lock_path, *, attempts=40, base_delay=0.005, best_effort=False):
     """Open + exclusively lock ``lock_path`` byte 0 on Windows (blocking-retry).
 
     Returns the raw file descriptor (the caller unlocks + closes it). Uses
     ``msvcrt.locking`` with ``LK_NBLCK`` (non-blocking) + bounded retry/backoff
-    so two processes serialize. Falls back to an unlocked fd after the retry
-    budget (the single-write-call atomicity is the backstop; a lost event is
-    recoverable via the §3.5 phase_recovery path).
+    so two processes serialize. An append-only caller can explicitly allow an
+    unlocked fd on timeout; state writers must acquire the lock.
     """
     import msvcrt
     import time
@@ -375,9 +375,12 @@ def _acquire_win_lock(lock_path, *, attempts=40, base_delay=0.005):
         try:
             msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
             return fd
-        except OSError:
+        except OSError as exc:
             if attempt == attempts - 1:
-                return fd  # best-effort: unlocked fd (single-write backstop)
+                if best_effort:
+                    return fd
+                os.close(fd)
+                raise TimeoutError(f"timed out acquiring state lock: {lock_path}") from exc
             time.sleep(base_delay * (1.4 ** min(attempt, 10)))
     return fd
 

@@ -2,7 +2,7 @@
 
 > **推荐使用 `/governance`**——自动检测项目状态并按需路由到对应 Reviewer Agent。本命令保留为手动触发快捷方式。
 
-用户通过斜杠命令 `/governance-review` 手动触发 Reviewer Agent 对指定阶段/类型的产出物进行独立审查。
+用户通过斜杠命令 `/governance-review` 手动触发 Reviewer Agent 对当前工作单元本轮的产出物进行独立审查。
 
 ## 触发条件
 
@@ -14,14 +14,16 @@
 - `/governance-review test` — 测试审查
 - `/governance-review release` — 发布审查
 - `/governance-review retro` — 复盘审查
-- `/governance-review all` — 全阶段审查
+- `/governance-review all` — 该单元适用的审查
 
 ## 执行流程
 
-### Step 1: 确定审查类型
+### Step 1: 确定工作单元和审查类型
+
+用 `loop status --unit <id> --json` 核对当前层、轮次、任务、工件和独立验收条件。沿该单元选择所需审查；退回时把原样本交回执行者，修正后另行复验。
 
 - **IF** 用户指定了审查类型 → 直接进入 Step 2
-- **IF** 用户未指定 → AskUserQuestion："选择审查类型"选项：(1) 需求审查——立项+调研阶段 (2) 设计审查——选型+基础设施+架构阶段 (3) 代码审查——开发阶段 (4) 测试审查——测试阶段 (5) 发布审查——CI/CD+发布阶段 (6) 复盘审查——运营+维护阶段 (7) 全阶段审查
+- **IF** 用户未指定 → AskUserQuestion："选择审查类型"选项：(1) 需求审查——立项+调研阶段 (2) 设计审查——选型+基础设施+架构阶段 (3) 代码审查——开发阶段 (4) 测试审查——测试阶段 (5) 发布审查——CI/CD+发布阶段 (6) 复盘审查——运营+维护阶段 (7) 该单元适用的审查
 
 ### Step 2: 派生 Reviewer Agent
 
@@ -35,7 +37,7 @@
 | test | test-review | 测试策略、测试计划、测试用例 |
 | release | release-review | CI 配置、发布检查清单、回滚方案 |
 | retro | retro-review | 运营数据、复盘报告、改进计划 |
-| all | 全部 7 个审查 SKILL | 全阶段产出物 |
+| all | 全部 7 个审查 SKILL | 本单元的相关工件 |
 
 **Reviewer 不可用处理（强制）**：
 1. 首先尝试平台原生 Reviewer Agent spawn。

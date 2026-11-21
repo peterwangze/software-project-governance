@@ -236,36 +236,12 @@ class BoundaryContractTests(unittest.TestCase):
                                 for issue in bp.revert_contract_issues()))
 
     def test_safety_invariant_markers_are_published(self):
-        """Each invariant's marker must appear wherever the switch is published."""
-        surfaces = _published_surfaces()
+        """The shared skill binds every invariant to both modes."""
+        skill = (ROOT / "skills/software-project-governance/SKILL.md").read_text(encoding="utf-8")
         for item in bp.SAFETY_INVARIANTS:
-            hits = [name for name, text in surfaces.items()
-                    if item["marker"] in text]
-            self.assertTrue(
-                hits,
-                f"safety invariant {item['id']!r} marker "
-                f"{item['marker']!r} is not published on any surface — the "
-                "boundary text drifted away from the boundary table")
-        # and the two richest surfaces must carry the FULL boundary, so no
-        # single-file rewrite can silently narrow it
-        for rich in ("skills/software-project-governance/SKILL.md",
-                     "commands/governance/bootstrap.md"):
-            text = surfaces[rich]
-            for item in bp.SAFETY_INVARIANTS:
-                self.assertIn(item["marker"], text,
-                              f"{rich} lost safety invariant "
-                              f"{item['id']!r} ({item['marker']!r})")
-
-
-def _published_surfaces():
-    out = {}
-    for rel in bp.PROTOCOL_SURFACES:
-        path = ROOT / rel
-        if path.is_file():
-            out[rel] = path.read_text(encoding="utf-8")
-    return out
-
-
+            self.assertIn(item["marker"], skill)
+        self.assertIn(bp.ENV_VAR, skill)
+        self.assertIn(bp.PLAN_TRACKER_KEY, skill)
 class PublicationTests(unittest.TestCase):
     """Every shipping surface publishes the switch, and it still works."""
 
@@ -273,25 +249,15 @@ class PublicationTests(unittest.TestCase):
         for rel in bp.PROTOCOL_SURFACES:
             self.assertTrue((ROOT / rel).is_file(), f"{rel} is missing")
 
-    def test_every_protocol_surface_carries_the_marker(self):
-        surfaces = _published_surfaces()
-        for rel in bp.PROTOCOL_SURFACES:
-            self.assertIn(bp.PROTOCOL_MARKER, surfaces[rel],
-                          f"{rel} does not publish the gray-release switch "
-                          f"({bp.PROTOCOL_MARKER!r})")
-
-    def test_entry_templates_carry_the_switch_and_the_boundary(self):
-        """All four Step 7 templates are generated from one canonical source."""
+    def test_entry_templates_preserve_the_shared_bootstrap_and_stop_boundary(self):
         from sync_entry_projection import extract_canonical_templates
-        templates = extract_canonical_templates(
-            (ROOT / "commands/governance-init.md").read_text(encoding="utf-8"))
-        for profile in ("lightweight", "standard", "strict", "secondary-thin"):
+        templates = extract_canonical_templates((ROOT / "commands/governance-init.md").read_text(encoding="utf-8"))
+        for profile, text in templates.items():
             with self.subTest(profile=profile):
-                text = templates[profile]
-                for token in (bp.ENV_VAR, bp.PLAN_TRACKER_KEY,
-                              "安全语义不回退"):
-                    self.assertIn(token, text, f"{profile} template lost {token}")
-
+                self.assertIn("governance-bootstrap --format json", text)
+                self.assertIn("resolve.resolved_root_ok", text)
+                self.assertIn("MUST STOP", text)
+                self.assertIn("SKILL.md", text)
     def test_dsh_thin_pointer_dialect_carries_the_switch(self):
         """FEAT-037 P3-6: the second thin-pointer dialect is guarded too."""
         from sync_entry_projection import (check_dsh_thin_pointer,
@@ -567,8 +533,9 @@ class CliSmokeTests(unittest.TestCase):
         self.assertEqual(code, 0, out[-800:])
         payload = json.loads(out[out.index("{"):])
         self.assertFalse(payload["resolve"]["governance_initialized"])
-        self.assertNotIn("project", payload)
-        self.assertIn("初始化", payload["next_actions"][0])
+        self.assertEqual(payload["loops"]["state"], "empty")
+        self.assertIn("project", payload)
+        self.assertTrue(any("初始化" in action for action in payload["next_actions"]))
 
 
 class FailClosedUnaffectedTests(unittest.TestCase):

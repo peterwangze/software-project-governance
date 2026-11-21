@@ -383,12 +383,13 @@ class CmdChangeTriageWiringTests(unittest.TestCase):
     def test_guard_failure_exits_two(self):
         """写入产物结构破坏 → change-triage exit 2（fail-closed G3）。"""
         with tempfile.TemporaryDirectory() as td:
-            gov = Path(td)
+            gov = Path(td) / ".governance"
+            gov.mkdir()
             evidence = gov / "evidence-log.md"
             evidence.write_text(
                 _evidence_row_10() + "| TRIAGE-FIX-278 | FIX-278 | x |\n",
                 encoding="utf-8")
-            record = gov / "change-triage" / "FIX-278.json"
+            record = gov / "change-triage" / "written-fixture.json"
             record.parent.mkdir()
             record.write_text('{"ok": true}', encoding="utf-8")
             summary = {
@@ -401,7 +402,8 @@ class CmdChangeTriageWiringTests(unittest.TestCase):
             }
             tracker = gov / "plan-tracker.md"
             tracker.write_text(_FIXTURE_TRACKER, encoding="utf-8")
-            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+            with mock.patch.object(vw, "HOST_PROJECT_ROOT", Path(td)), \
+                 mock.patch.object(vw, "SAMPLE_PATH", tracker), \
                  mock.patch.object(vw, "GOVERNANCE_DIR", gov), \
                  mock.patch.object(vw, "PLUGIN_ROOT",
                                    _INFRA_DIR.parents[1]), \
@@ -415,12 +417,13 @@ class CmdChangeTriageWiringTests(unittest.TestCase):
     def test_guard_clean_path_exits_zero(self):
         """写入产物结构合法 → 正常退出 0（guard 不误伤）。"""
         with tempfile.TemporaryDirectory() as td:
-            gov = Path(td)
+            gov = Path(td) / ".governance"
+            gov.mkdir()
             evidence = gov / "evidence-log.md"
             evidence.write_text(
                 _evidence_row_10() + _triage_row("TRIAGE-FIX-278", 10),
                 encoding="utf-8")
-            record = gov / "change-triage" / "FIX-278.json"
+            record = gov / "change-triage" / "written-fixture.json"
             record.parent.mkdir()
             record.write_text('{"ok": true}', encoding="utf-8")
             summary = {
@@ -433,7 +436,8 @@ class CmdChangeTriageWiringTests(unittest.TestCase):
             }
             tracker = gov / "plan-tracker.md"
             tracker.write_text(_FIXTURE_TRACKER, encoding="utf-8")
-            with mock.patch.object(vw, "SAMPLE_PATH", tracker), \
+            with mock.patch.object(vw, "HOST_PROJECT_ROOT", Path(td)), \
+                 mock.patch.object(vw, "SAMPLE_PATH", tracker), \
                  mock.patch.object(vw, "GOVERNANCE_DIR", gov), \
                  mock.patch.object(vw, "PLUGIN_ROOT",
                                    _INFRA_DIR.parents[1]), \
@@ -444,7 +448,10 @@ class CmdChangeTriageWiringTests(unittest.TestCase):
     def test_error_path_exits_two_without_guard(self):
         """fail-closed 输入（run_triage 返回 error）→ exit 2，不进入 guard
         （既有语义保持——FIX-278 只追加成功路径 guard）。"""
-        with mock.patch("change_triage.run_triage",
+        with tempfile.TemporaryDirectory() as td, \
+             mock.patch.object(vw, "HOST_PROJECT_ROOT", Path(td)), \
+             mock.patch.object(vw, "GOVERNANCE_DIR", Path(td) / ".governance"), \
+             mock.patch("change_triage.run_triage",
                         return_value={"error": "task_id must match"}):
             with self.assertRaises(SystemExit) as ctx:
                 vw.cmd_change_triage(self._args())

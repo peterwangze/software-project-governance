@@ -610,6 +610,18 @@ def _current_contract_sha256(governance_dir, goal):
     return contract_for_goal(Path(governance_dir).parent, goal)["contract_sha256"]
 
 
+def bind_delivery_unit(governance_dir, goal, intent, contract, digest):
+    """Use the native goal identity and the independently verifiable delivery criteria."""
+    from loop_workflow import start
+
+    if contract["goal_id"] != goal:
+        raise ValueError("delivery contract belongs to a different goal")
+    criteria = "\n".join(f"{key}: {label}" for key, label in sorted(contract["criteria"].items()))
+    return start(Path(governance_dir).parent, unit_id=goal, task=goal, goal=intent,
+                 acceptance=criteria, tier="middle", gate="G9", delivery_goal=goal,
+                 delivery_contract_sha256=digest)
+
+
 def bind_intent(goal_id, *, intent, governance_dir, state_dir=None, timeout_seconds=10.0):
     """Freeze the exact user intent and current delivery contract for this goal."""
     if bridge_disabled():
@@ -626,18 +638,24 @@ def bind_intent(goal_id, *, intent, governance_dir, state_dir=None, timeout_seco
             artifact, err = _load_artifact(path, goal, DEFAULT_BUDGET_CONFIG)
             if err is not None:
                 return err
-            fields = _intent_fields(intent, _current_contract_sha256(governance_dir, goal))
+            import delivery_acceptance as acceptance
+
+            project_root = Path(governance_dir).parent
+            contract, digest = acceptance._contract(acceptance._project_path(project_root, acceptance.CONTRACT))
+            fields = _intent_fields(intent, digest)
             already_bound = "intent_sha256" in artifact
             if already_bound:
                 if any(artifact[key] != fields[key] for key in _INTENT_FIELDS):
                     return _error(CODE_SCHEMA_VIOLATION,
                                   "goal intent or contract changed; bind an explicitly new goal")
-            else:
+            if not already_bound:
                 _validate_bound_artifact(artifact)
+            unit = bind_delivery_unit(governance_dir, goal, intent, contract, digest)
+            if not already_bound:
                 artifact.update(fields)
                 artifact["checkpoint_materialized"] = artifact["state"] in ("CHECKPOINTED", "BLOCKED")
                 _save(path, artifact)
-            return {"goal_id": goal, "state": artifact["state"],
+            return {"goal_id": goal, "unit_id": unit["flow_unit_id"], "state": artifact["state"],
                     "revision": artifact["revision"], "idempotent": already_bound, **fields}
     except StoreError as exc:
         return _error(CODE_LOCK_CONTENTION,
@@ -1222,7 +1240,7 @@ def add_goal_bridge_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--action", required=True,
                         choices=("record", "checkpoint", "ruling",
                                  "status", "judge", "thresholds",
-                                 "mapping", "check-completion", "bind-intent"))
+                                 "mapping", "check-completion", "bind-intent", "accept-delivery"))
     parser.add_argument("--goal", default="",
                         help="goal id ([A-Za-z0-9][A-Za-z0-9._-]*)")
     parser.add_argument("--intent", help="exact original user objective for bind-intent")
@@ -1296,6 +1314,33 @@ def _check_completion(goal_id, governance_dir):
     return verdict
 
 
+def accept_bound_delivery(goal_id, governance_dir):
+    """Close a non-DSH bound delivery under the same goal lock as its budget and obligations."""
+    from governance_store import StoreError, _TargetLock
+    from loop_workflow import accept_delivery
+    from goal_planning import has_active_goal_work
+
+    goal = _require_goal_id(goal_id)
+    if not goal or bridge_disabled():
+        return _error(CODE_SCHEMA_VIOLATION, "an enabled goal binding is required")
+    path = _artifact_path(governance_dir, goal)
+    try:
+        with _TargetLock(path):
+            artifact, error = _load_artifact(path, goal, DEFAULT_BUDGET_CONFIG)
+            if error:
+                return error
+            if "native_dsh" in artifact:
+                raise ValueError("complete this DSH goal through its native host")
+            if "contract_sha256" not in artifact or artifact["state"] != "RUNNING" or artifact["obligations"]:
+                raise ValueError("goal is unbound, paused, or has open obligations")
+            if has_active_goal_work(Path(governance_dir), goal, artifact["task_ref"]):
+                raise ValueError("goal has active work")
+
+            return accept_delivery(Path(governance_dir).parent, goal)
+    except (StoreError, OSError, ValueError) as exc:
+        return _error(CODE_SCHEMA_VIOLATION, str(exc))
+
+
 def cmd_goal_bridge(args, *, governance_dir) -> int:
     """Engine dispatch face — ``goal-bridge`` (all actions)."""
     _configure_stdio()
@@ -1307,6 +1352,9 @@ def cmd_goal_bridge(args, *, governance_dir) -> int:
     if action == "bind-intent":
         return _emit(bind_intent(goal, intent=getattr(args, "intent", None),
                                  governance_dir=governance_dir))
+    if action == "accept-delivery":
+        outcome = accept_bound_delivery(goal, governance_dir)
+        return _emit(outcome, refused=outcome.get("decision") != "exit")
     if action == "check-completion":
         verdict = _check_completion(goal, governance_dir)
         return _emit(verdict, refused=not verdict["pass"])

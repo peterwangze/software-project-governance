@@ -1,29 +1,4 @@
-"""Unit tests for loop_health.py — FX-192 (0.65.0 loop-engineering, slice 5).
-
-These tests are the load-bearing verification for the loop-health Check
-(ADR §9.5), split across the three sub-checks:
-
-  - **Part 1 (BLOCKING)** — active PausePoint missing velocity_cost_justification
-    → FAIL finding. Tests 1-3 cover active-missing / active-present / inactive.
-  - **Part 2 (ADVISORY)** — measured cost > 3× bound for 3 consecutive
-    iterations → advisory (promotable to FAIL). Tests 4-6 cover the exceedance,
-    the below-threshold boundary, and the blocking promotion.
-  - **DORA bridge (§3.6)** — change failure rate / deployment frequency.
-    Test 7 covers the fuse-trip fraction computation.
-  - **Graceful absence** — Test 8 proves no crash when runtime.json is missing.
-  - **Dogfood compliance** — Test 9 is the integration guard: the REAL
-    loop-engineering-registry.json must PASS Part 1 (all 5 active PPs carry a
-    justification). This is the proof that the dogfood registry is compliant.
-
-Part 1 tests use temporary registries (via ``tempfile``) so they never touch
-the real ``core/loop-engineering-registry.json``. Part 2 / DORA tests pass
-in-memory runtime dicts (no file IO needed).
-
-Run:
-    python -m pytest skills/software-project-governance/infra/tests/test_loop_health.py -v
-or:
-    python -m unittest skills.software-project-governance.infra.tests.test_loop_health -v
-"""
+"""Check pause-point authority and the separation from event observations."""
 
 import argparse
 import io
@@ -167,177 +142,6 @@ class Part1VelocityJustificationTests(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Part 2 — ADVISORY: sustained measured-cost exceedance
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class Part2VelocityExceedanceTests(unittest.TestCase):
-    """ADR §9.5 part 2 — measured > 3× bound for 3 consecutive iterations."""
-
-    def test_part2_advisory_on_exceedance_3x_3iter(self):
-        """Test 4: 3 consecutive samples above 3× bound → ADVISORY finding."""
-        runtime = {
-            "velocity_history": {
-                "PP-X": {
-                    "declared_bound_ms": 1000,
-                    # 7000, 7200, 7100 all > 3000 (3× bound) → 3 consecutive.
-                    "measured_ms": [7000, 7200, 7100],
-                },
-            },
-        }
-        findings = lh._check_velocity_exceedance(runtime)
-        self.assertEqual(len(findings), 1, f"expected 1 advisory, got {findings}")
-        self.assertEqual(findings[0]["severity"], "ADVISORY")
-        self.assertEqual(findings[0]["pause_point"], "PP-X")
-
-    def test_part2_no_flag_below_threshold(self):
-        """Test 5: boundary — only 2 iterations OR only 2× → no flag."""
-        with self.subTest(case="only-2-consecutive"):
-            # 3 samples but the last breaks the run (≤ 3× bound) → run resets to 0.
-            runtime = {
-                "velocity_history": {
-                    "PP-Y": {
-                        "declared_bound_ms": 1000,
-                        # 3500 (>3×), 3600 (>3×), then 2000 (≤3×) breaks run.
-                        "measured_ms": [3500, 3600, 2000],
-                    },
-                },
-            }
-            self.assertEqual(lh._check_velocity_exceedance(runtime), [])
-
-        with self.subTest(case="only-2x-not-3x"):
-            # 3 samples but all at 2× bound (< 3× threshold) → never exceeds.
-            runtime = {
-                "velocity_history": {
-                    "PP-Z": {
-                        "declared_bound_ms": 1000,
-                        "measured_ms": [2000, 2000, 2000],
-                    },
-                },
-            }
-            self.assertEqual(lh._check_velocity_exceedance(runtime), [])
-
-    def test_part2_blocking_flag_promotes_to_fail(self):
-        """Test 6: velocity_check_blocking=True promotes ADVISORY → FAIL."""
-        runtime = {
-            "velocity_history": {
-                "PP-X": {
-                    "declared_bound_ms": 1000,
-                    "measured_ms": [7000, 7200, 7100],
-                },
-            },
-        }
-        findings = lh._check_velocity_exceedance(runtime, blocking=True)
-        self.assertEqual(len(findings), 1)
-        self.assertEqual(
-            findings[0]["severity"], "FAIL",
-            f"blocking flag must promote to FAIL, got {findings[0]['severity']}",
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# DORA bridge (§3.6) — change failure rate / deployment frequency
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class DoraMetricsTests(unittest.TestCase):
-    """ADR §3.6 — DORA-bridge advisory metrics computed from runtime data."""
-
-    def test_dora_change_failure_rate(self):
-        """Test 7: 2 fuse trips out of 5 loops → CFR = 0.4 reported."""
-        runtime = {
-            "dora": {
-                "total_loops": 5,
-                "fuse_trips": 2,
-                "release_gate_passes": 3,
-            },
-        }
-        metrics = lh._compute_dora_metrics(runtime)
-        self.assertEqual(metrics["total_loops"], 5)
-        self.assertEqual(metrics["fuse_trips"], 2)
-        self.assertEqual(metrics["release_gate_passes"], 3)
-        self.assertEqual(metrics["deployment_frequency"], 3)
-        self.assertAlmostEqual(metrics["change_failure_rate"], 0.4)
-
-    def test_legacy_proxy_renamed_and_deprecated_in_envelope(self):
-        """0.69.0 (ADR-015 §7.3): the legacy DORA key is renamed to
-        ``dora_metrics_legacy_proxy`` and wrapped with a deprecation flag; the
-        new honest ``telemetry`` key is present. The legacy proxy function body
-        is NOT deleted (two-release deprecation: demoted 0.69.0, removed 0.70.0).
-        """
-        runtime = {"dora": {"total_loops": 5, "fuse_trips": 2,
-                            "release_gate_passes": 3}}
-        with tempfile.TemporaryDirectory() as td:
-            home = _write_registry(Path(td), {"PP-Active-OK": _PP_ACTIVE_OK})
-            result = lh.check_loop_health(
-                target=str(Path(td)), plugin_home=home,
-            )
-        # Old key name is GONE (renamed, not duplicated).
-        self.assertNotIn("dora_metrics", result)
-        # New wrapped legacy key carries the metrics + deprecation markers.
-        legacy = result["dora_metrics_legacy_proxy"]
-        self.assertTrue(legacy["deprecated"])
-        self.assertIn("deprecation_note", legacy)
-        self.assertIn("0.70.0", legacy["deprecation_note"])
-        # The proxy body is behavior-identical: no runtime → empty metrics dict.
-        self.assertEqual(legacy["metrics"], {})  # no runtime data in temp dir
-        # The honest telemetry key is present and advisory (no event log →
-        # unavailable, but the key exists and never blocks).
-        self.assertIn("telemetry", result)
-        self.assertEqual(result["telemetry"]["status"], "unavailable")
-        # Backwards-compat alias: the old function name still resolves.
-        self.assertIs(lh._compute_dora_metrics, lh._dora_metrics_legacy_proxy)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Graceful absence — runtime.json missing never crashes
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class GracefulAbsenceTests(unittest.TestCase):
-    """No runtime.json → Part 2 + DORA return empty; Part 1 still runs."""
-
-    def test_no_runtime_data_no_crash(self):
-        """Test 8: absent runtime.json → Part 2/DORA no-op, Part 1 runs fine."""
-        with tempfile.TemporaryDirectory() as td:
-            home = _write_registry(Path(td), {"PP-Active-OK": _PP_ACTIVE_OK})
-            # _load_runtime with a target that has no .governance/ → None.
-            result = lh.check_loop_health(
-                target=str(Path(td)),
-                plugin_home=home,
-            )
-
-        findings = result["findings"]
-        # Part 1 ran (registry-only) and found no violations.
-        self.assertEqual(
-            [f for f in findings if f["severity"] == "FAIL"], [],
-            f"compliant registry must yield no FAILs: {findings}",
-        )
-        # Part 2 (needs runtime) produced no findings — no crash.
-        self.assertEqual(
-            [f for f in findings if f["severity"] == "ADVISORY"], [],
-            f"absent runtime must yield no advisory findings: {findings}",
-        )
-        # Legacy DORA proxy returned empty metrics (no runtime data); the key
-        # was renamed to ``dora_metrics_legacy_proxy`` in 0.69.0 (ADR-015 §7.3)
-        # and wraps the metrics under a deprecation envelope.
-        legacy = result["dora_metrics_legacy_proxy"]
-        self.assertTrue(legacy["deprecated"])
-        self.assertEqual(legacy["metrics"], {})
-        # Summary counts are sane.
-        self.assertEqual(result["summary"]["blocking_count"], 0)
-        self.assertEqual(result["summary"]["advisory_count"], 0)
-
-    def test_part2_none_runtime_returns_empty(self):
-        """Passing None runtime to Part 2 directly → empty findings."""
-        self.assertEqual(lh._check_velocity_exceedance(None), [])
-
-    def test_dora_none_runtime_returns_empty(self):
-        """Passing None runtime to DORA directly → empty metrics."""
-        self.assertEqual(lh._compute_dora_metrics(None), {})
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # Dogfood compliance — integration guard against the REAL registry
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -384,26 +188,21 @@ class DogfoodRegistryTests(unittest.TestCase):
 
 
 class CheckLoopHealthEnvelopeTests(unittest.TestCase):
-    """The top-level envelope composes Part 1 + Part 2 + DORA + summary."""
-
-    def test_envelope_shape_and_keys(self):
-        """The result envelope exposes findings / dora_metrics_legacy_proxy /
-        telemetry / summary / boundary (0.69.0 renamed the DORA key, ADR-015 §7.3)."""
+    def test_unmeasured_runtime_counters_do_not_score_the_project(self):
         with tempfile.TemporaryDirectory() as td:
-            home = _write_registry(Path(td), {"PP-Active-OK": _PP_ACTIVE_OK})
-            result = lh.check_loop_health(
-                target=str(Path(td)),
-                plugin_home=home,
-            )
-
-        for key in ("findings", "dora_metrics_legacy_proxy", "telemetry",
-                    "summary", "no_overclaim_boundary"):
-            self.assertIn(key, result, f"envelope missing key: {key}")
-        self.assertIsInstance(result["findings"], list)
-        self.assertIsInstance(result["dora_metrics_legacy_proxy"], dict)
-        self.assertIn("blocking_count", result["summary"])
-        self.assertIn("advisory_count", result["summary"])
-        self.assertIsInstance(result["no_overclaim_boundary"], str)
+            root = Path(td)
+            _write_registry(root, {"PP": _PP_ACTIVE_OK})
+            gov = root / ".governance"
+            gov.mkdir()
+            (gov / "flow-unit-runtime.json").write_text(json.dumps({
+                "dora": {"release_gate_passes": 8, "fuse_trips": 5, "total_loops": 7},
+                "velocity_history": {"PP": {"declared_bound_ms": 1, "measured_ms": [999] * 3}},
+            }), encoding="utf-8")
+            result = lh.check_loop_health(target=root, plugin_home=root)
+        self.assertEqual({"findings", "telemetry", "summary"}, set(result))
+        self.assertEqual(result["findings"], [])
+        self.assertEqual(result["telemetry"]["status"], "unknown")
+        self.assertEqual(result["telemetry"]["flow"]["blocked_wait_time"]["value"], None)
 
     def test_envelope_fail_closed_on_missing_registry_authority(self):
         """A missing registry produces a blocking authority diagnostic."""

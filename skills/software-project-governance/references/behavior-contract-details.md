@@ -14,7 +14,7 @@
 
 ### C2
 
-2. **完成必推荐（M7.4 step 6，FIX-223/237.5 增强；FEAT-072/DEC-266 三要素推荐卡）**：任务标记已完成→MUST 运行 `task-priority-analysis`（fail-closed 不跳过），快照记入 evidence-log→按依赖推荐 1~3 项；AskUserQuestion 前 MUST 给正文三要素推荐卡（服务目标/解决问题/方案要点，附可追溯依赖理由）；依据缺失 MUST 明示、不得编造，影响执行则先澄清；按 DEC-143 用对应短选项确认，MUST NOT 默认自主执行；空推荐→结构化空原因；MUST NOT 直接结束会话。
+2. **完成必推荐的适用条件（M7.4 step 6）**：当前目标完成后如要开启未授权的新目标，先用 `task-priority-analysis`（fail-closed）核实依赖，保留证据快照。用三要素推荐卡说明服务目标、解决问题、方案要点及依赖理由，再通过 AskUserQuestion 取得授权。已授权子项直接回父目标，原目标悉数完成时交付结果。
 
 <a id="c3"></a>
 
@@ -115,7 +115,7 @@
 
 ### 每会话 bootstrap 健康摘要（REQ-145.1, A3）
 
-本 SKILL 经 persona 加载。先按 §B1 一次取得聚合结果；本次根可信后立即呈现最小状态行并开始首次交互。健康摘要（`check-governance --summary-only --scope quick`）**后置**为用户选择后按需执行的深检——深检结果不作为首次 ask 的前置条件；`health.state="deferred"` 期间状态行健康位显示「待检查」而非绿色通过。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑健康摘要与对应深检再继续——**推进类深检固定 full 面（FEAT-084/DEC-303，安全语义不回退）**：用 `check-governance --summary-only`（缺省 scope=full，全量引擎全部段）或显式 `--scope full`，quick 通过 ≠ 完整治理通过（插件产品自检/ArchGuard/loop-claim 等排除面段不在 quick 面）。后置执行时按以下契约运行健康摘要：
+本 SKILL 经 persona 加载。先按 §B1 一次取得聚合结果；按当前模式报告目标。有实际待决事项时进入首次交互。健康摘要（`check-governance --summary-only --scope quick`）**后置**到相关动作之前按需执行——深检结果不作为首次 ask 的前置条件；`health.state="deferred"` 期间状态行健康位显示「待检查」而非绿色通过。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑健康摘要与对应深检再继续——**推进类深检固定 full 面（FEAT-084/DEC-303，安全语义不回退）**：用 `check-governance --summary-only`（缺省 scope=full，全量引擎全部段）或显式 `--scope full`，quick 通过 ≠ 完整治理通过（插件产品自检/ArchGuard/loop-claim 等排除面段不在 quick 面）。后置执行时按以下契约运行健康摘要：
 
 - 运行 `python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only --scope quick`（DSH 支持 CLI；FEAT-084/DEC-303 形态 B——会话摘要默认 quick 面：FEAT-025 注册表 quick 面段执行 + 排除面段 NOT_RUN 披露，段数以注册表为准）。读取四态汇总行 `Governance: {N} issues (quick) | {p} passed / {f} failed / {nr} not-run / {c} cache-reused / {u} undetermined | run check-governance (full) for the {nr} not-run segments`——**quick N 与 full N 是两个口径，不得混读**（`(quick)` 标记与四态计数由 QR-4 机守卫强制；发布门基线/审查 census 一律按 full 口径解读）；NOT_RUN 段逐段携带注册表原因码，全部实质段未执行时 N 显示 `N=unknown` 而非 0；注册表守卫不可信时 fail-closed 自动回退 full 跑满（FIX-304 口径）。摘要**只读、只显示、不阻断**（fail-safe 到简报而非硬失败）；`--level` 详略档仅对 full 面生效，quick 输出不按 level 拆。legacy 回退（FEAT-040）：`GOVERNANCE_LEGACY_BEHAVIOR=1` 时会话摘要命令回退 `--summary-only`（无 scope，全量引擎）。按摘要驱动后续动作：
   - `Governance: [PASS]`／`0 issues (quick)`（N=0）→ 无动作，继续 bootstrap。

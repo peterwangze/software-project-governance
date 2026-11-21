@@ -8,6 +8,8 @@ opencode is a Tier 1 loading guide target in 0.47.0. The current loading model i
 skills/software-project-governance/SKILL.md
 ```
 
+The project instruction file locates the shared skill. Resume the work unit in the target project using its stable ID. See the [work-unit commands](../../skills/software-project-governance/core/lifecycle.md).
+
 ## Current Status
 
 opencode is runtime-detected and full target-cwd agent runtime E2E verified in

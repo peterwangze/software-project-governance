@@ -50,7 +50,10 @@ if str(_INFRA_DIR) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(_INFRA_DIR))
 
 import loop_engine  # noqa: E402  (pure: derive_round cross-check)
+from functools import partial
 import loop_gate_processor as gp  # noqa: E402
+_apply_verified = partial(gp.process_gate_result, verified_native_review=True)
+
 import loop_paro_engine as paro  # noqa: E402
 from checks import flow_unit_runtime_v2  # noqa: E402
 
@@ -99,13 +102,14 @@ def _unit_on_disk(unit_id, runtime_path):
 
 
 def _new_reflect_unit(tmpdir, unit_id="shitu.story.Skeleton", tier="inner",
-                      max_rounds=_TEST_MAX_ROUNDS, loop_count=0):
+                      max_rounds=_TEST_MAX_ROUNDS, loop_count=0, gate="G6"):
     """Build an activated unit, drive it to reflect, return (runtime_path, cas_before_gate).
 
     ``cas_before_gate`` is the cas_version at the reflect node (before any gate
     result is processed) — used to assert the back-edge bumps it by exactly 1.
     """
     payload = _activated_payload(unit_id=unit_id, tier=tier, max_rounds=max_rounds)
+    payload["flow_units"][0]["gate_state"]["gate_id"] = gate
     runtime_path = _write_payload(tmpdir, payload)
     _drive_to_reflect(unit_id, runtime_path)
     cas_before = _unit_on_disk(unit_id, runtime_path)["loop_state"]["cas_version"]
@@ -126,7 +130,7 @@ class GatePassedExitTests(unittest.TestCase):
 
     def test_approved_drives_exit(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id)
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "APPROVED",
             evidence_ref="review-code-Skeleton-R1.md", actor="code-reviewer-agent",
             runtime_file=runtime_path,
@@ -140,7 +144,7 @@ class GatePassedExitTests(unittest.TestCase):
 
     def test_approved_with_notes_also_passes(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id)
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "APPROVED_WITH_NOTES",
             evidence_ref="review-R1.md", actor="code-reviewer-agent",
             runtime_file=runtime_path,
@@ -152,7 +156,7 @@ class GatePassedExitTests(unittest.TestCase):
     def test_passed_does_not_increment_loop_count(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, tier="inner")
         before = _unit_on_disk(self.unit_id, runtime_path)["loop_state"]["loop_count"]
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G6", "APPROVED",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -161,7 +165,7 @@ class GatePassedExitTests(unittest.TestCase):
 
     def test_exit_emits_gate_result_and_loop_exit_events(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id)
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "APPROVED",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -185,7 +189,7 @@ class GateFailedIterateTests(unittest.TestCase):
     def test_failed_drives_back_edge_to_plan(self):
         # loop_count=0, max_rounds=3 → 0 < 3 → iterate.
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=3)
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="review-R1.md", actor="code-reviewer-agent",
             runtime_file=runtime_path,
@@ -201,7 +205,7 @@ class GateFailedIterateTests(unittest.TestCase):
 
     def test_iterate_increments_loop_count_by_exactly_one(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -209,7 +213,7 @@ class GateFailedIterateTests(unittest.TestCase):
         self.assertEqual(u["loop_state"]["loop_count"], 1)
         # Second iterate (drive back to reflect, fail again).
         _drive_to_reflect(self.unit_id, runtime_path)
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r2", actor="cr", runtime_file=runtime_path,
         )
@@ -227,7 +231,7 @@ class GateFailedIterateTests(unittest.TestCase):
             gate_state=_valid_gate_state(status="failed", last_result="NEEDS_CHANGE"),
         )
         runtime_path = _write_payload(self.tmpdir, _valid_payload(units=[unit]))
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -237,7 +241,7 @@ class GateFailedIterateTests(unittest.TestCase):
 
     def test_iterate_emits_gate_result_and_back_edge_events(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -272,7 +276,7 @@ class GateFailedFuseTripTests(unittest.TestCase):
             gate_state=_valid_gate_state(status="failed", last_result="NEEDS_CHANGE"),
         )
         runtime_path = _write_payload(self.tmpdir, _valid_payload(units=[unit]))
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="review-Rfinal.md", actor="code-reviewer-agent",
             runtime_file=runtime_path,
@@ -297,7 +301,7 @@ class GateFailedFuseTripTests(unittest.TestCase):
             gate_state=_valid_gate_state(status="failed", last_result="NEEDS_CHANGE"),
         )
         runtime_path = _write_payload(self.tmpdir, _valid_payload(units=[unit]))
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -323,7 +327,7 @@ class BackEdgeAtomicityTests(unittest.TestCase):
     def test_back_edge_bumps_cas_version_by_exactly_one(self):
         runtime_path, cas_before = _new_reflect_unit(
             self.tmpdir, self.unit_id, max_rounds=5)
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -337,7 +341,7 @@ class BackEdgeAtomicityTests(unittest.TestCase):
         # A reader sees ALL of: agent_phase=plan, loop_count+1, last_result set,
         # evidence_ref appended, round-evidence row — never a partial subset.
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="review-atomic.md", actor="cr",
             runtime_file=runtime_path,
@@ -380,7 +384,7 @@ class RoundCountingConsistencyTests(unittest.TestCase):
     def test_consistency_holds_across_three_iterates(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
         for i in range(1, 4):
-            gp.process_gate_result(
+            _apply_verified(
                 self.unit_id, "G6", "NEEDS_CHANGE",
                 evidence_ref="r{0}".format(i), actor="cr",
                 runtime_file=runtime_path,
@@ -397,7 +401,7 @@ class RoundCountingConsistencyTests(unittest.TestCase):
         o = None
         # max_rounds=2 → iterates at counts 1, 2, 3; trip at count=3 > 2.
         for i in range(1, 5):
-            o = gp.process_gate_result(
+            o = _apply_verified(
                 self.unit_id, "G6", "NEEDS_CHANGE",
                 evidence_ref="r{0}".format(i), actor="cr",
                 runtime_file=runtime_path,
@@ -624,8 +628,8 @@ class G1EscalateDirectlyTests(unittest.TestCase):
         self.unit_id = "shitu.story.Skeleton"
 
     def test_g1_failed_escalates_directly(self):
-        runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
-        o = gp.process_gate_result(
+        runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5, tier="setup", gate="G1")
+        o = _apply_verified(
             self.unit_id, "G1", "NEEDS_CHANGE",
             evidence_ref="initiation-R1.md", actor="requirement-reviewer",
             runtime_file=runtime_path,
@@ -641,9 +645,9 @@ class G1EscalateDirectlyTests(unittest.TestCase):
         self.assertFalse(u["loop_state"]["fuse"]["tripped"])
 
     def test_g1_does_not_increment_loop_count(self):
-        runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
+        runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5, tier="setup", gate="G1")
         before = _unit_on_disk(self.unit_id, runtime_path)["loop_state"]["loop_count"]
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G1", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -651,8 +655,8 @@ class G1EscalateDirectlyTests(unittest.TestCase):
         self.assertEqual(after, before, "G1 escalate-directly must not iterate")
 
     def test_g1_emits_unit_blocked_event(self):
-        runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
-        o = gp.process_gate_result(
+        runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5, tier="setup", gate="G1")
+        o = _apply_verified(
             self.unit_id, "G1", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -679,7 +683,7 @@ class CASConflictTests(unittest.TestCase):
 
         def worker():
             barrier.wait()  # release both threads simultaneously
-            o = gp.process_gate_result(
+            o = _apply_verified(
                 self.unit_id, "G6", "NEEDS_CHANGE",
                 evidence_ref="r", actor="cr",
                 runtime_file=runtime_path, max_retries=0,
@@ -710,7 +714,7 @@ class CASConflictTests(unittest.TestCase):
 
         def worker():
             barrier.wait()
-            outcomes.append(gp.process_gate_result(
+            outcomes.append(_apply_verified(
                 self.unit_id, "G6", "NEEDS_CHANGE",
                 evidence_ref="r", actor="cr",
                 runtime_file=runtime_path, max_retries=0,
@@ -746,7 +750,7 @@ class UnificationInvariantTests(unittest.TestCase):
 
     def test_unification_holds_on_iterate(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -754,7 +758,7 @@ class UnificationInvariantTests(unittest.TestCase):
 
     def test_unification_holds_on_exit(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G6", "APPROVED",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -769,7 +773,7 @@ class UnificationInvariantTests(unittest.TestCase):
             gate_state=_valid_gate_state(status="failed", last_result="NEEDS_CHANGE"),
         )
         runtime_path = _write_payload(self.tmpdir, _valid_payload(units=[unit]))
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -777,7 +781,7 @@ class UnificationInvariantTests(unittest.TestCase):
 
     def test_unification_holds_on_g1_escalate_directly(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G1", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -808,7 +812,7 @@ class V1PayloadAndEdgeCaseTests(unittest.TestCase):
             }, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8")
         before = v1_path.read_bytes()
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=v1_path,
         )
@@ -822,7 +826,7 @@ class V1PayloadAndEdgeCaseTests(unittest.TestCase):
                         loop_state=_dormant_loop_state())
         ])
         runtime_path = _write_payload(self.tmpdir, payload)
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -834,7 +838,7 @@ class V1PayloadAndEdgeCaseTests(unittest.TestCase):
                         loop_state=_active_loop_state())
         ])
         runtime_path = _write_payload(self.tmpdir, payload)
-        o = gp.process_gate_result(
+        o = _apply_verified(
             "absent.unit", "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -842,7 +846,7 @@ class V1PayloadAndEdgeCaseTests(unittest.TestCase):
 
     def test_missing_runtime_file_rejected(self):
         missing = Path(self.tmpdir) / "absent.json"
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=missing,
         )
@@ -850,7 +854,7 @@ class V1PayloadAndEdgeCaseTests(unittest.TestCase):
 
     def test_unknown_gate_id_rejected(self):
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, max_rounds=5)
-        o = gp.process_gate_result(
+        o = _apply_verified(
             self.unit_id, "G999", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -873,7 +877,7 @@ class RegistrySemanticsConsumedTests(unittest.TestCase):
         # G6 enclosing_loop=inner → the round-evidence row uses tier "inner".
         runtime_path, _ = _new_reflect_unit(self.tmpdir, self.unit_id, tier="inner",
                                             max_rounds=5)
-        gp.process_gate_result(
+        _apply_verified(
             self.unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="r", actor="cr", runtime_file=runtime_path,
         )
@@ -923,7 +927,7 @@ class EndToEndRel060ChainTests(unittest.TestCase):
         decisions = []
         for i in range(1, 6):
             _drive_to_reflect(self.unit_id, runtime_path)
-            o = gp.process_gate_result(
+            o = _apply_verified(
                 self.unit_id, "G6", "NEEDS_CHANGE",
                 evidence_ref="review-R{0}.md".format(i), actor="code-reviewer-agent",
                 runtime_file=runtime_path,

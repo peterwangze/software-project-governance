@@ -192,12 +192,10 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     "checks.dsh_boundary",
     "checks.evidence_domain",
     "checks.gate_domain",
-    "checks.gate_domain",
     # FEAT-039 (0.84.0 slice A-8): injection-size budget leaf — surface
     # resolution + tokenizer calibration + report render; the engine wires
     # dispatch and the Check 33 sub-report only (ArchGuard R1/R4 discipline).
     "checks.injection_budget",
-    "checks.loop_runtime_claims",
     "checks.manifest",
     # FEAT-080 (0.93.0 B3, DEC-290(5)): the provenance judgement leaves —
     # pure predicates for the Check 41/42 sections; the engine wires the
@@ -332,8 +330,6 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("check-locks", "verify_workflow.cmd_check_agent_locks"),
     ("check-loop-health", "verify_workflow.cmd_check_loop_health"),
     ("check-loop-role-skills", "verify_workflow.cmd_check_loop_role_skills"),
-    ("check-loop-runtime-claims",
-     "verify_workflow.cmd_check_loop_runtime_claims"),
     ("check-mainstream-agent-loading",
      "verify_workflow.cmd_check_mainstream_agent_loading"),
     ("check-manifest-consistency",
@@ -361,10 +357,6 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("check-version-consistency",
      "verify_workflow.cmd_check_version_consistency"),
     ("check-vertical-slices", "verify_workflow.cmd_check_vertical_slices"),
-    ("dynamic-flow-gate-migration",
-     "verify_workflow.cmd_dynamic_lifecycle_migration"),
-    ("dynamic-lifecycle-migration",
-     "verify_workflow.cmd_dynamic_lifecycle_migration"),
     ("dsh-doctor", "dsh_doctor.main"),
     ("e2e-check", "verify_workflow.cmd_e2e_check"),
     ("enforcement-check", "verify_workflow.cmd_enforcement_check_engine"),
@@ -396,8 +388,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("locks-amend", "governance_store.cmd_locks_amend"),
     ("locks-extend", "governance_store.cmd_locks_extend"),
     ("locks-release", "governance_store.cmd_locks_release"),
-    ("loop-engineering-migration",
-     "verify_workflow.cmd_loop_engineering_migration"),
+    ("loop", "verify_workflow.cmd_loop"),
     ("loop-rollup", "verify_workflow.cmd_loop_rollup"),
     ("loop-telemetry", "verify_workflow.cmd_loop_telemetry"),
     ("next-candidates", "verify_workflow.cmd_next_candidates"),
@@ -488,13 +479,12 @@ _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("30", "checks.review_domain.check_review_closure"),
     ("30b", "checks.review_domain.check_loop_wiring_call_sites"),
     ("30c", "checks.review_domain.check_review_machine_provenance"),
-    ("31", "checks.loop_runtime_claims.scan_loop_runtime_claims"),
     ("32", "checks.triage_domain.check_change_triage"),
     ("33", "verify_workflow.check_injection_contract"),
     ("34", "verify_workflow.check_completion_recommendation"),
     ("35", "checks.snapshot_domain.check_snapshot_freshness"),
     ("36", "verify_workflow.check_risk_mitigation_closure_with_archive"),
-    ("37", "checks.gate_domain.check_gate_sequence_for_release"),
+    ("37", "checks.gate_domain.release_unit_issues"),
     ("38", "checks.ci_domain.check_ci_evidence"),
     ("39", "checks.triage_domain.check_r1_completion_gate"),
     # FEAT-080 (0.93.0 B3, DEC-290(5) / ADR-021 §2.2.3+§3.2.3): the two

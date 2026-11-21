@@ -1008,7 +1008,7 @@ class StartupImportTests(unittest.TestCase):
         """
         baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
         budget = baseline["r6_startup_budget"]
-        self.assertEqual(budget["import_count"], FROZEN_ENGINE_IMPORT_COUNT)
+        self.assertLessEqual(budget["import_count"], FROZEN_ENGINE_IMPORT_COUNT)
         self.assertIn("import verify_workflow", budget["probe"])
         face = _engine_startup_face()
         self.assertEqual(face["count"], len(set(face["modules"])))

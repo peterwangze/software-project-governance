@@ -8,8 +8,8 @@
 
 1. 会话 skill 目录有 `software-project-governance` → 调用 `skill` 工具加载（resourceBase 即 `<plugin_root>/skills/software-project-governance`）。
 2. 若本次当前工作区尚无聚合结果，用 `pwsh` 执行 `python "<plugin_root>/skills/software-project-governance/infra/verify_workflow.py" governance-bootstrap --format json`。
-3. 除下述旧版缺少子命令外，仅在退出成功、JSON 有效且 `resolve.resolved_root_ok == true` 时采用热数据；否则 MUST STOP，展示 diagnostic 或命令错误，不呈现治理状态。 仅旧 CLI 明确不支持该子命令时才运行 `python "<plugin_root>/skills/software-project-governance/infra/resolve_entry.py" --json`；成功且 `resolved_root_ok == true` 方可六段读取。
-4. 从同次热面呈现最小状态行 + `ask_user_question` 首次交互；深检按需后置，推进类动作前 MUST 补齐。
+3. 除下述旧版缺少子命令外，仅在退出成功、JSON 有效且 `resolve.resolved_root_ok == true` 时采用热数据；否则 MUST STOP，展示 diagnostic 或命令错误，不呈现治理状态。 仅旧 CLI 明确不支持该子命令时才运行 `python "<plugin_root>/skills/software-project-governance/infra/resolve_entry.py" --json`；成功且 `resolved_root_ok == true` 方可定位运行记录。
+4. 从同次 `loops` 恢复目标、工作单元、层级、轮次和最新回执，呈现需要执行或裁决的事项 + `ask_user_question` 首次交互；深检按需后置，推进类动作前 MUST 补齐。
 5. 无该 skill → 提示本会话未加载治理技能，按普通任务执行。恢复接入见本页末尾的适配器指南。
 
 ## 行为灰度开关（FEAT-040——legacy 回退通道）
@@ -18,13 +18,13 @@
 
 ## SELF-CHECK（任何输出之前自问）
 
-1. 本次根、模式、阶段和 Gate 是否可核实？未知 → 停止并定位相应缺面；旧宿主的 plan-tracker 为 `.governance/plan-tracker.md`。
+1. 从可信根核对目标、单元与证据。当前状态用 `loop status --json` 复读，任务范围查 `.governance/plan-tracker.md`。
 2. 即将输出问句？→ 改用 `ask_user_question`。到达交互边界？→ MUST `ask_user_question`（完整 SELF-CHECK：SKILL.md「Bootstrap 规程明细」§B0）。
-3. 任务标记已完成，或收到含 NEEDS_CHANGE 的审查结论 → 复审与推荐是 MUST 义务（关键行为契约：复审必达 / 完成必推荐 / 选项必带依据 / 推荐必标需求源 / 发现即闭环——加载 skill 后见 SKILL.md「关键行为契约」段）。
+3. 子项退出时返回已授权父目标；交付后需转入新的未授权目标才推荐并请用户裁决。收到 NEEDS_CHANGE 时进入独立复审（关键行为契约：复审必达 / 完成必推荐 / 选项必带依据 / 推荐必标需求源 / 发现即闭环——加载 skill 后见 SKILL.md「关键行为契约」段）。
 
 ## 模式确认（每次会话一句，模式自适应）
 
-- **always-on** → `Governance: {trigger_mode} x {permission_mode} | stage: {stage}, Gate {gate}: {status}, {risk_count} risk(s)`
+- **always-on** → `Governance: {trigger_mode} x {permission_mode} | {unit}: {goal}, {tier} R{round} | {next_action}`
 - **on-demand** → `Governance: on-demand x {permission_mode}`（仅用户显式调用时展开完整状态）；**silent-track** → 不输出治理面板/风险统计/任务进度表
 
 ## Agent Team（DSH 映射）

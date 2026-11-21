@@ -14,13 +14,13 @@ from pathlib import Path
 import delivery_acceptance as acceptance
 import goal_bridge as bridge
 from dsh_goal_work import read_work_packages
-from goal_planning import _read_locks, plan_goal_candidates
-from governance_store import LOCK_DIR_NAME, LOCKS_FILE_NAME, StoreError, _TargetLock
+from execution_packet import read_goal_packets as _load_packets
+from goal_planning import has_active_goal_work, plan_goal_candidates
+from governance_store import LOCK_DIR_NAME, StoreError, _TargetLock
 
 
 PROFILE = ".governance/dsh-goal.json"
 MAX_REQUEST = 64 * 1024
-MAX_PACKETS = 4 * 1024 * 1024
 _MAX_NUMBER = 2**53 - 1
 _REQUEST_FIELDS = {"schema_version", "action", "session_id", "goal_id", "revision", "objective", "max_rounds", "usage"}
 _PROFILE_FIELDS = {"intent_sha256", "budget", "contract"}
@@ -240,36 +240,6 @@ def _publish_contract(path, contract):
         Path(scratch).unlink(missing_ok=True)
 
 
-def _load_packets(governance_dir):
-    path = governance_dir / "execution-packets.json"
-    if not _optional_path(path):
-        return {}, "missing execution packets"
-    with path.open("rb") as stream:
-        raw = stream.read(MAX_PACKETS + 1)
-    if len(raw) > MAX_PACKETS:
-        raise ValueError("execution packets are too large")
-    data = json.loads(raw.decode("utf-8"), object_pairs_hook=acceptance._json_object)
-    packets = data.get("packets", data) if isinstance(data, dict) else None
-    if not isinstance(packets, dict):
-        raise ValueError("invalid execution packets")
-    return packets, ""
-
-
-def _active_goal_work(governance_dir, request, task_ref):
-    if not _optional_path(governance_dir / LOCKS_FILE_NAME):
-        return False
-    active = _read_locks(governance_dir)
-    if task_ref in active or any(item["coordinator_session"] == request["session_id"] for item in active.values()):
-        return True
-    if not active:
-        return False
-    packets, _ = _load_packets(governance_dir)
-    for task_id in active:
-        packet = packets.get(task_id, {})
-        link = packet.get("goal_link") if isinstance(packet, dict) else None
-        if isinstance(link, dict) and link.get("goal_id") == request["goal_id"]:
-            return True
-    return False
 
 
 def _snapshot(artifact):
@@ -464,6 +434,8 @@ def _run_locked(root, target, request):
         plan = _short_plan(root, goal, packages, direct_repair=live_work, goal_status=goal_status)
         if plan["state"] in ("AWAIT_CONTRACT", "CONTRACT_CHANGED", "HOLD"):
             return _reply(request, "HOLD", "PLAN_GATE_CHANGED", **state, plan=plan)
+        unit = bridge.bind_delivery_unit(governance_dir, goal, intent, current_contract, digest)
+        state["unit_id"] = unit["flow_unit_id"]
         if awaiting_native_resume:
             stop["resumed_revision"] = request["revision"]
             bridge._save(target, artifact)
@@ -472,14 +444,20 @@ def _run_locked(root, target, request):
             attested["direct_repair_code"] = "DIRECT_REPAIR_EVIDENCE_INVALID"
         return _reply(request, "ALLOW", "ADMITTED", **state, plan=plan, **attested)
     verdict = bridge._check_completion(goal, governance_dir)
-    if not verdict["pass"]:
+    if verdict.get("receipt_verdict") not in {"FAIL", "PASS"}:
         return _reply(request, "HOLD", "DELIVERY_ACCEPTANCE_FAILED", **state,
                       acceptance_state=verdict["state"])
     if artifact["obligations"]:
         return _reply(request, "HOLD", "OPEN_OBLIGATIONS", **state, acceptance_state=verdict["state"])
-    if _active_goal_work(governance_dir, request, artifact["task_ref"]):
+    if has_active_goal_work(governance_dir, goal, artifact["task_ref"], request["session_id"]):
         return _reply(request, "HOLD", "ACTIVE_GOAL_WORK", **state, acceptance_state=verdict["state"])
-    return _reply(request, "ALLOW", "DELIVERY_ACCEPTED", **state, acceptance_state=verdict["state"])
+    import loop_workflow
+
+    outcome = loop_workflow.accept_delivery(root, goal)
+    if outcome["decision"] != "exit":
+        return _reply(request, "HOLD", "DELIVERY_ACCEPTANCE_FAILED", **state, unit_id=goal,
+                      acceptance_state="FAIL", loop_decision=outcome["decision"])
+    return _reply(request, "ALLOW", "DELIVERY_ACCEPTED", **state, unit_id=goal, acceptance_state="PASS")
 
 
 def run(root, request):

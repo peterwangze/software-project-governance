@@ -278,7 +278,8 @@ STATIC_PIN_EXEMPTIONS = {
         # 非真实计划面 in the row itself); version column is scenario payload.
         # FIX-383 re-audit: the hashlib/wgs import additions (3 lines incl.
         # the VW_PATH constant) shifted the row 83->86 (token unchanged).
-        (86, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-51ff95449e0547c682b6d89249a1916e (FIX-462): 86->87 via machine writer (token unchanged)
+        (87, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     "skills/software-project-governance/infra/tests/test_triage_write_guard.py": [
         # 0.86.0 bump-time rows: FEAT-057 fixture tracker row (scenario
@@ -291,8 +292,10 @@ STATIC_PIN_EXEMPTIONS = {
         # 995->997 and 1141->1143; the disclosure's tail clause was also
         # rewritten (the BLOCK mechanism is delivered, not "left to 0.87")
         # — the "0.86.0" posture-origin token is unchanged on the same rows.
-        (997, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
-        (1143, "0.86.0", _REASON_GUARD_OUTPUT_ASSERT),
+        # pins re-anchor op-8a567928c93447efb3c4f9d46e9af907 (FIX-462): 997->1004 via machine writer (token unchanged)
+        (1004, "0.86.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-5d1478abb2854a35a2d46a95fc27aa5b (FIX-462): 1143->1150 via machine writer (token unchanged)
+        (1150, "0.86.0", _REASON_GUARD_OUTPUT_ASSERT),
     ],
     "skills/software-project-governance/infra/tests/test_static_version_pins.py": [
         # FIX-411 re-anchor: the sandbox-fixture hardening import additions
@@ -389,20 +392,20 @@ STATIC_PIN_EXEMPTIONS = {
         # (rot-guard caught the stale ledger at fb56415; CI never saw it —
         # the FIX-458 hook-pin integrity FAIL killed the run before the
         # unit-test step); re-anchored to the actual token lines.
-        # pins re-anchor op-b7f2bc1d4c924d96b3293a32000bf463 (FIX-462): 21355->21099 via machine writer (token unchanged)
-        (21099, "0.93.0", _REASON_FUTURE_TARGET),
-        # pins re-anchor op-9a828ffbcacc4a5a9da9ff3f2e350949 (FIX-462): 21387->21131 via machine writer (token unchanged)
-        (21131, "0.93.0", _REASON_FUTURE_TARGET),
+        # pins re-anchor op-0a27133fcfb84175b51e7de42d75548a (FIX-462): 18626->18572 via machine writer (token unchanged)
+        (18572, "0.93.0", _REASON_FUTURE_TARGET),
+        # pins re-anchor op-094279438bfb491a93d7f2d30fa061fa (FIX-462): 18656->18602 via machine writer (token unchanged)
+        (18602, "0.93.0", _REASON_FUTURE_TARGET),
         # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
         # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
         # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
         # 目标版本 column — scenario payload written while 0.93.1 was active,
         # surfacing exactly once at this bump; the word-set judgement
         # consumes the row text, never the version cell.
-        # pins re-anchor op-42d4f90b95644754bcd4263e0412e84d (FIX-462): 20854->20598 via machine writer (token unchanged)
-        (20598, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
-        # pins re-anchor op-7e99d4e36eca4da688fbccf024ee5a37 (FIX-462): 20857->20601 via machine writer (token unchanged)
-        (20601, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-1066be4de9c840b4a9faee5c495e6b6c (FIX-462): 18127->18076 via machine writer (token unchanged)
+        (18076, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-5a85d40d593a4ae4928e67fa99242b87 (FIX-462): 18130->18079 via machine writer (token unchanged)
+        (18079, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
     ],
     # 0.95.0 bump-time rows (the FIX-361 designed double signal): the
     # FEAT-076 Q6 date-window fallback fail-closed fixture (roadmap row
@@ -433,10 +436,6 @@ STATIC_PIN_EXEMPTIONS = {
     # machine-writer (TRIAGE-FIX-462, DEC-220)): the guarded-import shim +
     # visible skip marker added at the module head shifted the token line
     # 61->80; token and reason unchanged, re-anchored to the actual line.
-    "skills/software-project-governance/infra/tests/test_evidence_migration.py": [
-        # pins re-anchor op-9dae6f1629dc4f7ca4f4644ebadc25f6 (FIX-462): 80->51 via machine writer (token unchanged)
-        (51, "0.99.0", _REASON_FIXTURE_ROW_TEXT),
-    ],
     # 0.89.0 bump-time rows (the FIX-361 designed double signal): fixture
     # worlds written by the 0.89.0-window tickets (FIX-390/393/394) carrying
     # the then-future target in scenario-payload cells — each surfaces

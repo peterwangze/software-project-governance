@@ -1,22 +1,8 @@
-"""Review-record writer + Wiring A (FIX-236.1 / ADR-017 §3.2, §3.4).
+"""Persist independently observed review records and bind scoped reviews to native work units.
 
-The **single machine-written review-conclusion persistence path** (P1-1
-anchor): ``review-record`` CLI (verify_workflow.py thin entry) delegates here.
-It writes ``review-{id}-R{n}.md`` + an evidence-log row in the Check 30
-(V1~V5) parseable contract, and then, when a review→unit/gate mapping
-resolves, invokes :func:`loop_gate_processor.process_gate_result` as Wiring A
-(thin call, ADR-014 §6.1).
-
-Behavior contract (ADR-017 §3.4):
-
-  - **Machine write**: review file + evidence row are written FIRST and
-    independently of the loop state machine. A wiring failure (CAS conflict /
-    lock / exception) must NEVER block the review record — it is recorded as a
-    ``degraded`` marker in the wiring summary.
-  - **Mapping is data, not logic**: review role → gate_id is a module-level
-    registry-side table (:data:`REVIEW_GATE_MAPPING`, documented defaults for
-    the ADR-014 §6.1 examples). When no mapping resolves (or no flow-unit id),
-    wiring is SKIPPED with a WARN reason — the review record still lands.
+The review-record CLI delegates transactions to this module. Only a named
+unit's bound native review can authorize its gate, via loop_workflow.gate_review.
+Independent observations still receive a durable review record.
   - **复审必达**: a NEEDS_CHANGE record carries the structured revisit fields
     ``next_round=REVIEW-{id}-R{n+1}`` + ``prev_report`` so Check 30 V6 and the
     Coordinator can verify / spawn the R+1 revisit.
@@ -44,9 +30,6 @@ Behavior contract (ADR-017 §3.4):
     (``check_review_machine_provenance``) WARNs on REVIEW rows/files dated
     on/after 2026-08-22 that lack the machine markers emitted here — the
     gradual-FAIL escalation path is registered in the FIX-260 decision log.
-  - **loop_exit → next-unit bridge**: when the wiring outcome is ``exit``,
-    :func:`loop_exit_bridge.refresh_candidates` is invoked best-effort so the
-    next-unit candidate snapshot stays fresh (FIX-236.3 consumer).
 
 FEAT-094 — 审查可信链 (five-step indivisible review transaction):
 
@@ -93,13 +76,11 @@ FEAT-094 — 审查可信链 (five-step indivisible review transaction):
   ``prev_report`` fields and summary keys are byte-compatible with the
   pre-FEAT-094 writer; this ticket only ADDS trust binding around them.
 
-This module is product code (Governance Developer domain) and stays
-import-cycle-free: it imports loop_gate_processor (peer) and loop_exit_bridge
-(peer, pure) lazily inside the exit-refresh path.  authority_ledger (peer,
-stdlib-only) is imported lazily inside the transaction path so the cold
-import face of the loop-wiring consumers is unchanged.
+The review ledger stores the observation. The native loop checks its
+binding before applying a scoped decision.
 """
 
+import json
 import hashlib
 import os
 import re
@@ -107,30 +88,6 @@ import subprocess
 from datetime import date, datetime
 from pathlib import Path
 
-from loop_gate_processor import process_gate_result  # noqa: F401 (re-exported)
-
-
-# Registry-side mapping data (not logic): review role → default gate_id.
-# Only the ADR-014 §6.1 documented mappings are declared; other roles require
-# explicit --unit/--gate (mapping-missing → WARN skip). Promoted to
-# core/loop-engineering-registry.json in a later phase.
-REVIEW_GATE_MAPPING = {
-    "CODE": "G6",      # code-review → G6 (inner-loop exit)
-    "DESIGN": "G5",    # design-review → G5 (middle-loop entry)
-    "RELEASE": "G9",   # release-review → G9 (middle-loop exit)
-}
-
-# Wiring B data (FIX-236.2 / ADR-017 §3.4): gate-engine verdict → review
-# conclusion. Lives here (registry-side data), NOT in verify_workflow.py —
-# the auto_judge_gate wiring is a thin call over this mapping. "needs_human"
-# is deliberately absent: no verdict is rendered, so no wiring happens.
-GATE_VERDICT_TO_RESULT = {
-    "passed": "APPROVED",
-    "passed-with-conditions": "APPROVED_WITH_NOTES",
-    "blocked": "NEEDS_CHANGE",
-}
-
-_ROLE_TOKEN_RE = re.compile(r"(?:^|[_-])(CODE|DESIGN|RELEASE)(?:[_-]|$)")
 _TASK_ID_RE = re.compile(r"^[A-Z]+-\d+$")
 # FEAT-094: ABORTED/UNKNOWN = supervisor-recorded agent-death terminal
 # states (never trigger a revisit, never discharge an open obligation).
@@ -174,6 +131,7 @@ _REPORT_SHA_FIELD_RE = re.compile(
     r"^- report_sha256: ([0-9a-f]{64})\s*$", re.MULTILINE)
 _COMMIT_FIELD_RE = re.compile(
     rf"^- snapshot_commit: ({_GIT_OID}|git:unavailable)\s*$", re.MULTILINE)
+_TREE_FIELD_RE = re.compile(rf"^- snapshot_tree: ({_GIT_OID})\s*$", re.MULTILINE)
 _BIND_FIELD_RE = re.compile(
     rf"^- snapshot_bind: (.+)=({_GIT_OID})\s*$", re.MULTILINE)
 _MODE_FIELD_RE = re.compile(r"^- snapshot_mode: (.+)=([0-7]{6})\s*$", re.MULTILINE)
@@ -217,19 +175,6 @@ def _read_record_reviewer(review_file):
     return m.group(1).strip() if m else None
 
 
-def _detect_role(task_id, report_path):
-    """Best-effort review-role detection from the task id / report filename.
-
-    Returns an upper-case role token (e.g. ``CODE``) or None. Only used when
-    the caller did not pass an explicit ``--unit``/``--gate``; the mapping is
-    registry-side data, so an undetected role is NOT an error.
-    """
-    blob = " ".join([task_id or "", Path(report_path).name if report_path else ""])
-    m = _ROLE_TOKEN_RE.search(blob.upper())
-    return m.group(1) if m else None
-
-
-# ── FEAT-094 trust-chain helpers ─────────────────────────────────────────────
 
 
 def _resolve_report_face(report_path, root=None):
@@ -374,6 +319,10 @@ def snapshot_binding(repo_root, bind_files=()):
     """
     root = Path(repo_root) if repo_root is not None else Path.cwd()
     commit = _git_output(root, "rev-parse", "HEAD")
+    unborn = False
+    if not commit:
+        status_header = _git_output(root, "status", "--porcelain=v2", "--branch", "--untracked-files=no")
+        unborn = "# branch.oid (initial)" in (status_header or "").splitlines()
     status = _git_output(root, "status", "--porcelain")
     worktree = "unavailable" if status is None else (
         "clean" if not status else "dirty({0})".format(
@@ -383,9 +332,9 @@ def snapshot_binding(repo_root, bind_files=()):
         bindings.append(_file_binding(root, str(raw).replace("\\", "/")))
     return {
         "commit": commit if commit and re.fullmatch(_GIT_OID, commit)
-        else "git:unavailable",
+        else ("git:unborn" if unborn else "git:unavailable"),
         "commit_status": "resolved" if commit and re.fullmatch(_GIT_OID, commit)
-        else "unavailable",
+        else ("unborn" if unborn else "unavailable"),
         "worktree": worktree,
         "bindings": bindings,
     }
@@ -404,7 +353,7 @@ def _pin_check(checks, kind, pinned, current, note=""):
     return state
 
 
-def verify_review_trust(review_file, repo_root=None):
+def verify_review_trust(review_file, repo_root=None, *, current_worktree=True):
     """FEAT-094 — re-verify a record's trust pins (tamper detection face).
 
     Re-reads the pinned report bytes and re-hashes them against the
@@ -481,9 +430,18 @@ def verify_review_trust(review_file, repo_root=None):
         conflict |= state == "mismatch"
         unknown |= state == "unverified"
 
+    tree_match = _TREE_FIELD_RE.search(text)
+    if tree_match:
+        tree = tree_match[1]
+        obj_type = _git_output(root, "cat-file", "-t", tree)
+        state = _pin_check(face["checks"], "snapshot_tree", tree,
+                           tree if obj_type == "tree" else obj_type)
+        conflict |= state == "mismatch"
+        unknown |= state == "unverified"
+
     # 3. per-file blob pins (the untracked-safe bindings)
     modes = dict(_MODE_FIELD_RE.findall(text))
-    for bind_match in _BIND_FIELD_RE.finditer(text):
+    for bind_match in (_BIND_FIELD_RE.finditer(text) if current_worktree else ()):
         spec, pinned_blob = bind_match.group(1), bind_match.group(2)
         current_bind = _file_binding(root, spec)
         blob = current_bind["hash"]
@@ -521,127 +479,6 @@ def verify_review_trust(review_file, repo_root=None):
     return face
 
 
-def resolve_wiring(task_id, report_path=None, *, unit_id=None, gate_id=None):
-    """Resolve the review→unit/gate wiring (data-driven, never raises).
-
-    Explicit ``unit_id`` + ``gate_id`` win. Otherwise the role token (from
-    task id / report filename) is looked up in :data:`REVIEW_GATE_MAPPING`.
-
-    Returns a dict: ``{"resolved": bool, "unit_id": ..., "gate_id": ...,
-    "role": ..., "reason": str}``. ``resolved=False`` → the caller skips the
-    wiring with a WARN (the review record still lands).
-    """
-    if unit_id and gate_id:
-        return {
-            "resolved": True,
-            "unit_id": unit_id,
-            "gate_id": gate_id,
-            "role": _detect_role(task_id, report_path),
-            "reason": "explicit --unit/--gate",
-        }
-    role = _detect_role(task_id, report_path)
-    if not role:
-        return {
-            "resolved": False,
-            "unit_id": None,
-            "gate_id": None,
-            "role": None,
-            "reason": (
-                "no review→gate mapping resolved (role token not found in "
-                "task id / report path; registry data missing — pass "
-                "--unit/--gate to wire)"
-            ),
-        }
-    gate_id = REVIEW_GATE_MAPPING.get(role)
-    if not gate_id:
-        return {
-            "resolved": False,
-            "unit_id": None,
-            "gate_id": None,
-            "role": role,
-            "reason": (
-                "no review→gate mapping for role {0!r} (registry data missing "
-                "— pass --unit/--gate to wire)".format(role)
-            ),
-        }
-    if not unit_id:
-        return {
-            "resolved": False,
-            "unit_id": None,
-            "gate_id": gate_id,
-            "role": role,
-            "reason": (
-                "role {0!r} maps to gate {1} but no flow-unit id is available "
-                "(pass --unit or register a unit mapping)".format(role, gate_id)
-            ),
-        }
-    return {
-        "resolved": True,
-        "unit_id": unit_id,
-        "gate_id": gate_id,
-        "role": role,
-        "reason": "registry role→gate mapping",
-    }
-
-
-def wiring_summary(outcome):
-    """Normalize a :class:`GateOutcome` into the wiring summary dict shape.
-
-    P2-1 (Code Review R1): ``wired`` reflects whether the CAS write actually
-    committed (``outcome.success``), NOT merely that process_gate_result was
-    invoked. A v1/classic no-op (status=illegal) or a missing-runtime error
-    (status=error) is therefore NOT ``wired`` — the status/reason are still
-    preserved for diagnosis.
-    """
-    return {
-        "wired": bool(outcome.success),
-        "degraded": False,
-        "decision": outcome.decision,
-        "status": outcome.status,
-        "reason": outcome.reason,
-        "loop_count": outcome.new_loop_count,
-    }
-
-
-def _wire_to_loop(task_id, round_n, result, review_file, reviewer, report_path,
-                  unit_id, gate_id, root, runtime_file, plugin_home):
-    """Wiring A (ADR-017 §3.4): thin process_gate_result invocation, best-effort.
-
-    Thin delegation (ADR-014 §6 principle). Never raises; every failure mode
-    (mapping missing / process_gate_result error / exception) is reported in
-    the returned dict and must NOT block the review record.
-    """
-    evidence_ref = review_file.name if review_file is not None else (
-        "review-{0}-R{1}.md".format(task_id, round_n))
-    actor = reviewer or "review-record"
-    mapping = resolve_wiring(task_id, report_path,
-                             unit_id=unit_id, gate_id=gate_id)
-    if not mapping["resolved"]:
-        return {
-            "wired": False,
-            "degraded": False,
-            "unit_id": mapping["unit_id"],
-            "gate_id": mapping["gate_id"],
-            "reason": mapping["reason"],
-        }
-    try:
-        outcome = process_gate_result(
-            mapping["unit_id"], mapping["gate_id"], result,
-            evidence_ref=evidence_ref, actor=actor,
-            root=root, runtime_file=runtime_file, plugin_home=plugin_home,
-        )
-        summary = wiring_summary(outcome)
-        summary["unit_id"] = mapping["unit_id"]
-        summary["gate_id"] = mapping["gate_id"]
-        return summary
-    except Exception as exc:  # noqa: BLE001 — best-effort degrade, never raise
-        return {
-            "wired": False,
-            "degraded": True,
-            "unit_id": mapping["unit_id"],
-            "gate_id": mapping["gate_id"],
-            "reason": "process_gate_result raised: {0}".format(exc),
-        }
 
 
 def _review_file_text(task_id, round_n, result, reviewer, report_path,
@@ -701,7 +538,7 @@ def _review_file_text(task_id, round_n, result, reviewer, report_path,
 
 
 def _evidence_row(task_id, round_n, result, reviewer, report_path,
-                  review_file_name, date_str, review_id=None, pins=None):
+                  review_file_name, date_str, review_id=None, pins=None, gate_id=None):
     """Evidence-log row in the Check 30 live-scan contract.
 
     Column shape mirrors existing rows: | id | task_ref | type | description |
@@ -725,7 +562,7 @@ def _evidence_row(task_id, round_n, result, reviewer, report_path,
         "{0}; {1}".format(report_path, review_file_name),
         reviewer or "unknown",
         date_str,
-        "G11",
+        gate_id or "—",
         result,
     ]
     if pins:
@@ -738,7 +575,7 @@ def _evidence_row(task_id, round_n, result, reviewer, report_path,
 def _review_ledger_transaction(evidence_dir, *, task_id, round_n,
                                result_norm, review_id, reviewer,
                                report_path, report_sha256, binding,
-                               scope_norm):
+                               scope_norm, native_binding=None, observed_loop=None):
     """FEAT-094 steps 3+4 — the ATOMIC ledger core of the review
     transaction: the ``review_recorded`` event and the recheck-obligation
     lifecycle events land in ONE ``transact`` batch (validation atomicity,
@@ -759,6 +596,12 @@ def _review_ledger_transaction(evidence_dir, *, task_id, round_n,
         writer.state.get("open_recheck_obligations", ())}
     this_key = "RECHECK-{0}-R{1}".format(task_id, round_n)
     next_key = "RECHECK-{0}-R{1}".format(task_id, round_n + 1)
+    if native_binding:
+        # A repair gate cannot discharge the parent gate's outstanding recheck.
+        scope_key = f"{native_binding['unit']}-{native_binding['gate']}"
+        this_key = next((obligation_key(o) for o in writer.state.get("open_recheck_obligations", [])
+                         if o.get("gate_scope") == scope_key), "")
+        next_key = f"RECHECK-{scope_key}-R{round_n + 1}"
     review_payload = {
         "review_id": review_id,
         "task_id": task_id,
@@ -772,6 +615,12 @@ def _review_ledger_transaction(evidence_dir, *, task_id, round_n,
         "bindings": binding["bindings"],
         "scope": scope_norm,
     }
+    if observed_loop:
+        review_payload["observed_loop"] = observed_loop
+    if "tree" in binding:
+        review_payload["tree"] = binding["tree"]
+    if native_binding:
+        review_payload["loop_binding"] = native_binding
     batch = [("review_recorded", review_payload)]
     obligations = []
     if result_norm in _OBLIGATION_DISCHARGING_RESULTS \
@@ -795,6 +644,7 @@ def _review_ledger_transaction(evidence_dir, *, task_id, round_n,
                 "task_id": task_id,
                 "round": round_n + 1,
                 "created_by": review_id,
+                **({"gate_scope": scope_key} if native_binding else {}),
                 "prev_report": str(report_path),
                 "prev_report_sha256": report_sha256,
                 "commit": binding["commit"],
@@ -811,6 +661,24 @@ def _review_ledger_transaction(evidence_dir, *, task_id, round_n,
     return ledger_face, obligations
 
 
+def _serialize_native_review(writer):
+    from functools import wraps
+    @wraps(writer)
+    def guarded(**kwargs):
+        root = kwargs.get("root")
+        evidence = kwargs.get("evidence_dir") or (Path(root) / ".governance" if root else None)
+        if evidence and (kwargs.get("require_loop") or (Path(evidence) / "flow-unit-runtime.json").is_file()):
+            from loop_event_log import _cross_process_lock
+            try:
+                with _cross_process_lock(Path(evidence) / "review-record"):
+                    return writer(**kwargs)
+            except OSError as exc:
+                return {"error": str(exc), "code": "review_io"}
+        return writer(**kwargs)
+    return guarded
+
+
+@_serialize_native_review
 def write_review_record(
     *,
     task_id,
@@ -829,7 +697,10 @@ def write_review_record(
     scope="full",
     delta_base=None,
     bind_files=(),
+    bind_tree=None,
     abort_reason=None,
+    require_loop=False,
+    record_only=False,
 ):
     """Persist one review conclusion + Wire A (FIX-236.1) — as the FEAT-094
     five-step indivisible review transaction (提交报告→验证结构与修订→登记
@@ -854,17 +725,11 @@ def write_review_record(
             ``review-{task}-R{n}-{reviewer-slug}.md`` (mirrored evidence id
             ``REVIEW-{task}-R{n}-{SLUG}``). A name that does not normalize
             to an ASCII slug fails closed.
-        unit_id / gate_id: explicit flow-unit wiring (overrides the registry
-            mapping).
-        root: host project root — review file + evidence row land under
-            ``<root>/.governance`` (RISK-040: never PLUGIN_HOME); also the
-            repo root for the FEAT-094 snapshot binding.
-        evidence_dir: explicit governance dir override (tests); defaults to
-            ``root/.governance``.
-        runtime_file: explicit flow-unit-runtime.json path forwarded to the
-            wiring (tests / hosts where the runtime is not under root).
-        plugin_home: forwarded to registry reads in process_gate_result.
-        actor: loop actor override (defaults to reviewer or "review-record").
+        unit_id / gate_id: bind the observation to the current unit and its own gate.
+        root: host project root for evidence storage and revision binding.
+        evidence_dir: explicit governance directory; defaults to root/.governance.
+        runtime_file: when supplied, it must point to the same host's runtime file.
+        plugin_home / actor: retained for compatibility with prior callers.
         force: FIX-289⑤ overwrite opt-in (FIX-314: the guard key is the full
             task+round+reviewer triple). When the reviewer's own record
             already exists, the default (``force=False``) fails closed: an
@@ -894,7 +759,10 @@ def write_review_record(
     """
     # Input validation (fail-closed).
     if not _TASK_ID_RE.match(str(task_id or "")):
-        return {"error": "task_id must match PREFIX-NNN (e.g. FIX-236)"}
+        from loop_workflow import UNIT_ID
+        if not (root and UNIT_ID.fullmatch(str(task_id or "")) and
+                (Path(root) / ".governance" / "flow-unit-runtime.json").is_file()):
+            return {"error": "task_id must name a registered work unit or PREFIX-NNN task"}
     try:
         round_n = int(round_n)
     except (TypeError, ValueError):
@@ -932,6 +800,40 @@ def write_review_record(
             return {"error": "root or evidence_dir is required"}
         evidence_dir = Path(root) / ".governance"
     evidence_dir = Path(evidence_dir)
+    native_binding = None
+    runtime_path = evidence_dir / "flow-unit-runtime.json"
+    if runtime_file is not None and Path(runtime_file).resolve() != runtime_path.resolve():
+        return {"error": "the scoped runtime must belong to the review's host", "code": "loop_binding"}
+    observed_loop = None
+    if record_only and gate_id:
+        return {"error": "an independent observation cannot apply a gate verdict"}
+    from loop_workflow import _payload, review_binding
+    try:
+        units = _payload(runtime_path)["flow_units"]
+        matching = [u for u in units if u["task_id"] == task_id and (not unit_id or u["flow_unit_id"] == unit_id)]
+        assigned = any(u["runtime_status"] in ("active", "dormant") for u in matching)
+        if record_only and unit_id and not matching:
+            raise ValueError("no such unit for this observed task")
+        if len(matching) == 1 and (record_only or (not assigned and not unit_id and not gate_id)):
+            subject = matching[0]
+            observed_loop = {"unit": subject["flow_unit_id"], "attempt": len(subject.get("gate_history", [])),
+                             "cas_version": subject["loop_state"].get("cas_version")}
+    except (ValueError, OSError) as exc:
+        return {"error": str(exc), "code": "loop_binding"}
+    if not record_only and (unit_id or gate_id or assigned):
+        try:
+            if not reviewer:
+                raise ValueError("a scoped gate requires an identified reviewer")
+            from loop_engine import reviewer_gates
+            allowed = reviewer_gates(reviewer)
+            native_binding = review_binding(root or evidence_dir.parent, task_id, unit_id, gate_id,
+                                            allowed_gates=allowed)
+            if native_binding.get("release_reviewer") and reviewer != native_binding["release_reviewer"]:
+                raise ValueError("this version requires its designated release reviewer")
+            if force:
+                raise ValueError("a consumed gate review is immutable; use a new review round")
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc), "code": "loop_binding"}
 
     # FIX-314 key-face resolution: the record key is (task, round, reviewer).
     # The canonical name stays the FIRST reviewer's slot — backward
@@ -1000,6 +902,12 @@ def write_review_record(
 
     # ── FEAT-094 step 2 — 验证结构与修订: conflict check + snapshot ──
     report_verdicts = _report_verdict_tokens(report_text)
+    if native_binding and result_norm in ("APPROVED", "APPROVED_WITH_NOTES") and report_verdicts != {result_norm}:
+        return {"error": "a scoped approval requires the review report's unambiguous verdict", "code": "review_verdict"}
+    if native_binding and native_binding.get("release_version"):
+        version = re.escape(native_binding["release_version"])
+        if not re.search(r"(?<![0-9.])" + version + r"(?![0-9]|\.[0-9])", report_text):
+            return {"error": "the release report must identify the reviewed candidate version", "code": "release_version"}
     if (report_verdicts
             and result_norm not in _CONFLICT_EXEMPT_RESULTS
             and result_norm not in report_verdicts):
@@ -1028,6 +936,11 @@ def write_review_record(
             }
     repo_root = root if root is not None else evidence_dir.parent
     binding = snapshot_binding(repo_root, bind_files)
+    if bind_tree is not None:
+        if (not re.fullmatch(_GIT_OID, bind_tree) or _git_output(repo_root, "cat-file", "-t", bind_tree) != "tree"
+                or not re.search(r"(?<![0-9a-f])" + re.escape(bind_tree) + r"(?![0-9a-f])", report_text)):
+            return {"error": "the review report must identify the existing immutable candidate tree", "code": "tree_binding"}
+        binding["tree"] = bind_tree
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
     # ── FEAT-094 steps 3+4 — the atomic ledger core (登记发现 event +
@@ -1038,7 +951,7 @@ def write_review_record(
             evidence_dir, task_id=task_id, round_n=round_n,
             result_norm=result_norm, review_id=review_id, reviewer=reviewer,
             report_path=report_path, report_sha256=report_sha256,
-            binding=binding, scope_norm=scope_norm)
+            binding=binding, scope_norm=scope_norm, native_binding=native_binding, observed_loop=observed_loop)
     except Exception as exc:  # LedgerError family — structured, never raise
         return {
             "error": (
@@ -1090,6 +1003,12 @@ def write_review_record(
         "- snapshot_commit: {0}".format(binding["commit"]),
         "- snapshot_worktree: {0}".format(binding["worktree"]),
     ]
+    if observed_loop:
+        trust_fields.append("- observed_loop: " + json.dumps(observed_loop, sort_keys=True, separators=(",", ":")))
+    if "tree" in binding:
+        trust_fields.append(f"- snapshot_tree: {binding['tree']}")
+    if native_binding:
+        trust_fields.extend(f"- {key}: {value}" for key, value in native_binding.items())
     for bound in binding["bindings"]:
         trust_fields.append("- snapshot_bind: {0}={1}".format(
             bound["path"], bound["hash"]))
@@ -1125,7 +1044,8 @@ def write_review_record(
             pins, ",".join(ob["id"] for ob in registered))
     row = _evidence_row(
         task_id, round_n, result_norm, reviewer, report_path,
-        review_file.name, today, review_id=review_id, pins=pins)
+        review_file.name, today, review_id=review_id, pins=pins,
+        gate_id=native_binding["gate"] if native_binding else gate_id)
     try:
         with evidence_path.open("a", encoding="utf-8") as fh:
             fh.write("\n" + row)
@@ -1154,19 +1074,14 @@ def write_review_record(
             "ledger": ledger_face,
         }
 
-    # 2. Wiring A (best-effort; never blocks the record).
-    wiring = _wire_to_loop(
-        task_id, round_n, result_norm, review_file, reviewer or actor,
-        report_path,
-        unit_id, gate_id, root, runtime_file, plugin_home)
-
-    # 3. loop_exit → next-unit bridge (best-effort consumer).
-    if wiring.get("wired") and wiring.get("decision") == "exit" and root is not None:
+    wiring = {"wired": False, "decision": "recorded", "reason": "independent or interrupted observation"}
+    if native_binding and not record_only and result_norm not in ("ABORTED", "UNKNOWN"):
+        from loop_workflow import gate_review
         try:
-            from loop_exit_bridge import refresh_candidates  # deferred (peer)
-            refresh_candidates(Path(root))
-        except Exception:  # noqa: BLE001 — bridge refresh must never block
-            pass
+            wiring = gate_review(root or evidence_dir.parent, native_binding["unit"], native_binding["gate"], review_id)
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc), "review_id": review_id, "review_file": str(review_file),
+                    "code": "loop_gate_pending", "evidence_row_written": True}
 
     summary = {
         "review_id": review_id,
@@ -1203,12 +1118,7 @@ def write_review_record(
 
 
 __all__ = [
-    "REVIEW_GATE_MAPPING",
-    "GATE_VERDICT_TO_RESULT",
-    "resolve_wiring",
-    "wiring_summary",
     "write_review_record",
     "snapshot_binding",
     "verify_review_trust",
-    "process_gate_result",
 ]

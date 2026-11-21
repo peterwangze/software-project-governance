@@ -88,60 +88,27 @@ class R2ReverseDependencyTests(unittest.TestCase):
     def test_r2_inventory_records_paths_and_lines(self):
         """Packet acceptance ③ — inventory carries path + line numbers."""
         inventory = _committed_baseline()["r2_reverse_dependency"]["inventory"]
-        self.assertGreater(len(inventory), 30)
+        current = self._current()
+        records = {(e["path"], e["kind"]): e for e in inventory}
+        self.assertTrue(set(current).issubset(records))
         for entry in inventory:
-            self.assertIn("path", entry)
-            self.assertIn("lines", entry)
-            self.assertGreaterEqual(entry["count"], 1)
-            self.assertEqual(len(entry["lines"]), entry["count"])
-        joined = " ".join(e["path"] for e in inventory)
-        self.assertIn("checks/review_domain.py", joined)
-        self.assertIn("loop_health.py", joined)
+            self.assertTrue((_INFRA_DIR / entry["path"]).is_file())
+            self.assertEqual(entry["count"], len(entry["lines"]))
+            self.assertTrue(all(isinstance(line, int) and line > 0 for line in entry["lines"]))
 
-    def test_r2_new_site_count_fails(self):
-        baseline = _committed_baseline()
-        current = self._current()
-        key = ("checks/review_domain.py", "vw_call")
-        self.assertIn(key, current)  # precondition: legacy site exists
-        inflated = copy.deepcopy(current)
-        inflated[key]["count"] += 1
-        violations = ar.check_r2(
-            inflated, baseline["r2_reverse_dependency"]["inventory"])
-        self.assertTrue(any(v["rule"] == "R2" and v["path"] == key[0]
-                            for v in violations))
-
-    def test_r2_new_file_zero_tolerance(self):
-        baseline = _committed_baseline()
-        current = self._current()
-        current[("brand_new_module.py", "vw_def")] = {"count": 1, "lines": [3]}
-        violations = ar.check_r2(
-            current, baseline["r2_reverse_dependency"]["inventory"])
-        self.assertTrue(any("brand_new_module.py" in v.get("path", "")
-                            for v in violations))
-
-    def test_r2_line_drift_tolerated(self):
-        """Edits above a legacy site shift its line — count semantics hold."""
-        baseline = _committed_baseline()
-        current = self._current()
-        key = ("checks/review_domain.py", "vw_def")
-        drifted = copy.deepcopy(current)
-        drifted[key]["lines"] = [line + 500 for line in drifted[key]["lines"]]
-        violations = ar.check_r2(
-            drifted, baseline["r2_reverse_dependency"]["inventory"])
-        self.assertEqual(violations, [])
-
-    def test_r2_expired_inventory_entry_zero_budget(self):
-        """到期即 FAIL — an expired inventory fuse un-budgets its sites."""
-        baseline = _committed_baseline()
-        inventory = copy.deepcopy(baseline["r2_reverse_dependency"]["inventory"])
-        for entry in inventory:
-            if entry["path"] == "checks/review_domain.py" and entry["kind"] == "vw_def":
-                entry["expire_version"] = "0.78.1"  # == current skill version
-        violations = ar.check_r2(self._current(), inventory,
-                                 version=(0, 78, 1))
-        self.assertTrue(any(v.get("kind") == "vw_def"
-                            and v["path"] == "checks/review_domain.py"
-                            for v in violations))
+    def test_r2_reductions_line_drift_and_new_sites(self):
+        key = ("example.py", "vw_call")
+        baseline = [{"path": key[0], "kind": key[1], "count": 2, "lines": [2, 3]}]
+        for lines in ([], [12], [12, 14], [12, 14, 17]):
+            with self.subTest(lines=lines):
+                current = {key: {"count": len(lines), "lines": lines}} if lines else {}
+                violations = ar.check_r2(current, baseline)
+                self.assertEqual(bool(violations), len(lines) > 2, violations)
+        added = {("new.py", "import_vw"): {"count": 1, "lines": [3]}}
+        self.assertTrue(any(v.get("path") == "new.py" for v in ar.check_r2(added, baseline)))
+        expired = [dict(baseline[0], expire_version="0.78.1")]
+        violations = ar.check_r2({key: {"count": 1, "lines": [3]}}, expired, version=(0, 78, 1))
+        self.assertTrue(any(v.get("path") == "example.py" for v in violations))
 
 
 class R3LayerMatrixTests(unittest.TestCase):

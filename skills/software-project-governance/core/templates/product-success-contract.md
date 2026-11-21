@@ -1,6 +1,6 @@
 # Product Success Contract 模板
 
-该模板用于 P0/P1 用户可见任务。目标是把“产品是否真的成功”从 LLM 的隐含判断转成可审查、可验证、可追溯的契约。
+该模板用于 明确采用这一交接契约的成品。目标是把“产品是否真的成功”从 LLM 的隐含判断转成可审查、可验证、可追溯的契约。
 
 ## Contract
 
@@ -20,9 +20,9 @@ product_success_contract:
 
 ## 使用规则
 
-- 产品成功契约先于实现产生，并进入 `.governance/execution-packets.json`。
-- 自动生成的 `TO_BE_DEFINED` 只是草案；P0/P1 任务必须替换为具体用户、场景、非目标、指标和完成定义。
-- P0/P1 任务不得使用 `TBD`、`TODO`、`TO_BE_DEFINED`、`待补`、`unknown`、`无` 等占位内容关闭。
+- 接收方需要产品成功契约时，在实现前确认并写入 `.governance/execution-packets.json`。
+- 自动生成的 `TO_BE_DEFINED` 只是草案；这些交接项必须替换为具体用户、场景、非目标、指标和完成定义。
+- 这些交接项不得使用 `TBD`、`TODO`、`TO_BE_DEFINED`、`待补`、`unknown`、`无` 等占位内容关闭。
 - 成功指标必须同时覆盖用户可感知结果和可运行验证，不得只写“governance/check/review/evidence 已完成”。
 - 非目标用于保护范围，防止弱 LLM 把任务扩展成不可验证的大包。
 - 竞争基线用于提示 AI：最低标准不是“代码存在”，而是达到成熟团队会接受的产品完成度。

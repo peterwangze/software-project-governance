@@ -7,9 +7,6 @@ These tests are the load-bearing verification for FEAT-002:
   - The ``test_*_fails`` cases are the negative coverage: each removes or
     corrupts one load-bearing field and asserts validation FAILS with a
     specific error. Fail-closed: no silent pass.
-  - ``test_routing_*`` — the version router in ``flow_unit_runtime.py``
-    dispatches ``schema_version`` "1.0" → v1 (unchanged), "2.0" → v2, unknown
-    → fail.
   - ``test_contract_drift_registry_loop_state_fields`` — the drift test: the
     registry's ``agent_intrinsic_loop.loop_state_fields`` MUST equal the
     contract's ``loop_state_fields`` (ADR §3.6/§3.7). Fails on drift.
@@ -30,7 +27,6 @@ if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
 
 import loop_engine  # noqa: E402
-from checks import flow_unit_runtime  # noqa: E402
 from checks import flow_unit_runtime_v2  # noqa: E402
 
 PLUGIN_HOME = _INFRA_DIR.parent  # skills/software-project-governance/
@@ -345,77 +341,6 @@ class V2ValidatorNegativeTests(unittest.TestCase):
         self.assertTrue(any("must be an object" in e for e in result["errors"]))
 
 
-class RoutingTests(unittest.TestCase):
-    """The version router in flow_unit_runtime.py dispatches on schema_version."""
-
-    def test_schema_version_1_routes_to_v1_unchanged(self):
-        """A v1 payload routes to the byte-frozen v1 validator (unchanged)."""
-        # A minimal v1 payload: schema_version 1.0, workflow_model classic. The
-        # v1 validator requires many classic fields, so this incomplete payload
-        # produces v1-specific failures (proving it routed to v1, not v2).
-        v1_payload = {"schema_version": "1.0", "workflow_model": "classic-phase-gate"}
-        failures = flow_unit_runtime.validate_flow_unit_runtime_payload_dispatch(v1_payload)
-        self.assertTrue(
-            len(failures) > 0,
-            "v1 payload should produce v1 failures (it lacks classic fields)",
-        )
-        # v1-specific failure: runtime_scope must be runtime-visibility-only.
-        joined = " ".join(failures)
-        self.assertIn("runtime_scope must be runtime-visibility-only", joined)
-
-    def test_schema_version_2_routes_to_v2(self):
-        """A v2 payload routes to the v2 validator."""
-        payload = _valid_payload()
-        failures = flow_unit_runtime.validate_flow_unit_runtime_payload_dispatch(payload)
-        self.assertEqual(
-            failures, [],
-            f"valid v2 payload routed through the dispatcher should pass: {failures}",
-        )
-
-    def test_schema_version_2_invalid_routes_to_v2_and_fails(self):
-        """An invalid v2 payload routes to v2 and fails there (not v1)."""
-        payload = _valid_payload()
-        del payload["migration_timestamp"]  # missing top-level field
-        failures = flow_unit_runtime.validate_flow_unit_runtime_payload_dispatch(payload)
-        # v2-specific failure wording, proving it routed to v2.
-        joined = " ".join(failures)
-        self.assertIn("missing required top-level field `migration_timestamp`", joined)
-
-    def test_absent_schema_version_routes_to_v1(self):
-        """Absent schema_version is treated as v1 (legacy visibility payloads)."""
-        v1_payload = {"workflow_model": "classic-phase-gate"}  # no schema_version
-        failures = flow_unit_runtime.validate_flow_unit_runtime_payload_dispatch(v1_payload)
-        joined = " ".join(failures)
-        # Routed to v1: it complains about schema_version must be 1.0 (v1 wording).
-        self.assertIn("schema_version must be 1.0", joined)
-
-    def test_unknown_schema_version_fails_closed(self):
-        """An unknown schema_version fails closed (not silently routed)."""
-        payload = _valid_payload()
-        payload["schema_version"] = "9.9"
-        failures = flow_unit_runtime.validate_flow_unit_runtime_payload_dispatch(payload)
-        self.assertEqual(len(failures), 1)
-        self.assertIn("unsupported schema_version", failures[0])
-        self.assertIn("9.9", failures[0])
-
-    def test_v2_payload_still_rejected_by_raw_v1_validator(self):
-        """The v1 validator (called directly) still rejects loop-engineering.
-
-        This proves the v1 containment is preserved: a v2/loop-engineering
-        payload presented to the byte-frozen v1 validator fails on
-        workflow_model (the AUDIT-133 containment boundary).
-        """
-        payload = _valid_payload()
-        # Call the v1 validator DIRECTLY (not via the dispatcher) to prove it
-        # is unchanged and still rejects loop-engineering.
-        failures = flow_unit_runtime.validate_flow_unit_runtime_payload(payload)
-        joined = " ".join(failures)
-        self.assertIn(
-            "workflow_model must be classic-phase-gate or dynamic-flow-gate", joined,
-            "the byte-frozen v1 validator must still reject loop-engineering",
-        )
-
-
 class ContractDriftTests(unittest.TestCase):
     """The drift test: registry loop_state_fields == contract loop_state_fields.
 
@@ -472,26 +397,27 @@ class ContractDriftTests(unittest.TestCase):
         )
 
     def test_contract_required_per_unit_fields_complete(self):
-        """The contract declares the exact 10 per-unit fields from ADR §3.3."""
+        """Native declarations carry their goal once and need no migration provenance."""
         with open(CONTRACT_PATH, encoding="utf-8") as fh:
             contract_data = json.load(fh)
         expected = [
-            "flow_unit_id", "title", "unit_type", "project_type",
-            "derivation_reason", "loop_state", "gate_state", "runtime_status",
+            "flow_unit_id", "loop_state", "gate_state", "runtime_status",
             "dependencies", "blockers",
         ]
         self.assertEqual(contract_data["required_per_unit_fields"], expected)
+        self.assertIn("goal", contract_data["native_contract"]["required_per_unit_fields"])
+        self.assertIn("title", contract_data["archived_unit_fields"])
 
     def test_contract_required_top_level_fields_complete(self):
-        """The contract declares the exact 11 top-level fields from ADR §3.2."""
+        """Only historical migration records require a decomposition acknowledgement."""
         with open(CONTRACT_PATH, encoding="utf-8") as fh:
             contract_data = json.load(fh)
         expected = [
-            "schema_version", "runtime_contract", "runtime_scope",
-            "workflow_model", "contract_source", "migration_version",
-            "migration_plan_hash", "migration_timestamp",
-            "decomposition_confirmed", "flow_units", "no_overclaim_boundary",
+            "schema_version", "runtime_contract", "runtime_scope", "workflow_model",
+            "contract_source", "flow_units",
         ]
+        self.assertEqual(set(contract_data["archived_migration_fields"]),
+                         {"migration_version", "migration_plan_hash", "migration_timestamp", "decomposition_confirmed", "no_overclaim_boundary"})
         self.assertEqual(contract_data["required_top_level_fields"], expected)
 
     def test_contract_enums_match_adr(self):
@@ -504,7 +430,7 @@ class ContractDriftTests(unittest.TestCase):
         )
         self.assertEqual(
             contract_data["allowed_runtime_statuses"],
-            ["active", "dormant", "blocked", "withdrawn"],
+            ["active", "dormant", "blocked", "withdrawn", "completed"],
         )
         self.assertEqual(
             contract_data["allowed_loop_tiers"],

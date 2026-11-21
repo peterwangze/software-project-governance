@@ -103,12 +103,22 @@ ASSERTED_EDGE_COUNT = 12
 # admitted by the R0 leftover batch (FIX-303 / F-5) so its zero-internal-
 # dependency claim is machine-judged instead of self-attested.
 DEFAULT_MANAGED_MODULES: Dict[str, Dict[str, str]] = {
+    "infra/governance_readers.py": {
+        "layer": "L2",
+        "admitted_by": "FIX-508",
+        "note": "Shared Markdown readers for project plans, evidence and risks; no internal dependencies.",
+    },
     "infra/archguard_ratchet.py": {
         "layer": "L5",
         "admitted_by": "FEAT-019",
         "note": "cross-cutting guard; CLI surface ≈ L5; internal imports: "
                 "stdlib only + lazy contract_matrix consumer edge (unmanaged "
                 "until its own slice - owner task FIX-303, F-6 transfer)",
+    },
+    "infra/claim_negation.py": {
+        "layer": "L0",
+        "admitted_by": "FIX-509",
+        "note": "Pure lexical matcher; domain callers supply the noun-claim vocabulary.",
     },
     "infra/contracts.py": {
         "layer": "L0",
@@ -130,7 +140,6 @@ DEFAULT_MANAGED_MODULES: Dict[str, Dict[str, str]] = {
 # debt would otherwise lose its owner on task closure.
 _OWNER_TASK_MAP: Tuple[Tuple[str, str], ...] = (
     ("checks/review_domain.py", "REFACTOR-migrate-review-domain"),
-    ("checks/loop_runtime_claims", "REFACTOR-migrate-review-domain"),
     ("checks/", "REFACTOR-domains-batch1"),
     ("release/", "REFACTOR-domains-batch1"),
     ("loop_", "REFACTOR-domains-batch1"),

@@ -92,7 +92,7 @@ def _active_loop_state(agent_phase="plan", loop_count=0, cas_version=0,
     }
 
 
-def _valid_gate_state(status="pending", gate_id="G5", last_result=None):
+def _valid_gate_state(status="pending", gate_id="G6", last_result=None):
     return {
         "status": status,
         "gate_id": gate_id,
@@ -109,7 +109,9 @@ def _valid_unit(unit_id="shitu.story.Skeleton", runtime_status="dormant",
     if gate_state is None:
         gate_state = _valid_gate_state(last_result=loop_state.get("last_gate_result"))
     return {
-        "flow_unit_id": unit_id,
+        "flow_unit_id": unit_id, "task_id": unit_id, "parent_unit_id": None,
+        "entry_tier": loop_state.get("active_loop_tier") or "inner", "entry_gate": gate_state["gate_id"],
+        "goal": "Deliver the unit", "acceptance": "Its declared behavior is observed",
         "title": "Skeleton story unit",
         "unit_type": "story",
         "project_type": "game-narrative",
@@ -127,6 +129,7 @@ def _valid_payload(units=None):
     if units is None:
         units = [_valid_unit()]
     return {
+        "origin": "native-loop",
         "schema_version": "2.0",
         "runtime_contract": "loop-runtime-contract/v2",
         "runtime_scope": "loop-engineering-runtime",

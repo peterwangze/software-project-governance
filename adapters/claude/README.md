@@ -9,6 +9,8 @@ Claude Code is a Tier 1 loading target in 0.47.0. The current user-facing path i
 - workflow entry: `skills/software-project-governance/SKILL.md`
 - runtime records: the target project's `.governance/`
 
+在项目根调用 `/governance`。插件从 `CLAUDE_PLUGIN_ROOT` 定位工作流，在该项目创建或恢复本轮单元。启动、返工及复审的命令见[工作单元运行协议](../../skills/software-project-governance/core/lifecycle.md)。
+
 ## 适配目标
 
 让 Claude 类 coding agent 在执行软件项目任务时，优先读取统一规则与模板，而不是直接自由发挥。

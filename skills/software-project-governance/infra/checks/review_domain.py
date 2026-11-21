@@ -317,23 +317,25 @@ def check_m5_compliance():
             "fix": "Create interaction-boundary.md with AskUserQuestion binding rules"
         })
 
-    # Check 4: Bootstrap template (governance-init.md) contains M5 pre-output guard
-    if bootstrap_template.is_file():
-        content = bootstrap_template.read_text(encoding="utf-8")
-        m5_selfcheck_patterns = [
-            "我即将输出的文本是否包含向用户提问的问句",
-            "M5.1",
-            "AskUserQuestion",
-        ]
-        has_selfcheck_item4 = all(p in content for p in m5_selfcheck_patterns)
-        if not has_selfcheck_item4:
+    # Each installed entry resolves the shared pre-output rule.
+    skill_path = skills_dir / "SKILL.md"
+    if bootstrap_template.is_file() and skill_path.is_file():
+        from sync_entry_projection import CanonicalSourceError, extract_canonical_templates
+        try:
+            templates = extract_canonical_templates(bootstrap_template.read_text(encoding="utf-8"))
+        except CanonicalSourceError:
+            templates = {}
+        skill = skill_path.read_text(encoding="utf-8")
+        heading = re.search(r"^### B0 SELF-CHECK[^\n]*\n(.*?)(?=^### |\Z)", skill, re.M | re.S)
+        reaches_rule = bool(templates) and all("SKILL.md" in entry and "AskUserQuestion" in entry for entry in templates.values())
+        if not (reaches_rule and heading and all(token in heading[1] for token in ("问句", "M5.1", "AskUserQuestion"))):
             issues.append({
                 "type": "m5_selfcheck_missing",
                 "file": "commands/governance-init.md",
                 "line": 0,
-                "text": "Bootstrap template missing M5 pre-output guard. Without this, agent's natural conversational patterns can produce M5.1 violations.",
+                "text": "The entry templates must resolve the shared M5 pre-output guard.",
                 "severity": "BLOCKING",
-                "fix": "Add SELF-CHECK to governance-init.md bootstrap template"
+                "fix": "Restore the entry reference or the B0 AskUserQuestion rule."
             })
     else:
         issues.append({
@@ -2832,8 +2834,8 @@ def _task_routing_exempt(task_id, routing_table):
     if not routing_table:
         return False
     # Collect the exempt routing keys (post-review cell == —).
-    exempt_types = {t for t, cell in routing_table.items()
-                    if _is_post_review_exempt(cell)}
+    exempt_types = {label.strip() for task_type, cell in routing_table.items()
+                    if _is_post_review_exempt(cell) for label in task_type.split("/")}
     if not exempt_types:
         return False
     blob = _evidence_task_type_index().get(task_id, "")
@@ -3870,96 +3872,61 @@ def check_review_machine_provenance(review_rows=None, review_files=None,
 
 
 def check_loop_wiring_call_sites(roots=None):
-    """FIX-236.4 / ADR-017 §3.4 (P1-1): enumerate process_gate_result call sites.
-
-    AST + import-graph analysis over the production infra modules. Docstrings,
-    comments and string literals are structurally excluded (only real AST
-    ``Call`` nodes count), so the ``loop_gate_processor.py:69`` docstring
-    example is a NEGATIVE sample and cannot cause the AUDIT-133/140 rg-text
-    false positive. The gate is PASS when at least 2 production call sites
-    exist (Wiring A — review-record — and Wiring B — auto_judge_gate).
-
-    Args:
-        roots: optional list of files/dirs to scan (default: the plugin's
-            ``infra`` directory derived from ROOT).
-
-    Returns:
-        dict: ``{"verdict", "count", "call_sites": [{"file", "path", "line"}],
-        "reason"}``. Never raises.
-    """
+    """Require one scoped verdict writer and its review, command and delivery consumers."""
     _resolve_shared()
-    if roots is None:
-        roots = [ROOT / "skills/software-project-governance/infra"]
-    files = []
-    for entry in roots or []:
-        p = Path(entry)
-        if p.is_file():
-            files.append(p)
-        elif p.is_dir():
-            files.extend(sorted(p.rglob("*.py")))
-    call_sites = []
-    for path in files:
+    files = set()
+    for entry in roots if roots is not None else [ROOT / "skills/software-project-governance/infra"]:
+        path = Path(entry)
+        files.update([path] if path.is_file() else path.rglob("*.py"))
+    sites, consumers, issues = [], [], []
+    for path in sorted(files):
         if "tests" in path.parts or "__pycache__" in path.parts:
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (OSError, UnicodeDecodeError, SyntaxError):
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            issues.append(f"{path.name}: {exc}")
             continue
-        # Import-graph pass: collect aliases that resolve to
-        # loop_gate_processor.process_gate_result.
-        direct_names = {"process_gate_result"}
-        module_aliases = {"loop_gate_processor"}
+        calls = {"loop_gate_processor": {"process_gate_result"}, "loop_workflow": {"_apply_receipt"}}
+        aliases = {"_apply_receipt": "_apply_receipt"} if path.name == "loop_workflow.py" else {}
         for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in calls:
+                for name in node.names:
+                    if name.name in calls[node.module]:
+                        aliases[name.asname or name.name] = name.name
             if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name == "loop_gate_processor":
-                        module_aliases.add(alias.asname or "loop_gate_processor")
-            elif isinstance(node, ast.ImportFrom) and node.module == "loop_gate_processor":
-                for alias in node.names:
-                    if alias.name == "process_gate_result":
-                        direct_names.add(alias.asname or "process_gate_result")
-        # Call-site pass: only real Call nodes (docstrings/comments/strings
-        # are not AST calls).
+                for name in node.names:
+                    for call in calls.get(name.name, ()):
+                        aliases[f"{name.asname or name.name}.{call}"] = call
+        if not aliases:
+            continue
+        owners = {node: fn.name for fn in ast.walk(tree) if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+                  for node in ast.walk(fn) if isinstance(node, ast.Call)}
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, (ast.Name, ast.Attribute)):
                 continue
-            func = node.func
-            matched = False
-            if isinstance(func, ast.Name):
-                matched = func.id in direct_names
-            elif isinstance(func, ast.Attribute):
-                matched = (
-                    func.attr == "process_gate_result"
-                    and isinstance(func.value, ast.Name)
-                    and func.value.id in module_aliases
-                )
-            if matched:
-                call_sites.append({
-                    "file": path.name,
-                    "path": str(path),
-                    "line": node.lineno,
-                })
-    count = len(call_sites)
-    if count >= 2:
-        return {
-            "verdict": "PASS",
-            "count": count,
-            "call_sites": call_sites,
-            "reason": (
-                "{0} production call site(s) of process_gate_result "
-                "(>= 2 required: Wiring A review-record + Wiring B "
-                "gate-engine)".format(count)
-            ),
-        }
-    return {
-        "verdict": "FAIL",
-        "count": count,
-        "call_sites": call_sites,
-        "reason": (
-            "{0} production call site(s) of process_gate_result "
-            "(< 2 required — Wiring A/B regression)".format(count)
-        ),
-    }
+            kind = aliases.get(ast.unparse(node.func))
+            if not kind:
+                continue
+            site = {"file": path.name, "path": str(path), "line": node.lineno, "function": owners.get(node)}
+            if kind == "_apply_receipt":
+                consumers.append(site)
+            else:
+                sites.append(site)
+                if (site["file"], site["function"]) != ("loop_workflow.py", "_apply_receipt") or not any(
+                    kw.arg == "verified_native_review" and isinstance(kw.value, ast.Constant)
+                    and kw.value.value is True for kw in node.keywords
+                ):
+                    issues.append(f"unexpected or unverified verdict writer at {path.name}:{node.lineno}")
+    if len(sites) != 1:
+        issues.append(f"expected one native verdict writer, found {len(sites)}")
+    allowed = {"gate_review", "verify_command", "accept_delivery"}
+    actual = {site["function"] for site in consumers if site["file"] == "loop_workflow.py"}
+    if actual != allowed or any(site["file"] != "loop_workflow.py" for site in consumers):
+        issues.append("review, command and delivery must each consume their own receipt through the native writer")
+    return {"verdict": "FAIL" if issues else "PASS", "count": len(sites), "call_sites": sites,
+            "consumers": consumers, "issues": issues,
+            "reason": "; ".join(issues) if issues else "native review, command and delivery share one scoped verdict writer"}
 
 
 def cmd_check_review_debt(args):
@@ -3995,5 +3962,3 @@ def cmd_check_review_debt(args):
     )
     if args.fail_on_issues and has_fail:
         sys.exit(1)
-
-

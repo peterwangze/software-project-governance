@@ -27,7 +27,7 @@
 | --- | --- |
 | `{task_id}`、`{task_summary}`、`{priority}` | 现有任务编号、摘要和优先级。 |
 | `{agent_role}`、`{role_definition_path}`、`{task_skill_path}` | 角色名、角色定义和绑定的 SKILL 路径。 |
-| `{task_description}` | 用户原意与本次缺口。宿主 `.governance/<intake.record>` 给出受理依据和候选资源 `prior_art`。当前来源沿用 `task-priority-analysis` 的裁决；有修订时从 `intake.demand_revisions` 取依据，旧包缺少定位可用 `execution-packet --task <ID>` 刷新预览。按[行为协议 M10](behavior-protocol.md) 从宿主授权渠道补缺，引用试用回执或标明待试项。跳过或受限时注明依据和可行路径。 |
+| `{task_description}` | 用户原意、单元 ID、父单元及本轮需要解决的缺口。宿主 `.governance/<intake.record>` 给出受理依据和候选资源 `prior_art`。当前来源沿用 `task-priority-analysis` 的裁决；有修订时从 `intake.demand_revisions` 取依据，旧包缺少定位可用 `execution-packet --task <ID>` 刷新预览。按[行为协议 M10](behavior-protocol.md) 从宿主授权渠道补缺，引用试用回执或标明待试项。跳过或受限时注明依据和可行路径。 |
 | `{file_list}` | 获准路径。沿用已明确的 `allowed_change_scope`，只读任务标明只读。 |
 | `{acceptance_criteria}` | 沿用已明确的 `acceptance_contract`，给出工件、正常验收入口、可观察的完成条件和结果位置。 |
 | `{hard_gates}` | 本事务的硬门槛。有建议步数预算时注明建议值。 |

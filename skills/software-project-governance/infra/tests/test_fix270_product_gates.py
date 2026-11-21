@@ -3,7 +3,7 @@
 Deliverable under test:
 
 B. 宿主场景（HOST_PROJECT_ROOT != PLUGIN_ROOT）默认跳过插件产品自检
-   （Check 31 loop-runtime-claims + identity attestation、Check 28o/28p/28q
+   （Check 28o/28p/28q
    ArchGuard、Check 11/12/28b 等以 PLUGIN_ROOT 为事实源的检查），新增
    ``--product-gates`` 显式开启；dogfood 场景（host==plugin）默认保留全部。
    判定标准：以「检查事实源根」切分（``_PLUGIN_PRODUCT_CHECK_IDS`` 声明表）。
@@ -188,12 +188,6 @@ class EngineProductGateTests(unittest.TestCase):
         _apply_project_root_override rebinds for --project-root). Local
         ignored dogfood governance must not decide clean-checkout results.
         """
-        stub = types.SimpleNamespace(
-            verdict="PASS", issues=[], phase="staged_index",
-            findings=[], inventory=types.SimpleNamespace(
-                candidate_count=0, inventory_sha256="x"),
-            parsed_candidates=0,
-        )
         with tempfile.TemporaryDirectory() as td:
             host = Path(td)
             gov = host / ".governance"
@@ -203,55 +197,51 @@ class EngineProductGateTests(unittest.TestCase):
                 encoding="utf-8")
             for name in ("evidence-log.md", "decision-log.md", "risk-log.md"):
                 (gov / name).write_text("# Isolated test host\n", encoding="utf-8")
-            with mock.patch.object(vw, "scan_loop_runtime_claims",
-                                   side_effect=AssertionError("product check ran: Check 31 claims")):
-                with mock.patch.object(vw, "_run_identity_attestation_fixture_only",
-                                       side_effect=AssertionError("product check ran: attestation")):
-                    with mock.patch.object(vw, "check_architecture_health",
-                                           side_effect=AssertionError("product check ran: Check 28o")):
-                        with mock.patch.object(vw, "check_manifest_consistency",
-                                               side_effect=AssertionError("product check ran: Check 11")):
-                            with mock.patch.object(vw, "check_cross_references",
-                                                   side_effect=AssertionError("product check ran: Check 12")):
-                                with mock.patch.object(vw, "check_projection_sync",
-                                                       side_effect=AssertionError("product check ran: Check 28b")):
-                                    p1, p2 = _patch_roots(
-                                        divergent=divergent,
-                                        plugin_root=Path(vw.ROOT),
-                                        host_root=host,
+            with mock.patch.object(vw, "check_architecture_health",
+                                   side_effect=AssertionError("product check ran: Check 28o")):
+                with mock.patch.object(vw, "check_manifest_consistency",
+                                       side_effect=AssertionError("product check ran: Check 11")):
+                    with mock.patch.object(vw, "check_cross_references",
+                                           side_effect=AssertionError("product check ran: Check 12")):
+                        with mock.patch.object(vw, "check_projection_sync",
+                                               side_effect=AssertionError("product check ran: Check 28b")):
+                            p1, p2 = _patch_roots(
+                                divergent=divergent,
+                                plugin_root=Path(vw.ROOT),
+                                host_root=host,
+                            )
+                            with p1, p2, mock.patch.multiple(
+                                    vw,
+                                    GOVERNANCE_DIR=gov,
+                                    EXECUTION_PACKET_PATH=gov / "execution-packets.json",
+                                    SAMPLE_PATH=gov / "plan-tracker.md",
+                                    SESSION_SNAPSHOT_PATH=gov / "session-snapshot.md",
+                                    EVIDENCE_PATH=gov / "evidence-log.md",
+                                    RISK_PATH=gov / "risk-log.md",
+                                    ARCHIVE_INDEX_PATH=gov / "archive" / "index.md",
+                                    ARCHIVE_TASKS_DIR=gov / "archive" / "tasks",
+                                    ARCHIVE_EVIDENCE_DIR=gov / "archive" / "evidence",
+                                    ARCHIVE_DECISIONS_DIR=gov / "archive" / "decisions",
+                                    ARCHIVE_RISKS_DIR=gov / "archive" / "risks"), \
+                                 mock.patch.dict(vw.REQUIRED_FILES, {
+                                     "Governance Plan Tracker": gov / "plan-tracker.md",
+                                     "Governance Evidence Log": gov / "evidence-log.md",
+                                     "Governance Decision Log": gov / "decision-log.md",
+                                     "Governance Risk Log": gov / "risk-log.md",
+                                 }):
+                                buf = io.StringIO()
+                                with redirect_stdout(buf):
+                                    vw._run_full_engine_checks(
+                                        _args(product_gates=product_gates)
                                     )
-                                    with p1, p2, mock.patch.multiple(
-                                            vw,
-                                            GOVERNANCE_DIR=gov,
-                                            EXECUTION_PACKET_PATH=gov / "execution-packets.json",
-                                            SAMPLE_PATH=gov / "plan-tracker.md",
-                                            SESSION_SNAPSHOT_PATH=gov / "session-snapshot.md",
-                                            EVIDENCE_PATH=gov / "evidence-log.md",
-                                            RISK_PATH=gov / "risk-log.md",
-                                            ARCHIVE_INDEX_PATH=gov / "archive" / "index.md",
-                                            ARCHIVE_TASKS_DIR=gov / "archive" / "tasks",
-                                            ARCHIVE_EVIDENCE_DIR=gov / "archive" / "evidence",
-                                            ARCHIVE_DECISIONS_DIR=gov / "archive" / "decisions",
-                                            ARCHIVE_RISKS_DIR=gov / "archive" / "risks"), \
-                                         mock.patch.dict(vw.REQUIRED_FILES, {
-                                             "Governance Plan Tracker": gov / "plan-tracker.md",
-                                             "Governance Evidence Log": gov / "evidence-log.md",
-                                             "Governance Decision Log": gov / "decision-log.md",
-                                             "Governance Risk Log": gov / "risk-log.md",
-                                         }):
-                                        buf = io.StringIO()
-                                        with redirect_stdout(buf):
-                                            vw._run_full_engine_checks(
-                                                _args(product_gates=product_gates)
-                                            )
-                                    return buf.getvalue()
+                            return buf.getvalue()
 
     def test_host_mode_skips_product_checks_by_default(self):
         output = self._run_engine(divergent=True, product_gates=False)
         self.assertIn("[SKIP] product self-check", output)
 
     def test_host_mode_product_gates_flag_enables_product_checks(self):
-        with self.assertRaises(AssertionError):
+        with self.assertRaisesRegex(AssertionError, "product check ran: Check (11|12|28[ob])"):
             self._run_engine(divergent=True, product_gates=True)
 
 

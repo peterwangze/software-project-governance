@@ -24,11 +24,9 @@
 
 **判定**：路径落在 `skills/**` `agents/**` `commands/**` `adapters/**` `infra/**` `.claude-plugin/**` `.codex-plugin/**` `.agents/**` = **产品代码**（MUST spawn Agent Team）；落在 `.governance/**` `docs/**` `project/CHANGELOG.md` `project/references/**` = **治理记录**（Coordinator 可直接写入）。判定依据是文件路径，不是修改复杂度（改一行 Python 和改一百行 Markdown 都是产品代码）。**完整边界表见 `commands/governance/overview.md`。**
 
-### Agent Team 路由表（核心 9 条）
+### Agent Team 路由
 
-路由表 = 9 条核心「任务类型 → 执行 Agent → 后置审查」映射（含 Debug/新功能/治理基础设施/架构/需求/测试/发布/CI/复盘 九类）。
-
-完整路由表（19 行）见 `skills/software-project-governance/SKILL.md`；九条核心表全文见 `commands/governance/overview.md`。
+小修由一名执行者复现并重放，跨接口工作在父单元验收组合结果。独立审查、发布授权和复盘按成品契约和实际风险触发。按 `skills/software-project-governance/SKILL.md` 的「Agent 分发路由」选角色。
 
 ### Sub-agent 调度
 
@@ -36,7 +34,7 @@
 
 ### 交互规则
 
-- **AskUserQuestion 是唯一合法用户提问方式**——MUST NOT 内联文字提问；关键决策永远停下来（范围/架构/发布/风险接受/外部依赖/模式/阶段跳跃），非关键决策自动执行。
+- **AskUserQuestion 是唯一合法用户提问方式**——MUST NOT 内联文字提问；关键决策永远停下来（范围/架构/发布/风险接受/外部依赖/模式/切换目标、退出未收敛单元），非关键决策自动执行。
 - **M7.4 任务完成协议**：完成 → evidence → check-governance → audit → 再开新任务；**M7.5 先入账再动手**：任何新任务 MUST 先出现在 plan-tracker 中。
 - **治理文件读取编码（FIX-278 G4/F）**：pwsh 读 `.governance` 治理文件 MUST 显式 UTF-8（`-Encoding UTF8` / `ReadAllText(..., [Text.Encoding]::UTF8)`）——裸 `Get-Content` 产生 mojibake（AUDIT-147 D6）。
 - **完整交互规则**（M7.4/M7.5 全文、健康摘要 `--summary-only` 输出契约 FIX-278 G1 + `--scope quick|full` 执行面契约 FEAT-084、编码规约全文）见 `commands/governance/overview.md`。
@@ -49,15 +47,15 @@
 1. **自动分类，不问用户**【自动化分级：B 级（CLI-Enforced Automation）——命令时点，按聚合返回的 `resolve.scenario_hint` 分类，事件驱动非持续；详见 `commands/governance/overview.md` 的分级声明】：命令自动检测项目状态并路由到正确场景
 2. **最少提问**：每个场景最小化 AskUserQuestion 次数
 3. **安全默认**：异常先于状态展示，恢复先于推进
-4. **会话连续性**：snapshot 是跨会话的契约
+4. **会话连续性**：跨会话从同一单元的运行状态与回执恢复，快照提供交接说明
 
 ---
 
 ## 决策树（自动分类——deterministic，DEC-096）
 
-**第一动作（fail-closed）**：复用同次启动、同项目的聚合结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。仅旧 CLI 明确报告未知子命令时改用 `python <plugin_home>/infra/resolve_entry.py --json`，成功判根后才手读六段。其余非零退出、无效 JSON 或 `resolve.resolved_root_ok != true` → MUST STOP 并展示诊断。详见 `commands/governance/bootstrap.md`。
+**第一动作（fail-closed）**：复用同次启动、同项目的聚合结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。仅旧 CLI 明确报告未知子命令时改用 `python <plugin_home>/infra/resolve_entry.py --json`，成功判根后读取运行记录；无可用能力就报告诊断。其余非零退出、无效 JSON 或 `resolve.resolved_root_ok != true` → MUST STOP 并展示诊断。详见 `commands/governance/bootstrap.md`。
 
-**首次交互（FEAT-034）**：读取同次返回的项目、候选与迁移状态，**立即**呈现最小状态行（模式确认句 + 阶段/Gate 摘要 + carry-over/风险计数）并通过 AskUserQuestion 进入首次用户交互——Scenario D 呈现恢复选项（继续上次/审查快照/重新开始），Scenario F 呈现下一步引导（见 Scenario F 规程文件「状态展示后的引导」），其余场景按对应 Scenario 的首个用户决策点呈现。
+**首次交互**。从已定位的 `loops` 说明目标、工作单元、所属层、本轮裁决和下一项可验证动作。有多个可执行单元时根据用户原意和依赖选择；需要改变范围或接受风险时使用 AskUserQuestion。首次使用且记录为空时，进入[初始化](governance-init.md)，以真实工作登记第一项。
 
 **深检后置（FEAT-034——用户选择后按需执行）**：`check-governance --summary-only --scope quick` 健康摘要（FEAT-084/DEC-303 形态 B——会话面默认 quick：quick 面段执行 + 四态汇总行；legacy 回退时为无 scope 全量）、交叉验证、版本升级摘要呈现与确认后写序列（Scenario C——FEAT-035 ask-确认前置）、归档检测**不作为首次 ask 的前置条件**——深检结果不阻塞首次交互；`governance-bootstrap` 的 `health.state="deferred"` 期间，状态行健康位显示「待检查」而非绿色通过（诚实语义——deferred ≠ 已检查）。**深检后置 ≠ 深检可选**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时 MUST 先补跑对应深检（健康摘要——**推进类深检固定 full 面**：`check-governance --summary-only`〔缺省 scope=full〕，quick 通过 ≠ 完整治理通过 + 交叉验证 + 按所选动作对应的升级/归档序列）再继续——版本升级写序列属推进类动作（DEC-207② P2-1），写操作执行前深检 MUST 补齐；安全约束零削减，只重排时序。
 
@@ -65,7 +63,7 @@
 
 - `resolved_root_ok == false` → **STOP**，展示 `diagnostic`，不呈现任何治理状态（DEC-080 / RISK-038 fail-closed）。
 - `scenario_hint == "A"` → Scenario A（全新项目初始化）
-- `scenario_hint == "B"` → Scenario B（半途接入）
+- `scenario_hint == "B"` → Scenario B（已有项目接入）
 - `scenario_hint == "C"` → Scenario C（工作流版本落后——`active_version` 来自 SKILL.md frontmatter，权威）
 - `scenario_hint == "D"` → Scenario D（会话恢复，snapshot fresh）
 - `scenario_hint == "E"` → Scenario E（异常恢复）
@@ -77,28 +75,20 @@
 
 ## Scenario 摘要与路由
 
-> **路由契约（MUST）**：决策树解析出 `scenario_hint` 后，MUST 先用 `read` 工具读取下表对应文件**全文**，再按该文件执行——摘要只用于**识别与分流**，不是执行依据。跳过 Read = 流程违规（完整规程可能在摘要之外携带 MUST 条款）。
->
-> **零丢失保证（FEAT-038）**：完整执行规程逐字搬移自拆分前的 `commands/governance.md` Scenario 段——摘要只做索引，正文全量在场于各自文件。
+读取 `resolve.scenario_hint` 命中的操作说明，沿同一单元继续。
 
-| # | 触发条件（`scenario_hint`） | 关键步骤 | 执行规程文件（命中后 MUST Read） | 参考 |
-|---|---------------------------|---------|--------------------------------|------|
-| A | `.governance/` 不存在 AND 目录基本为空 | 7 步：参数 ask → 建 4 治理文件 → 注入入口 bootstrap → 装 hooks → 确认面板 → 首任务 INIT-001 → **自动衔接 F** | `commands/governance/scenario-a.md` | `commands/governance-init.md` |
-| B | `.governance/` 不存在 AND 项目有文件/commit 历史 | 8 步：B1 探索信号 → B2 阶段推断 → B3 确认 → B4 参数 → B5 建库+onboarding → B6-B7 bootstrap+hooks → B8 接入确认 → **自动衔接 F** | `commands/governance/scenario-b.md` | `core/onboarding.md` |
-| C | host `工作流版本` < `active_version`（SKILL.md frontmatter 权威） | 5 步：算版本差距 → CHANGELOG delta → **ask 升级摘要（未响应前零写操作）** → 写序列 A~E（bootstrap 段/plan-tracker 补全/hooks 检测/清理 C-2 dry-run 先行/版本字段/归档检测）→ 摘要面板 → **自动衔接 F** | `commands/governance/scenario-c.md` | `commands/governance-update.md` |
-| D | `session-snapshot.md` 存在且新鲜（≤24h 活跃 / 24h~7d 标记 / >7d 归档转 F） | 4 步：D1 校验 snapshot 字段（缺则降级 F）→ D2 交叉验证四项 → D3 恢复面板 + ask 三选项 → D4 按选择执行 | `commands/governance/scenario-d.md` | `commands/governance/snapshot-schema.md` |
-| E | 任一异常标记触发（P0 阻断级 / P1 警告级） | 4 步：E1 全量诊断（P0 3 项 + P1 6 项）→ E2 诊断面板四选项 → E3 执行修复 → E4 修复报告 → **自动衔接 F** | `commands/governance/scenario-e.md` | `commands/governance-verify.md` |
-| F | 一切正常——`.governance/` 存在、健康、版本最新、无 snapshot、无异常 | `status`/`governance-bootstrap` 渲染 → Delivery Trust Snapshot **默认视图 ≤8 字段** + 配置 + 下一步；Gate 表/最近活动/版本折叠 → **ask 引导下一步**（情况 A~D） | `commands/governance/scenario-f.md` | `commands/governance-status.md` |
+| 场景 | 操作说明 | 实际动作 |
+| --- | --- | --- |
+| A · 新项目 | `commands/governance/scenario-a.md` | 确认成品及验收条件，写入首个单元，重开验证 |
+| B · 已有代码 | `commands/governance/scenario-b.md` | 以本次实际修改或交付为起点 |
+| C · 安装版本变化 | `commands/governance/scenario-c.md` | 说明差异，授权后更新投影 |
+| D · 恢复会话 | `commands/governance/scenario-d.md` | 用单元 ID 回读本轮证据和遗留阻塞 |
+| E · 诊断 | `commands/governance/scenario-e.md` | 核实原件与影响范围，修正后复读 |
+| F · 查看 | `commands/governance/scenario-f.md` | 显示目标、单元、门禁条件、最近证据和下一动作 |
 
-**跨场景执行注记（FEAT-034/035/036——拆分中零回退）**：
+恢复或查看本身只读；健康检查延期标为待检查。各宿主共用 `core/lifecycle.md` 的运行命令。
 
-- **首次交互前置**：六个 Scenario 的首次 ask 均在聚合热面就绪后**立即**执行；深检（健康摘要/交叉验证/升级写序列/归档检测）后置为用户选择后按需执行，`health.state="deferred"` 期间健康位显示「待检查」而非通过。深检后置 ≠ 可选——推进类动作前 MUST 补齐。
-- **Scenario C 写序列**：版本升级写序列属推进类动作——执行前 MUST 满足 M5.5 条 3 深检前置；用户确认升级不免除深检；确认前零写操作（FEAT-035）。
-- **Scenario D 新鲜度**：≤24h 活跃恢复 / 24h~7d 标记且仍提供继续 / >7d 归档转 F（规则全文见规程文件）。
-- **Scenario F 双契约（FEAT-036）**：默认交互视图（≤8 字段，强制生成）+ 完整机器契约（20 字段 CLI snapshot + 4 字段 pack doc-surface，不随会话强制生成）。
-- **行为灰度开关（FEAT-040）**：`GOVERNANCE_LEGACY_BEHAVIOR=1` 或 plan-tracker `behavior_profile: legacy` → 只回退性能行为，安全语义不回退；判定与边界全文见 `commands/governance/bootstrap.md`。
-
----
+对照单元的 `intent` 和 `acceptance` 选择能验证用户结果的下一步。试用改变方案时记录 `loop learn --kind decision` 并复验原条件。交付后向用户说明实测结果，也可从 `opportunity` 给出有反馈依据的下一项试验及通过条件。跨会话按单元 ID 查阅完整记录。[运行示例](../skills/software-project-governance/core/lifecycle.md)
 
 ## 现有命令路由（按需 Read）
 

@@ -127,36 +127,10 @@ import webbrowser
 from datetime import datetime, date
 
 from checks import commit as commit_checks
-from checks.flow_unit_runtime import (
-    ALLOWED_GATE_STATUSES as FLOW_UNIT_RUNTIME_ALLOWED_GATE_STATUSES,
-    ALLOWED_SOURCES as FLOW_UNIT_RUNTIME_ALLOWED_SOURCES,
-    BOUNDARY_TOKENS as FLOW_UNIT_RUNTIME_BOUNDARY_TOKENS,
-    FORBIDDEN_OVERCLAIMS as FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS,
-    RUNTIME_SCOPE as FLOW_UNIT_RUNTIME_SCOPE,
-    observed_runtime_issues,
-    read_flow_unit_runtime,
-    validate_flow_unit_runtime_payload_dispatch,
-)
 from checks import projection as projection_checks
 from checks import version as version_checks
-from checks.loop_runtime_claims import (
-    ClaimScanContext,
-    materialize_loop_runtime_git_root,
-    scan_loop_runtime_claims,
-)
-from checks.loop_runtime_claim_attestation import (
-    IdentityAttestationError,
-    aggregate_claim_reports,
-    attest_explicit_sources,
-    canonical_json_bytes as canonical_attestation_json_bytes,
-    compare_identity_attestations,
-    load_attestation,
-    write_attestation,
-)
 
-IDENTITY_ATTESTATION_PENDING = (
-    "IDENTITY_ATTESTATION_PENDING: independent source identity and final-candidate attestation remain FIX-200 work"
-)
+
 from release.context import RepositoryContext
 from release.ledger import validate_release_ledger
 from release.projection import check_projections, write_projections
@@ -403,28 +377,8 @@ def _git_files(args):
 
 
 def _split_markdown_table_row(line):
-    """Split a markdown table row while ignoring pipes inside inline code."""
-    stripped = line.strip()
-    if not stripped.startswith("|"):
-        return []
-    cells = []
-    buf = []
-    in_code = False
-    i = 1 if stripped.startswith("|") else 0
-    end = len(stripped) - 1 if stripped.endswith("|") else len(stripped)
-    while i < end:
-        ch = stripped[i]
-        if ch == "`":
-            in_code = not in_code
-            buf.append(ch)
-        elif ch == "|" and not in_code:
-            cells.append("".join(buf).strip())
-            buf = []
-        else:
-            buf.append(ch)
-        i += 1
-    cells.append("".join(buf).strip())
-    return cells
+    from governance_readers import markdown_table_cells
+    return markdown_table_cells(line)
 
 
 PLATFORM_ENTRY_FILES = {
@@ -574,18 +528,15 @@ PROJECTION_SNIPPETS = {
         "check-agent-adapters --runtime",
     ],
     ROOT / "adapters/claude/adapter-manifest.json": [
-        "adapter_id",
-        "workflow_id",
-        "native_entry",
-        "runtime_e2e",
-        "runtime_capabilities",
-        "launcher",
+        "adapter_id", "workflow_id", "native_entry", "runtime_e2e", "runtime_capabilities", "launcher",
     ],
     ROOT / "adapters/claude/launch.py": [
-        "Claude Adapter Launcher",
-        "native_entry",
-        "read_order",
-        "validation",
+        'MANIFEST_PATH = ROOT / "adapters/claude/adapter-manifest.json"',
+        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Claude")',
+    ],
+    ROOT / "adapters/manifest_report.py": [
+        "{platform} Adapter Launcher", 'print("read_order:")', 'print("native_entry:")',
+        'print("runtime_e2e:")', 'print("validation:")',
     ],
     ROOT / "adapters/codex/README.md": [
         "Tier 1",
@@ -600,17 +551,11 @@ PROJECTION_SNIPPETS = {
         "agent-runtime-e2e --agent codex",
     ],
     ROOT / "adapters/codex/adapter-manifest.json": [
-        "adapter_id",
-        "workflow_id",
-        "native_entry",
-        "runtime_e2e",
-        "runtime_capabilities",
-        "launcher",
+        "adapter_id", "workflow_id", "native_entry", "runtime_e2e", "runtime_capabilities", "launcher",
     ],
     ROOT / "adapters/codex/launch.py": [
-        "Codex Adapter Launcher",
-        "read_order",
-        "validation",
+        'MANIFEST_PATH = ROOT / "adapters/codex/adapter-manifest.json"',
+        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Codex")',
     ],
     ROOT / "adapters/gemini/README.md": [
         "## 兼容要求",
@@ -724,9 +669,10 @@ WORKFLOW_SNIPPETS = {
         "## 新主线如何接管",
     ],
     ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md": [
-        "## 通用对象模型",
-        "### 1. Workflow",
-        "### 3. Gate",
+        "governance-bootstrap --format json",
+        "loop status --unit",
+        "(../lifecycle.md)",
+        "(../loop-engineering-registry.json)",
     ],
     ROOT / "skills/software-project-governance/core/protocol/plugin-contract.md": [
         "## 最小承载单元",
@@ -814,9 +760,10 @@ REQUIRED_SNIPPETS = {
         "已迁移",
     ],
     ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md": [
-        "## 通用对象模型",
-        "### 1. Workflow",
-        "### 3. Gate",
+        "governance-bootstrap --format json",
+        "loop status --unit",
+        "(../lifecycle.md)",
+        "(../loop-engineering-registry.json)",
     ],
     ROOT / "skills/software-project-governance/core/protocol/plugin-contract.md": [
         "## 最小承载单元",
@@ -868,33 +815,14 @@ REQUIRED_SNIPPETS = {
         "## Agent 执行纪律",
     ],
     ROOT / "commands/governance-init.md": [
-        "## 输入参数",
-        "## 执行流程",
-        "## 输出格式",
-        "## 错误码",
-        "## 自校验",
-        "INIT-ERR-001",
-        "INIT-ERR-002",
-        "INIT-ERR-003",
+        "governance-bootstrap --format json", "resolve.resolved_root_ok",
+        "loop start --unit", "--goal", "--acceptance", "--tier",
     ],
     ROOT / "commands/governance-status.md": [
-        "## 输入参数",
-        "## 执行流程",
-        "## 输出格式",
-        "## 错误码",
-        "## 自校验",
-        "permission_mode",
-        "操作权限模式",
-        "STATUS-ERR-001",
+        "governance-bootstrap --format json", "loop status --unit", "loop status --json",
     ],
     ROOT / "commands/governance-gate.md": [
-        "## 输入参数",
-        "## 执行流程",
-        "## 输出格式",
-        "## 错误码",
-        "## 自校验",
-        "GATE-ERR-001",
-        "GATE-ERR-002",
+        "loop status --unit", "loop gate --unit", "--gate", "--review",
     ],
     ROOT / "commands/governance-verify.md": [
         "## 输入参数",
@@ -929,10 +857,12 @@ REQUIRED_SNIPPETS = {
         "launcher",
     ],
     ROOT / "adapters/claude/launch.py": [
-        "Claude Adapter Launcher",
-        "native_entry",
-        "read_order",
-        "validation",
+        'MANIFEST_PATH = ROOT / "adapters/claude/adapter-manifest.json"',
+        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Claude")',
+    ],
+    ROOT / "adapters/manifest_report.py": [
+        "{platform} Adapter Launcher", 'print("read_order:")', 'print("native_entry:")',
+        'print("runtime_e2e:")', 'print("validation:")',
     ],
     ROOT / "adapters/codex/README.md": [
         "Tier 1",
@@ -952,9 +882,8 @@ REQUIRED_SNIPPETS = {
         "launcher",
     ],
     ROOT / "adapters/codex/launch.py": [
-        "Codex Adapter Launcher",
-        "read_order",
-        "validation",
+        'MANIFEST_PATH = ROOT / "adapters/codex/adapter-manifest.json"',
+        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Codex")',
     ],
     ROOT / "adapters/gemini/README.md": [
         "## 兼容要求",
@@ -1059,8 +988,7 @@ REQUIRED_SNIPPETS = {
         "software-project-governance",
     ],
     ROOT / "skills/software-project-governance/core/stage-gates.md": [
-        "Tier 审计检查点（Tier Audit Checkpoint）",
-        "TIER-<layer>-<tier>-AUDIT",
+        "loop status --unit",
     ],
     ROOT / "skills/software-project-governance/core/audit-framework.md": [
         "Tier 完成时",
@@ -1073,6 +1001,7 @@ REQUIRED_SNIPPETS = {
         "语义化版本规则",
         "版本升级触发条件",
     ],
+    ROOT / "changelog.md": ["](project/CHANGELOG.md)"],
     ROOT / "project/CHANGELOG.md": [
         "# 变更日志",
         "## [0.10.0]",
@@ -1123,6 +1052,7 @@ from checks.manifest import (  # noqa: E402
     expand_manifest_to_canonical_set,
     check_manifest_canonical_product_artifacts,
     check_manifest_cleanup_scope,
+    check_repository_navigation,
     check_manifest_consistency,
     cmd_check_manifest_consistency,
 )
@@ -1166,6 +1096,7 @@ from checks.capability_registry import (  # noqa: E402
     check_capability_registry,
     cmd_check_capability_registry,
     _capability_registry_text_values,
+    _line_has_scoped_claim_negation,
     CAPABILITY_REGISTRY_ALLOWED_KINDS,
     CAPABILITY_REGISTRY_ALLOWED_STATUSES,
     CAPABILITY_REGISTRY_REQUIRED_FIELDS,
@@ -1200,7 +1131,7 @@ from checks.evidence_domain import (  # noqa: E402
     _FORENSIC_HEAD_RE, _is_product_code_location, _is_review_evidence, _is_audit_or_review_type,
     SECRET_FIELD_RE, SECRET_ASSIGNMENT_RE, _contains_secret_like,
     _extract_structured_fact_json, _validate_structured_fact_payload,
-    render_evidence_binding_drift_block, render_rb2_goal_contract_block,
+    render_rb2_goal_contract_block,
 )
 
 # ── Risk domain (extracted to infra/checks/risk_domain.py in 0.70.0) ────────
@@ -1235,10 +1166,8 @@ from checks.snapshot_domain import (  # noqa: E402
 # snapshot_domain pattern: deferred _vw() shared accessor, no import cycle.
 # The module also carries released_history_version() — the BR-4 auto-
 # released helper for cmd_check_release's already-published-version checks.
-from checks.gate_domain import (  # noqa: E402
-    check_gate_sequence_for_release,  # FIX-266 / REQ-145.4 (Check 37)
-    released_history_version,     # BR-4: roadmap 已发布/已撤回 status probe
-)
+from checks.gate_domain import release_unit_issues
+
 
 # ── CI domain (new in 0.76.0) ──────────────────────────────────────
 # FIX-267 / REQ-145.5 (design §3.5): the CI-evidence watchdog
@@ -1381,170 +1310,48 @@ def check_snippets():
     return failures
 
 
-# ── FIX-191: review SKILL loop-role contract ─────────────────────
-# These contracts keep the seven review SKILLs mechanically aligned with the
-# shared mapping without changing the loop runtime or review responsibilities.
-LOOP_ROLE_SKILL_CONTRACTS = {
-    "requirement-review": {
-        "role_tokens": ("`loop-setup`", "`loop-entry-gate`"),
-        "failure_token": "返回所属循环（setup-loop）",
-    },
-    "design-review": {
-        "role_tokens": ("`loop-entry-gate`", "Middle loop"),
-        "failure_token": "返回所属循环（Middle loop 的设计子循环）",
-    },
-    "tech-review": {
-        "role_tokens": ("`loop-entry-gate`", "技术深度子迭代"),
-        "failure_token": "返回所属循环（Middle loop 的设计子循环）",
-    },
-    "code-review": {
-        "role_tokens": ("`loop-exit-gate`", "Inner loop"),
-        "failure_token": "返回所属循环（Inner loop）",
-    },
-    "test-review": {
-        "role_tokens": ("`loop-body` + `loop-exit-gate`", "testing-to-development-rework"),
-        "failure_token": "返回所属循环（Inner loop）",
-    },
-    "release-review": {
-        "role_tokens": ("`loop-exit-gate`", "`loop-entry-gate`", "release-to-testing-rework"),
-        "failure_token": "返回所属循环（测试子循环，并可回到 Inner loop）",
-    },
-    "retro-review": {
-        "role_tokens": ("`loop-exit-gate`", "Outer loop", "operations-feedback-to-maintenance-loop"),
-        "failure_token": "返回所属循环（Outer loop）",
-    },
-}
-
-LOOP_ROLE_SHARED_SEMANTIC_TOKENS = (
-    "版本背景：本循环语义于 0.65.0 引入",
-    "experimental scaffolding",
-    "M7.4",
-    "`NEEDS_CHANGE -> 返工 -> 复审`",
-    '"target_version":"0.68.0"',
-    '"status":"planned_not_active"',
-    "当前不生效",
-    "Reviewer 只审查并输出结论，不修改产品代码",
-    "`APPROVED`、`APPROVED_WITH_NOTES`、`NEEDS_CHANGE` 或 `BLOCKED`",
-    "`APPROVED_WITH_NOTES` 是保留备注的通过终态",
-    "不得包含未解决的 BLOCKING finding",
-    "`unresolved_blockers=0`",
-    "`NEEDS_CHANGE`（及兼容输入 `NEEDS_CHANGES`）不是终态",
-    "Check 30 的复审链消费",
-    "`APPROVED` 与 `APPROVED_WITH_NOTES` 可以通过并结束复审链",
-    "`BLOCKED` 结束链路但不是通过",
-    "未知或格式错误结论必须 fail-closed",
-    "超过复审 fuse 的 `NEEDS_CHANGE` 必须升级为 `BLOCKED`",
+LOOP_ROLE_SKILL_CONTRACTS = (
+    "requirement-review", "design-review", "tech-review", "code-review",
+    "test-review", "release-review", "retro-review",
 )
 
 
 def check_loop_role_skill_consistency(root=None):
-    """Validate the seven review SKILL loop-role documentation contract.
-
-    The check is intentionally documentation-only: it verifies stable section
-    titles, resolvable shared-mapping references, role-specific semantics, and
-    the executable review/failure contract. It neither reads nor changes loop
-    runtime state or review data formats.
-    """
+    """Each reviewer consumes its named local gates and the shared decision contract."""
     root = Path(root) if root is not None else ROOT
     mapping_path = root / "skills/software-project-governance/references/loop-role-mapping.md"
     issues = []
-
     if not mapping_path.is_file():
-        return {
-            "passed": False,
-            "skills_checked": 0,
-            "issues": [f"missing shared loop-role mapping: {_display_path(mapping_path, root)}"],
-        }
-
-    mapping_text = _read_text_normalized(mapping_path)
-    for token in ("# 审查 SKILL 循环角色映射", "## 可执行审查契约"):
-        if token not in mapping_text:
-            issues.append(f"shared mapping missing required token: {token}")
-
-    for skill_name, contract in LOOP_ROLE_SKILL_CONTRACTS.items():
-        skill_path = root / "skills" / skill_name / "SKILL.md"
-        display_path = _display_path(skill_path, root)
-        if not skill_path.is_file():
-            issues.append(f"missing review SKILL: {display_path}")
+        return {"passed": False, "skills_checked": 0,
+                "issues": [f"missing shared loop-role mapping: {_display_path(mapping_path, root)}"]}
+    mapping = _read_text_normalized(mapping_path)
+    for token in ("`APPROVED`", "`APPROVED_WITH_NOTES`", "unresolved_blockers=0", "`NEEDS_CHANGE`",
+                  "`BLOCKED`", "review-record", "loop status --unit"):
+        if token not in mapping:
+            issues.append(f"shared review contract missing {token}")
+    for name in LOOP_ROLE_SKILL_CONTRACTS:
+        rows = re.findall(rf"^\|\s*`{re.escape(name)}`\s*\|([^\n]+)", mapping, re.M)
+        if len(rows) != 1:
+            issues.append(f"shared review contract must map {name} exactly once")
+        expected = set(re.findall(r"\bG\d+\b", rows[0])) if len(rows) == 1 else set()
+        if not expected or not expected <= set(LIFECYCLE_REGISTRY_GATES):
+            issues.append(f"shared review contract has missing or unknown gates for {name}")
+        path = root / "skills" / name / "SKILL.md"
+        if not path.is_file():
+            issues.append(f"missing review SKILL: {_display_path(path, root)}")
             continue
-
-        content = _read_text_normalized(skill_path)
-        headings = re.findall(r"^##\s+循环角色\s*$", content, flags=re.MULTILINE)
-        if len(headings) != 1:
-            issues.append(f"{display_path}: expected exactly one stable '## 循环角色' heading")
-        if re.search(r"^##\s+循环角色\s*\([^)]*\)", content, flags=re.MULTILINE):
-            issues.append(f"{display_path}: loop-role heading must not carry a version")
-        if re.search(r"^##\s+Loop Role", content, flags=re.MULTILINE):
-            issues.append(f"{display_path}: legacy English Loop Role heading remains")
-
-        references = re.findall(r"\[[^\]]+\]\(([^)]+)\)", content)
-        expected_mapping = mapping_path.resolve()
-        resolves_to_mapping = any(
-            (skill_path.parent / reference).resolve() == expected_mapping
-            for reference in references
-        )
-        if not resolves_to_mapping:
-            issues.append(f"{display_path}: no resolvable shared loop-role mapping reference")
-
-        for token in contract["role_tokens"]:
-            if token not in content:
-                issues.append(f"{display_path}: missing role token: {token}")
-        for token in LOOP_ROLE_SHARED_SEMANTIC_TOKENS:
-            if token not in content:
-                issues.append(f"{display_path}: missing executable review contract token: {token}")
-
-        mapping_row = f"| `{skill_name}` |"
-        if mapping_row not in mapping_text:
-            issues.append(f"shared mapping missing row for {skill_name}")
-
+        section = _markdown_section_by_prefix(_read_text_normalized(path), "## 循环角色")
+        refs = re.findall(r"\[[^\]]+\]\(([^)]+)\)", section)
+        if not any((path.parent / ref).resolve() == mapping_path.resolve() for ref in refs):
+            issues.append(f"{name}: no resolvable shared loop-role mapping reference")
+        actual = set(re.findall(r"\bG\d+\b", section))
+        if actual != expected:
+            issues.append(f"{name}: consumes {sorted(actual)}, expected {sorted(expected)} from its review contract")
     return {
         "passed": not issues,
         "skills_checked": len(LOOP_ROLE_SKILL_CONTRACTS),
         "issues": issues,
     }
-
-
-def _extract_markdown_table_rows_after_heading(content, heading):
-    """Return data rows from the first markdown table after a heading."""
-    lines = content.splitlines()
-    in_section = False
-    table_started = False
-    rows = []
-    for line in lines:
-        stripped = line.strip()
-        if not in_section:
-            if stripped == heading:
-                in_section = True
-            continue
-        if stripped.startswith("## ") and stripped != heading:
-            break
-        if not stripped.startswith("|"):
-            if table_started and rows:
-                break
-            continue
-        table_started = True
-        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-        if not cells or all(not cell for cell in cells):
-            continue
-        if all(set(cell) <= {"-", ":"} for cell in cells):
-            continue
-        if any(cell in ("任务类型", "SKILL") for cell in cells):
-            continue
-        rows.append(cells)
-    return rows
-
-
-def _skill_route_table_count(skill_path=None):
-    path = skill_path or ROOT / "skills/software-project-governance/SKILL.md"
-    content = path.read_text(encoding="utf-8")
-    return len(_extract_markdown_table_rows_after_heading(content, "## Agent 分发路由"))
-
-
-def _documented_route_table_count(command_path=None):
-    path = command_path or ROOT / "commands/governance.md"
-    content = path.read_text(encoding="utf-8")
-    match = re.search(r"完整路由表（(\d+)\s*行）", content)
-    return int(match.group(1)) if match else None
 
 
 ACTIVE_AGENT_ROLES = [
@@ -1573,31 +1380,6 @@ NAMED_REVIEWER_ROLES = [
     "Retro Reviewer",
 ]
 
-GOVERNANCE_DEVELOPER_REQUIRED_SKILLS = [
-    "stage-maintenance",
-    "stage-infra",
-    "code-review",
-]
-
-FIX_069_RELEASE_BLOCKERS = [
-    "FIX-069",
-    "FIX-070",
-    "FIX-071",
-    "FIX-072",
-    "FIX-073",
-    "FIX-074",
-]
-
-REQ_059_RELEASE_BLOCKERS = [
-    "REQ-059",
-    "REQ-060",
-    "REQ-061",
-    "REQ-062",
-    "REQ-063",
-    "REQ-064",
-]
-FIX_069_RELEASE_VERSION = "0." + "35.0"
-FIX_069_READINESS_VERSION = "1." + "0.0"
 MAINSTREAM_AGENT_ADAPTERS = ["claude", "codex", "gemini", "opencode", "dsh", "pi"]
 ADAPTER_REQUIRED_KEYS = [
     "adapter_id",
@@ -1690,13 +1472,6 @@ def _generic_reviewer_cells(content):
     return hits
 
 
-def _find_table_line(content, prefix):
-    for line in content.splitlines():
-        if line.strip().startswith(prefix):
-            return line
-    return ""
-
-
 def _normalize_markdown_cell(cell):
     return re.sub(r"[`*]", "", cell).strip()
 
@@ -1746,15 +1521,6 @@ def _hot_status_cell_is_delivered(status):
     return _status_is_writer_committed_cell(_status_clean_cell(status))
 
 
-def _task_id_has_open_status(content, task_id):
-    for cells in _find_table_rows_with_cell(content, task_id):
-        if len(cells) >= 2 and _normalize_markdown_cell(cells[1]) == task_id:
-            status = cells[-1]
-            if not _status_cell_is_delivered(status):
-                return True
-    return False
-
-
 def _contains_fix_token_or_range(content, fix_id):
     if fix_id in content:
         return True
@@ -1766,205 +1532,6 @@ def _contains_fix_token_or_range(content, fix_id):
         if int(start) <= fix_num <= int(end):
             return True
     return False
-
-
-def _extract_fenced_blocks(content):
-    blocks = []
-    in_block = False
-    current = []
-    for line in content.splitlines():
-        if line.strip().startswith("```"):
-            if in_block:
-                blocks.append("\n".join(current))
-                current = []
-                in_block = False
-            else:
-                in_block = True
-            continue
-        if in_block:
-            current.append(line)
-    return blocks
-
-
-def _duplicate_target_structure_entries(architecture_content):
-    section = _markdown_section(architecture_content, "## 目标目录结构")
-    duplicates = []
-    seen = {}
-    for block in _extract_fenced_blocks(section):
-        stack = []
-        for line_no, line in enumerate(block.splitlines(), start=1):
-            raw_entry = line.split("←", 1)[0].rstrip()
-            entry = raw_entry.strip()
-            if not entry:
-                continue
-            indent = len(raw_entry) - len(raw_entry.lstrip(" "))
-            while stack and indent <= stack[-1][0]:
-                stack.pop()
-            parent = "/".join(item[1].strip("/") for item in stack if item[1].strip("/"))
-            normalized_name = re.sub(r"\s+", " ", entry)
-            normalized = f"{parent}/{normalized_name}".strip("/")
-            if normalized in seen:
-                duplicates.append((normalized, seen[normalized], line_no))
-            else:
-                seen[normalized] = line_no
-            if entry.endswith("/"):
-                stack.append((indent, entry))
-    return duplicates
-
-
-def _evidence_closes_fix_069_while_req_open(evidence_content):
-    closing_pattern = re.compile(
-        r"(FIX-069).*(已完成|已交付|关闭|可关闭|最终审查通过)"
-        r"|"
-        r"(已完成|已交付|关闭|可关闭|最终审查通过).*(FIX-069)"
-    )
-    non_closing_markers = [
-        "BLOCKED",
-        "不可关闭",
-        "不能关闭",
-        "不得关闭",
-        "未关闭",
-        "未完成",
-        "待最终",
-        "未最终",
-        "首轮",
-        "NEEDS_CHANGE",
-    ]
-    for line in evidence_content.splitlines():
-        if "FIX-069" not in line:
-            continue
-        if any(marker in line for marker in non_closing_markers):
-            continue
-        cells = _markdown_table_cells(line)
-        if cells and _normalize_markdown_cell(cells[-1]) in ["完成", "已完成", "关闭", "已关闭"]:
-            return line.strip()
-        if closing_pattern.search(line):
-            return line.strip()
-    return ""
-
-
-def _line_overstates_pending_adapter_or_e2e(line):
-    done_markers = ["已完成", "已实现", "已验证", "E2E 通过", "真实环境 E2E 通过", "✅"]
-    has_done_marker = any(marker in line for marker in done_markers)
-    if not has_done_marker:
-        return False
-    non_closing_patterns = [
-        r"未完成",
-        r"未实现",
-        r"待实现",
-        r"待实施",
-        r"预研",
-        r"不构成",
-        r"仅(?:作为)?预检",
-        r"仅兼容",
-        r"仅路线",
-        r"仅.*分析",
-    ]
-    if any(re.search(pattern, line) for pattern in non_closing_patterns):
-        return False
-    adapter_markers = ["Gemini", "opencode"]
-    if any(adapter in line for adapter in adapter_markers):
-        return True
-    if re.search(r"真实(?:\s*agent)?(?:运行)?环境\s*E2E", line):
-        return True
-    return False
-
-
-def check_release_readiness_fact_source(
-    plan_tracker_path=None,
-    architecture_path=None,
-    evidence_log_path=None,
-):
-    """FIX-069: keep release blockers, requirements, and readiness facts aligned."""
-    plan_tracker_path = plan_tracker_path or GOVERNANCE_DIR / "plan-tracker.md"
-    architecture_path = architecture_path or ROOT / "project/references/architecture.md"
-    evidence_log_path = evidence_log_path or GOVERNANCE_DIR / "evidence-log.md"
-
-    failures = []
-    plan_content = plan_tracker_path.read_text(encoding="utf-8")
-    architecture_content = architecture_path.read_text(encoding="utf-8")
-    evidence_content = (
-        evidence_log_path.read_text(encoding="utf-8")
-        if evidence_log_path and evidence_log_path.exists()
-        else ""
-    )
-
-    rel_plan = _display_path(plan_tracker_path)
-    rel_architecture = _display_path(architecture_path)
-    rel_evidence = _display_path(evidence_log_path) if evidence_log_path else "evidence-log"
-
-    dependency_chain = _markdown_section(plan_content, f"### {FIX_069_READINESS_VERSION} 依赖链")
-    if not dependency_chain:
-        failures.append(f"{rel_plan}: missing {FIX_069_READINESS_VERSION} dependency chain section")
-    else:
-        required_chain_tokens = [FIX_069_RELEASE_VERSION, "RISK-030"] + FIX_069_RELEASE_BLOCKERS
-        for token in required_chain_tokens:
-            present = _contains_fix_token_or_range(dependency_chain, token) if token.startswith("FIX-") else token in dependency_chain
-            if not present:
-                failures.append(f"{rel_plan}: {FIX_069_READINESS_VERSION} dependency chain missing blocker token {token}")
-        required_chain_semantics = [
-            ("real agent E2E blocker", r"真实\s*agent\s*环境\s*E2E|agent\s*真实环境\s*E2E|真实运行环境\s*E2E"),
-            ("goal-drift guardrail blocker", r"防跑偏|目标偏离"),
-            ("blocking release language", r"不得推进\s*1\.0\.0|不得发布|阻断|全部闭环前|关闭前"),
-        ]
-        for label, pattern in required_chain_semantics:
-            if not re.search(pattern, dependency_chain):
-                failures.append(f"{rel_plan}: {FIX_069_READINESS_VERSION} dependency chain missing {label}")
-
-    release_row = _find_table_row_by_first_cell(plan_content, FIX_069_READINESS_VERSION)
-    if not release_row:
-        failures.append(f"{rel_plan}: missing {FIX_069_READINESS_VERSION} roadmap row")
-    else:
-        release_row_text = " | ".join(release_row)
-        for token in [FIX_069_RELEASE_VERSION, "RISK-030"] + FIX_069_RELEASE_BLOCKERS:
-            present = _contains_fix_token_or_range(release_row_text, token) if token.startswith("FIX-") else token in release_row_text
-            if not present:
-                failures.append(f"{rel_plan}: {FIX_069_READINESS_VERSION} roadmap row missing release blocker {token}")
-
-    for req_id, fix_id in zip(REQ_059_RELEASE_BLOCKERS, FIX_069_RELEASE_BLOCKERS):
-        req_row = _find_table_row_by_first_cell(plan_content, req_id)
-        if not req_row:
-            failures.append(f"{rel_plan}: requirement matrix missing {req_id}")
-            continue
-        if len(req_row) >= 5 and fix_id not in req_row[4]:
-            failures.append(f"{rel_plan}: requirement matrix {req_id} must reference {fix_id}")
-
-    req_059_row = _find_table_row_by_first_cell(plan_content, "REQ-059")
-    req_059_status = req_059_row[5] if len(req_059_row) > 5 else ""
-    closing_line = _evidence_closes_fix_069_while_req_open(evidence_content)
-    if req_059_status and not _status_cell_is_delivered(req_059_status) and closing_line:
-        failures.append(
-            f"{rel_evidence}: FIX-069 closing evidence conflicts with open REQ-059 status: {closing_line}"
-        )
-
-    req_061_row = _find_table_row_by_first_cell(plan_content, "REQ-061")
-    req_064_row = _find_table_row_by_first_cell(plan_content, "REQ-064")
-    req_061_status = req_061_row[5] if len(req_061_row) > 5 else ""
-    req_064_status = req_064_row[5] if len(req_064_row) > 5 else ""
-    adapter_or_e2e_pending = (
-        not _status_cell_is_delivered(req_061_status)
-        or not _status_cell_is_delivered(req_064_status)
-        or _task_id_has_open_status(plan_content, "FIX-071")
-        or _task_id_has_open_status(plan_content, "FIX-074")
-    )
-    if adapter_or_e2e_pending:
-        for line_no, line in enumerate(architecture_content.splitlines(), start=1):
-            if _line_overstates_pending_adapter_or_e2e(line):
-                failures.append(
-                    f"{rel_architecture}:{line_no}: architecture overstates pending Gemini/opencode or real-environment E2E status"
-                )
-
-    for entry, first_line, second_line in _duplicate_target_structure_entries(architecture_content):
-        failures.append(
-            f"{rel_architecture}: target directory structure repeats `{entry}` "
-            f"(fenced-block lines {first_line} and {second_line})"
-        )
-
-    for failure in failures:
-        print(f"[FAIL] release readiness fact source: {failure}")
-    if not failures:
-        print("[OK] release readiness fact source synchronized")
-    return failures
 
 
 # FIX-339 (DEC-195 a): 0.38.0-era version anchors removed — the active anchor
@@ -2187,6 +1754,8 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
     """
     plan_tracker_path = plan_tracker_path or _governance_dir() / "plan-tracker.md"
     failures = []
+    if not plan_tracker_path.is_file():
+        return [f"{_display_path(plan_tracker_path)}: plan-tracker unavailable"]
     plan_content = plan_tracker_path.read_text(encoding="utf-8")
     rel_plan = _display_path(plan_tracker_path)
     _gov = _governance_dir()
@@ -2203,7 +1772,6 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
     plugin_scope = _hot_fact_source_plugin_scope()
     required_sections = [
         "## 项目配置",
-        "## 项目总览",
         "## 当前活跃事项",
         "## 版本规划",
         "## 需求跟踪矩阵",
@@ -2216,7 +1784,7 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
             failures.append(f"{rel_plan}: missing hot fact-source section {heading}")
 
     project_config = sections.get("## 项目配置", "")
-    overview = sections.get("## 项目总览", "")
+    overview = _markdown_section_by_prefix(plan_content, "## 项目总览")
     active_items = sections.get("## 当前活跃事项", "")
     dependency_chain = sections.get("### 1.0.0 依赖链", "")
 
@@ -2251,10 +1819,7 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
                 failures.append(f"{rel_plan}: {active_version} roadmap row claims 已发布 but no delivered release task row corroborates it")
         if not any(version != active_version for version, _date_text in FIX_105_SNAPSHOT_RELEASE_VERSION_RE.findall(plan_content)):
             failures.append(f"{rel_plan}: missing released roadmap row before {active_version}")
-        for source_name, source in [("project config", project_config), ("project overview", overview), ("current active items", active_items)]:
-            if active_version not in source:
-                failures.append(f"{rel_plan}: {source_name} missing active version {active_version}")
-        if not released_face and re.search(re.escape(active_version) + r"[^。\n|]*已发布", project_config + "\n" + overview):
+        if not released_face and re.search(re.escape(active_version) + r"[^。\n|]*已发布", project_config):
             failures.append(f"{rel_plan}: hot sections overstate {active_version} as released before its release task is delivered")
         if not released_face:
             if not version_task_ids:
@@ -2563,23 +2128,6 @@ LIFECYCLE_REGISTRY_STAGE_IDS = [
     "operations",
     "maintenance",
 ]
-LIFECYCLE_REGISTRY_REQUIRED_FLOW_FIELDS = [
-    "flow_unit_id",
-    "title",
-    "unit_type",
-    "project_type",
-    "lifecycle_mode",
-    "current_stage",
-    "current_subphase",
-    "gate_lane",
-    "gate_references",
-    "allowed_next_transitions",
-    "dependencies",
-    "blockers",
-    "evidence_refs",
-    "loop_state",
-    "runtime_status_source",
-]
 LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES = {
     "game",
     "web-app",
@@ -2618,16 +2166,14 @@ LIFECYCLE_REGISTRY_REQUIRED_LIBRARY_STANDARDS = {
     "docs",
     "downstream-tests",
 }
-LIFECYCLE_REGISTRY_BOUNDARY_TOKENS = [
-    "classic G1-G11 registry execution",
-    "does not activate flow-unit runtime behavior",
-    "does not migrate projects",
-    "preserves classic G1-G11 behavior",
-    "automation commands are metadata only",
-    "does not make dynamic-flow-gate the default lifecycle mode",
-    "does not close RISK-036",
-    "does not close RISK-037",
-    "does not claim 1.0.0 production-ready",
+LIFECYCLE_REGISTRY_RISK_CLAIMS = [
+    ("risk-036 closed", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosed\b")),
+    ("risk-036 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-036\b")),
+    ("risk-036 closure achieved", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosure\s+achieved\b")),
+    ("risk-037 closed", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosed\b")),
+    ("risk-037 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-037\b")),
+    ("risk-037 closure achieved", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosure\s+achieved\b")),
+    ("1.0.0 production-ready", re.compile(r"\b1\.0\.0\s+production-ready\b")),
 ]
 LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS = [
     (
@@ -2655,22 +2201,8 @@ LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS = [
         re.compile(r"\bdefault\s+lifecycle\s+mode\s+(?:is\s+|now\s+)?dynamic-flow-gate\b"),
     ),
 ]
-LIFECYCLE_REGISTRY_RUNTIME_ACTIVATION_EXPECTED = {
-    "flow_unit_status_runtime": False,
-    "project_migration": False,
-    "declarative_gate_engine": False,
-    "classic_registry_execution": True,
-    "release_bump": False,
-}
 GATE_EXECUTION_REGISTRY_REQUIRED_FIELDS = {
-    "introduced_for",
-    "status",
-    "classic_registry_execution",
-    "execution_scope",
-    "automation_commands_are_metadata_only",
-    "project_migration",
-    "dynamic_flow_gate_default",
-    "gate_checks",
+    "status", "execution_scope", "automation_commands_are_metadata_only", "gate_checks",
 }
 GATE_EXECUTION_REQUIRED_FIELDS = {
     "gate_id",
@@ -2790,18 +2322,6 @@ GOVERNANCE_PACK_STATUS_DOC_PATHS = [
     "commands/governance/scenario-f.md",
     "project/e2e-test-project/commands/governance-status.md",
     "project/e2e-test-project/commands/governance/scenario-f.md",
-]
-GOVERNANCE_PACK_STATUS_REQUIRED_TOKENS = [
-    "Pack summary",
-    "Default packs",
-    "Enabled packs",
-    "Pack boundary",
-    "Packs are capability modules; profiles are governance intensity presets.",
-    "`governance-core`",
-    "`quality-gates`",
-    "`release-governance`",
-    "`agent-team`",
-    "`enterprise`",
 ]
 GOVERNANCE_PACK_STATUS_BOUNDARY_TOKENS = [
     "pack membership",
@@ -3360,26 +2880,19 @@ def _check_gate_execution_registry(registry, display, gate_id_set, project_type_
     missing_fields = sorted(GATE_EXECUTION_REGISTRY_REQUIRED_FIELDS - set(gate_execution_registry))
     for field in missing_fields:
         failures.append(f"{display}: gate_execution_registry missing required field `{field}`")
-    if gate_execution_registry.get("status") != "active-classic-compatibility":
-        failures.append(f"{display}: gate_execution_registry.status must be active-classic-compatibility")
-    if gate_execution_registry.get("classic_registry_execution") is not True:
-        failures.append(f"{display}: gate_execution_registry.classic_registry_execution must be true")
-    if gate_execution_registry.get("execution_scope") != "classic-g1-g11-only":
-        failures.append(f"{display}: gate_execution_registry.execution_scope must be classic-g1-g11-only")
+    if gate_execution_registry.get("status") != "unit-scoped":
+        failures.append(f"{display}: gate_execution_registry.status must be unit-scoped")
+    if gate_execution_registry.get("execution_scope") != "flow-unit":
+        failures.append(f"{display}: gate_execution_registry.execution_scope must be flow-unit")
     if gate_execution_registry.get("automation_commands_are_metadata_only") is not True:
         failures.append(f"{display}: gate_execution_registry.automation_commands_are_metadata_only must be true")
-    if gate_execution_registry.get("project_migration") is not False:
-        failures.append(f"{display}: gate_execution_registry.project_migration must be false")
-    if gate_execution_registry.get("dynamic_flow_gate_default") is not False:
-        failures.append(f"{display}: gate_execution_registry.dynamic_flow_gate_default must be false")
-
     gate_checks = gate_execution_registry.get("gate_checks")
     if not isinstance(gate_checks, list):
         failures.append(f"{display}: gate_execution_registry.gate_checks must be a list")
         gate_checks = []
     gate_ids = [item.get("gate_id") for item in gate_checks if isinstance(item, dict)]
-    if gate_ids != LIFECYCLE_REGISTRY_GATES:
-        failures.append(f"{display}: gate_execution_registry.gate_checks must cover G1-G11 in order")
+    if not all(isinstance(gate, str) for gate in gate_ids) or set(gate_ids) != gate_id_set or len(gate_ids) != len(gate_id_set):
+        failures.append(f"{display}: gate_checks must define each referenced gate exactly once")
 
     project_type_keys = set(project_type_hooks) if isinstance(project_type_hooks, dict) else set()
     for gate_entry in gate_checks:
@@ -3395,8 +2908,10 @@ def _check_gate_execution_registry(registry, display, gate_id_set, project_type_
             failures.append(f"{gate_label}: gate_id must reference gate_references")
         if not _is_valid_string_list(gate_entry.get("required_artifacts")):
             failures.append(f"{gate_label}.required_artifacts must be a non-empty string list")
-        if not isinstance(gate_entry.get("evidence_query"), dict):
-            failures.append(f"{gate_label}.evidence_query must be an object")
+        evidence = gate_entry.get("evidence_query")
+        if (not isinstance(evidence, dict) or not evidence.get("source")
+                or not _is_valid_string_list(evidence.get("fields"))):
+            failures.append(f"{gate_label}.evidence_query must declare its source and evidence fields")
         automation_command = gate_entry.get("automation_command")
         if not isinstance(automation_command, dict):
             failures.append(f"{gate_label}.automation_command must be metadata object")
@@ -3488,204 +3003,100 @@ def _gate_execution_registry_contract_issues(registry, display):
     return _check_gate_execution_registry(registry, display, gate_id_set, project_type_hooks)
 
 
-def check_lifecycle_registry(root=None):
-    """FIX-135: dynamic lifecycle registry must remain schema-only and classic-compatible."""
-    root = root or ROOT
-    registry_path = root / "skills/software-project-governance/core/lifecycle-registry.json"
-    display = _display_path(registry_path, root)
-    registry, load_issues = _load_lifecycle_registry(root)
-    if load_issues:
-        return load_issues
+def check_lifecycle_registry(root=None, registry=None):
+    """Resolve the active workflow, tier routes, local evidence contracts and project presets."""
+    import loop_engine
+    from loop_workflow import TIERS
 
-    failures = []
-    if registry.get("workflow") != "software-project-governance":
-        failures.append(f"{display}: workflow must be software-project-governance")
-    if registry.get("source_of_truth") is not True:
-        failures.append(f"{display}: source_of_truth must be true")
-    if registry.get("registry_mode") != "schema-only-no-runtime-activation":
-        failures.append(f"{display}: registry_mode must be schema-only-no-runtime-activation")
-    if registry.get("active_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
-        failures.append(f"{display}: active_lifecycle_mode must be {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
-    if registry.get("default_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
-        failures.append(f"{display}: default_lifecycle_mode must be {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
+    root = Path(root or ROOT)
+    core = root / "skills/software-project-governance/core"
+    path = core / "lifecycle-registry.json"
+    display = _display_path(path, root)
+    if registry is None:
+        registry, issues = _load_lifecycle_registry(root)
+        if issues:
+            return issues
 
-    runtime_activation = registry.get("runtime_activation")
-    if not isinstance(runtime_activation, dict):
-        failures.append(f"{display}: runtime_activation must be an object")
-        runtime_activation = {}
-    for field, expected in LIFECYCLE_REGISTRY_RUNTIME_ACTIVATION_EXPECTED.items():
-        if runtime_activation.get(field) is not expected:
-            if expected is False:
-                failures.append(f"{display}: runtime_activation.{field} must be false for schema-only dynamic lifecycle runtime")
-            else:
-                failures.append(f"{display}: runtime_activation.{field} must be true for classic G1-G11 registry execution")
-
-    boundary = registry.get("no_overclaim_boundary")
-    if not _is_valid_string_list(boundary):
-        failures.append(f"{display}: no_overclaim_boundary must be a non-empty string list")
-        boundary = []
-    boundary_text = " ".join(boundary).lower()
-    for token in LIFECYCLE_REGISTRY_BOUNDARY_TOKENS:
-        if token.lower() not in boundary_text:
-            failures.append(f"{display}: missing lifecycle no-overclaim boundary token `{token}`")
-
-    failures.extend(_lifecycle_registry_manifest_issues(root, registry_path, display))
-
-    lifecycle_modes = registry.get("lifecycle_modes")
-    if not isinstance(lifecycle_modes, list) or not lifecycle_modes:
-        failures.append(f"{display}: lifecycle_modes must be a non-empty list")
-        lifecycle_modes = []
-    mode_by_id = {mode.get("id"): mode for mode in lifecycle_modes if isinstance(mode, dict)}
-    classic = mode_by_id.get(LIFECYCLE_REGISTRY_ACTIVE_MODE)
-    if not classic:
-        failures.append(f"{display}: lifecycle_modes must include classic-phase-gate")
-    else:
-        if classic.get("active") is not True:
-            failures.append(f"{display}: classic-phase-gate.active must be true")
-        if classic.get("default") is not True:
-            failures.append(f"{display}: classic-phase-gate.default must be true")
-        if classic.get("compatibility_preset") is not True:
-            failures.append(f"{display}: classic-phase-gate.compatibility_preset must be true")
-        if classic.get("runtime_behavior") != "existing-g1-g11":
-            failures.append(f"{display}: classic-phase-gate.runtime_behavior must be existing-g1-g11")
-        if classic.get("flow_unit_behavior") != "not-active":
-            failures.append(f"{display}: classic-phase-gate.flow_unit_behavior must be not-active")
-        if classic.get("stage_sequence") != LIFECYCLE_REGISTRY_STAGE_IDS:
-            failures.append(f"{display}: classic-phase-gate.stage_sequence must preserve classic stage order")
-        if classic.get("gate_sequence") != LIFECYCLE_REGISTRY_GATES:
-            failures.append(f"{display}: classic-phase-gate.gate_sequence must preserve G1-G11 order")
-    dynamic = mode_by_id.get(LIFECYCLE_REGISTRY_DYNAMIC_MODE)
-    if not dynamic:
-        failures.append(f"{display}: lifecycle_modes must include dynamic-flow-gate as inactive schema")
-    else:
-        if dynamic.get("active") is not False:
-            failures.append(f"{display}: dynamic-flow-gate.active must be false in 0.51.0")
-        if dynamic.get("default") is not False:
-            failures.append(f"{display}: dynamic-flow-gate.default must be false in 0.51.0")
-        if dynamic.get("flow_unit_behavior") != "schema-only":
-            failures.append(f"{display}: dynamic-flow-gate.flow_unit_behavior must be schema-only")
-    active_modes = [mode.get("id") for mode in lifecycle_modes if isinstance(mode, dict) and mode.get("active") is True]
-    default_modes = [mode.get("id") for mode in lifecycle_modes if isinstance(mode, dict) and mode.get("default") is True]
-    if active_modes != [LIFECYCLE_REGISTRY_ACTIVE_MODE]:
-        failures.append(f"{display}: exactly one active mode is required: {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
-    if default_modes != [LIFECYCLE_REGISTRY_ACTIVE_MODE]:
-        failures.append(f"{display}: exactly one default mode is required: {LIFECYCLE_REGISTRY_ACTIVE_MODE}")
-
-    stage_vocabulary = registry.get("stage_vocabulary")
-    if not isinstance(stage_vocabulary, list):
-        failures.append(f"{display}: stage_vocabulary must be a list")
-        stage_vocabulary = []
-    stage_ids = [stage.get("id") for stage in stage_vocabulary if isinstance(stage, dict)]
-    if stage_ids != LIFECYCLE_REGISTRY_STAGE_IDS:
-        failures.append(f"{display}: stage_vocabulary must preserve the 11 classic stage ids in order")
-    stage_id_set = set(stage_ids)
-    for index, stage in enumerate(stage_vocabulary, start=1):
-        if not isinstance(stage, dict):
-            failures.append(f"{display}: each stage_vocabulary entry must be an object")
-            continue
-        label = f"{display}: stage {stage.get('id', '<missing>')}"
-        if stage.get("number") != index:
-            failures.append(f"{label}: number must be {index}")
-        expected_gate = f"G{index}"
-        if stage.get("gate_out") != expected_gate:
-            failures.append(f"{label}: gate_out must be {expected_gate}")
-        if not _is_valid_string_list(stage.get("allowed_subphases")):
-            failures.append(f"{label}: allowed_subphases must be a non-empty string list")
-
-    subphase_vocabulary = registry.get("subphase_vocabulary")
-    if not isinstance(subphase_vocabulary, list) or not subphase_vocabulary:
-        failures.append(f"{display}: subphase_vocabulary must be a non-empty list")
-        subphase_vocabulary = []
-    subphase_ids = {
-        item.get("id") for item in subphase_vocabulary
-        if isinstance(item, dict) and item.get("id")
-    }
-    for required_subphase in ("backlog", "implementation", "release-candidate", "released", "operations-feedback"):
-        if required_subphase not in subphase_ids:
-            failures.append(f"{display}: missing required subphase `{required_subphase}`")
-
-    gate_references = registry.get("gate_references")
-    if not isinstance(gate_references, list):
-        failures.append(f"{display}: gate_references must be a list")
-        gate_references = []
-    gate_ids = [gate.get("gate_id") for gate in gate_references if isinstance(gate, dict)]
-    if gate_ids != LIFECYCLE_REGISTRY_GATES:
-        failures.append(f"{display}: gate_references must cover G1-G11 in order")
-    gate_id_set = set(gate_ids)
-    for gate in gate_references:
-        if not isinstance(gate, dict):
-            failures.append(f"{display}: each gate_references entry must be an object")
-            continue
-        gate_label = f"{display}: gate reference {gate.get('gate_id', '<missing>')}"
-        if gate.get("from_stage") not in stage_id_set:
-            failures.append(f"{gate_label}: from_stage must reference stage_vocabulary")
-        if gate.get("to_stage") not in stage_id_set:
-            failures.append(f"{gate_label}: to_stage must reference stage_vocabulary")
-        if "stage-gates.md" not in str(gate.get("source", "")):
-            failures.append(f"{gate_label}: source must reference stage-gates.md")
-
-    allowed_transitions = registry.get("allowed_transitions")
-    if not isinstance(allowed_transitions, list) or not allowed_transitions:
-        failures.append(f"{display}: allowed_transitions must be a non-empty list")
-        allowed_transitions = []
-    for transition in allowed_transitions:
-        if not isinstance(transition, dict):
-            failures.append(f"{display}: each allowed_transitions entry must be an object")
-            continue
-        transition_id = transition.get("id", "<missing>")
-        label = f"{display}: transition {transition_id}"
-        if transition.get("from_stage") not in stage_id_set:
-            failures.append(f"{label}: from_stage must reference stage_vocabulary")
-        if transition.get("to_stage") not in stage_id_set:
-            failures.append(f"{label}: to_stage must reference stage_vocabulary")
-        refs = transition.get("gate_references")
-        if not _is_valid_string_list(refs):
-            failures.append(f"{label}: gate_references must be a non-empty string list")
+    failures = _lifecycle_registry_manifest_issues(root, path, display)
+    if registry.get("workflow") != "software-project-governance" or registry.get("source_of_truth") is not True:
+        failures.append(f"{display}: invalid workflow or source_of_truth")
+    if registry.get("registry_mode") != "loop-unit-gates":
+        failures.append(f"{display}: registry_mode must be loop-unit-gates")
+    for key in ("active_lifecycle_mode", "default_lifecycle_mode"):
+        if registry.get(key) != "loop-engineering":
+            failures.append(f"{display}: {key} must be loop-engineering")
+    activation = registry.get("runtime_activation")
+    for key in ("flow_unit_status_runtime", "unit_scoped_gate_execution"):
+        if not isinstance(activation, dict) or activation.get(key) is not True:
+            failures.append(f"{display}: runtime_activation.{key} must be true")
+    modes = registry.get("lifecycle_modes")
+    if not isinstance(modes, list) or len(modes) != 1 or not isinstance(modes[0], dict):
+        return failures + [f"{display}: exactly one executable lifecycle mode is required"]
+    mode = modes[0]
+    if (mode.get("id") != "loop-engineering" or mode.get("active") is not True
+            or mode.get("default") is not True or mode.get("runtime_command") != "loop"):
+        failures.append(f"{display}: lifecycle_modes must select the loop command")
+    if mode.get("workflow_source") != "lifecycle.md" or not (core / "lifecycle.md").is_file():
+        failures.append(f"{display}: missing lifecycle.md workflow source")
+    policy = registry.get("loop_policy")
+    if not isinstance(policy, dict) or policy.get("scope") != "per-flow-unit" or policy.get("runtime_activation") is not True:
+        failures.append(f"{display}: loop_policy must activate per-flow-unit execution")
+        policy = policy if isinstance(policy, dict) else {}
+    if policy.get("read_command") != "loop status --unit <id> --json":
+        failures.append(f"{display}: loop_policy.read_command must select the unit")
+    if any(item.get("topology_source") != "loop-engineering-registry.json" for item in (mode, policy)):
+        failures.append(f"{display}: workflow and policy must reference the runtime topology")
+    topology, topology_issues = loop_engine.load_loop_registry(core.parent)
+    failures.extend(topology_issues)
+    topology = topology if isinstance(topology, dict) else {}
+    if topology.get("registry_mode") != "native-loop-execution" or topology.get("workflow_model") != "loop-engineering":
+        failures.append(f"{display}: runtime topology must declare native loop execution")
+    paths = topology.get("iteration_paths")
+    if not isinstance(paths, dict) or set(paths) != set(TIERS):
+        failures.append(f"{display}: every executable tier needs an iteration path")
+        paths = paths if isinstance(paths, dict) else {}
+    gates = set(LIFECYCLE_REGISTRY_GATES)
+    consumed = {"G1"}  # explicit one-time project decision at setup intake
+    for tier, route in paths.items():
+        if not _is_valid_string_list(route) or not set(route) <= gates or len(route) != len(set(route)):
+            failures.append(f"{display}: {tier} has invalid or empty local gates")
         else:
-            for gate_id in refs:
-                if gate_id not in gate_id_set:
-                    failures.append(f"{label}: unknown gate reference `{gate_id}`")
-        if not isinstance(transition.get("transition_type"), str) or not transition.get("transition_type", "").strip():
-            failures.append(f"{label}: transition_type must be a non-empty string")
+            consumed.update(route)
+    if gates != consumed:
+        failures.append(f"{display}: unconsumed local gates: {sorted(gates - consumed)}")
+    targets = topology.get("rework_targets")
+    if not isinstance(targets, dict):
+        failures.append(f"{display}: topology must declare rework targets")
+    else:
+        for gate, pair in targets.items():
+            if (gate not in gates or not isinstance(pair, list) or len(pair) != 2
+                    or not isinstance(pair[0], str) or not isinstance(paths.get(pair[0]), list)
+                    or pair[1] not in paths[pair[0]]):
+                failures.append(f"{display}: invalid rework target for {gate}")
 
-    loop_policy = registry.get("loop_policy")
-    if not isinstance(loop_policy, dict):
-        failures.append(f"{display}: loop_policy must be an object")
-        loop_policy = {}
-    if loop_policy.get("scope") != "per-flow-unit":
-        failures.append(f"{display}: loop_policy.scope must be per-flow-unit")
-    if loop_policy.get("runtime_activation") is not False:
-        failures.append(f"{display}: loop_policy.runtime_activation must be false in schema-only 0.51.0")
-    if not _is_valid_string_list(loop_policy.get("allowed_loop_types")):
-        failures.append(f"{display}: loop_policy.allowed_loop_types must be a non-empty string list")
-    for field in ("blocked_dependency_rule", "sibling_completion_rule", "loop_counter_policy"):
-        if not isinstance(loop_policy.get(field), str) or not loop_policy.get(field, "").strip():
-            failures.append(f"{display}: loop_policy.{field} must be a non-empty string")
-
-    flow_unit_schema = registry.get("flow_unit_schema")
-    if not isinstance(flow_unit_schema, dict):
-        failures.append(f"{display}: flow_unit_schema must be an object")
-        flow_unit_schema = {}
-    if flow_unit_schema.get("schema_only") is not True:
-        failures.append(f"{display}: flow_unit_schema.schema_only must be true")
-    if flow_unit_schema.get("status_activation") != "not-active-in-0.51.0":
-        failures.append(f"{display}: flow_unit_schema.status_activation must be not-active-in-0.51.0")
-    required_fields = flow_unit_schema.get("required_fields")
-    if not isinstance(required_fields, list):
-        failures.append(f"{display}: flow_unit_schema.required_fields must be a list")
-        required_fields = []
-    for field in LIFECYCLE_REGISTRY_REQUIRED_FLOW_FIELDS:
-        if field not in required_fields:
-            failures.append(f"{display}: flow_unit_schema.required_fields missing `{field}`")
-    allowed_unit_types = set(flow_unit_schema.get("allowed_unit_types") or [])
-    for unit_type in ("chapter", "engine-system", "story", "module", "release-candidate", "hotfix"):
-        if unit_type not in allowed_unit_types:
-            failures.append(f"{display}: flow_unit_schema.allowed_unit_types missing `{unit_type}`")
-    allowed_gate_lanes = set(flow_unit_schema.get("allowed_gate_lanes") or [])
-    for lane in ("backlog", "design", "development", "testing", "release-candidate", "released", "operations-feedback"):
-        if lane not in allowed_gate_lanes:
-            failures.append(f"{display}: flow_unit_schema.allowed_gate_lanes missing `{lane}`")
-
+    activities = registry.get("stage_vocabulary") or []
+    activity_gates = {a["id"]: a.get("related_gate") for a in activities
+                      if isinstance(a, dict) and isinstance(a.get("id"), str)}
+    refs = registry.get("gate_references")
+    if not isinstance(refs, list):
+        return failures + [f"{display}: missing gate_references"]
+    catalog = core / "stage-gates.md"
+    headings = set(re.findall(r"^##\s+(G\d+)\b", _read_text_normalized(catalog), re.M)) if catalog.is_file() else set()
+    gate_id_set = set()
+    for ref in refs:
+        if not isinstance(ref, dict) or not isinstance(ref.get("gate_id"), str):
+            failures.append(f"{display}: invalid gate reference")
+            continue
+        gate = ref["gate_id"]
+        if gate in gate_id_set or gate not in gates:
+            failures.append(f"{display}: duplicate or unknown gate reference {gate}")
+        gate_id_set.add(gate)
+        if (not isinstance(ref.get("activity"), str) or activity_gates.get(ref["activity"]) != gate
+                or ref.get("source") != f"skills/software-project-governance/core/stage-gates.md#{gate}"
+                or gate not in headings):
+            failures.append(f"{display}: {gate} must resolve to its activity and gate evidence catalog section")
+    if gate_id_set != gates:
+        failures.append(f"{display}: missing gate reference {sorted(gates - gate_id_set)}")
     project_type_hooks = registry.get("project_type_hooks")
     if not isinstance(project_type_hooks, dict):
         failures.append(f"{display}: project_type_hooks must be an object")
@@ -3720,16 +3131,6 @@ def check_lifecycle_registry(root=None):
             failures.append(
                 f"{hook_label}.default_flow_unit_type must be included in unit_templates"
             )
-        if default_flow_unit_type not in allowed_unit_types:
-            failures.append(
-                f"{hook_label}.default_flow_unit_type must be declared in flow_unit_schema.allowed_unit_types"
-            )
-        for unit_template in unit_templates:
-            if unit_template not in allowed_unit_types:
-                failures.append(
-                    f"{hook_label}.unit_templates includes undeclared unit type `{unit_template}`"
-                )
-
     for project_type, preset in project_type_gate_presets.items():
         preset_label = f"{display}: project_type_gate_presets.{project_type}"
         hooks = project_type_hooks.get(project_type, {})
@@ -3790,12 +3191,6 @@ def check_lifecycle_registry(root=None):
             failures.append(f"{preset_label}.default_flow_unit_type must match project_type_hooks.{project_type}.default_flow_unit_type")
         if default_flow_unit_type not in preset_unit_templates:
             failures.append(f"{preset_label}.default_flow_unit_type must be included in unit_templates")
-        if default_flow_unit_type not in allowed_unit_types:
-            failures.append(f"{preset_label}.default_flow_unit_type must be declared in flow_unit_schema.allowed_unit_types")
-        for unit_template in preset_unit_templates:
-            if unit_template not in allowed_unit_types:
-                failures.append(f"{preset_label}.unit_templates includes undeclared unit type `{unit_template}`")
-
         gate_standards = preset.get("gate_standards")
         if not isinstance(gate_standards, list) or not gate_standards:
             failures.append(f"{preset_label}.gate_standards must be a non-empty list")
@@ -3834,15 +3229,13 @@ def check_lifecycle_registry(root=None):
 
     for text in _lifecycle_registry_text_values(registry):
         lowered = text.lower()
-        if "flow-unit runtime behavior active" in lowered:
-            failures.append(f"{display}: forbidden lifecycle runtime activation wording")
         for label, pattern in LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS:
             for match in pattern.finditer(lowered):
                 matched_text = text[match.start():match.end()]
                 if not _line_has_scoped_claim_negation(text, matched_text):
                     failures.append(f"{display}: forbidden lifecycle overclaim `{label}`")
                     break
-        for label, pattern in FLOW_UNIT_RUNTIME_FORBIDDEN_OVERCLAIMS:
+        for label, pattern in LIFECYCLE_REGISTRY_RISK_CLAIMS:
             if pattern.search(lowered) and not _line_has_scoped_claim_negation(text, label):
                 failures.append(f"{display}: forbidden lifecycle overclaim `{label}`")
 
@@ -3850,284 +3243,7 @@ def check_lifecycle_registry(root=None):
 
 
 def _flow_unit_runtime_path(root=None):
-    return (root or ROOT) / FLOW_UNIT_RUNTIME_STATE_REL
-
-
-def _flow_runtime_boundary_display(value):
-    if isinstance(value, list):
-        return "; ".join(item for item in value if isinstance(item, str))
-    return str(value or "")
-
-
-def discover_flow_unit_runtime_context(root=None, *, validate_v1=False):
-    """Return visibility-only flow-unit context from optional hot project state."""
-    root = root or ROOT
-    runtime_path = _flow_unit_runtime_path(root)
-    display = str(_display_path(runtime_path, root))
-    state, _, load_issues = read_flow_unit_runtime(runtime_path, display)
-    if state is not None:
-        load_issues = observed_runtime_issues(state, display, validate_v1=validate_v1)
-    if state is None or load_issues:
-        missing = state is None and not load_issues
-        return {
-            "status": "NOT_FOUND" if missing else "INVALID",
-            "path": str(_display_path(runtime_path, root)),
-            "workflow_model": "classic-phase-gate",
-            "active_lanes": {},
-            "rollup_status": "not found" if missing else "invalid",
-            "blocked_downstream_units": [],
-            "loop_counters": {},
-            "source_facts": load_issues or [f"{display}: NOT_FOUND safe; flow-unit runtime hot state is optional"],
-            "no_overclaim_boundary": "runtime visibility only; classic G1-G11 remains compatible",
-        }
-
-    flow_units = state["flow_units"]
-    observed_units = []
-    active_lanes = {}
-    loop_counters = {}
-    blocked_downstream = []
-    directly_blocked = {
-        unit["flow_unit_id"] for unit in flow_units
-        if unit.get("blockers") or (
-            isinstance(unit.get("gate_state"), dict)
-            and unit["gate_state"].get("status") == "blocked"
-        )
-    }
-    for unit in flow_units:
-        unit_id = unit["flow_unit_id"]
-        lane = unit.get("gate_lane")
-        row = {"flow_unit_id": unit_id, "gate_lane": lane if isinstance(lane, str) and lane.strip() else None}
-        if row["gate_lane"] is not None:
-            active_lanes.setdefault(lane, []).append(unit_id)
-        if state.get("schema_version") == "2.0":
-            row["gate_id"] = unit["gate_state"]["gate_id"]
-        observed_units.append(row)
-        loop_state = unit.get("loop_state")
-        loop_count = loop_state.get("loop_count") if isinstance(loop_state, dict) else None
-        if isinstance(loop_count, str) and loop_count.strip().isdecimal():
-            try:
-                loop_count = int(loop_count.strip())
-            except ValueError:
-                loop_count = 0
-        loop_counters[unit_id] = loop_count if type(loop_count) is int else 0
-        deps = unit.get("dependencies")
-        if isinstance(deps, list) and any(isinstance(dep, str) and dep in directly_blocked for dep in deps):
-            blocked_downstream.append(unit_id)
-
-    declared_blocked = state.get("blocked_downstream_units")
-    blocked_downstream_units = declared_blocked if isinstance(declared_blocked, list) else blocked_downstream
-    return {
-        "status": "FOUND",
-        "path": str(_display_path(runtime_path, root)),
-        "workflow_model": state.get("workflow_model", ""),
-        "active_lanes": active_lanes,
-        "preview_units": observed_units,
-        "rollup_status": state.get("rollup_status", ""),
-        "blocked_downstream_units": blocked_downstream_units,
-        "loop_counters": loop_counters,
-        "source_facts": [
-            f"{_display_path(runtime_path, root)}: {len(flow_units)} flow unit(s), "
-            f"{len(active_lanes)} active lane(s)"
-        ],
-        "no_overclaim_boundary": _flow_runtime_boundary_display(state.get("no_overclaim_boundary")),
-    }
-
-
-def check_flow_unit_runtime(root=None):
-    """FIX-136: validate optional flow-unit hot state without activating gate engine."""
-    root = root or ROOT
-    runtime_path = _flow_unit_runtime_path(root)
-    display = _display_path(runtime_path, root)
-    state, _, load_issues = read_flow_unit_runtime(runtime_path, str(display))
-    if state is None:
-        return load_issues
-    if "schema_version" in state:
-        return observed_runtime_issues(state, str(display))
-    return validate_flow_unit_runtime_payload_dispatch(state, str(display))
-
-
-def _dynamic_migration_target_root(target):
-    target_path = Path(target)
-    return target_path if target_path.is_absolute() else ROOT / target_path
-
-
-def _parse_plan_workflow_model(plan_text):
-    config_match = re.search(
-        r"(?ms)^##\s+项目配置\s*$"
-        r"(?P<section>.*?)(?=^##\s+|\Z)",
-        plan_text,
-    )
-    config_section = config_match.group("section") if config_match else ""
-    explicit_model_fields = (
-        "workflow_model",
-        "workflow model",
-        "current_workflow_model",
-        "active_workflow_model",
-        "lifecycle_model",
-        "current_lifecycle_model",
-        "active_lifecycle_model",
-        "工作流模型",
-        "当前工作流模型",
-        "生命周期模型",
-        "当前生命周期模型",
-    )
-    for line in config_section.splitlines():
-        lowered = line.lower()
-        if not any(field in lowered for field in explicit_model_fields):
-            continue
-
-        field_value = lowered
-        for separator in (":", "：", "="):
-            if separator in field_value:
-                field_value = field_value.split(separator, 1)[1]
-                break
-        field_value = re.split(r"[;；#]", field_value, maxsplit=1)[0].strip()
-        if LIFECYCLE_REGISTRY_ACTIVE_MODE in field_value:
-            return LIFECYCLE_REGISTRY_ACTIVE_MODE
-        if LIFECYCLE_REGISTRY_DYNAMIC_MODE in field_value:
-            return LIFECYCLE_REGISTRY_DYNAMIC_MODE
-
-    if (
-        "## Gate 状态跟踪" in plan_text
-        or "## gate 状态跟踪" in plan_text
-        or re.search(r"(?mi)^\|\s*Gate\s*\|", plan_text)
-    ):
-        return LIFECYCLE_REGISTRY_ACTIVE_MODE
-    return "unknown"
-
-
-def _count_evidence_rows(evidence_text):
-    count = 0
-    for line in evidence_text.splitlines():
-        cells = _split_markdown_table_row(line)
-        if cells and re.match(r"^(?:EVD-\d+|REVIEW-[A-Z]+-\d+)", cells[0]):
-            count += 1
-    return count
-
-
-def build_dynamic_lifecycle_migration_preview(target=None):
-    """FIX-139: build a read-only classic -> dynamic migration preview."""
-    root = _dynamic_migration_target_root(target or ROOT)
-    plan_path = root / ".governance/plan-tracker.md"
-    evidence_path = root / ".governance/evidence-log.md"
-    registry, registry_issues = _load_lifecycle_registry(ROOT)
-    runtime_context = discover_flow_unit_runtime_context(root, validate_v1=True)
-
-    preview = {
-        "command": "dynamic-lifecycle-migration",
-        "target": str(root),
-        "mode": "dry-run",
-        "dry_run": True,
-        "write_operations": [],
-        "workflow_model": {
-            "current": "unknown",
-            "target": LIFECYCLE_REGISTRY_DYNAMIC_MODE,
-            "active_default_remains": LIFECYCLE_REGISTRY_ACTIVE_MODE,
-            "dynamic_opt_in": True,
-        },
-        "flow_units": {
-            "source": "none",
-            "count": 0,
-            "active_lanes": {},
-            "preview_units": [],
-        },
-        "evidence_preservation": {
-            "evidence_rows": 0,
-            "hashes": {},
-        },
-        "blocked_checks": [],
-        "warnings": [],
-        "no_overclaim_boundaries": [
-            "classic-phase-gate remains active/default",
-            "dynamic-flow-gate is opt-in",
-            "dry-run is read-only and does not modify target",
-            "plan-tracker is preserved",
-            "evidence-log is preserved",
-        ],
-        "migration_plan": [],
-    }
-
-    if registry_issues:
-        preview["blocked_checks"].extend(registry_issues)
-    else:
-        if registry.get("active_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
-            preview["blocked_checks"].append("lifecycle registry active mode is not classic-phase-gate")
-        if registry.get("default_lifecycle_mode") != LIFECYCLE_REGISTRY_ACTIVE_MODE:
-            preview["blocked_checks"].append("lifecycle registry default mode is not classic-phase-gate")
-        modes = registry.get("lifecycle_modes")
-        dynamic = [
-            mode for mode in modes
-            if isinstance(mode, dict) and mode.get("id") == LIFECYCLE_REGISTRY_DYNAMIC_MODE
-        ] if isinstance(modes, list) else []
-        if len(dynamic) != 1 or dynamic[0].get("default") is not False or dynamic[0].get("active") is not False:
-            preview["blocked_checks"].append("dynamic-flow-gate must remain inactive/default=false until explicit opt-in")
-
-    preservation = preview["evidence_preservation"]
-    for key, path in (("plan_tracker", plan_path), ("evidence_log", evidence_path)):
-        display = str(_display_path(path, root))
-        record = {"path": display, "exists": False, "preserved": False}
-        preservation[key] = record
-        try:
-            raw = path.read_bytes()
-            content = raw.decode("utf-8")
-        except FileNotFoundError:
-            preview["blocked_checks"].append(f"missing {path.relative_to(root).as_posix()}")
-            continue
-        except (OSError, UnicodeError) as exc:
-            record["exists"] = path.exists()
-            preview["blocked_checks"].append(f"{display}: unreadable: {exc}")
-            continue
-        record.update(exists=True, preserved=True)
-        preservation["hashes"][f"{key}_sha256"] = hashlib.sha256(raw).hexdigest()
-        if key == "plan_tracker":
-            preview["workflow_model"]["current"] = _parse_plan_workflow_model(content)
-        else:
-            preservation["evidence_rows"] = _count_evidence_rows(content)
-            if not preservation["evidence_rows"]:
-                preview["blocked_checks"].append("evidence-log has no parseable evidence rows")
-
-    if runtime_context["status"] == "FOUND":
-        units = runtime_context["preview_units"]
-        preview["flow_units"] = {
-            "source": runtime_context["path"],
-            "active_lanes": runtime_context["active_lanes"],
-            "count": len(units),
-            "preview_units": units,
-        }
-    elif runtime_context["status"] == "INVALID":
-        preview["flow_units"]["source"] = runtime_context["path"]
-        preview["blocked_checks"].extend(runtime_context["source_facts"])
-
-    preview["migration_plan"] = [
-        {
-            "step": "inventory",
-            "action": "Read plan-tracker, evidence-log, lifecycle registry, and optional flow-unit runtime.",
-            "write": False,
-        },
-        {
-            "step": "preserve",
-            "action": "Keep existing plan-tracker and evidence-log as source evidence; record hashes in preview.",
-            "write": False,
-        },
-        {
-            "step": "opt-in",
-            "action": "Prepare dynamic-flow-gate target model only for explicit future opt-in.",
-            "write": False,
-        },
-        {
-            "step": "review",
-            "action": "Require human review and separate follow-up before any real migration writes.",
-            "write": False,
-        },
-    ]
-    preview["status"] = "BLOCKED" if preview["blocked_checks"] else "READY_FOR_REVIEW"
-    preview["validation_issues"] = list(preview["blocked_checks"])
-    return preview
-
-
-def check_dynamic_lifecycle_migration_preview(target=None):
-    """Return the diagnostics from one read-only snapshot for legacy callers."""
-    return build_dynamic_lifecycle_migration_preview(target)["validation_issues"]
+    return (root or HOST_PROJECT_ROOT) / FLOW_UNIT_RUNTIME_STATE_REL
 
 
 def check_governance_packs(root=None):
@@ -4650,213 +3766,6 @@ def check_mainstream_agent_loading(root=None):
     return failures
 
 
-def _claim_clause_bounds(text, start, end):
-    separators = ";；.!?！？|:："
-    clause_start = 0
-    for index in range(start - 1, -1, -1):
-        if text[index] in separators:
-            clause_start = index + 1
-            break
-
-    clause_end = len(text)
-    for index in range(end, len(text)):
-        if text[index] in separators:
-            clause_end = index
-            break
-
-    return clause_start, clause_end
-
-
-def _claim_local_window(text, start, end):
-    clause_start, clause_end = _claim_clause_bounds(text, start, end)
-    clause = text[clause_start:clause_end]
-    rel_start = start - clause_start
-    rel_end = end - clause_start
-    prefix = clause[:rel_start]
-    suffix = clause[rel_end:]
-    prefix = re.split(r"[;；.!?！？|:：]", prefix)[-1]
-    suffix = re.split(r"[;；.!?！？|:：]", suffix, maxsplit=1)[0]
-    return prefix, suffix
-
-
-def _word_count(text):
-    return len(re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", text.lower()))
-
-
-def _marker_positions(text, markers):
-    lower = text.lower()
-    positions = []
-    for marker in markers:
-        marker_lower = marker.lower()
-        if re.search(r"[a-z0-9]", marker_lower):
-            pattern = rf"(?<![a-z0-9]){re.escape(marker_lower)}(?![a-z0-9])"
-            positions.extend((match.start(), match.end(), marker_lower) for match in re.finditer(pattern, lower))
-        else:
-            start = lower.find(marker_lower)
-            while start != -1:
-                positions.append((start, start + len(marker_lower), marker_lower))
-                start = lower.find(marker_lower, start + len(marker_lower))
-    return positions
-
-
-def _line_has_scoped_claim_negation(line, phrase):
-    """Return true only when every claim occurrence is negated in its local clause."""
-    lower = line.lower()
-    phrase_lower = phrase.lower()
-    noun_claim_terms = (
-        "official approval",
-        "marketplace approval",
-        "universal runtime support",
-        "full runtime support",
-        "universal/full runtime support",
-        "external first-session pilot success",
-        "external first-session pilot pass",
-        "external first-session pilot passed",
-        "codex desktop marketplace-management e2e pass",
-        "codex desktop marketplace-management e2e passed",
-        "automatic best-tool selection",
-        "automatic best-tool selection pass",
-        "automatic best-tool selection passed",
-        "automatic best-tool selection available",
-        "automatic best-tool selection verified",
-        "universal plugin/skill/tool availability",
-        "universal plugin/skill/tool availability pass",
-        "universal plugin/skill/tool availability passed",
-        "universal plugin/skill/tool availability available",
-        "universal plugin/skill/tool availability verified",
-        "catalog entry runtime pass",
-        "catalog entry runtime passed",
-        "catalog entry runtime available",
-        "catalog entry runtime verified",
-        "1.0.0 production-ready",
-        "1.0.0 production-ready claim",
-        "risk-036 closed",
-        "risk-037 closed",
-        "risk-036 closure achieved",
-        "risk-037 closure achieved",
-        "declarative gate engine active",
-        "dynamic-flow-gate default",
-    )
-    direct_pre_markers = (
-        "not",
-        "no",
-        "does not",
-        "do not",
-        "is not",
-        "are not",
-        "isn't",
-        "doesn't",
-        "don't",
-        "不是",
-        "不等于",
-        "不得",
-        "不能",
-        "不声明",
-        "未",
-        "未发现",
-        "没有",
-        "明确否定",
-        "阻断",
-        "拦截",
-    )
-    predicate_markers = (
-        "does not claim",
-        "do not claim",
-        "not claim",
-        "does not mean",
-        "do not mean",
-        "doesn't mean",
-        "don't mean",
-        "is not",
-        "are not",
-        "isn't",
-        "no",
-        "不是",
-        "不等于",
-        "不替代",
-        "不得",
-        "不能",
-        "不声明",
-        "未",
-        "未发现",
-        "没有",
-        "avoid",
-        "avoids",
-        "避免",
-        "明确否定",
-        "阻断",
-        "拦截",
-    )
-    post_markers = (
-        "is not",
-        "are not",
-        "isn't",
-        "not claimed",
-        "not verified",
-        "not proof",
-        "不是",
-        "不等于",
-        "不得",
-        "不能",
-        "不声明",
-        "未",
-        "没有",
-        "不可用",
-        "不可发布",
-        "仍不可用",
-        "仍不可发布",
-        "保守处置",
-        "继续保留",
-        "继续打开",
-        "仍打开",
-        "仍需",
-        "阻断",
-        "拦截",
-        "过度声明",
-        "肯定式过度声明",
-    )
-
-    matches = list(re.finditer(re.escape(phrase_lower), lower))
-    if not matches:
-        return False
-
-    for match in matches:
-        prefix, suffix = _claim_local_window(lower, match.start(), match.end())
-
-        negated = False
-        prefix_window = prefix[-96:]
-        for marker_start, marker_end, _marker in _marker_positions(prefix_window, direct_pre_markers):
-            between = prefix_window[marker_end:]
-            if not re.search(r"[,;；.!?！？|:：]", between) and _word_count(between) <= 2:
-                negated = True
-                break
-
-        if not negated:
-            for marker_start, marker_end, marker in _marker_positions(prefix, predicate_markers):
-                between = prefix[marker_end:]
-                if marker == "no":
-                    if phrase_lower not in noun_claim_terms:
-                        continue
-                    if not any(other_claim in between for other_claim in noun_claim_terms):
-                        continue
-                if _word_count(between) <= 36:
-                    negated = True
-                    break
-
-        if not negated:
-            suffix_head = suffix[:96]
-            for marker_start, marker_end, _marker in _marker_positions(suffix_head, post_markers):
-                between = suffix_head[:marker_start]
-                if not re.search(r"[,;；.!?！？|:：]", between) and _word_count(between) <= 3:
-                    negated = True
-                    break
-
-        if not negated:
-            return False
-
-    return True
-
-
 def _append_pack_overclaim_issues(failures, path, content, root):
     display = _display_path(path, root)
     lines = content.splitlines()
@@ -4910,10 +3819,8 @@ def check_governance_pack_status(root=None):
             failures.append(f"{display}: missing pack-aware status contract")
             continue
         content = path.read_text(encoding="utf-8")
-        for token in GOVERNANCE_PACK_STATUS_REQUIRED_TOKENS:
-            if token not in content:
-                failures.append(f"{display}: missing pack-aware status token `{token}`")
-        _append_missing_status_boundary_issues(failures, path, content, root)
+        if "Pack boundary:" in content:
+            _append_missing_status_boundary_issues(failures, path, content, root)
         _append_pack_overclaim_issues(failures, path, content, root)
 
     release_path = root / GOVERNANCE_PACK_RELEASE_BOUNDARY_PATH
@@ -5152,7 +4059,8 @@ def _validate_codex_runtime_e2e_claim(root, manifest_path, runtime_e2e):
             failures.append(
                 f"{display}: Codex agent_runtime_e2e.status=passed must be real codex exec target-cwd evidence, not Codex App/current session or separately timed-out CLI evidence"
             )
-        if any(marker in claim_text for marker in blocked_markers):
+        observed = " ".join(str(agent_block.get(key) or "") for key in ("evidence", "blocked_reason")).lower()
+        if any(marker in observed for marker in blocked_markers):
             failures.append(
                 f"{display}: Codex agent_runtime_e2e.status=passed must not include timeout/blocked evidence"
             )
@@ -6759,12 +5667,13 @@ def check_release_readiness(
     lineage_mode="candidate",
     release_commit=None,
     lineage_remote="origin",
-    gate_sequence_lineage_mode=None,
+    release_unit=None,
     dsh_upgrade_regression_runner=None,
     require_delivery_evidence=False,
 ):
     """FIX-072: aggregate release gate scripts behind the stage-release check-release command."""
-    replay_hint = _tagged_release_replay_hint(version)
+    plugin_release = not _host_plugin_roots_divergent()
+    replay_hint = _tagged_release_replay_hint(version) if plugin_release else None
     if replay_hint:
         return {
             "pass": False,
@@ -6775,55 +5684,28 @@ def check_release_readiness(
     issues = []
     details = {}
 
-    version_issues = check_version_consistency()
-    version_failures = [issue for issue in version_issues if not issue.startswith("[WARN]")]
-    details["version_consistency"] = {
-        "pass": not version_failures,
-        "issues": version_failures,
-        "warnings": [issue for issue in version_issues if issue.startswith("[WARN]")],
-    }
-    issues.extend(f"version consistency: {issue}" for issue in version_failures)
+    if plugin_release:
+        version_issues = check_version_consistency()
+        version_failures = [issue for issue in version_issues if not issue.startswith("[WARN]")]
+        details["version_consistency"] = {
+            "pass": not version_failures,
+            "issues": version_failures,
+            "warnings": [issue for issue in version_issues if issue.startswith("[WARN]")],
+        }
+        issues.extend(f"version consistency: {issue}" for issue in version_failures)
 
-    release_fact_issues = check_release_readiness_fact_source()
-    details["release_fact_source"] = {
-        "pass": not release_fact_issues,
-        "issues": release_fact_issues,
-    }
-    issues.extend(f"release fact source: {issue}" for issue in release_fact_issues)
-
-    hot_fact_issues = check_hot_fact_source_consistency()
-    details["hot_fact_source"] = {
-        "pass": not hot_fact_issues,
-        "issues": hot_fact_issues,
-    }
-    issues.extend(f"hot fact source: {issue}" for issue in hot_fact_issues)
-
-    runtime_matrix_issues = check_runtime_readiness_matrix()
-    details["runtime_readiness_matrix"] = {
-        "pass": not runtime_matrix_issues,
-        "issues": runtime_matrix_issues,
-    }
-    issues.extend(f"runtime readiness matrix: {issue}" for issue in runtime_matrix_issues)
-
-    first_session_issues = check_first_session_measurement()
-    details["first_session_measurement"] = {
-        "pass": not first_session_issues,
-        "issues": first_session_issues,
-    }
-    issues.extend(f"first-session measurement: {issue}" for issue in first_session_issues)
-
-    pack_status_issues = check_governance_pack_status()
-    details["governance_pack_status"] = {
-        "pass": not pack_status_issues,
-        "issues": pack_status_issues,
-        "boundary": (
-            "packs are capability modules; profiles are intensity presets; "
-            "pack enabled or membership is not task evidence, independent review, "
-            "quality gate, release gate, official approval, marketplace approval, "
-            "universal/full runtime support, or 1.0.0 production-ready proof"
-        ),
-    }
-    issues.extend(f"governance pack status: {issue}" for issue in pack_status_issues)
+        pack_status_issues = check_governance_pack_status()
+        details["governance_pack_status"] = {
+            "pass": not pack_status_issues,
+            "issues": pack_status_issues,
+            "boundary": (
+                "packs are capability modules; profiles are intensity presets; "
+                "pack enabled or membership is not task evidence, independent review, "
+                "quality gate, release gate, official approval, marketplace approval, "
+                "universal/full runtime support, or 1.0.0 production-ready proof"
+            ),
+        }
+        issues.extend(f"governance pack status: {issue}" for issue in pack_status_issues)
 
     # FEAT-080 / ADR-021 §2.2.4: provenance release gate (DEC-290(5) wiring;
     # NF-2 semantics — 排期/改期豁免 rides the task row's target_version,
@@ -6865,55 +5747,55 @@ def check_release_readiness(
     # FIX-406 F-1: a plan that cannot be built is an EXPLICIT issue — the
     # face error is lifted into the details/issues faces instead of being
     # silently dropped behind .get("paths", []) (vacuous-PASS fix).
-    _sd_face = _sd_projection_face(PLUGIN_ROOT)
+    _sd_face = _sd_projection_face(PLUGIN_ROOT) if plugin_release else {"paths": []}
     _sd_face_error = _sd_face.get("error")
     if _sd_face_error:
         issues.append(f"sd integrity: {_sd_face_error}")
     _sd_face_paths = list(_sd_face.get("paths", []))
-    _sd_face_paths.extend(_sd_hooks_face(PLUGIN_ROOT))
+    hook_paths = _sd_hooks_face(HOST_PROJECT_ROOT)
+    _sd_face_paths.extend(hook_paths if plugin_release else (path for path in hook_paths if os.path.lexists(path)))
     sd_scan = _sd_scan(_sd_face_paths)
-    details["sd_integrity"] = {**sd_scan, "face_error": _sd_face_error}
-    if not sd_scan["pass"]:
-        issues.extend(
-            "sd integrity: {0} unreadable — remediate: {1}".format(path, cmd)
-            for path, cmd in zip(sd_scan["unreadable"],
-                                 sd_scan["remediation"]))
+    sd_issues = [f"{path} unreadable — remediate: {cmd}"
+                 for path, cmd in zip(sd_scan["unreadable"], sd_scan["remediation"])]
+    details["sd_integrity"] = {**sd_scan, "face_error": _sd_face_error, "issues": sd_issues}
+    issues.extend(f"sd integrity: {issue}" for issue in sd_issues)
 
-    adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
-    details["agent_adapters"] = {
-        "pass": not adapter_issues,
-        "issues": adapter_issues,
-        "runtime": run_runtime_adapters,
-    }
-    issues.extend(f"agent adapters: {issue}" for issue in adapter_issues)
+    if plugin_release:
+        adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
+        details["agent_adapters"] = {
+            "pass": not adapter_issues,
+            "issues": adapter_issues,
+            "runtime": run_runtime_adapters,
+        }
+        issues.extend(f"agent adapters: {issue}" for issue in adapter_issues)
 
-    projection_result = check_projection_sync()
-    details["projection_sync"] = {
-        "pass": projection_result["pass"],
-        "issues": projection_result["issues"],
-        "mirrors_checked": projection_result["mirrors_checked"],
-        "mirrors_discovered": projection_result["mirrors_discovered"],
-        "mirrors_skipped_untracked": projection_result["mirrors_skipped_untracked"],
-        "source_version": projection_result["source_version"],
-    }
-    issues.extend(f"projection sync: {issue}" for issue in projection_result["issues"])
+        projection_result = check_projection_sync()
+        details["projection_sync"] = {
+            "pass": projection_result["pass"],
+            "issues": projection_result["issues"],
+            "mirrors_checked": projection_result["mirrors_checked"],
+            "mirrors_discovered": projection_result["mirrors_discovered"],
+            "mirrors_skipped_untracked": projection_result["mirrors_skipped_untracked"],
+            "source_version": projection_result["source_version"],
+        }
+        issues.extend(f"projection sync: {issue}" for issue in projection_result["issues"])
 
-    cross_ref_result = check_cross_references()
-    cross_ref_issues = (
-        [f"dangling reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["dangling"]]
-        + [f"deprecated reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["deprecated"]]
-        + [f"circular reference: {' -> '.join(cycle)}" for cycle in cross_ref_result["cycles"]]
-        # FIX-432 (F-4/F-A2) / FIX-436 F-8 wording: quote-sync issues ride
-        # the same gate; the current check_cross_references() always emits
-        # the key — .get only tolerates pre-FIX-432/partial dict shapes
-        # (e.g. fixtures or older cached results) that lack it.
-        + [f"quote sync: {issue}" for issue in cross_ref_result.get("quote_sync", [])]
-    )
-    details["cross_references"] = {
-        "pass": not cross_ref_issues,
-        "issues": cross_ref_issues,
-    }
-    issues.extend(cross_ref_issues)
+        cross_ref_result = check_cross_references()
+        cross_ref_issues = (
+            [f"dangling reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["dangling"]]
+            + [f"deprecated reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["deprecated"]]
+            + [f"circular reference: {' -> '.join(cycle)}" for cycle in cross_ref_result["cycles"]]
+            # FIX-432 (F-4/F-A2) / FIX-436 F-8 wording: quote-sync issues ride
+            # the same gate; the current check_cross_references() always emits
+            # the key — .get only tolerates pre-FIX-432/partial dict shapes
+            # (e.g. fixtures or older cached results) that lack it.
+            + [f"quote sync: {issue}" for issue in cross_ref_result.get("quote_sync", [])]
+        )
+        details["cross_references"] = {
+            "pass": not cross_ref_issues,
+            "issues": cross_ref_issues,
+        }
+        issues.extend(cross_ref_issues)
 
     archive_result = check_archive_integrity()
     archive_issues = archive_result.get("issues", [])
@@ -6924,13 +5806,14 @@ def check_release_readiness(
     }
     issues.extend(f"archive integrity: {issue}" for issue in archive_issues)
 
-    release_docs_issues = check_release_docs_coverage(version)
-    details["release_docs"] = {
-        "pass": not release_docs_issues,
-        "issues": release_docs_issues,
-        "version": version,
-    }
-    issues.extend(f"release docs: {issue}" for issue in release_docs_issues)
+    if plugin_release:
+        release_docs_issues = check_release_docs_coverage(version)
+        details["release_docs"] = {
+            "pass": not release_docs_issues,
+            "issues": release_docs_issues,
+            "version": version,
+        }
+        issues.extend(f"release docs: {issue}" for issue in release_docs_issues)
 
     lineage_result = check_release_lineage(
         version=version,
@@ -6941,23 +5824,12 @@ def check_release_readiness(
     details["release_lineage"] = lineage_result
     issues.extend(f"release lineage: {issue}" for issue in lineage_result["issues"])
 
-    # FIX-266 / REQ-145.4: pending prerelease gates block tagged candidates.
-    # BR-4 / DEC-153 ②: already-published audits warn about past bypasses.
-    gate_seq_mode = gate_sequence_lineage_mode or lineage_mode
-    gate_seq_result = check_gate_sequence_for_release(
-        lineage_mode=gate_seq_mode,
-    )
-    details["gate_sequence_for_release"] = {
-        "pass": not gate_seq_result["violations"],
-        "verdict": gate_seq_result["verdict"],
-        "lineage_mode": gate_seq_result["stats"].get("lineage_mode"),
-        "latest_tag": gate_seq_result["stats"].get("latest_tag"),
-        "prerelease_pending": gate_seq_result["stats"].get("prerelease_pending"),
-        "issues": [v["reason"] for v in gate_seq_result["violations"]],
-        "warnings": [w["reason"] for w in gate_seq_result["warnings"]],
-    }
-    issues.extend(f"gate sequence: {v['reason']}"
-                  for v in gate_seq_result["violations"])
+    # Release certification belongs to the candidate/version being shipped.
+    if lineage_mode == "candidate":
+        from loop_workflow import release_issues
+        scoped_issues = release_issues(HOST_PROJECT_ROOT, release_unit, version)
+        details["release_loop"] = {"pass": not scoped_issues, "unit": release_unit, "issues": scoped_issues}
+        issues.extend(scoped_issues)
 
     # Delivery acceptance also applies when broader execution gates are disabled.
     from delivery_acceptance import evaluate_delivery_acceptance
@@ -6966,33 +5838,44 @@ def check_release_readiness(
         HOST_PROJECT_ROOT,
         release_version=version,
         required=require_delivery_evidence,
-        released_history="released" in (lineage_mode, gate_seq_mode))
+        released_history=lineage_mode == "released")
     details["delivery_acceptance"] = delivery_acceptance
     issues.extend(f"delivery acceptance: {issue}" for issue in delivery_acceptance["issues"])
 
     one_dot_zero_blocker_issues = []
-    if version == "1.0.0":
+    if plugin_release and version == "1.0.0":
         one_dot_zero_blocker_issues = check_one_dot_zero_release_blockers()
         issues.extend(f"1.0.0 blocker: {issue}" for issue in one_dot_zero_blocker_issues)
-    details["one_dot_zero_blockers"] = {
-        "pass": not one_dot_zero_blocker_issues,
-        "issues": one_dot_zero_blocker_issues,
-        "required": version == "1.0.0",
-        "version": version,
-    }
+    if plugin_release:
+        details["one_dot_zero_blockers"] = {
+            "pass": not one_dot_zero_blocker_issues,
+            "issues": one_dot_zero_blocker_issues,
+            "required": plugin_release and version == "1.0.0",
+            "version": version,
+        }
 
     execution_gate_results = []
     execution_gate_issues = []
-    if run_execution_gates:
+    if run_execution_gates and plugin_release:
         execution_gate_results = run_release_execution_gates(runner=execution_gate_runner)
         execution_gate_issues = [result["issue"] for result in execution_gate_results if result.get("issue")]
         issues.extend(f"execution gate: {issue}" for issue in execution_gate_issues)
-    details["execution_gates"] = {
-        "pass": not execution_gate_issues,
-        "issues": execution_gate_issues,
-        "required": run_execution_gates,
-        "results": execution_gate_results,
-    }
+    if plugin_release:
+        details["execution_gates"] = {
+            "pass": not execution_gate_issues,
+            "issues": execution_gate_issues,
+            "required": run_execution_gates and plugin_release,
+            "results": execution_gate_results,
+        }
+
+    if not plugin_release:
+        ci = check_ci_evidence(repo_root=HOST_PROJECT_ROOT)
+        ci_issues = [item["reason"] for item in ci["violations"]]
+        details["project_ci_evidence"] = {
+            **ci, "pass": not ci_issues, "issues": ci_issues,
+            "skipped": ci["verdict"] == "no-verdict", "skip_reason": ci["reason"],
+        }
+        issues.extend(f"project CI: {issue}" for issue in ci_issues)
 
     # ── FEAT-016 / RISK-049 ③: dsh upgrade regression gate component ──
     # The isolated dsh upgrade re-verification command set (reuses the
@@ -7008,12 +5891,14 @@ def check_release_readiness(
     dsh_regression_results = []
     dsh_regression_issues = []
     dsh_regression_isolation = None
-    if not run_execution_gates:
+    if not plugin_release:
+        dsh_regression_skipped_reason = "DSH preset regression applies to the governance plugin release."
+    elif not run_execution_gates:
         dsh_regression_skipped_reason = (
             "execution gates skipped (--skip-execution-gates); the dsh "
             "upgrade regression command set was not run — WARN disclosure, "
             "not a release verdict")
-    elif lineage_mode == "released" or gate_seq_mode == "released":
+    elif lineage_mode == "released":
         dsh_regression_skipped_reason = (
             "released-history check (BR-4 / DEC-153 ②); the dsh upgrade "
             "regression targets the candidate working tree and is not run "
@@ -7040,32 +5925,7 @@ def check_release_readiness(
             "real-home writes — not a live marketplace upgrade"),
     }
 
-    # ── Loop fuse block (FEAT-006 / ADR-014 §6.3 — the system-level block). ──
-    # An ADDITIVE invocation of loop_gate_processor.collect_loop_fuse_issues
-    # (a PURE READ over flow-unit-runtime.json). A tripped, unresolved fuse
-    # blocks the release WITHOUT relying on Coordinator self-discipline — this
-    # gate is in check-release, which the Coordinator does not bypass. Returns
-    # empty when no fuses are tripped, so releases with no loop-fuse state are
-    # unaffected (the §9.1 regression discipline). Deferred import mirrors the
-    # _vw() pattern; the helper is a thin read, no new logic here (RISK-039).
-    loop_fuse_issues = []
-    try:
-        from loop_gate_processor import collect_loop_fuse_issues as _collect_fuse_issues
-        loop_fuse_issues = _collect_fuse_issues(root=HOST_PROJECT_ROOT)
-    except Exception:
-        # Fail-open on import/lookup errors: a missing loop_gate_processor or an
-        # unreadable runtime must NOT break a release that has no v2 loop state.
-        # (The v2 validator + FEAT-005/006 tests cover the wired path; this guard
-        # is for hosts not yet on the v2 contract.)
-        loop_fuse_issues = []
-    details["loop_fuse_block"] = {
-        "pass": not loop_fuse_issues,
-        "issues": loop_fuse_issues,
-        "required": True,
-    }
-    issues.extend(f"loop fuse block: {issue}" for issue in loop_fuse_issues)
-
-    changelog_path = changelog_path or (ROOT / "project/CHANGELOG.md")
+    changelog_path = changelog_path or (ROOT / "project/CHANGELOG.md" if plugin_release else HOST_PROJECT_ROOT / "CHANGELOG.md")
     changelog_issues = []
     if version:
         if not re.fullmatch(r"\d+\.\d+\.\d+", version):
@@ -7155,6 +6015,27 @@ def check_release_lineage(version, mode="candidate", release_commit=None, remote
 
 
 
+def _specialist_skill_owner_issues(root, router):
+    """Check the same role files and skill-table binding that a dispatched agent reads."""
+    roles = {path.stem: path for path in (root / "agents").glob("*.md")}
+    expected = {role.lower().replace(" ", "-") for role in ACTIVE_AGENT_ROLES}
+    issues = [f"active role files differ: {sorted(set(roles) ^ expected)}"] if set(roles) != expected else []
+    specialists = {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
+    specialists -= {"software-project-governance", "main-workflow"}
+    owners = {}
+    for role, path in roles.items():
+        if f"agents/{role}.md" not in router:
+            issues.append(f"dispatch route missing role {role}")
+        for name in re.findall(r"^\|\s*`?([a-z][a-z0-9-]*)`?\s*\|", path.read_text(encoding="utf-8"), re.M):
+            if name not in specialists:
+                issues.append(f"{role}: unknown bound skill {name}")
+            owners.setdefault(name, set()).add(role)
+    issues.extend(f"no dispatched role consumes {name}" for name in sorted(specialists - owners.keys()))
+    if owners.get("stage-operations") != {"release"}:
+        issues.append("operational feedback requires Release as the responsible role")
+    return issues
+
+
 def check_architecture_fact_source(
     skill_path=None,
     skill_index_path=None,
@@ -7164,6 +6045,7 @@ def check_architecture_fact_source(
     governance_developer_prompt_path=None,
 ):
     """FIX-065: keep Agent/team architecture facts synchronized."""
+    navigation_root = ROOT if architecture_path is None else None
     skill_path = skill_path or ROOT / "skills/software-project-governance/SKILL.md"
     skill_index_path = skill_index_path or ROOT / "skills/software-project-governance/references/skill-index.md"
     architecture_path = architecture_path or ROOT / "project/references/architecture.md"
@@ -7171,16 +6053,14 @@ def check_architecture_fact_source(
     agent_protocol_path = agent_protocol_path or ROOT / "skills/software-project-governance/references/agent-communication-protocol.md"
     governance_developer_prompt_path = governance_developer_prompt_path or ROOT / "agents/governance-developer.md"
 
-    failures = []
-    contents = {
-        skill_path: skill_path.read_text(encoding="utf-8"),
-        skill_index_path: skill_index_path.read_text(encoding="utf-8"),
-        architecture_path: architecture_path.read_text(encoding="utf-8"),
-        governance_command_path: governance_command_path.read_text(encoding="utf-8"),
-        agent_protocol_path: agent_protocol_path.read_text(encoding="utf-8"),
-        governance_developer_prompt_path: governance_developer_prompt_path.read_text(encoding="utf-8"),
-    }
+    documents = (
+        skill_path, skill_index_path, architecture_path, governance_command_path,
+        agent_protocol_path, governance_developer_prompt_path,
+    )
+    contents = {path: path.read_text(encoding="utf-8") for path in documents}
 
+    current_navigation = _markdown_section(contents[architecture_path], "## 当前目录导航")
+    failures = check_repository_navigation(architecture_path, current_navigation, navigation_root)
     forbidden_patterns = [
         ("legacy 7 groups / 9 Agent narrative", r"7\s*组\s*9\s*Agent|7组9Agent"),
         ("legacy 46-line SKILL.md entry narrative", r"46\s*行"),
@@ -7194,57 +6074,46 @@ def check_architecture_fact_source(
                 failures.append(f"{rel}: forbidden {label}")
 
     skill_index_content = contents[skill_index_path]
-    for line in skill_index_content.splitlines():
-        if line.strip().startswith("| stage-operations ") and "Release" in line:
-            rel = _display_path(skill_index_path)
-            failures.append(f"{rel}: stage-operations must not be bound to Release")
-
     skill_content = contents[skill_path]
     required_skill_phrases = [
         "Coordinator 融入入口层",
-        "14 个活跃文件化角色 Agent",
-        "15 个活跃角色含 Coordinator",
         "Coordinator 接管用户交互",
         "Producer-Reviewer 分离",
     ]
-    rel_skill = _display_path(skill_path)
     for phrase in required_skill_phrases:
         if phrase not in skill_content:
-            failures.append(f"{rel_skill}: missing architecture fact phrase: {phrase}")
+            failures.append(f"{_display_path(skill_path)}: missing architecture fact phrase: {phrase}")
 
-    actual_routes = _skill_route_table_count(skill_path)
-    documented_routes = _documented_route_table_count(governance_command_path)
-    rel_command = _display_path(governance_command_path)
-    if documented_routes is None:
-        failures.append(f"{rel_command}: missing documented full route table count")
-    elif documented_routes != actual_routes:
-        failures.append(
-            f"{rel_command}: route table count {documented_routes} does not match SKILL.md actual {actual_routes}"
-        )
+    if "skills/software-project-governance/SKILL.md" not in contents[governance_command_path]:
+        failures.append(f"{_display_path(governance_command_path)}: missing dispatch route to the main SKILL")
+    if "后置审查" not in _markdown_section(skill_content, "## Agent 分发路由"):
+        failures.append(f"{_display_path(skill_path)}: missing post-review routing for the review reader")
+    if navigation_root is not None:
+        failures.extend(_specialist_skill_owner_issues(navigation_root, skill_content))
 
     rel_skill_index = _display_path(skill_index_path)
-    governance_developer_binding = _find_table_line(
-        skill_index_content, "| 开发组 | **Governance Developer** "
-    )
-    if not governance_developer_binding:
-        failures.append(f"{rel_skill_index}: missing Governance Developer skill binding row")
-    else:
-        for required_skill in GOVERNANCE_DEVELOPER_REQUIRED_SKILLS:
-            if required_skill not in governance_developer_binding:
-                failures.append(
-                    f"{rel_skill_index}: Governance Developer skill binding missing {required_skill}"
-                )
-
-    required_skill_index_bindings = [
-        ("| stage-infra ", "stage-infra"),
-        ("| stage-maintenance ", "stage-maintenance"),
-        ("| code-review ", "code-review"),
-    ]
-    for row_prefix, skill_name in required_skill_index_bindings:
-        row = _find_table_line(skill_index_content, row_prefix)
-        if not row or "Governance Developer" not in row:
-            failures.append(f"{rel_skill_index}: {skill_name} must bind Governance Developer")
-
+    from governance_readers import markdown_table_cells
+    routes = [cells for line in skill_index_content.splitlines()
+              if len(cells := markdown_table_cells(line)) == 3 and "`" in cells[1]]
+    reviewed = set()
+    governance_route = False
+    for activity, producers, consumers in routes:
+        skill_ids = re.findall(r"`([a-z][a-z0-9-]*)`", producers + " " + consumers)
+        for skill_id in skill_ids:
+            if not (ROOT / "skills" / skill_id / "SKILL.md").is_file():
+                failures.append(f"{rel_skill_index}: {activity} references missing skill {skill_id}")
+        if not consumers.strip():
+            failures.append(f"{rel_skill_index}: {activity} has no artifact consumer")
+        local_reviewers = re.findall(r"`([a-z]+-review)`", consumers)
+        reviewed.update(local_reviewers)
+        if local_reviewers and not any(role in consumers for role in NAMED_REVIEWER_ROLES):
+            failures.append(f"{rel_skill_index}: {activity} needs a named independent reviewer")
+        if "Governance Developer" in producers and "`code-review`" in consumers and "Code Reviewer" in consumers:
+            governance_route = True
+    if not governance_route:
+        failures.append(f"{rel_skill_index}: missing Governance Developer → independent Code Reviewer route")
+    for name in sorted(set(LOOP_ROLE_SKILL_CONTRACTS) - reviewed):
+        failures.append(f"{rel_skill_index}: missing independent consumer for {name}")
     agent_protocol_content = contents[agent_protocol_path]
     rel_protocol = _display_path(agent_protocol_path)
     for role in ACTIVE_AGENT_ROLES:
@@ -7270,16 +6139,10 @@ def check_architecture_fact_source(
 
     governance_developer_prompt_content = contents[governance_developer_prompt_path]
     rel_governance_developer_prompt = _display_path(governance_developer_prompt_path)
-    required_governance_developer_prompt_phrases = [
-        "不得直接写 `.governance/` 治理记录",
-        "Proposed evidence-log entry",
-        "Proposed decision-log / risk-log entry",
-        "Coordinator 负责最终写回",
-    ]
-    for phrase in required_governance_developer_prompt_phrases:
-        if phrase not in governance_developer_prompt_content:
-            failures.append(f"{rel_governance_developer_prompt}: missing Governance Developer output boundary: {phrase}")
-
+    if not re.search(r"治理记录由 Coordinator.{0,12}写回|Coordinator 负责最终写回", governance_developer_prompt_content):
+        failures.append(f"{rel_governance_developer_prompt}: missing coordinator governance writeback boundary")
+    if not re.search(r"(?:不|不得)直接写\s*`\.governance/`", governance_developer_prompt_content):
+        failures.append(f"{rel_governance_developer_prompt}: direct governance writes must be prohibited")
     for path in (skill_path, skill_index_path, agent_protocol_path):
         rel = _display_path(path)
         for line_no in _generic_reviewer_cells(contents[path]):
@@ -7363,76 +6226,13 @@ def _extract_section(content, heading, stop_headings=None):
 
 
 def parse_project_config(path=None):
-    """Parse project configuration section from sample."""
-    content = (Path(path) if path is not None else SAMPLE_PATH).read_text(encoding="utf-8")
-    config = {}
-    in_section = False
-    for line in content.split("\n"):
-        if line.strip() == "## 项目配置":
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if in_section:
-            m = re.match(r"- \*\*(.+?)\*\*:\s*(.+)", line)
-            if m:
-                config[m.group(1)] = m.group(2)
-    return config
-
-
-def parse_gate_status():
-    """Parse Gate status table from sample."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    gates = []
-    in_section = False
-    for line in content.split("\n"):
-        # FIX-287④: tolerate bracketed heading variants (e.g. `## Gate 状态跟踪（G1-G11）`).
-        if line.strip().startswith("## Gate 状态跟踪"):
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if in_section and line.startswith("|"):
-            parts = [p.strip() for p in line.split("|")[1:-1]]
-            if len(parts) >= 5 and parts[0] != "Gate" and not all(
-                set(p.strip()) <= {"-", " "} for p in parts
-            ):
-                gates.append({
-                    "gate": parts[0],
-                    "transition": parts[1],
-                    "status": parts[2],
-                    "date": parts[3],
-                    "evidence": parts[4] if len(parts) > 4 else "",
-                })
-    return gates
+    from governance_readers import project_config
+    return project_config((Path(path) if path is not None else SAMPLE_PATH).read_text(encoding="utf-8"))
 
 
 def parse_overview():
-    """Parse project overview table from sample."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    in_section = False
-    for line in content.split("\n"):
-        if line.strip() == "## 项目总览":
-            in_section = True
-            continue
-        if in_section and line.startswith("## "):
-            break
-        if in_section and line.startswith("|"):
-            parts = [p.strip() for p in line.split("|")[1:-1]]
-            if len(parts) >= 8 and parts[0] != "项目" and not all(
-                set(p.strip()) <= {"-", " "} for p in parts
-            ):
-                return {
-                    "project": parts[0],
-                    "current_stage": parts[1],
-                    "total": parts[2],
-                    "completed": parts[3],
-                    "blocked": parts[4],
-                    "risks": parts[5],
-                    "latest_gate": parts[6],
-                    "latest_retro": parts[7],
-                }
-    return {}
+    from governance_readers import overview
+    return overview(SAMPLE_PATH.read_text(encoding="utf-8"))
 
 
 def _normalize_task_status(status_text):
@@ -8427,145 +7227,28 @@ def _dedupe_context_items(items):
 
 
 def discover_governance_context(root=None, skip_evidence_log=False):
-    """Discover unfinished user work from recorded facts only.
-
-    ``skip_evidence_log=True`` (FIX-270 R0 F1) is the status fast-path mode:
-    the evidence-log corpus is skipped entirely. The evidence collector
-    (``_parse_evidence_context_tasks``) does a full ``read_text`` of
-    ``.governance/evidence-log.md`` whenever the file exists, which can be
-    MB-sized in real projects — the status command must never do a full read
-    of that file, so its resume context is derived from plan-tracker /
-    session-snapshot / risk-log / git facts only, and the evidence-derived
-    items are dropped (resume-state fields that need evidence are not
-    required by Scenario F; the authoritative evidence context stays with
-    the ``governance-context`` CLI and Check 28g, which keep full mode).
-    """
-    root = _context_root(root)
-    flow_context = discover_flow_unit_runtime_context(root)
-    recent_commit_facts = _parse_recent_commit_context_facts(root)
-    context_items = (
-        _parse_plan_context_tasks(root)
-        + _parse_snapshot_context_tasks(root)
-        + _parse_git_status_context_tasks(root)
-    )
-    if not skip_evidence_log:
-        context_items += _parse_evidence_context_tasks(root)
-    items = _dedupe_context_items(context_items)
-    risks = _parse_context_open_risks(root)
-    if not items:
-        context = _empty_governance_context(root)
-        if risks:
-            risk_ids = ", ".join(risk["task_id"] for risk in risks[:3])
-            context["blocker_state"] = f"open risk(s) recorded: {risk_ids}"
-            context["source_facts"].append(f".governance/risk-log.md: {risk_ids}")
-            context["_items"] = risks
-        if recent_commit_facts:
-            context["source_facts"].append(f"git log --oneline -5: {recent_commit_facts[0]}")
-        if flow_context["status"] == "FOUND":
-            context["source_facts"].append(
-                f"{flow_context['path']}: flow-unit lanes {flow_context['active_lanes']}; "
-                f"rollup {flow_context['rollup_status']}"
-            )
-            context["flow_unit_runtime"] = flow_context
-        return context
-
-    first = items[0]
-    blocked = [
-        item for item in items
-        if any(marker in item.get("status", "").lower() or marker in item.get("raw_line", "").lower()
-               for marker in GOVERNANCE_CONTEXT_BLOCKED_MARKERS)
-    ]
-    risk_text = ", ".join(risk["task_id"] for risk in risks[:3])
-    source_facts = [
-        f"{item['source']}: {item['task_id']} | {item['raw_line']}"
-        for item in items[:3]
-    ]
-    if risks:
-        source_facts.append(f".governance/risk-log.md: open risk(s) {risk_text}")
-    if recent_commit_facts:
-        source_facts.append(f"git log --oneline -5: {recent_commit_facts[0]}")
-    if flow_context["status"] == "FOUND":
-        source_facts.append(
-            f"{flow_context['path']}: flow-unit lanes {flow_context['active_lanes']}; "
-            f"blocked downstream {flow_context['blocked_downstream_units']}"
-        )
-
-    if blocked:
-        blocker_state = f"blocked fact recorded for {blocked[0]['task_id']}"
-        auto_continue = False
-        interrupt_boundary = "AskUserQuestion before continuing blocked work"
-    elif risks:
-        blocker_state = f"open risk guard present: {risk_text}"
-        auto_continue = False
-        interrupt_boundary = "AskUserQuestion or risk owner review required before auto-continuing risk-guarded work"
-    else:
-        blocker_state = "no blocker recorded in checked facts"
-        auto_continue = True
-        interrupt_boundary = "continue automatically until critical decision, blocker, review, or release boundary"
-
-    return {
-        "status": "FOUND",
-        "detected_item": f"{first['task_id']} - {first['title']}",
-        "source_facts": source_facts,
-        "blocker_state": blocker_state,
-        "next_action": f"resume {first['task_id']} from recorded facts and attach evidence before completion",
-        "auto_continue": auto_continue,
-        "interrupt_boundary": interrupt_boundary,
-        "_items": items + risks,
-        "flow_unit_runtime": flow_context if flow_context["status"] == "FOUND" else None,
-    }
+    """Return the same durable work units used by status and bootstrap."""
+    from governance_readers import loop_state
+    return loop_state(_context_root(root))
 
 
 def check_governance_context(root=None):
-    """FIX-112: context discovery must be factual and explicit about not-found."""
+    """Validate the recorded state and the route that resumes it."""
     root = _context_root(root)
-    context = discover_governance_context(root)
-    failures = []
-    for field in GOVERNANCE_CONTEXT_REQUIRED_FIELDS:
-        if field not in context:
-            failures.append(f"governance context: missing `{field}`")
-    if context.get("status") not in {"FOUND", "NOT_FOUND"}:
-        failures.append("governance context: status must be FOUND or NOT_FOUND")
-    if context.get("status") == "FOUND" and not context.get("source_facts"):
-        failures.append("governance context: FOUND requires source facts")
-    blocker_state = context.get("blocker_state", "").lower()
-    if context.get("auto_continue") and (
-        "open risk" in blocker_state or "blocked fact" in blocker_state
+    view = discover_governance_context(root)
+    failures = [view["message"]] if view["state"] == "invalid" else []
+    scenario = root / "commands/governance/scenario-f.md"
+    status = root / "commands/governance-status.md"
+    if not scenario.is_file() or not any(
+        (scenario.parent / target).resolve() == status.resolve()
+        for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", _read_text_normalized(scenario))
     ):
-        failures.append("governance context: blocker or open risk must disable auto-continue")
-    if context.get("status") == "NOT_FOUND":
-        if "not found" not in context.get("detected_item", "").lower():
-            failures.append("governance context: NOT_FOUND must explicitly say not found")
-        if context.get("auto_continue"):
-            failures.append("governance context: NOT_FOUND cannot auto-continue")
-
-    docs = [
-        # FEAT-038 (AUDIT-154 A-7): the resume/unfinished-work contract moved
-        # from the router layer into the on-demand Scenario F document.
-        root / "commands/governance/scenario-f.md",
-        root / "commands/governance-status.md",
-    ]
-    required_doc_tokens = [
-        "Unfinished work",
-        "Source facts",
-        "Blocker state",
-        "Auto-continue",
-        "Interrupt boundary",
-        "not found",
-        "do not invent",
-        "governance-context",
-    ]
-    for path in docs:
-        if not path.is_file():
-            failures.append(f"{_display_path(path, root)}: missing governance context contract doc")
-            continue
-        text = path.read_text(encoding="utf-8")
-        for token in required_doc_tokens:
-            if token not in text:
-                failures.append(f"{_display_path(path, root)}: missing context contract token `{token}`")
+        failures.append(f"{_display_path(scenario, root)}: missing reference to the status command")
+    content = _read_text_normalized(status) if status.is_file() else ""
+    for command in ("governance-bootstrap --format json", "loop status --unit"):
+        if command not in content:
+            failures.append(f"{_display_path(status, root)}: missing work-unit reader {command}")
     return failures
-
-
 def check_capability_context(root=None, *, sampled_context=None):
     """FIX-115: capability selection trace must be fact-backed and no-overclaim safe."""
     root = _context_root(root)
@@ -8693,94 +7376,6 @@ def check_capability_context(root=None, *, sampled_context=None):
     return failures
 
 
-def parse_resume_state(skip_evidence_log=False):
-    """Summarize existing-project resume state from local governance files.
-
-    ``skip_evidence_log=True`` (FIX-270 status fast path) is forwarded to
-    :func:`discover_governance_context` so the evidence-log corpus is never
-    fully read during ``status`` (R0 F1).
-    """
-    governance_dir = SAMPLE_PATH.parent
-    state_exists = governance_dir.is_dir() and SAMPLE_PATH.is_file()
-    active_tasks = [
-        task for task in parse_current_active_tasks()
-        if _is_incomplete_task_status(task.get("status", ""))
-    ] if state_exists else []
-    if state_exists and not active_tasks:
-        active_tasks = parse_session_snapshot_carry_over_tasks()
-    if SAMPLE_PATH.parent.name == ".governance":
-        context_root = SAMPLE_PATH.parent.parent
-    else:
-        context_root = SAMPLE_PATH.parent
-    context = (
-        discover_governance_context(context_root, skip_evidence_log=skip_evidence_log)
-        if state_exists else _empty_governance_context(context_root)
-    )
-    if active_tasks and context.get("status") != "FOUND":
-        first = active_tasks[0]
-        context = {
-            "status": "FOUND",
-            "detected_item": f"{first['task_id']} - {first.get('title') or first['task_id']}",
-            "source_facts": [f"{_display_path(SAMPLE_PATH, context_root)}: {first.get('raw_line', first['task_id'])}"],
-            "blocker_state": "no blocker recorded in checked facts",
-            "next_action": f"resume {first['task_id']} from recorded facts and attach evidence before completion",
-            "auto_continue": True,
-            "interrupt_boundary": "continue automatically until critical decision, blocker, review, or release boundary",
-            "_items": active_tasks,
-        }
-    open_risks = parse_open_risks() if state_exists else []
-    hook_paths = [
-        ROOT / ".git/hooks/pre-commit",
-        ROOT / ".git/hooks/commit-msg",
-        ROOT / ".git/hooks/post-commit",
-    ]
-    present_hooks = [path.name for path in hook_paths if path.is_file()]
-    missing_hooks = [path.name for path in hook_paths if not path.is_file()]
-
-    if open_risks:
-        risk_details = ", ".join(
-            f"{risk_id} opened {date_str}" for risk_id, date_str in open_risks[:3]
-        )
-        if len(open_risks) > 3:
-            risk_details += f", +{len(open_risks) - 3} more"
-    else:
-        risk_details = "none"
-
-    if missing_hooks:
-        hook_state = f"missing {', '.join(missing_hooks)}"
-    elif present_hooks:
-        hook_state = f"installed ({', '.join(present_hooks)})"
-    else:
-        hook_state = "not detected"
-
-    if active_tasks:
-        next_task = active_tasks[0]
-        next_action = (
-            f"resume {next_task['task_id']} and attach evidence before completion"
-        )
-    elif open_risks:
-        next_action = "review open risk before starting new work"
-    elif state_exists:
-        next_action = "pick the next task or run a gate check before release claims"
-    else:
-        next_action = "initialize governance before relying on resume state"
-
-    return {
-        "state_exists": state_exists,
-        "state_label": (
-            "Existing governance state detected"
-            if state_exists
-            else "No governance state detected"
-        ),
-        "carry_over_count": len(active_tasks),
-        "open_risk_count": len(open_risks),
-        "risk_details": risk_details,
-        "hook_state": hook_state,
-        "next_action": next_action,
-        "context": context,
-    }
-
-
 def parse_session_snapshot_carry_over_tasks(snapshot_path=None):
     """Parse carry-over tasks from session-snapshot when active plan rows are absent."""
     snapshot_path = Path(snapshot_path) if snapshot_path is not None else SESSION_SNAPSHOT_PATH
@@ -8868,200 +7463,75 @@ def parse_session_snapshot_carry_over_tasks(snapshot_path=None):
     return tasks
 
 
-def build_delivery_trust_snapshot(config=None, overview=None, gates=None, stats=None, resume=None):
-    """Build the compact first-run trust signal shown by status output."""
-    config = config or parse_project_config()
-    overview = overview or parse_overview()
-    gates = gates or parse_gate_status()
-    stats = stats or parse_task_stats()
-    resume = resume or parse_resume_state()
-    context = resume.get("context") or discover_governance_context(ROOT)
-    flow_context = context.get("flow_unit_runtime") or discover_flow_unit_runtime_context(ROOT)
+def build_delivery_trust_snapshot(project_root=None, unit_id=None):
+    """Project only the actual work units and evidence present in the requested host."""
+    from governance_readers import loop_state
 
-    goal = (
-        config.get("项目目标")
-        or config.get("Project Goal")
-        or config.get("project_goal")
-        or config.get("Project Name")
-        or overview.get("project")
-        or "Not recorded yet"
-    )
-    stage = overview.get("current_stage") or config.get("当前阶段") or "Not recorded yet"
-
-    latest_gate = overview.get("latest_gate") or ""
-    if latest_gate and latest_gate not in {"—", "-", "N/A"}:
-        gate_status = latest_gate
-    else:
-        first_pending = next((g for g in gates if g.get("status") == "pending"), None)
-        if first_pending:
-            gate_status = f"{first_pending['gate']} pending"
-        elif gates:
-            last_gate = gates[-1]
-            gate_status = f"{last_gate['gate']} {last_gate.get('status', 'N/A')}"
-        else:
-            gate_status = "setup status not recorded"
-
-    risk_count = str(overview.get("risks", "0") or "0")
-    risk = "no open risks yet" if risk_count in {"0", "0.0", "—", "-", "N/A"} else f"{risk_count} open risk(s)"
-
-    completed = str(overview.get("completed", "0") or "0")
-    total = str(overview.get("total", "0") or "0")
-    evidence = (
-        "no delivery evidence yet; first task must record runnable evidence"
-        if completed == "0"
-        else f"{completed}/{total} task(s) completed; verify evidence before closing work"
-    )
-
-    if resume["state_exists"]:
-        next_action = resume["next_action"]
-    elif completed == "0":
-        next_action = "define the first user-visible task with acceptance and evidence"
-    else:
-        next_action = "pick the next task or run a gate check before release claims"
-
+    view = loop_state(Path(project_root) if project_root is not None else GOVERNANCE_DIR.parent)
+    if view["state"] == "invalid":
+        raise ValueError(view["message"])
+    units = [unit for unit in view["units"] if unit_id is None or unit["flow_unit_id"] == unit_id]
+    if unit_id and not units:
+        raise ValueError(f"Unknown work unit: {unit_id}")
     return {
-        "Resume state": resume["state_label"],
-        "Carry-over": f"{resume['carry_over_count']} active task(s)",
-        "Open risks": f"{resume['open_risk_count']} open risk(s); {resume['risk_details']}",
-        "Unfinished work": context["detected_item"],
-        "Source facts": "; ".join(context["source_facts"][:3]),
-        "Blocker state": context["blocker_state"],
-        "Auto-continue": "yes" if context["auto_continue"] else "no",
-        "Interrupt boundary": context["interrupt_boundary"],
-        "Hooks": resume["hook_state"],
-        "Goal": goal,
-        "Stage": stage,
-        "Gate/setup status": gate_status,
-        "Flow-unit lanes": (
-            f"{flow_context['active_lanes']}; rollup={flow_context['rollup_status']}; "
-            f"blocked_downstream={flow_context['blocked_downstream_units']}"
-            if flow_context.get("status") == "FOUND"
-            else "not found"
-        ),
-        "Risk": risk,
-        "Evidence": evidence,
-        "Next action": next_action,
-        "Preset guidance": (
-            "lite is the recommended first-run default; standard is for team delivery; "
-            "strict is for regulated/high-risk work"
-        ),
-        "Question budget": (
-            "ask no more than 3 non-critical questions before snapshot; "
-            "record deferred non-critical fields as assumptions"
-        ),
-        "Verification signal": "python skills/software-project-governance/infra/verify_workflow.py status",
-        "No-overclaim boundary": (
-            "local/demo-only snapshot; no external credentials required; "
-            "no official approval, marketplace approval, "
-            "universal/full runtime support, or 1.0.0 production-ready claim"
-        ),
+        "Work units": [{key: unit.get(key) for key in
+                        ("flow_unit_id", "parent_unit_id", "goal", "acceptance", "active_loop_tier",
+                         "gate_id", "gate_status", "evidence_refs", "blockers", "next_action")}
+                       for unit in units],
+        "State": view["state"],
+        "Next action": units[0]["next_action"] if len(units) == 1 else (
+            "Resume the relevant unit by its ID." if units else "Record the first goal and its acceptance condition."),
     }
 
 
-FIRST_RUN_DEMO_REQUIRED_FIELDS = [
-    "Resume state",
-    "Carry-over",
-    "Open risks",
-    "Unfinished work",
-    "Source facts",
-    "Blocker state",
-    "Auto-continue",
-    "Interrupt boundary",
-    "Hooks",
-    "Goal",
-    "Stage",
-    "Gate/setup status",
-    "Risk",
-    "Evidence",
-    "Next action",
-    "Preset guidance",
-    "Question budget",
-    "Verification signal",
-    "No-overclaim boundary",
-]
-
-FIRST_RUN_DEMO_REQUIRED_MARKERS = [
-    "Delivery Trust Snapshot",
-    "Unfinished work:",
-    "Source facts:",
-    "Blocker state:",
-    "Auto-continue:",
-    "Interrupt boundary:",
-    "not found",
-    "Goal:",
-    "Stage:",
-    "Gate/setup status:",
-    "Risk:",
-    "Evidence:",
-    "Next action:",
-    "Preset guidance:",
-    "lite is the recommended first-run default",
-    "standard is for team delivery",
-    "strict is for regulated/high-risk work",
-    "Question budget:",
-    "no more than 3 non-critical questions before snapshot",
-    "Verification signal:",
-    "No-overclaim boundary:",
-    "local/demo-only",
-    "no external credentials",
-    "no official approval",
-    "marketplace approval",
-    "universal/full runtime support",
-    "1.0.0 production-ready",
-]
+FIRST_RUN_DEMO_REQUIRED_FIELDS = ["Work units", "State", "Next action"]
+FIRST_RUN_DEMO_REQUIRED_MARKERS = ["Delivery Trust Snapshot", "demo-delivery", "demo-export",
+                                   "totals match", "loop-evidence/", "local/demo-only"]
 
 
 def render_delivery_trust_snapshot(snapshot):
-    """Render a snapshot with the same compact field labels used by status."""
-    lines = ["Delivery Trust Snapshot"]
-    lines.extend(f"{label}: {value}" for label, value in snapshot.items())
+    lines = ["Delivery Trust Snapshot", f"State: {snapshot.get('State', '')}", "Work units:"]
+    for unit in snapshot.get("Work units", []):
+        parent = f" (child of {unit['parent_unit_id']})" if unit["parent_unit_id"] else ""
+        lines.extend([
+            f"- {unit['flow_unit_id']}{parent}: {unit['goal']}",
+            f"  Acceptance: {unit['acceptance']}",
+            f"  {unit['active_loop_tier']} loop | {unit['gate_id']} {unit['gate_status']} | {unit['next_action']}",
+        ])
+        if unit["evidence_refs"]:
+            lines.append("  Evidence: " + ", ".join(unit["evidence_refs"]))
+        if unit["blockers"]:
+            lines.append("  Blockers: " + ", ".join(unit["blockers"]))
+    lines.append("Next action: " + snapshot.get("Next action", ""))
+    if "Verification" in snapshot:
+        lines.append("Verification: " + snapshot["Verification"])
     return "\n".join(lines)
 
-
 def build_first_run_demo_snapshot():
-    """Build the local/demo-only first happy path fixture for FIX-103."""
-    demo_config = {
-        "项目目标": "Demo project: see the delivery trust layer before reading full governance files",
-        "当前阶段": "First-run demo",
-    }
-    demo_overview = {
-        "project": "First-run demo fixture",
-        "current_stage": "First-run demo",
-        "total": "1",
-        "completed": "0",
-        "blocked": "0",
-        "risks": "1",
-        "latest_gate": "G0 setup ready",
-        "latest_retro": "N/A",
-    }
-    demo_gates = [{"gate": "G0", "status": "setup-ready", "date": "", "evidence": "local demo"}]
-    demo_stats = {"进行中": 1}
-    demo_resume = {
-        "state_exists": True,
-        "state_label": "First-run demo fixture (local/demo-only)",
-        "carry_over_count": 0,
-        "open_risk_count": 1,
-        "risk_details": "RISK-036 remains open; demo makes no approval or runtime support claims",
-        "hook_state": "not required for demo; local assertions only",
-        "next_action": "run the first user-visible task and attach runnable evidence",
-        "context": {
-            "status": "NOT_FOUND",
-            "detected_item": "not found in demo fixture",
-            "source_facts": ["demo fixture checked; no unfinished user work facts found"],
-            "blocker_state": "not found",
-            "next_action": "do not invent work; continue from the demo task only",
-            "auto_continue": False,
-            "interrupt_boundary": "AskUserQuestion required before creating new work from assumptions",
-            "_items": [],
-        },
-    }
-    return build_delivery_trust_snapshot(
-        demo_config,
-        demo_overview,
-        demo_gates,
-        demo_stats,
-        resume=demo_resume,
-    )
+    """Exercise a disposable delivery and a bounded, locally verified child."""
+    import tempfile
+    import loop_workflow
+
+    with tempfile.TemporaryDirectory() as demo:
+        root = Path(demo)
+        (root / ".governance").mkdir()
+        loop_workflow.start(root, unit_id="demo-delivery", goal="Deliver a ledger export",
+                            acceptance="Exported amounts match the ledger", tier="middle", gate=None)
+        (root / "ledger.csv").write_text("amount\n3\n4\n", encoding="utf-8")
+        check = [sys.executable, "-c", "import csv; from pathlib import Path; "
+                 "total=sum(int(r['amount']) for r in csv.DictReader(Path('ledger.csv').read_text().splitlines())); "
+                 "print('totals match' if total == 7 else 'mismatch')"]
+        loop_workflow.start(root, unit_id="demo-export", parent="demo-delivery", goal="Check the exported amounts",
+                            acceptance="CSV rows total seven", tier="inner", gate=None,
+                            check_command=check, expect_output="totals match")
+        outcome = loop_workflow.verify_command(root, "demo-export")
+        if outcome["decision"] != "exit":
+            raise ValueError(f"demo-export failed its declared acceptance: {outcome['decision']}")
+        snapshot = build_delivery_trust_snapshot(root)
+        child = next(unit for unit in snapshot["Work units"] if unit["flow_unit_id"] == "demo-export")
+        receipt = json.loads((root / ".governance" / child["evidence_refs"][-1]).read_bytes())
+        snapshot["Verification"] = "local/demo-only: " + receipt["stdout"].strip()
+        return snapshot
 
 
 def assert_first_run_demo_snapshot(snapshot, rendered_text=None):
@@ -9700,38 +8170,13 @@ def expand_task_ids(raw_text):
     return result
 
 
-def parse_gate_statuses():
-    """Return list of dicts with gate status from plan-tracker."""
-    return parse_gate_status()
-
-
 def check_gate_consistency():
-    """Check gate status vs evidence consistency."""
-    gates = parse_gate_statuses()
+    """Check the evidence actually consumed by each unit, plus task closure references."""
+    from checks.loop_receipts import receipt_issues
+
     ds = GovernanceDataSource()
     evidenced = ds.get_all_evidence_task_map()
-
-    issues = []
-
-    # Check: passed gates should have evidence referencing the gate
-    for g in gates:
-        if g["status"] == "passed":
-            # Look for evidence entries whose task references this gate
-            gate_id = g["gate"]
-            found = False
-            for task_id, evd_list in evidenced.items():
-                if gate_id in task_id or gate_id.lower() in task_id.lower():
-                    found = True
-                    break
-            # Don't fail if no direct match — gates are referenced indirectly
-            # Instead, check if passed-on-entry gates look suspicious
-
-        if g["status"] == "passed-on-entry":
-            # These are pre-onboarding gates, should have evidence date
-            if not g.get("date") or g["date"] == "2026-04-20":
-                continue  # Standard onboarding date
-            # Flag gates with inconsistent dates
-            pass
+    issues = [{"type": "loop_receipt", "detail": issue} for issue in receipt_issues(GOVERNANCE_DIR.parent)]
 
     # Check for tasks marked 已完成 in plan-tracker but no evidence.
     # Uses GovernanceDataSource to cover both hot files + archive files.
@@ -9826,33 +8271,7 @@ def check_protocol_compliance():
 
     issues["dri_violations"] = dri_violations
 
-    # ── Conditional Pass Check: passed-with-conditions without corrective tasks ──
-    gates = parse_gate_status()
-    conditional_gates = [g for g in gates if g["status"] == "passed-with-conditions"]
 
-    if conditional_gates:
-        # Collect all task descriptions for corrective task detection
-        all_task_text = plan_content
-
-        for g in conditional_gates:
-            gate_id = g["gate"]
-            # Look for corrective tasks related to this gate
-            # Search for tasks whose description references this gate's conditions
-            found_corrective = False
-            for parts in task_rows:
-                task_desc = " ".join(parts[3:7]) if len(parts) > 6 else ""
-                # Check if any task mentions corrective action for this gate
-                if gate_id in task_desc and any(
-                    kw in task_desc for kw in ("纠正", "修复", "补齐", "DRI", "条件")
-                ):
-                    found_corrective = True
-                    break
-
-            if not found_corrective:
-                issues["conditional_pass"].append({
-                    "gate": gate_id,
-                    "issue": f"Gate {gate_id} is passed-with-conditions but no corrective task found in plan-tracker",
-                })
 
     # ── Evidence Format Check: evidence entries with missing required fields ──
     evidence_path = GOVERNANCE_DIR / "evidence-log.md"
@@ -10948,192 +9367,12 @@ def _status_task_stats(rows):
 
 
 def cmd_status(args):
-    """Show project status overview (FIX-270 秒级状态快路径)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    config = parse_project_config()
-    overview = parse_overview()
-    gates = parse_gate_status()
-    stats = parse_task_stats()
-    permission_mode = config.get("操作权限模式", config.get("permission_mode", "N/A"))
-    # FIX-270 R0 F1: status 快路径的 resume 上下文发现必须跳过 evidence-log 全量读
-    # （discover_governance_context 的 evidence 采集器在该文件存在时会 read_text 整读；
-    # 1.2MB 级文件即交付 A 明令禁止的"全量读大文件"）。plan-tracker/snapshot/risk/git
-    # 事实足以为 Scenario F resume 信号供货；证据上下文留给 governance-context CLI 的
-    # 全量模式（skip_evidence_log=False 缺省语义不变）。
-    trust_snapshot = build_delivery_trust_snapshot(
-        config, overview, gates, stats,
-        resume=parse_resume_state(skip_evidence_log=True),
-    )
-
-    # ── FIX-270: 秒级结构化数据（Scenario F 面板所需全部字段）──
-    # 行级解析热文件；明确不读 evidence-log 大文件。
-    plan_content = SAMPLE_PATH.read_text(encoding="utf-8") if SAMPLE_PATH.is_file() else ""
-    task_rows = parse_task_table_rows(plan_content)
-    row_stats, p0_pending = _status_task_stats(task_rows)
-    risks = parse_active_risks()
-    decisions = parse_recent_decisions(5)
-    recent_completed = parse_recent_completed_tasks(task_rows, 5)
-    freshness = _status_plugin_freshness(plan_content)
-    next_steps = _status_next_steps(plan_content)
-
-    if getattr(args, "json", False):
-        try:
-            total_raw = int(str(overview.get("total", 0) or 0))
-        except (TypeError, ValueError):
-            total_raw = 0
-        try:
-            completed_raw = int(str(overview.get("completed", 0) or 0))
-        except (TypeError, ValueError):
-            completed_raw = 0
-        try:
-            blocked_raw = int(str(overview.get("blocked", 0) or 0))
-        except (TypeError, ValueError):
-            blocked_raw = 0
-        payload = {
-            "project_config": {
-                "project_name": _status_project_name(config, overview),
-                "profile": _status_clean_cell(config.get("Profile", "")),
-                "trigger_mode": _status_clean_cell(config.get("触发模式", "")),
-                "permission_mode": permission_mode,
-                "workflow_version": _status_clean_cell(config.get("工作流版本", "")),
-                "current_stage": _status_clean_cell(config.get("当前阶段", "")),
-            },
-            "overview": overview,
-            "gates": gates,
-            "stats": {
-                "total": total_raw,
-                "completed": completed_raw,
-                "blocked": blocked_raw,
-                "p0_pending": p0_pending,
-                "table_rows": row_stats,
-            },
-            "risks": risks,
-            "recent_activity": {
-                "completed_tasks": [
-                    {"id": r["id"], "status": r["status"],
-                     "actual_completion": r["actual_completion"],
-                     "evidence": r["evidence"]}
-                    for r in recent_completed
-                ],
-                "decisions": decisions,
-            },
-            "plugin_freshness": freshness,
-            "next_steps": next_steps,
-            "delivery_trust_snapshot": trust_snapshot,
-        }
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-
-    # Config section
-    print("\n┌─ Project Config ────────────────────────────────────┐")
-    labels = {"Profile": "Profile", "触发模式": "Trigger", "当前阶段": "Stage",
-              "并行活跃阶段": "Active", "接入方式": "Onboarding",
-              "操作权限模式": "Permission Mode"}
-    emitted_permission_mode = False
-    for k, v in config.items():
-        label = labels.get(k, k)
-        if k in ("操作权限模式", "permission_mode"):
-            print(f"│  Permission Mode (permission_mode / 操作权限模式): {v}")
-            emitted_permission_mode = True
-            continue
-        print(f"│  {label}: {v}")
-    if not emitted_permission_mode:
-        print(f"│  Permission Mode (permission_mode / 操作权限模式): {permission_mode}")
-    print("└──────────────────────────────────────────────────────┘")
-
-    # Overview section
-    if overview:
-        print("\n┌─ Project Overview ──────────────────────────────────┐")
-        print(f"│  Project:    {overview.get('project', 'N/A')}")
-        print(f"│  Stage:      {overview.get('current_stage', 'N/A')}")
-        print(f"│  Tasks:      {overview.get('completed', '0')}/{overview.get('total', '0')} completed")
-        print(f"│  Blocked:    {overview.get('blocked', '0')}")
-        print(f"│  Key Risks:  {overview.get('risks', '0')}")
-        print(f"│  Latest Gate: {overview.get('latest_gate', 'N/A')}")
-        print(f"│  Last Retro: {overview.get('latest_retro', 'N/A')}")
-        print("└──────────────────────────────────────────────────────┘")
-
-    # First-run trust signal
-    print("\n┌─ Delivery Trust Snapshot ───────────────────────────┐")
-    for label, value in trust_snapshot.items():
-        print(f"│  {label}: {value}")
-    print("└──────────────────────────────────────────────────────┘")
-
-    # Task stats (FIX-270: overview numbers + deduped table rows + P0 pending)
-    print("\n┌─ Task Status ───────────────────────────────────────┐")
-    total_overview = overview.get("total", 0)
-    completed_overview = overview.get("completed", 0)
-    print(f"│  Overview: {completed_overview}/{total_overview} completed, "
-          f"{overview.get('blocked', 0)} blocked (## 项目总览)")
-    print(f"│  P0 pending: {p0_pending} (未完成 P0 任务)")
-    total = sum(row_stats.values())
-    if total:
-        for status, count in row_stats.items():
-            bar = "#" * count + "." * (total - count)
-            print(f"│  {status:6s} {count:2d} {bar}")
-    else:
-        print(f"│  Table rows: none")
-    print("└──────────────────────────────────────────────────────┘")
-
-    # Gate status (FIX-270: fixed loop — G1-G11 all printed with date + evidence)
-    if gates:
-        print("\n┌─ Gate Status ───────────────────────────────────────┐")
-        for g in gates:
-            icon = STATUS_ICONS.get(g["status"], "?")
-            date = g["date"] if g["date"] else ""
-            evidence = g.get("evidence", "")
-            line = f"│  {icon} {g['gate']:4s}  {g['status']:20s}  {date}"
-            if evidence:
-                line += f"  ({evidence[:40]})"
-            print(line)
-        print("└──────────────────────────────────────────────────────┘")
-
-    # Active risks (≤3 天升级线标记)
-    print("\n┌─ Active Risks ───────────────────────────────────────┐")
-    if risks:
-        for r in risks:
-            marker = ""
-            if r["escalation_overdue"]:
-                marker = f" ⚠ overdue ({-r['days_left']}d)"
-            elif r["escalation_soon"]:
-                marker = f" ⚠ ≤3d escalation"
-            print(f"│  {r['id']:10s} {r['status']:8s} 截止 {r['deadline'] or '—'}{marker}")
-    else:
-        print("│  no open risks")
-    print("└──────────────────────────────────────────────────────┘")
-
-    # Recent activity (last 5 completed tasks + last 5 decisions)
-    print("\n┌─ Recent Activity ────────────────────────────────────┐")
-    if recent_completed:
-        for r in recent_completed:
-            print(f"│  Completed: {r['id']} ({r['status'][:24]})"
-                  f"{' @ ' + r['actual_completion'] if r['actual_completion'] else ''}"
-                  f"{' EVD ' + r['evidence'] if r['evidence'] else ''}")
-    else:
-        print("│  Completed: none")
-    for d in decisions:
-        print(f"│  Decision:  {d['id']} {d['date']} {d['topic']}")
-    print("└──────────────────────────────────────────────────────┘")
-
-    # Plugin freshness (advisory — 权威版本见 resolve_entry active_version)
-    print("\n┌─ Plugin Freshness ───────────────────────────────────┐")
-    print(f"│  active={freshness['active_version']} vs plan={freshness['plan_version']} "
-          f"→ {freshness['status']} (advisory — 权威版本见 resolve_entry.py)")
-    print("└──────────────────────────────────────────────────────┘")
-
-    # Next-step hints (轻量派生，不运行 check-governance)
-    print("\n┌─ Next step hints ────────────────────────────────────┐")
-    if next_steps:
-        for i, s in enumerate(next_steps, 1):
-            print(f"│  {i}. {s['task_id']:10s} [{s['priority']}] {s['status'][:40]}")
-    else:
-        print("│  no ready-to-start candidates (all unblocked work finished or "
-              "blocked by unfinished dependencies)")
-    print("└──────────────────────────────────────────────────────┘")
-
+    """Use the same work-unit projection for ordinary status and startup."""
+    from bootstrap_aggregate import cmd_governance_bootstrap
+    args.format = "json" if getattr(args, "json", False) else "text"
+    args._status_fast_path = True
+    args._validated_host_root = HOST_PROJECT_ROOT
+    return cmd_governance_bootstrap(args)
 
 def _status_project_name(config, overview):
     name = config.get("项目名称", "") or overview.get("project", "")
@@ -11141,42 +9380,13 @@ def _status_project_name(config, overview):
 
 
 def cmd_governance_context(args):
-    """Show fact-based unfinished work handoff for /governance resume."""
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    fixture = getattr(args, "fixture", None)
-    root = ROOT
-    if fixture:
-        fixture_path = Path(fixture)
-        root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
-
-    context = discover_governance_context(root)
-    print("== Governance Context Discovery ==")
-    print(f"Root: {_display_path(root, ROOT)}")
-    print(f"Status: {context['status']}")
-    print(f"Unfinished work: {context['detected_item']}")
-    print("Source facts:")
-    for fact in context["source_facts"]:
-        print(f"  - {fact}")
-    print(f"Blocker state: {context['blocker_state']}")
-    print(f"Next action: {context['next_action']}")
-    print(f"Auto-continue: {'yes' if context['auto_continue'] else 'no'}")
-    print(f"Interrupt boundary: {context['interrupt_boundary']}")
-    print(
-        "No-overclaim boundary: context discovery is a handoff signal only; "
-        "it does not mean quality, review, or release passed."
-    )
-
-    issues = check_governance_context(root)
-    if issues:
-        print("\n== Governance Context Result: FAILED ==")
-        for issue in issues:
-            print(f"  - {issue}")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n== Governance Context Result: PASSED ==")
-
+    """Recover the unit's actual objective, last decision and next action."""
+    from governance_readers import loop_state
+    root = Path(getattr(args, "fixture", None) or HOST_PROJECT_ROOT)
+    report = loop_state(root)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if report["state"] == "invalid":
+        sys.exit(2)
 
 def cmd_capability_context(args):
     """Show fact-backed capability context and selection trace."""
@@ -11256,154 +9466,32 @@ def cmd_first_run_demo(args):
 
 
 def cmd_gate(args):
-    """Show detailed info for a specific Gate."""
-    gate_id = args.gate_id
-    detail = parse_gate_detail(gate_id)
-
-    if not detail:
-        print(f"[FAIL] Gate {gate_id.upper()} not found")
-        sys.exit(1)
-
-    print(f"\n┌─ {detail['title']} ─┐")
-
-    if detail["transition"]:
-        print(f"│  Transition:    {detail['transition']}")
-    if detail["materials"]:
-        print(f"│  Materials:     {detail['materials']}")
-
-    if detail["checks"]:
-        print("│")
-        print("│  Check items:")
-        for i, check in enumerate(detail["checks"], 1):
-            print(f"│    {i}. {check}")
-
-    if detail["pass_criteria"]:
-        print("│")
-        print(f"│  Pass criteria: {detail['pass_criteria']}")
-
-    if detail["conditional"]:
-        print("│")
-        print(f"│  Conditional:   {detail['conditional']}")
-
-    if detail["auto_criteria"]:
-        print("│")
-        print("│  Auto-judgment criteria:")
-        for i, ac in enumerate(detail["auto_criteria"], 1):
-            print(f"│    {i}. {ac}")
-
-    print("└──────────────────────────────────────────────────────┘")
-
-    # Also show current status from sample
-    gates = parse_gate_status()
-    for g in gates:
-        if g["gate"].upper() == gate_id.upper().lstrip("G").zfill(2) \
-           or g["gate"].upper() == gate_id.upper():
-            icon = STATUS_ICONS.get(g["status"], "[????]")
-            print(f"\n  Current status: {icon} {g['status']} ({g['date']})")
-            break
-
-
-def cmd_stage(args):
-    """Show workflow summary for a specific stage."""
-    stage_name = normalize_stage_name(args.stage_name)
-
-    stage_path = stage_skill_path(stage_name)
-    if not stage_path.is_file():
-        print(f"[FAIL] Stage '{stage_name}' not found")
-        available = list_available_stages()
-        if available:
-            print(f"Available: {', '.join(available)}")
-        sys.exit(1)
-
-    content = stage_path.read_text(encoding="utf-8")
-
-    # Also check for supporting markdown files in this stage skill directory.
-    stage_dir = stage_path.parent
-    skills = sorted([
-        f.name for f in stage_dir.iterdir()
-        if f.is_file() and f.name != "SKILL.md" and f.suffix == ".md"
-    ])
-
-    print(f"\n┌─ Stage: {stage_name} ─────────────────────────────────────┐")
-
-    lines = content.split("\n")
-    current_section = ""
-    for line in lines:
-        if line.startswith("# "):
-            continue
-        if line.startswith("## "):
-            current_section = line[3:].strip()
-            print(f"│\n│  {current_section}")
-        elif line.startswith("### "):
-            print(f"│    {line[4:].strip()}")
-        elif line.strip().startswith("|") and "---" not in line:
-            parts = [p.strip() for p in line.split("|")[1:-1]]
-            if parts and not all(set(p) <= {"-"} for p in parts):
-                print(f"│    {' | '.join(p for p in parts if p)}")
-        elif line.strip().startswith("- ["):
-            check = line.strip()
-            icon = "[x]" if "[x]" in check else "[ ]"
-            text = re.sub(r"- \[[ x]\]\s*", "", check)
-            print(f"│    {icon} {text}")
-        elif line.strip().startswith("- **"):
-            print(f"│    {line.strip()}")
-        elif line.strip() and not line.startswith("|"):
-            print(f"│    {line.strip()}")
-
-    if skills:
-        print(f"│\n│  Skills ({len(skills)}):")
-        for s in skills:
-            print(f"│    - {s}")
-
-    print("└──────────────────────────────────────────────────────┘")
-
-
-def cmd_stages(args):
-    """List all available stages with index."""
-    stages = list_available_stages()
-    lifecycle_content = LIFECYCLE_PATH.read_text(encoding="utf-8")
-
-    # Parse stage names from lifecycle
-    stage_names = {}
-    for m in re.finditer(r"### (\d+)\.\s+(.+?)(?:（|$)", lifecycle_content):
-        stage_names[m.group(1)] = m.group(2).strip()
-
-    print("\n┌─ Available Stages ──────────────────────────────────┐")
-    for i, stage in enumerate(stages, 1):
-        name = stage_names.get(str(i), stage)
-        skill_path = stage_skill_path(stage)
-        has_skill = "Y" if skill_path.is_file() else "N"
-
-        # Count supporting markdown files.
-        stage_dir = skill_path.parent
-        skill_count = len([
-            f for f in stage_dir.iterdir()
-            if f.is_file() and f.name != "SKILL.md" and f.suffix == ".md"
-        ]) if stage_dir.is_dir() else 0
-
-        skill_info = f", {skill_count} skill(s)" if skill_count else ""
-        print(f"│  {i:2d}. {stage:16s} {name:20s}  SKILL.md:{has_skill}{skill_info}")
-    print("└──────────────────────────────────────────────────────┘")
+    """Inspect the scoped gate and its evidence, without granting authorization."""
+    return cmd_gates(args)
 
 
 def cmd_gates(args):
-    """List all Gates with current status."""
-    gates = parse_gate_status()
+    from governance_readers import loop_state
+    unit_id = getattr(args, "unit", None)
+    gate = getattr(args, "gate_id", None)
+    report = loop_state(HOST_PROJECT_ROOT)
+    units = [unit for unit in report["units"] if (not unit_id or unit.get("flow_unit_id") == unit_id)
+             and (not gate or unit.get("gate_id") == gate.upper())]
+    print(json.dumps({"state": report["state"], "units": units, "message": report.get("message")}, ensure_ascii=False, indent=2))
+    if report["state"] == "invalid" or ((unit_id or gate) and not units):
+        sys.exit(2)
 
-    print("\n┌─ All Gates ─────────────────────────────────────────┐")
-    for g in gates:
-        icon = STATUS_ICONS.get(g["status"], "?")
-        date = g["date"] if g["date"] else "        "
-        print(f"│  {icon} {g['gate']:4s}  {g['transition']:20s}  {g['status']:20s}  {date}")
-    print("└──────────────────────────────────────────────────────┘")
 
-    # Summary
-    statuses = {}
-    for g in gates:
-        statuses[g["status"]] = statuses.get(g["status"], 0) + 1
-    summary = ", ".join(f"{k}: {v}" for k, v in sorted(statuses.items()))
-    print(f"\n  Summary: {summary}")
+def cmd_stage(args):
+    """Read a specialist playbook; the name selects a skill, never project state."""
+    path = stage_skill_path(normalize_stage_name(args.stage_name))
+    if not path.is_file():
+        sys.exit(f"Unknown playbook: {args.stage_name}")
+    print(path.read_text(encoding="utf-8"))
 
+
+def cmd_stages(args):
+    print("Available playbooks: " + ", ".join(list_available_stages()))
 
 # ── SYSGAP-008: Cross-Reference Checking ──────────────────────────
 
@@ -11820,7 +9908,7 @@ def check_cross_references():
         for i, line in enumerate(source_lines[source], 1):
             if f.suffix == ".py":
                 # Python: ROOT / "relative/path"  pattern
-                for m in re.finditer(r'ROOT\s*/\s*"([^"]+)"', line):
+                for m in re.finditer(r'\bROOT\s*/\s*"([^"]+)"', line):
                     target = m.group(1)
                     if Path(target).suffix:
                         refs[source].append((target, i))
@@ -12723,55 +10811,8 @@ def _task_priority_from_table_parts(parts):
 
 
 def _split_governance_table_row(line):
-    """Split a Markdown table row while preserving pipes inside JSON cells.
-
-    FIX-373: a ``"`` inside a code span is literal text and must NOT open
-    the JSON-string state — an unguarded quote flipped ``in_string`` on,
-    which in turn suppressed the code-span backtick toggle (backtick branch
-    requires ``not in_string``), pinned the state to end-of-line and folded
-    every remaining pipe (live: EVD-248 row folded 10 data cells -> 5).
-    """
-    parts = []
-    current = []
-    depth = 0
-    in_string = False
-    in_code_span = False
-    escape = False
-
-    for ch in line:
-        if ch == "`" and not in_string:
-            in_code_span = not in_code_span
-            current.append(ch)
-            continue
-
-        if in_string:
-            current.append(ch)
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"' and not in_code_span:
-            in_string = True
-            current.append(ch)
-        elif ch in "{[":
-            depth += 1
-            current.append(ch)
-        elif ch in "}]":
-            if depth > 0:
-                depth -= 1
-            current.append(ch)
-        elif ch == "|" and depth == 0 and not in_code_span:
-            parts.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-
-    parts.append("".join(current))
-    return parts
+    from governance_readers import split_governance_table_row
+    return split_governance_table_row(line)
 
 
 # Standalone task-ID table cell (e.g. ``FIX-222`` / ``**REL-070**``). Single
@@ -12782,12 +10823,8 @@ _TASK_ID_CELL_RE = re.compile(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$")
 
 
 def _governance_table_cells(line):
-    cells = [p.strip() for p in _split_governance_table_row(line.strip())]
-    if cells and cells[0] == "":
-        cells = cells[1:]
-    if cells and cells[-1] == "":
-        cells = cells[:-1]
-    return cells
+    from governance_readers import governance_table_cells
+    return governance_table_cells(line)
 
 
 # Date-cell content shape (FIX-374): ``YYYY-MM-DD`` / ``YYYY/MM/DD`` as
@@ -12994,10 +11031,46 @@ def parse_current_active_tasks():
 
 
 def _active_execution_packet_tasks():
+    """Plan rows available for an explicit bulk handoff."""
     return [
         task for task in parse_current_active_tasks()
         if task.get("priority") in {"P0", "P1"} and _is_incomplete_task_status(task.get("status", ""))
     ]
+
+
+def _declared_packet_checks(result, packet_path, contract=None):
+    """Select actual handoffs. Native local work has its own acceptance receipt."""
+    from governance_readers import loop_state
+    path = packet_path or SAMPLE_PATH.parent / "execution-packets.json"
+    try:
+        packets, _ = _read_execution_packet_document(path, missing_ok=True)
+        if not packets:
+            return []
+        tasks = {task["task_id"]: task for task in parse_current_active_tasks()
+                 if _is_incomplete_task_status(task.get("status", ""))}
+        view = loop_state(SAMPLE_PATH.parent.parent)
+        if view["state"] == "invalid":
+            raise ValueError(view["message"])
+        for unit in view["units"]:
+            if unit["runtime_status"] != "completed":
+                for key in (unit["flow_unit_id"], unit["task_id"]):
+                    tasks.setdefault(key, {"task_id": key, "status": unit["runtime_status"]})
+        selected = []
+        for key, task in tasks.items():
+            if key not in packets:
+                continue
+            packet = packets[key]
+            if contract and contract != "acceptance_contract" and isinstance(packet, dict):
+                required = packet.get("required_contracts", [])
+                if isinstance(required, list) and contract not in required and contract not in packet:
+                    continue
+            result["required_tasks"].append(key)
+            selected.append((task, packet))
+        return selected
+    except (ValueError, OSError) as exc:
+        result["pass"] = False
+        result["issues"].append(str(exc))
+        return []
 
 
 def parse_impact_analysis_entries():
@@ -13432,8 +11505,11 @@ def _read_execution_packet_document(path, *, missing_ok=False):
     packets = data.get("packets", data)
     if not isinstance(packets, dict):
         raise ValueError("packets must be object")
-    if any(not governance_store._TASK_ID_RE.fullmatch(key) for key in packets):
-        raise ValueError("execution packet map must be keyed by task ID")
+    from execution_packet import has_native_unit_identity
+
+    for key, packet in packets.items():
+        if not governance_store._TASK_ID_RE.fullmatch(key) and not has_native_unit_identity(key, packet):
+            raise ValueError("execution packet map must be keyed by its task or native work unit")
     metadata = {k: v for k, v in data.items() if k != "packets"} if "packets" in data else {}
     return packets, metadata
 
@@ -13471,6 +11547,12 @@ def _execution_packet_field_issues(packet):
             not value or not all(isinstance(item, str) and item.strip() for item in value)
         ):
             issues.append(f"{field} must be non-empty string array")
+    from execution_packet import OPTIONAL_CONTRACTS
+    required = packet.get("required_contracts", [])
+    if not isinstance(required, list) or not all(isinstance(name, str) and name in OPTIONAL_CONTRACTS for name in required):
+        issues.append("required_contracts must list supported handoff contracts")
+    else:
+        issues.extend(f"missing required {name}" for name in required if name not in packet)
     # FEAT-092: optional advisory budget field — absent is legal (缺省不写),
     # present must be exactly {max_steps: positive int} (fail-closed on
     # illegal shapes so Check 18c / write-guard surface them).
@@ -13567,17 +11649,19 @@ def _validate_execution_packet(task, packet):
         return issues  # HEAD-identical early exit: ["packet must be object"]
     if packet.get("task_id") and packet.get("task_id") != task["task_id"]:
         issues.append("task_id does not match active task")
-    allowed_text = " ".join(packet.get("allowed_change_scope", []))
+    if any(not isinstance(packet.get(field), list) or not all(isinstance(value, str) for value in packet[field])
+           for field in ("allowed_change_scope", "required_evidence", "done_definition")):
+        return issues
+    allowed_text = " ".join(packet["allowed_change_scope"])
     if allowed_text and _is_too_broad_scope_text(allowed_text):
         issues.append("allowed_change_scope is too broad")
-    required_text = " ".join(packet.get("required_evidence", []))
-    if required_text and "事实依据" not in required_text:
-        issues.append("required_evidence must mention 事实依据")
-    if required_text and "结构化事实" not in required_text:
-        issues.append("required_evidence must mention 结构化事实")
-    done_text = " ".join(packet.get("done_definition", []))
-    if done_text and not any(token in done_text for token in ("review", "Review", "审查", "APPROVED")):
-        issues.append("done_definition must include independent review or explicit review status")
+    for field in ("goal", "allowed_change_scope", "required_evidence", "next_commands", "done_definition"):
+        values = packet.get(field, [])
+        if isinstance(values, str):
+            values = [values]
+        if isinstance(values, list) and any(isinstance(value, str) and PRODUCT_SUCCESS_PLACEHOLDER_RE.search(value)
+                                            for value in values):
+            issues.append(f"{field} contains a placeholder")
     return issues
 
 
@@ -13596,7 +11680,7 @@ PRODUCT_SUCCESS_PLACEHOLDER_RE = re.compile(
 )
 PRODUCT_SUCCESS_PROCESS_ONLY_RE = re.compile(
     r"(?:check-governance|verify_workflow|evidence-log|plan-tracker|review|commit|push|archive|"
-    r"治理|证据|归档|提交|审查|记录|hook)",
+    r"治理|证据|归档|提交|审查|记录|hook|\bgate\s*(?:G?\d+\s*)?(?:已?通过|pass(?:ed)?\b))",
     re.IGNORECASE,
 )
 PRODUCT_SUCCESS_USER_OUTCOME_RE = re.compile(
@@ -13625,7 +11709,16 @@ def _is_meaningful_product_success_list(value):
 
 def _is_process_only_product_success_metric(value):
     text = value.strip()
-    return bool(PRODUCT_SUCCESS_PROCESS_ONLY_RE.search(text))
+    if not PRODUCT_SUCCESS_PROCESS_ONLY_RE.search(text):
+        return False
+    # A visible, repeatable product interaction can itself display review or evidence data.
+    interaction = re.search(
+        r"(?:用户|客户|使用者).*?(?:刷新|打开|点击|选择|搜索|运行|执行).*?(?:看到|看见|显示|返回|恢复|找到|获取)"
+        r"|\b(?:users?|customers?|operators?)\b.*?\b(?:refresh|open|click|select|search|run|execute)\w*\b"
+        r".*?\b(?:see|display|show|return|restore|find|receive)\w*\b",
+        text, re.IGNORECASE,
+    )
+    return interaction is None
 
 
 def _validate_product_success_contract(packet):
@@ -13668,24 +11761,9 @@ def check_product_success_contracts(packet_path=None):
         "issues": [],
         "pass": True,
     }
-    tasks = _active_execution_packet_tasks()
-    result["required_tasks"] = [task["task_id"] for task in tasks]
-    if not tasks:
-        return result
-
-    packets, load_error = _load_execution_packets(packet_path)
-    if load_error:
-        result["pass"] = False
-        result["issues"].append(load_error)
-        return result
-
-    for task in tasks:
+    for task, packet in _declared_packet_checks(result, packet_path, 'product_success_contract'):
         task_id = task["task_id"]
-        packet = packets.get(task_id)
-        if packet is None:
-            issues = ["missing execution packet"]
-        else:
-            issues = _validate_product_success_contract(packet)
+        issues = _validate_product_success_contract(packet)
         status = "PASS" if not issues else "FAIL"
         if issues:
             result["pass"] = False
@@ -13766,24 +11844,9 @@ def check_acceptance_contracts(packet_path=None):
         "issues": [],
         "pass": True,
     }
-    tasks = _active_execution_packet_tasks()
-    result["required_tasks"] = [task["task_id"] for task in tasks]
-    if not tasks:
-        return result
-
-    packets, load_error = _load_execution_packets(packet_path)
-    if load_error:
-        result["pass"] = False
-        result["issues"].append(load_error)
-        return result
-
-    for task in tasks:
+    for task, packet in _declared_packet_checks(result, packet_path, 'acceptance_contract'):
         task_id = task["task_id"]
-        packet = packets.get(task_id)
-        if packet is None:
-            issues = ["missing execution packet"]
-        else:
-            issues = _validate_acceptance_contract(task, packet)
+        issues = _validate_acceptance_contract(task, packet)
         status = "PASS" if not issues else "FAIL"
         if issues:
             result["pass"] = False
@@ -13907,6 +11970,8 @@ def _validate_quality_budget(task, packet):
         if dimension not in QUALITY_BUDGET_DIMENSIONS:
             issues.append(f"quality_budget dimension invalid: {item.get('dimension')}")
             continue
+        if dimension in seen:
+            issues.append(f'quality_budget duplicate dimension: {dimension}')
         seen.add(dimension)
 
         for field in ("threshold", "validation", "evidence"):
@@ -13931,7 +11996,10 @@ def _validate_quality_budget(task, packet):
         if status not in QUALITY_BUDGET_PASS_STATUSES:
             issues.append(f"quality_budget.{dimension}.status must be PASS or a justified EXEMPT status")
 
-    missing = [dim for dim in QUALITY_BUDGET_DIMENSIONS if dim not in seen]
+    required = contract.get('required_dimensions', [])
+    if not isinstance(required, list) or not all(isinstance(dim, str) and dim in QUALITY_BUDGET_DIMENSIONS for dim in required):
+        return issues + ['quality_budget.required_dimensions must name supported dimensions']
+    missing = [dim for dim in required if dim not in seen]
     if missing:
         issues.append(f"quality_budget missing dimension(s): {', '.join(missing)}")
     return issues
@@ -13945,24 +12013,9 @@ def check_quality_budget(packet_path=None):
         "issues": [],
         "pass": True,
     }
-    tasks = _active_execution_packet_tasks()
-    result["required_tasks"] = [task["task_id"] for task in tasks]
-    if not tasks:
-        return result
-
-    packets, load_error = _load_execution_packets(packet_path)
-    if load_error:
-        result["pass"] = False
-        result["issues"].append(load_error)
-        return result
-
-    for task in tasks:
+    for task, packet in _declared_packet_checks(result, packet_path, 'quality_budget'):
         task_id = task["task_id"]
-        packet = packets.get(task_id)
-        if packet is None:
-            issues = ["missing execution packet"]
-        else:
-            issues = _validate_quality_budget(task, packet)
+        issues = _validate_quality_budget(task, packet)
         status = "PASS" if not issues else "FAIL"
         if issues:
             result["pass"] = False
@@ -14059,24 +12112,9 @@ def check_vertical_slices(packet_path=None):
         "issues": [],
         "pass": True,
     }
-    tasks = _active_execution_packet_tasks()
-    result["required_tasks"] = [task["task_id"] for task in tasks]
-    if not tasks:
-        return result
-
-    packets, load_error = _load_execution_packets(packet_path)
-    if load_error:
-        result["pass"] = False
-        result["issues"].append(load_error)
-        return result
-
-    for task in tasks:
+    for task, packet in _declared_packet_checks(result, packet_path, 'vertical_slice'):
         task_id = task["task_id"]
-        packet = packets.get(task_id)
-        if packet is None:
-            issues = ["missing execution packet"]
-        else:
-            issues = _validate_vertical_slice(task, packet)
+        issues = _validate_vertical_slice(task, packet)
         status = "PASS" if not issues else "FAIL"
         if issues:
             result["pass"] = False
@@ -14519,41 +12557,37 @@ def check_interruption_policy(
         })
     result["issues"].extend(example_issues)
 
-    tasks = _active_execution_packet_tasks()
-    result["required_tasks"] = [task["task_id"] for task in tasks]
-    if tasks:
-        packets, load_error = _load_execution_packets(packet_path)
-        if load_error:
-            result["issues"].append(load_error)
-        else:
-            for task in tasks:
-                task_id = task["task_id"]
-                packet = packets.get(task_id)
-                if not isinstance(packet, dict):
-                    entry_issues = ["missing execution packet"]
-                else:
-                    entry_issues = _validate_packet_interruption_policy(packet, task_id)
-                status = "PASS" if not entry_issues else "FAIL"
-                result["entries"].append({"task_id": task_id, "status": status, "issues": entry_issues})
+    for task, packet in _declared_packet_checks(result, packet_path, "interruption_policy"):
+        task_id = task["task_id"]
+        entry_issues = _validate_packet_interruption_policy(packet, task_id) if isinstance(packet, dict) else ["invalid packet"]
+        result["entries"].append({"task_id": task_id, "status": "FAIL" if entry_issues else "PASS", "issues": entry_issues})
 
     if result["issues"] or any(entry["status"] == "FAIL" for entry in result["entries"]):
         result["pass"] = False
     return result
 
 
-def build_execution_packet(task):
+def build_execution_packet(task, **options):
     from execution_packet import build_execution_packet as build
-    return build(task)
+    return build(task, **options)
 
 
-def generate_execution_packets(existing=None, *, task_ids=None, governance_dir=None):
+def generate_execution_packets(existing=None, *, task_ids=None, governance_dir=None, contracts=(), quality_dimensions=()):
     from execution_packet import generate_packet_document
     existing = existing or {}
     if any(not isinstance(packet, dict) for packet in existing.values()):
         raise ValueError("each execution packet must be object")
-    return generate_packet_document(_active_execution_packet_tasks(), task_ids=task_ids,
-                                    existing=existing, governance_dir=governance_dir or SAMPLE_PATH.parent,
-                                    build_packet=build_execution_packet)
+    from functools import partial
+    tasks = _active_execution_packet_tasks()
+    if task_ids:
+        known = {task["task_id"] for task in tasks}
+        tasks.extend(task for task in parse_current_active_tasks() if task["task_id"] in task_ids - known
+                     and _is_incomplete_task_status(task.get("status", "")))
+    return generate_packet_document(tasks, task_ids=task_ids, existing=existing,
+                                    governance_dir=governance_dir or SAMPLE_PATH.parent,
+                                    build_packet=partial(build_execution_packet, contracts=contracts,
+                                                         quality_dimensions=quality_dimensions))
+
 
 
 def check_execution_packets(packet_path=None):
@@ -14564,26 +12598,8 @@ def check_execution_packets(packet_path=None):
         "issues": [],
         "pass": True,
     }
-    tasks = _active_execution_packet_tasks()
-    result["required_tasks"] = [task["task_id"] for task in tasks]
-    if not tasks:
-        return result
-
-    packets, load_error = _load_execution_packets(packet_path)
-    if load_error:
-        result["pass"] = False
-        result["issues"].append(load_error)
-        result["missing"] = result["required_tasks"]
-        return result
-
-    for task in tasks:
+    for task, packet in _declared_packet_checks(result, packet_path, None):
         task_id = task["task_id"]
-        packet = packets.get(task_id)
-        if packet is None:
-            result["pass"] = False
-            result["missing"].append(task_id)
-            result["entries"].append({"task_id": task_id, "status": "FAIL", "issues": ["missing execution packet"]})
-            continue
         issues = _validate_execution_packet(task, packet)
         status = "PASS" if not issues else "FAIL"
         if issues:
@@ -14610,18 +12626,24 @@ def cmd_execution_packet(args):
         path = EXECUTION_PACKET_PATH.resolve()
         with governance_store._TargetLock(path) if args.write else nullcontext():
             packets, metadata = _read_execution_packet_document(path, missing_ok=True)
-            payload = generate_execution_packets(existing=packets, task_ids=wanted, governance_dir=path.parent)
+            contracts = set(getattr(args, "contract", None) or [])
+            dimensions = list(dict.fromkeys(getattr(args, "quality_dimension", None) or []))
+            if dimensions:
+                contracts.add("quality_budget")
+            selection = wanted if wanted is not None else set(packets)
+            payload = generate_execution_packets(existing=packets, task_ids=selection, governance_dir=path.parent,
+                                                 contracts=contracts, quality_dimensions=dimensions)
             generated = payload["packets"]
             if budget is not None:
                 for packet in generated.values():
                     packet["budget"] = {"max_steps": budget}
             if not args.write:
                 message = json.dumps(payload, ensure_ascii=False, indent=2)
-            elif wanted is not None and not generated:
+            elif not generated:
                 message = "[OK] no active execution packets matched the selected tasks"
             else:
+                payload["packets"] = {**packets, **generated}
                 if wanted is not None:
-                    payload["packets"] = {**packets, **generated}
                     preserved = len(payload["packets"]) - len(generated)
                     note = (f" (incremental merge: regenerated {', '.join(sorted(generated))};"
                             f" preserved {preserved} other {'entry' if preserved == 1 else 'entries'})")
@@ -14828,141 +12850,27 @@ def check_agent_activation():
 
 # ── FIX-038: Profile Consistency Check (Check 23) ──────────────────
 
-# Per-profile expectations (from core/profiles.md)
-_PROFILE_GATE_COUNT = {
-    "lightweight": 7,
-    "standard": 11,
-    "strict": 11,
-}
-_PROFILE_TASK_COLUMNS = {
-    "lightweight": 6,
-    "standard": 20,
-    "strict": 20,
-}
-
-# FIX-480: the profile-driven status-column helpers
-# (``_task_status_column_index`` / ``_LEGACY_TASK_STATUS_COLUMN``) were
-# removed with the GovernanceDataSource hot-face convergence onto
-# task_priority.parse_task_dependencies — the status cell is now located by
-# HEADER SEMANTICS on both supported shapes, not inferred from the declared
-# profile's column count (the 0.54-era python_game host with a mismatched
-# Profile line mis-located the status column and reported 0 completed).
-
-
 def check_profile_consistency():
-    """FIX-038: Check 23 — Profile consistency between declaration and actual structure.
+    """Validate the declared profile and the review behind any closed work unit."""
+    from governance_readers import loop_state, project_config
 
-    Validates:
-      a. Gate table row count matches profile expectation
-      b. Task tracking table column count matches profile expectation
-      c. Strict profile must not contain any "passed-with-conditions" entries
-
-    Returns dict with profile, gate_rows, expected_gate_rows, task_cols,
-    expected_task_cols, conditional_passes, issues, pass.
-    """
-    result = {
-        "profile": "",
-        "gate_rows": 0,
-        "expected_gate_rows": 0,
-        "task_cols": 0,
-        "expected_task_cols": 0,
-        "conditional_passes": 0,
-        "issues": [],
-        "pass": True,
-    }
-
+    result = {"profile": None, "issues": [], "pass": True}
     if not SAMPLE_PATH.is_file():
         result["issues"].append("plan-tracker.md not found")
-        result["pass"] = False
-        return result
-
-    # 1. Parse profile from plan-tracker project config
-    config = parse_project_config()
-    profile_raw = config.get("Profile", "")
-    # Remove parenthetical remarks like "standard（本项目即为工作流产品本身...）"
-    profile = re.match(r"^\s*(\w+)", profile_raw)
-    if not profile:
-        result["issues"].append(
-            f"Profile field not found or unparseable in plan-tracker project config"
-        )
-        result["pass"] = False
-        return result
-    profile = profile.group(1).lower()
-    result["profile"] = profile
-
-    if profile not in _PROFILE_GATE_COUNT:
-        result["issues"].append(f"Unknown profile: '{profile}'")
-        result["pass"] = False
-        return result
-
-    # 2. Set expected values
-    result["expected_gate_rows"] = _PROFILE_GATE_COUNT[profile]
-    result["expected_task_cols"] = _PROFILE_TASK_COLUMNS[profile]
-
-    # 3. Count actual gate rows
-    gates = parse_gate_status()
-    result["gate_rows"] = len(gates)
-    if result["gate_rows"] != result["expected_gate_rows"]:
-        result["issues"].append(
-            f"Gate table has {result['gate_rows']} rows, "
-            f"expected {result['expected_gate_rows']} for '{profile}' profile"
-        )
-        result["pass"] = False
-
-    # 4. Count task tracking table columns when the legacy table exists.
-    # FMT-001 intentionally removed "## 样例跟踪表" from hot plan-tracker.
-    # Absence is no longer a profile violation; current active task tables
-    # have their own compact shape and are validated by structural checks.
-    plan_content = SAMPLE_PATH.read_text(encoding="utf-8")
-    in_section = False
-    for line in plan_content.split("\n"):
-        if "## 样例跟踪表" in line:
-            in_section = True
-            continue
-        if in_section:
-            line = line.strip()
-            if not line:
-                continue  # skip blank lines between heading and table
-            if line.startswith("## "):
-                break   # hit next section — no table found
-            if not line.startswith("|"):
-                break   # end of table
-            if "---" in line:
-                continue  # separator row
-            # Header row — count columns (strip leading/trailing empties)
-            parts = [p.strip() for p in line.split("|")]
-            # Remove leading and trailing empty strings from split
-            if parts and parts[0] == "":
-                parts = parts[1:]
-            if parts and parts[-1] == "":
-                parts = parts[:-1]
-            result["task_cols"] = len(parts)
-            break  # Only count the first header row
-
-    if result["task_cols"] == 0:
-        pass
-    elif result["task_cols"] != result["expected_task_cols"]:
-        result["issues"].append(
-            f"Task table has {result['task_cols']} columns, "
-            f"expected {result['expected_task_cols']} for '{profile}' profile"
-        )
-        result["pass"] = False
-
-    # 5. Strict profile: no conditional passes allowed
-    if profile == "strict":
-        for g in gates:
-            if g["status"] == "passed-with-conditions":
-                result["conditional_passes"] += 1
-        if result["conditional_passes"] > 0:
-            result["issues"].append(
-                f"Strict profile forbids 'passed-with-conditions', "
-                f"but {result['conditional_passes']} gate(s) have it"
-            )
-            result["pass"] = False
-
+    else:
+        config = project_config(SAMPLE_PATH.read_text(encoding="utf-8"))
+        declared = re.match(r"^\s*(\w+)", config.get("Profile", ""))
+        result["profile"] = declared.group(1).lower() if declared else None
+        if result["profile"] not in {"lightweight", "standard", "strict"}:
+            result["issues"].append("Profile must be lightweight, standard or strict")
+        view = loop_state(SAMPLE_PATH.parent.parent)
+        if view["state"] == "invalid":
+            result["issues"].append(view["message"])
+        for unit in view["units"]:
+            if unit["runtime_status"] == "completed" and not unit["last_review"]:
+                result["issues"].append(f"{unit['flow_unit_id']}: completed unit has no review evidence")
+    result["pass"] = not result["issues"]
     return result
-
-
 def _evidence_task_type_index():
     """FIX-174 R1 (P0-3): map task_id -> joined type+description text scanned
     from the evidence-log, so _task_routing_exempt can heuristically infer a
@@ -15405,7 +13313,6 @@ _PLUGIN_PRODUCT_CHECK_IDS = frozenset({
     "Check 28v",  # DSH Preset Schema Compat（插件 presets/ + adapters/dsh 组合 ↔ 安装态 dsh schema）
     "Check 28w",  # DSH Dependency Boundary（契约 K-1~K-13：模板/令牌/hooks/patch/证据/覆盖/演练基线）
     "Check 30b",  # Loop wiring call sites（插件 infra AST 扫描）
-    "Check 31",   # Loop Runtime Claim Gate（插件树扫描 + identity attestation）
     "Check 33",   # Injection Contract（插件 persona/SKILL/AGENTS 锚点）
 })
 
@@ -15469,7 +13376,6 @@ _PRODUCT_GATE_LABELS = {
     "Check 28v": "DSH Preset Schema Compat",
     "Check 28w": "DSH Dependency Boundary (FEAT-031)",
     "Check 30b": "Loop wiring call sites",
-    "Check 31": "Loop Runtime Claim Gate",
     "Check 33": "Injection Contract",
 }
 
@@ -15578,7 +13484,10 @@ def _run_full_engine_checks(args):
     gate_issues = check_gate_consistency()
     if gate_issues:
         for issue in gate_issues:
-            if issue["type"] == "completed_tasks_missing_evidence":
+            if issue["type"] == "loop_receipt":
+                all_issues += 1
+                print(f"│  [FAIL] {issue['detail']}")
+            elif issue["type"] == "completed_tasks_missing_evidence":
                 tasks_list = issue["detail"]
                 all_issues += len(tasks_list)
                 print(f"│  [WARN] Completed tasks without evidence:")
@@ -15597,7 +13506,7 @@ def _run_full_engine_checks(args):
                     print(f"│    ... and {len(tasks_list) - 10} more")
     else:
         print("│  [PASS] Gate status and evidence are consistent.")
-    print("└──────────────────────────────────────────────────────┘"); all_issues = render_evidence_binding_drift_block(all_issues)
+    print("└──────────────────────────────────────────────────────┘")
 
     # ── 4. Evidence quality ──
     print("\n┌─ Check 4: Evidence Quality ─────────────────────────┐")
@@ -15640,18 +13549,7 @@ def _run_full_engine_checks(args):
     else:
         print(f"│  [PASS] All active tasks have unique DRI.")
 
-    if pc_issues["conditional_pass"]:
-        pc_count += len(pc_issues["conditional_pass"])
-        print(f"│  [WARN] {len(pc_issues['conditional_pass'])} conditional pass(es) without corrective tasks:")
-        for v in pc_issues["conditional_pass"]:
-            print(f"│    - {v['gate']}: {v['issue']}")
-    else:
-        print(f"│  [PASS] No unresolved conditional passes.")
-        # Show conditional pass tracking if any exist
-        gates = parse_gate_status()
-        cp_gates = [g for g in gates if g["status"] == "passed-with-conditions"]
-        if cp_gates:
-            print(f"│  [INFO] {len(cp_gates)} conditional passes tracked: {', '.join(g['gate'] for g in cp_gates)}")
+
 
     if pc_issues["evidence_format"]:
         pc_count += len(pc_issues["evidence_format"])
@@ -16334,10 +14232,6 @@ def _run_full_engine_checks(args):
     print("\n┌─ Check 23: Profile Consistency (FIX-038) ────────────┐")
     pc_result = check_profile_consistency()
     print(f"│  Profile: {pc_result['profile']}")
-    print(f"│  Gate table rows: {pc_result['gate_rows']} (expected: {pc_result['expected_gate_rows']})")
-    print(f"│  Task table columns: {pc_result['task_cols']} (expected: {pc_result['expected_task_cols']})")
-    print(f"│  Conditional passes found: {pc_result['conditional_passes']}"
-          f" {'(strict: must be 0)' if pc_result['profile'] == 'strict' else ''}")
     if pc_result["issues"]:
         all_issues += len(pc_result["issues"])
         print(f"│  [WARN] {len(pc_result['issues'])} profile consistency issue(s):")
@@ -16514,7 +14408,7 @@ def _run_full_engine_checks(args):
         if len(hfs_issues) > 10:
             print(f"│    ... and {len(hfs_issues) - 10} more")
     else:
-        print("│  [PASS] Project config, overview, active items, roadmap, dependency chain, and requirement matrix are aligned.")
+        print("│  [PASS] Project configuration, release and requirement records are aligned.")
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 28d. Runtime Readiness Matrix Guard (FIX-106) ──
@@ -16925,50 +14819,16 @@ def _run_full_engine_checks(args):
         print(f"│  [{mp30c['verdict']}] {mp30c['reason']}")
     print("└──────────────────────────────────────────────────────┘")
 
-    # ── 30b. Loop wiring call sites (FIX-236.4 / ADR-017 §3.4 P1-1) ──
-    # AST/import-graph check: process_gate_result production call sites >= 2
-    # (Wiring A review-record + Wiring B gate-engine). Regression → FAIL so
-    # the wiring can never silently return to "call sites = 0" (BT-5).
+    # ── 30b. Native receipt routing ──
     if _product_gate_active(args):
         wiring_calls = check_loop_wiring_call_sites()
-        if wiring_calls["count"] >= 2:
-            print(f"│  [PASS] loop wiring call sites: {wiring_calls['count']} "
-                  f"(Wiring A review-record + Wiring B gate-engine)")
-        else:
+        if wiring_calls["verdict"] != "PASS":
             all_issues += 1
-            print(f"│  [FAIL] loop wiring call sites: {wiring_calls['count']} — "
-                  f"{wiring_calls['reason']}")
+        print(f"│  [{wiring_calls['verdict']}] Check 30b native receipt routing: {wiring_calls['reason']}")
     else:
-        print("│  [SKIP] product self-check — Check 30b loop wiring call sites "
-              "(plugin infra AST scan); enable with --product-gates")
+        print("│  [SKIP] Check 30b native receipt routing; enable with --product-gates")
 
-    # ── 31. Loop Runtime Claim Gate (FIX-197 / DEC-106) ──
-    if _product_gate_active(args):
-        print("\n┌─ Check 31: Loop Runtime Claim Gate (FIX-197) ───────┐")
-        claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("installed_host"))
-        print(f"│  Verdict: {claim_report.verdict}")
-        print(f"│  Candidates: {claim_report.inventory.candidate_count}; parsed: {claim_report.parsed_candidates}")
-        print(f"│  Inventory: {claim_report.inventory.inventory_sha256}")
-        if claim_report.findings:
-            all_issues += len(claim_report.findings)
-            for finding in claim_report.findings[:20]:
-                print(f"│  [FAIL] {finding.code}: {finding.normalized_path} {finding.message}")
-            if len(claim_report.findings) > 20:
-                print(f"│  [FAIL] ... {len(claim_report.findings) - 20} more finding(s)")
-        else:
-            print("│  [PASS] complete semantic inventory; zero skip/truncate")
-        identity = _run_identity_attestation_fixture_only()
-        identity_verdict = identity["verdict"]
-        if identity_verdict == "PASS":
-            print(f"│  [PASS] identity attestation (fixture_only staged_index): {identity_verdict}")
-        else:
-            all_issues += len(identity["issues"])
-            for issue in identity["issues"]:
-                print(f"│  [FAIL] {issue}")
-        print(f"│  identity_verdict={identity_verdict}; phase={identity['phase']}")
-    else:
-        _print_product_gate_skipped("Check 31")
-    print("└──────────────────────────────────────────────────────┘")
+
 
     # ── 32. Change-Control Triage (FIX-237.4 / ADR-017 §4.4) ──
     # Mandatory four-step triage for product-code task intake: the
@@ -17146,31 +15006,13 @@ def _run_full_engine_checks(args):
     # (Check-36 convention). Standalone runs use candidate mode — the
     # already-published release checks carry released mode via
     # check_release_readiness (BR-4 / DEC-153 ②).
-    print("\n┌─ Check 37: Gate Sequence for Release (FIX-266) ─────┐")
-    cr37 = check_gate_sequence_for_release()
-    st37 = cr37["stats"]
-    tag_desc = st37["latest_tag"] or "—"
-    if st37["latest_tag_date"]:
-        tag_desc += f" ({st37['latest_tag_date']})"
-    print(f"│  Gates: {st37['gates_scanned']} (release: "
-          f"{st37['release_gate'] or '—'}; prerelease: "
-          f"{st37['prerelease_gates']} = passed {st37['prerelease_passed']} + "
-          f"on-entry {st37['prerelease_on_entry']} + pending "
-          f"{st37['prerelease_pending']})")
-    print(f"│  Latest release tag: {tag_desc}; lineage mode: "
-          f"{st37['lineage_mode']}")
-    print(f"│  Verdict: {cr37['verdict']}")
-    if cr37["violations"]:
-        print(f"│  [FAIL] {len(cr37['violations'])} violation(s):")
-        for v in cr37["violations"][:8]:
-            print(f"│    - [{v['rule']}] {v['reason']}")
-    if cr37["warnings"]:
-        print(f"│  [WARN] {len(cr37['warnings'])} warning(s):")
-        for w in cr37["warnings"][:8]:
-            print(f"│    - [{w['rule']}] {w['reason']}")
-    if not cr37["violations"] and not cr37["warnings"]:
-        print(f"│  [{cr37['verdict']}] {cr37['reason']}")
-    all_issues += len(cr37["violations"]) + len(cr37["warnings"])
+    print("\n┌─ Check 37: Release work-unit evidence ─────┐")
+    violations = release_unit_issues(HOST_PROJECT_ROOT)
+    for issue in violations:
+        print(f"│  [FAIL] {issue}")
+    if not violations:
+        print("│  [PASS] No unsupported release certification")
+    all_issues += len(violations)
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 38. CI Evidence (FIX-267 / REQ-145.5) ──
@@ -18125,22 +15967,7 @@ def auto_judge_gate(gate_id, unit_id=None):
     else:
         overall = "passed"
 
-    # ── Wiring B (FIX-236.2 / ADR-017 §3.4): gate-engine judgment → loop
-    # engine. Thin best-effort delegation (10 lines); the verdict→conclusion
-    # mapping (GATE_VERDICT_TO_RESULT) and outcome normalization
-    # (wiring_summary) live in review_record.py — no logic here (RISK-039).
-    # Non-success outcomes (v1 no-op / missing runtime / exception) are NOT
-    # reported as wired; the judgment itself is already rendered.
-    wiring = None
-    if unit_id and overall not in ("needs_human",):
-        try:
-            from loop_gate_processor import process_gate_result as _pgr
-            from review_record import GATE_VERDICT_TO_RESULT, wiring_summary
-            if (mapped := GATE_VERDICT_TO_RESULT.get(overall)):
-                outcome = _pgr(unit_id, gate_id, mapped, evidence_ref=f"gate-check-{gate_id}", actor="gate-engine")
-                wiring = wiring_summary(outcome)
-        except Exception as exc:  # noqa: BLE001 — best-effort degrade
-            wiring = {"wired": False, "degraded": True, "reason": f"process_gate_result raised: {exc}"}
+    # Diagnostics report local checks. Scoped review is applied by the native writer.
     result = {
         "gate": gate_id,
         "title": detail["title"],
@@ -18148,65 +15975,23 @@ def auto_judge_gate(gate_id, unit_id=None):
         "items": items,
         "summary": f"PASS={pass_count} FAIL={fail_count} NEEDS_HUMAN={human_count}",
     }
-    if wiring is not None:
-        result["wiring"] = wiring
     return result
 
 
 def cmd_gate_check(args):
-    """Auto-judge a specific Gate (optional --unit routes the verdict to the
-    loop engine — Wiring B, FIX-236.2)."""
-    gate_id = args.gate_id.upper()
-    result = auto_judge_gate(gate_id, unit_id=getattr(args, "unit", None))
-
-    if "error" in result:
-        print(f"[FAIL] {result['error']}")
+    """Evaluate only an identified unit's current gate using its scoped receipt."""
+    from loop_workflow import gate_review
+    if not getattr(args, "unit", None) or not getattr(args, "review", None):
+        print("gate-check requires --unit and --review from this unit and iteration", file=sys.stderr)
+        sys.exit(2)
+    try:
+        outcome = gate_review(HOST_PROJECT_ROOT, args.unit, args.gate_id.upper(), args.review)
+    except (ValueError, OSError) as exc:
+        print(f"gate-check: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(outcome, ensure_ascii=False, indent=2))
+    if outcome.get("decision") in ("escalate", "iterate") and getattr(args, "fail_on_blocked", False):
         sys.exit(1)
-
-    # Display result
-    overall_icons = {
-        "passed": "[PASS]",
-        "blocked": "[BLOCK]",
-        "passed-with-conditions": "[COND]",
-        "needs_human": "[????]",
-    }
-    icon = overall_icons.get(result["overall"], "[????]")
-
-    print(f"\n┌─ Gate Check: {result['gate']} ───────────────────────────────────┐")
-    print(f"│  {result['title']}")
-    print(f"│  Overall: {icon} {result['overall'].upper()}")
-    print(f"│  {result['summary']}")
-    print(f"│")
-
-    for i, item in enumerate(result["items"], 1):
-        item_icon = {"PASS": "[PASS]", "FAIL": "[FAIL]", "NEEDS_HUMAN": "[????]"}
-        ic = item_icon.get(item["result"], "[????]")
-        print(f"│  {ic} 检查项{i}: {item['check']}")
-        print(f"│      {item['detail']}")
-
-    if result.get("wiring"):
-        wiring = result["wiring"]
-        print(f"│  Wiring B: {'wired' if wiring.get('wired') else 'NOT wired'}"
-              f" ({wiring.get('status') or wiring.get('reason')})")
-    print(f"└──────────────────────────────────────────────────────┘")
-
-    # Show current status from plan-tracker
-    gates = parse_gate_status()
-    for g in gates:
-        if g["gate"].upper() == gate_id.upper():
-            cur_icon = STATUS_ICONS.get(g["status"], "[????]")
-            print(f"\n  Plan-tracker status: {cur_icon} {g['status']} ({g['date']})")
-            if g["status"] == "passed-on-entry":
-                print(f"  Note: This gate was passed-on-entry (mid-project onboarding).")
-                print(f"  Auto-judgment reflects current evidence, not historical state.")
-            break
-
-    # Exit with non-zero if blocked
-    if args.fail_on_blocked and result["overall"] == "blocked":
-        sys.exit(1)
-
-
-# ── Main CLI entry point ─────────────────────────────────────────
 
 def check_plugin_freshness():
     """Compare installed plugin version with source repository HEAD."""
@@ -19019,14 +16804,14 @@ def _e2e_command_matrix():
         {
             "label": "/governance-status",
             "kind": "source_cli_proxy",
-            "command": [python, str(verify_py), "status"],
+            "command": [python, str(verify_py), "status", "--json"],
             "validator": _validate_e2e_status,
         },
         {
-            "label": "/governance-gate G1",
+            "label": "/governance-gates",
             "kind": "source_cli_proxy",
-            "command": [python, str(verify_py), "gate", "G1"],
-            "validator": _validate_e2e_gate_g1,
+            "command": [python, str(verify_py), "gates"],
+            "validator": _validate_e2e_gates,
         },
         {
             "label": "/governance-gate G99",
@@ -19051,7 +16836,7 @@ def _e2e_command_matrix():
         {
             "label": "/governance Scenario F proxy",
             "kind": "source_cli_proxy",
-            "command": [python, str(verify_py), "status"],
+            "command": [python, str(verify_py), "loop", "status", "--json"],
             "validator": _validate_e2e_governance_proxy,
         },
     ]
@@ -19067,15 +16852,15 @@ def _e2e_target_cwd_command_matrix(e2e_dir):
             "label": "target-cwd /governance-status",
             "kind": "target_cwd_command",
             "cwd": e2e_dir,
-            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "status"],
-            "validator": _validate_e2e_target_status,
+            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "status", "--json"],
+            "validator": _validate_e2e_status,
         },
         {
-            "label": "target-cwd /governance-gate G1",
+            "label": "target-cwd /governance-gates",
             "kind": "target_cwd_command",
             "cwd": e2e_dir,
-            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "gate", "G1"],
-            "validator": _validate_e2e_gate_g1,
+            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "gates"],
+            "validator": _validate_e2e_gates,
         },
         {
             "label": "target-cwd /governance-gate G99",
@@ -19105,35 +16890,6 @@ def _e2e_target_fixture_checks(e2e_dir):
         or _extract_skill_version(target_skill_path)
         or _extract_skill_version(ROOT / "skills/software-project-governance/SKILL.md")
     )
-    delivery_trust_needles = [
-        "Delivery Trust Snapshot",
-        "Resume state",
-        "Existing governance state detected",
-        "Carry-over",
-        "Open risks",
-        "Unfinished work",
-        "Source facts",
-        "Blocker state",
-        "Auto-continue",
-        "Interrupt boundary",
-        "Hooks",
-        "Goal",
-        "Stage",
-        "Gate/setup status",
-        "Risk",
-        "Evidence",
-        "Next action",
-        "Preset guidance",
-        "lite is the recommended first-run default",
-        "standard is for team delivery",
-        "strict is for regulated/high-risk work",
-        "Question budget",
-        "no more than 3 non-critical questions before snapshot",
-        "deferred non-critical fields",
-        "assumptions",
-        "Verification signal",
-        "No-overclaim boundary",
-    ]
     return [
         {
             "label": "CLAUDE.md bootstrap fixture",
@@ -19185,17 +16941,12 @@ def _e2e_target_fixture_checks(e2e_dir):
         {
             "label": "target /governance route contract (router layer)",
             "path": e2e_dir / "commands" / "governance.md",
-            "needles": ["Scenario F", "AskUserQuestion", "Coordinator"],
+            "needles": ["commands/governance/scenario-f.md", "AskUserQuestion", "Coordinator"],
         },
         {
-            "label": "target /governance Scenario F delivery-trust contract",
-            "path": e2e_dir / "commands" / "governance" / "scenario-f.md",
-            "needles": delivery_trust_needles,
-        },
-        {
-            "label": "target /governance-status Delivery Trust Snapshot contract",
+            "label": "target status restores scoped work",
             "path": e2e_dir / "commands" / "governance-status.md",
-            "needles": delivery_trust_needles,
+            "needles": ["governance-bootstrap --format json", "loop status --unit", "loop status --json"],
         },
     ]
 
@@ -19241,49 +16992,15 @@ def _e2e_contract_checks():
             "path": ROOT / "commands/governance/scenario-f.md",
             "needles": [
                 "Scenario F",
-                # FEAT-038: the pre-split needle "状态面板" matched the router
-                # section intro; the Scenario F document's own status-panel
-                # (compact Snapshot) contract is the equivalent anchor there.
-                "默认交互视图合约",
-                "Delivery Trust Snapshot",
-                "lite is the recommended first-run default",
-                "No-overclaim boundary",
+                "../governance-status.md",
             ],
             "reason": "Executable coverage comes from the Scenario F status proxy.",
         },
         {
-            "label": "/governance-status Delivery Trust Snapshot contract",
+            "label": "/governance-status work-unit recovery",
             "kind": "CONTRACT_CHECK",
             "path": ROOT / "commands/governance-status.md",
-            "needles": [
-                "Delivery Trust Snapshot",
-                "Resume state",
-                "Existing governance state detected",
-                "Carry-over",
-                "Open risks",
-                "Unfinished work",
-                "Source facts",
-                "Blocker state",
-                "Auto-continue",
-                "Interrupt boundary",
-                "Hooks",
-                "Goal",
-                "Stage",
-                "Gate/setup status",
-                "Risk",
-                "Evidence",
-                "Next action",
-                "Preset guidance",
-                "lite is the recommended first-run default",
-                "standard is for team delivery",
-                "strict is for regulated/high-risk work",
-                "Question budget",
-                "no more than 3 non-critical questions before snapshot",
-                "deferred non-critical fields",
-                "assumptions",
-                "Verification signal",
-                "No-overclaim boundary",
-            ],
+            "needles": ["governance-bootstrap --format json", "loop status --unit", "loop status --json"],
             "reason": "Status output is the runnable first-run snapshot signal.",
         },
     ]
@@ -19297,9 +17014,11 @@ AGENT_RUNTIME_E2E_PLATFORMS = ("claude", "codex", "gemini", "opencode", "pi")
 
 def _agent_runtime_e2e_prompt(agent_id):
     return (
-        "Read the local governance bootstrap and answer with exactly these "
+        "Read the local governance bootstrap and the native work units. Use an open unit ID, "
+        "or any recorded unit ID if all are closed. Use [] only if there are no units. "
+        "Answer with exactly these "
         f"machine-readable fields if the workflow is loaded: E2E_PLATFORM={agent_id}; "
-        "E2E_AGENT=<workflow role>; E2E_STAGE=<current stage>; "
+        "E2E_AGENT=<workflow role>; E2E_UNIT=<work unit ID or []>; "
         "E2E_MODE=<trigger x permission>. "
         "Do not modify files."
     )
@@ -19434,120 +17153,49 @@ def _has_all(text, needles):
     return all(needle in text for needle in needles)
 
 
+def _e2e_json_object(result):
+    try:
+        value = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _valid_e2e_loop_view(view):
+    if not isinstance(view, dict) or view.get("state") not in ("ready", "empty"):
+        return False
+    units = view.get("units")
+    if not isinstance(units, list) or view["state"] == "empty" and units:
+        return False
+    if view["state"] == "ready" and not units and not view.get("omitted_units"):
+        return False
+    for unit in units:
+        if not isinstance(unit, dict) or not all(unit.get(key) for key in
+                ("flow_unit_id", "goal", "acceptance", "gate_id", "gate_status", "runtime_status", "next_action")):
+            return False
+        if unit["runtime_status"] == "completed" and not (unit.get("last_review") or {}).get("evidence_ref"):
+            return False
+    return True
+
+
 def _validate_e2e_status(result):
-    output = _e2e_output(result)
-    labels_present = _has_all(output, ["permission_mode", "操作权限模式"])
-    legal_permission_mode_present = any(
-        value in output for value in ("maximum-autonomy", "default-confirm")
-    )
-    snapshot_present = _has_all(
-        output,
-        [
-            "Delivery Trust Snapshot",
-            "Resume state:",
-            "Existing governance state detected",
-            "Carry-over:",
-            "Open risks:",
-            "Unfinished work:",
-            "Source facts:",
-            "Blocker state:",
-            "Auto-continue:",
-            "Interrupt boundary:",
-            "Hooks:",
-            "Goal:",
-            "Stage:",
-            "Gate/setup status:",
-            "Risk:",
-            "Evidence:",
-            "Next action:",
-            "Preset guidance:",
-            "lite is the recommended first-run default",
-            "standard is for team delivery",
-            "strict is for regulated/high-risk work",
-            "Question budget:",
-            "no more than 3 non-critical questions before snapshot",
-            "deferred non-critical fields",
-            "assumptions",
-            "Verification signal:",
-            "No-overclaim boundary:",
-            "no official approval",
-            "marketplace approval",
-            "universal/full runtime support",
-            "1.0.0 production-ready",
-        ],
-    )
-    ok = result.returncode == 0 and _has_all(
-        output,
-        ["Project Overview", "Tasks", "Gate"],
-    ) and labels_present and legal_permission_mode_present and snapshot_present
-    return ok, (
-        "status output exposes Project Overview, Tasks, Gate, "
-        "permission_mode/操作权限模式, a legal permission mode "
-        "(maximum-autonomy or default-confirm), and Delivery Trust Snapshot"
-    )
+    payload = _e2e_json_object(result)
+    project = payload.get("project")
+    view = payload.get("loops")
+    ok = (result.returncode == 0 and isinstance(project, dict)
+          and project.get("permission_mode") in ("", "maximum-autonomy", "default-confirm")
+          and _valid_e2e_loop_view(view) and view.get("no_global_stage") is True)
+    return ok, "host status reports project.permission_mode and current work with scoped acceptance"
 
 
-def _validate_e2e_target_status(result):
-    output = _e2e_output(result)
-    snapshot_present = _has_all(
-        output,
-        [
-            "Delivery Trust Snapshot",
-            "Resume state:",
-            "Existing governance state detected",
-            "Carry-over:",
-            "Open risks:",
-            "Unfinished work:",
-            "Source facts:",
-            "Blocker state:",
-            "Auto-continue:",
-            "Interrupt boundary:",
-            "Hooks:",
-            "Goal:",
-            "Stage:",
-            "Gate/setup status:",
-            "Risk:",
-            "Evidence:",
-            "Next action:",
-            "Preset guidance:",
-            "lite is the recommended first-run default",
-            "standard is for team delivery",
-            "strict is for regulated/high-risk work",
-            "Question budget:",
-            "no more than 3 non-critical questions before snapshot",
-            "deferred non-critical fields",
-            "assumptions",
-            "Verification signal:",
-            "No-overclaim boundary:",
-            "no official approval",
-            "marketplace approval",
-            "universal/full runtime support",
-            "1.0.0 production-ready",
-        ],
-    )
-    ok = (
-        result.returncode == 0
-        and _has_all(output, ["Project Overview", "Tasks", "Gate"])
-        and any(value in output for value in ("maximum-autonomy", "default-confirm"))
-        and snapshot_present
-    )
-    return ok, "target cwd status command returns project overview, tasks, gate, legal permission mode, and Delivery Trust Snapshot"
-
-
-def _validate_e2e_gate_g1(result):
-    output = _e2e_output(result)
-    ok = result.returncode == 0 and _has_all(output, ["G1", "Check items"])
-    return ok, "G1 command returns check items"
+def _validate_e2e_gates(result):
+    return result.returncode == 0 and _valid_e2e_loop_view(_e2e_json_object(result)), "all gates belong to recorded work units"
 
 
 def _validate_e2e_gate_g99(result):
-    output = _e2e_output(result)
-    ok = result.returncode != 0 and (
-        "Gate G99 not found" in output or "GATE-ERR" in output
-    )
-    return ok, "invalid gate returns non-zero and GATE-ERR/not-found semantics"
-
-
+    report = _e2e_json_object(result)
+    ok = result.returncode != 0 and report.get("state") in ("empty", "ready") and report.get("units") == []
+    return ok, "unknown gate has no matching work unit and returns nonzero"
 def _validate_e2e_cleanup(result):
     output = _e2e_output(result).strip()
     try:
@@ -19650,45 +17298,9 @@ def _evaluate_e2e_target_fixture_check(entry):
 
 
 def _validate_e2e_governance_proxy(result):
-    output = _e2e_output(result)
-    # FEAT-038: the Delivery Trust Snapshot resume contract lives in the
-    # on-demand Scenario F document; the router layer is asserted separately to
-    # route to it (so a router that stopped pointing at the contract fails too).
-    contract = ROOT / "commands/governance/scenario-f.md"
-    try:
-        contract_text = contract.read_text(encoding="utf-8")
-    except OSError:
-        contract_text = ""
-    router = ROOT / "commands/governance.md"
-    try:
-        router_text = router.read_text(encoding="utf-8")
-    except OSError:
-        router_text = ""
-    ok = (
-        result.returncode == 0
-        and "Project Overview" in output
-        and "Gate Status" in output
-        and "Delivery Trust Snapshot" in output
-        and "Existing governance state detected" in output
-        and "Carry-over:" in output
-        and "Open risks:" in output
-        and "Unfinished work:" in output
-        and "Source facts:" in output
-        and "Blocker state:" in output
-        and "Auto-continue:" in output
-        and "Interrupt boundary:" in output
-        and "Hooks:" in output
-        and "No-overclaim boundary" in output
-        and "Scenario F" in contract_text
-        and "Delivery Trust Snapshot" in contract_text
-        and "Unfinished work" in contract_text
-        and "Source facts" in contract_text
-        and "Existing governance state detected" in contract_text
-        and "commands/governance/scenario-f.md" in router_text
-    )
-    return ok, "Scenario F proxy executed status and found /governance Delivery Trust Snapshot resume route contract"
-
-
+    report = _e2e_json_object(result)
+    ok = result.returncode == 0 and report.get("no_global_stage") is True and _valid_e2e_loop_view(report)
+    return ok, "Scenario F recovers the active work-unit snapshot"
 def _evaluate_e2e_command(entry, runner=_run_e2e_subprocess):
     """Execute one E2E matrix entry and normalize its result."""
     try:
@@ -19761,29 +17373,35 @@ def _evaluate_e2e_contract_check(entry):
     }
 
 
-def _validate_agent_runtime_e2e_passed(agent_id, result):
+def _validate_agent_runtime_e2e_passed(agent_id, result, root=None):
     output = _e2e_output(result)
     if result.returncode != 0:
         return False, f"real agent exited with code {result.returncode}"
 
     fields = _parse_agent_runtime_e2e_fields(output)
     if not fields:
-        return False, "real agent output missing structured E2E_PLATFORM/E2E_AGENT/E2E_STAGE/E2E_MODE response"
+        return False, "real agent output missing structured E2E_PLATFORM/E2E_AGENT/E2E_UNIT/E2E_MODE response"
+    from governance_readers import loop_state
+    view = loop_state(root or ROOT / "project/e2e-test-project")
+    if view["state"] == "invalid":
+        return False, view["message"]
+    current = [u for u in view["units"] if u["runtime_status"] not in ("completed", "withdrawn")]
+    expected = {u["flow_unit_id"] for u in current or view["units"]} or {"[]"}
     for response in fields:
         platform = response.get("E2E_PLATFORM", "")
         workflow_agent = response.get("E2E_AGENT", "")
-        stage = response.get("E2E_STAGE", "")
+        unit_id = response.get("E2E_UNIT", "")
         mode = response.get("E2E_MODE", "")
         if (
             platform == agent_id
             and _is_valid_agent_runtime_workflow_agent(workflow_agent)
-            and _is_non_placeholder_agent_runtime_value(stage)
+            and unit_id in expected
             and _is_valid_agent_runtime_mode(mode)
         ):
             return True, (
                 f"real agent output includes structured response: "
                 f"E2E_PLATFORM={platform}; E2E_AGENT={workflow_agent}; "
-                f"E2E_STAGE={stage}; E2E_MODE={mode}"
+                f"E2E_UNIT={unit_id}; E2E_MODE={mode}"
             )
     return False, (
         "real agent output did not include a complete non-placeholder "
@@ -19824,13 +17442,13 @@ def _parse_agent_runtime_e2e_fields(output):
     groups = []
     current = {}
     for candidate in _agent_runtime_e2e_candidate_texts(output):
-        for match in re.finditer(r"\b(E2E_PLATFORM|E2E_AGENT|E2E_STAGE|E2E_MODE)\s*=\s*([^;\r\n]+)", candidate or ""):
+        for match in re.finditer(r"\b(E2E_PLATFORM|E2E_AGENT|E2E_UNIT|E2E_MODE)\s*=\s*([^;\r\n]+)", candidate or ""):
             key, value = match.group(1), match.group(2).strip()
             if key == "E2E_PLATFORM" and "E2E_PLATFORM" in current:
                 groups.append(current)
                 current = {}
             current[key] = value
-            if {"E2E_PLATFORM", "E2E_AGENT", "E2E_STAGE", "E2E_MODE"}.issubset(current):
+            if {"E2E_PLATFORM", "E2E_AGENT", "E2E_UNIT", "E2E_MODE"}.issubset(current):
                 groups.append(current)
                 current = {}
     if current:
@@ -19845,7 +17463,7 @@ def _is_non_placeholder_agent_runtime_value(value):
         return False
     if value.startswith("<") and value.endswith(">"):
         return False
-    placeholder_markers = ("placeholder", "current stage", "trigger x permission")
+    placeholder_markers = ("placeholder", "work unit id or []", "trigger x permission")
     return not any(marker in lowered for marker in placeholder_markers)
 
 
@@ -20038,7 +17656,7 @@ def _evaluate_agent_runtime_e2e_command(
         }
 
     output = _e2e_output(result)
-    ok, message = entry["validator"](agent_id, result)
+    ok, message = entry["validator"](agent_id, result, root=cwd)
     if ok:
         return {
             "agent": agent_id,
@@ -21482,9 +19100,17 @@ def cmd_e2e_check(_args):
     source_cli_results = [
         _evaluate_e2e_command(entry) for entry in _e2e_command_matrix()
     ]
-    target_cwd_results = [
-        _evaluate_e2e_command(entry) for entry in _e2e_target_cwd_command_matrix(e2e_dir)
-    ]
+    # Install the working skill into a disposable external host. The tracked
+    # fixture contains project facts, but intentionally excludes the installed CLI.
+    with tempfile.TemporaryDirectory(prefix="governance-e2e-host-") as temporary:
+        target = Path(temporary)
+        shutil.copytree(e2e_dir / ".governance", target / ".governance")
+        plugin = Path("skills/software-project-governance")
+        shutil.copytree(PLUGIN_ROOT / plugin, target / plugin,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "tests"))
+        target_cwd_results = [
+            _evaluate_e2e_command(entry) for entry in _e2e_target_cwd_command_matrix(target)
+        ]
     fixture_results = [
         _evaluate_e2e_target_fixture_check(entry)
         for entry in _e2e_target_fixture_checks(e2e_dir)
@@ -21495,7 +19121,7 @@ def cmd_e2e_check(_args):
 
     print("=== E2E Governance Verification ===")
     print(f"Target: {e2e_dir}")
-    print("Mode: source CLI proxy + external target cwd execution + target fixture checks\n")
+    print("Mode: source CLI proxy + isolated external installation + tracked project fixture checks\n")
 
     print("--- Source CLI proxy command matrix ---")
     print(f"  cwd: {ROOT}")
@@ -21510,8 +19136,8 @@ def cmd_e2e_check(_args):
         print(f"      assert: {result['message']}")
 
     print("\n--- External target cwd command matrix ---")
-    print(f"  cwd: {e2e_dir}")
-    print("  note: these commands execute the target project's own workflow copy from the target cwd.")
+    print(f"  cwd: {target}")
+    print("  note: these commands exercised the current skill installed into a disposable external host.")
     for result in target_cwd_results:
         command = " ".join(str(part) for part in result["command"])
         print(
@@ -21568,140 +19194,6 @@ def cmd_check_agent_adapters(args):
         sys.exit(1)
 
 
-def _loop_runtime_claim_context(scan_mode):
-    """Build the explicit three-root claim context for governance and release gates."""
-    return ClaimScanContext(
-        product_root=PLUGIN_ROOT,
-        plugin_home=PLUGIN_ROOT / "skills/software-project-governance",
-        host_root=HOST_PROJECT_ROOT,
-        scan_mode=scan_mode,
-    )
-
-
-def _run_identity_attestation_fixture_only():
-    """Run the independent three-root identity attestation in fixture_only mode.
-
-    FIX-200: the governance (and release) gate must run the real identity
-    attestation instead of hard-coding ``IDENTITY_ATTESTATION_PENDING``.  In a
-    governance check there is no release candidate commit, so the attestation
-    runs as a ``staged_index`` fixture (mirroring the release gate's
-    ``write_path=None`` + ``compare_path=None`` rehearsal path) over the current
-    Git index of the product and plugin roots.
-
-    Returns a dict with ``verdict`` (``"PASS"`` on success, otherwise the real
-    failure verdict), ``issues`` (list of human-readable identity issue
-    strings, empty when the verdict is PASS), and ``phase``.  Any failure to
-    build the attestation (missing files, attestation module issues) degrades
-    gracefully to the legacy PENDING behaviour with the underlying error
-    message, so the governance check never crashes on identity work.
-    FIX-403/FIX-404: a failure to clean up the fixture temp dir likewise
-    degrades to a no-op (``shutil.rmtree(..., ignore_errors=True)``) —
-    cleanup failure never escalates into a crash and never masks the verdict.
-    """
-    plugin_home = PLUGIN_ROOT / "skills/software-project-governance"
-    policy_path = plugin_home / "core/loop-runtime-claim-allowlist.json"
-    try:
-        policy = json.loads(policy_path.read_text(encoding="utf-8"))
-        required_rows = policy.get("required_paths")
-        if not isinstance(required_rows, list):
-            raise IdentityAttestationError("SCHEMA_MISSING", "required_paths")
-        required_paths = [
-            (row.get("root_owner"), row.get("path"))
-            for row in required_rows
-        ]
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return {
-            "verdict": "PENDING",
-            "phase": "staged_index",
-            "issues": [f"{IDENTITY_ATTESTATION_PENDING} (policy load failed: {exc})"],
-        }
-    except IdentityAttestationError as exc:
-        return {
-            "verdict": "PENDING",
-            "phase": "staged_index",
-            "issues": [f"{IDENTITY_ATTESTATION_PENDING} ({exc.code}: {exc.detail})"],
-        }
-
-    # FIX-403: under a UAC-filtered token (DSH sandbox) the fixture dir's
-    # TemporaryDirectory __exit__ cleanup hit PermissionError (WinError 5)
-    # on both scandir and the chmod recovery, crashing the governance gate
-    # and violating this helper's own docstring contract ("never crashes on
-    # identity work").  ignore_cleanup_errors=True does NOT close that
-    # escape on Python 3.14: the recovery chmod raise happens inside
-    # tempfile's onexc handler, outside its ignore_errors checks (verified
-    # empirically against 3.14.3).  mkdtemp + finally +
-    # shutil.rmtree(ignore_errors=True) instead routes every cleanup
-    # OSError to a no-op handler, so a cleanup failure can never escalate
-    # into a crash; at worst the fixture dir is left to the OS TEMP
-    # lifecycle while the identity verdict is still produced.
-    temp_value = tempfile.mkdtemp(prefix="fix200-identity-")
-    try:
-        snapshot_dir = Path(temp_value) / "snapshot"
-        try:
-            identity_report = attest_explicit_sources(
-                product_git_repo=str(PLUGIN_ROOT),
-                product_git_ref=":index",
-                product_prefix="",
-                plugin_git_repo=str(PLUGIN_ROOT),
-                plugin_git_ref=":index",
-                plugin_prefix="skills/software-project-governance",
-                host_root=str(HOST_PROJECT_ROOT),
-                snapshot_dir=str(snapshot_dir),
-                required_paths=required_paths,
-                phase="staged_index",
-                subject={"kind": "index", "sha": None},
-                scan_mode="product_release",
-            )
-        except IdentityAttestationError as exc:
-            return {
-                "verdict": "FAIL",
-                "phase": "staged_index",
-                "issues": [f"IDENTITY_ATTESTATION_FAIL: {exc.code}: {exc.detail}"],
-            }
-        except Exception as exc:  # graceful degradation: never crash the gate
-            return {
-                "verdict": "PENDING",
-                "phase": "staged_index",
-                "issues": [f"{IDENTITY_ATTESTATION_PENDING} (builder error: {type(exc).__name__}: {exc})"],
-            }
-    finally:
-        shutil.rmtree(temp_value, ignore_errors=True)
-    verdict = identity_report.get("identity_verdict", "UNKNOWN")
-    issues: list[str] = []
-    if verdict != "PASS":
-        issues.append(f"IDENTITY_ATTESTATION_{verdict}: independent source identity attestation did not pass")
-    return {"verdict": verdict, "phase": identity_report.get("phase", "staged_index"), "issues": issues}
-
-
-def _loop_runtime_claim_gate_detail(claim_report):
-    """Aggregate semantic evidence with a real identity attestation verdict.
-
-    FIX-200: instead of unconditionally appending the hard-coded
-    ``IDENTITY_ATTESTATION_PENDING`` issue, run the fixture-only identity
-    attestation and reflect its real verdict.  Only when the attestation does
-    not pass (or degrades to PENDING on builder error) is an identity issue
-    appended.
-    """
-    issues = [
-        f"{finding.code}: {finding.normalized_path} {finding.message}"
-        for finding in claim_report.findings
-    ]
-    identity = _run_identity_attestation_fixture_only()
-    identity_verdict = identity["verdict"]
-    issues.extend(identity["issues"])
-    return {
-        "pass": claim_report.verdict == "PASS" and identity_verdict == "PASS",
-        "issues": issues,
-        "boundary": (
-            f"semantic_verdict={claim_report.verdict}; identity_verdict={identity_verdict}; "
-            f"inventory={claim_report.inventory.inventory_sha256}; "
-            f"candidates={claim_report.inventory.candidate_count}; "
-            f"parsed={claim_report.parsed_candidates}; skip={claim_report.skipped_candidates}; "
-            f"truncate={claim_report.truncated_candidates}"
-        ),
-    }
-
-
 def cmd_check_release(args):
     """Run release readiness checks used by the stage-release workflow."""
     try:
@@ -21710,15 +19202,7 @@ def cmd_check_release(args):
         pass
 
     skip_execution_gates = getattr(args, "skip_execution_gates", False)
-    # BR-4 / DEC-153 ③: implicit checks for already-published versions use
-    # WARN-only historical gate sequencing. Lineage keeps its requested or
-    # default mode because "released" lineage requires --release-commit.
-    requested_lineage_mode = getattr(args, "lineage_mode", None)
-    lineage_mode = requested_lineage_mode or "candidate"
-    gate_sequence_lineage_mode = lineage_mode
-    if requested_lineage_mode is None and released_history_version(
-            getattr(args, "version", None)):
-        gate_sequence_lineage_mode = "released"
+    lineage_mode = getattr(args, "lineage_mode", None) or "candidate"
     result = check_release_readiness(
         version=getattr(args, "version", None),
         require_changelog=getattr(args, "require_changelog", False),
@@ -21727,17 +19211,18 @@ def cmd_check_release(args):
         lineage_mode=lineage_mode,
         release_commit=getattr(args, "release_commit", None),
         lineage_remote=getattr(args, "lineage_remote", "origin"),
-        gate_sequence_lineage_mode=gate_sequence_lineage_mode,
+        release_unit=getattr(args, "unit", None),
         require_delivery_evidence=getattr(args, "require_delivery_evidence", False),
     )
+    if getattr(args, "json", False):
+        write_cli_json(result, indent=2)
+        if not result["pass"]:
+            sys.exit(1)
+        return
     if "release_replay" in result["details"]:
         sys.exit(result["issues"][0])
-    claim_report = scan_loop_runtime_claims(_loop_runtime_claim_context("product_release"))
-    claim_gate = _loop_runtime_claim_gate_detail(claim_report)
-    result["details"]["loop_runtime_claim_gate"] = claim_gate
-    result["issues"].extend(claim_gate["issues"])
-    # FIX-299: derive the final exit verdict after merging the claim-gate issues.
-    result["pass"] = not result["issues"]
+
+
     print()
     print("=== Release Readiness Check ===")
     if getattr(args, "version", None):
@@ -21745,9 +19230,6 @@ def cmd_check_release(args):
     print(f"  Runtime adapters: {'enabled' if getattr(args, 'runtime_adapters', False) else 'static'}")
     print(f"  Execution gates: {'skipped' if skip_execution_gates else 'enabled'}")
     print(f"  Lineage mode: {lineage_mode}")
-    if gate_sequence_lineage_mode != lineage_mode:
-        print(f"  Gate-sequence lineage mode: {gate_sequence_lineage_mode} "
-              f"(BR-4: already-published version check)")
     for label, detail in result["details"].items():
         if detail.get("skipped"):
             # FEAT-016 / RISK-049 ③: an intentionally not-run gate must be
@@ -21906,221 +19388,6 @@ def cmd_check_loop_role_skills(_args):
             print(f"    - {issue}")
         sys.exit(1)
     print("  [PASS] All review SKILL loop-role contracts are consistent.")
-
-
-def cmd_check_loop_runtime_claims(args):
-    """Run the FIX-197 blocking claim gate and emit a stable JSON report."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    identity_options = (
-        "product_git_repo", "product_git_ref", "product_prefix",
-        "plugin_git_repo", "plugin_git_ref", "plugin_prefix",
-        "host_root", "snapshot_dir", "write_attestation", "compare_attestation",
-    )
-    identity_requested = bool(getattr(args, "require_identity", False) or any(
-        getattr(args, option, None) not in (None, "") for option in identity_options
-    ))
-    if identity_requested:
-        try:
-            _cmd_check_loop_runtime_claims_identity(args)
-        except IdentityAttestationError as exc:
-            payload = {
-                "schema_version": "loop-claim-aggregate/v1",
-                "fixture_only": bool(getattr(args, "fixture_only", False)),
-                "release_authorized": False,
-                "authorized": False,
-                "verdict": "FAIL" if exc.code != "UNKNOWN" else "UNKNOWN",
-                "issues": [exc.code],
-                "detail": exc.detail,
-            }
-            sys.stdout.write(canonical_attestation_json_bytes(payload).decode("utf-8"))
-            sys.exit(1)
-        return
-
-    product_root = Path(args.product_root or ROOT).resolve()
-    host_root = Path(args.claim_project_root or HOST_PROJECT_ROOT).resolve()
-    plugin_home = (PLUGIN_ROOT / "skills/software-project-governance").resolve()
-    report = scan_loop_runtime_claims(ClaimScanContext(
-        product_root=product_root,
-        plugin_home=plugin_home,
-        host_root=host_root,
-        scan_mode=args.scan_mode,
-    ))
-    payload = report.as_dict()
-    if getattr(args, "fixture_identity", False):
-        # FIX-300 dual-caliber agreement: re-run the identity sub-phase
-        # through the exact engine Check-31 assembly (fixture-only
-        # staged_index over PLUGIN_ROOT/`:index` + HOST_PROJECT_ROOT) so
-        # the standalone CLI and the engine produce comparable verdicts on
-        # the same input.  Neither sub-phase's fail-closed rule changes;
-        # the top-level verdict aggregates both.
-        identity = _run_identity_attestation_fixture_only()
-        payload["identity_phase"] = identity["phase"]
-        payload["identity_issues"] = identity["issues"]
-        payload["identity_verdict"] = identity["verdict"]
-        payload["verdict_scope"] = "semantic+identity_fixture"
-        if identity["verdict"] != "PASS":
-            payload["verdict"] = "FAIL"
-    else:
-        # FIX-300: a semantic-only PASS must never be misread as "Check 31
-        # fully green" (EVD-969) — declare what the verdict covers.
-        payload["verdict_scope"] = "semantic_only"
-    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    if payload["verdict"] != "PASS":
-        sys.exit(1)
-
-
-def _cmd_check_loop_runtime_claims_identity(args):
-    """FIX-216 thin explicit-source identity orchestration."""
-    required_names = (
-        "product_git_repo", "product_git_ref", "plugin_git_repo", "plugin_git_ref",
-        "host_root", "snapshot_dir",
-    )
-    missing = [name for name in required_names if not getattr(args, name, None)]
-    if missing:
-        raise IdentityAttestationError("SCHEMA_MISSING", ",".join(missing))
-    if getattr(args, "scan_mode", None) != "product_release":
-        raise IdentityAttestationError("PHASE_DRIFT", "identity requires product_release")
-    if not getattr(args, "fixture_only", False):
-        raise IdentityAttestationError("FIXTURE_ONLY_REQUIRED", "real C is REL-063-owned")
-    write_path = getattr(args, "write_attestation", None)
-    compare_path = getattr(args, "compare_attestation", None)
-    if bool(write_path) == bool(compare_path):
-        raise IdentityAttestationError(
-            "SCHEMA_MISSING", "exactly one of --write-attestation/--compare-attestation is required"
-        )
-    artifact_path = Path(write_path or compare_path).absolute()
-    for source_value in (args.product_git_repo, args.plugin_git_repo, args.host_root):
-        source_root = Path(source_value).resolve(strict=True)
-        if artifact_path == source_root or source_root in artifact_path.parents \
-                or artifact_path in source_root.parents:
-            raise IdentityAttestationError(
-                "ROOT_SOURCE_AMBIGUOUS", "attestation artifact must be outside every scanned root"
-            )
-    product_ref = args.product_git_ref
-    plugin_ref = args.plugin_git_ref
-    if write_path:
-        if product_ref != ":index":
-            raise IdentityAttestationError("PHASE_DRIFT", "write phase requires product index")
-        phase = "staged_index"
-        subject = {"kind": "index", "sha": None}
-        snapshot_label = "staged-index"
-    else:
-        if product_ref == ":index" or plugin_ref == ":index":
-            raise IdentityAttestationError("PHASE_DRIFT", "compare phase forbids index bindings")
-        completed = subprocess.run(
-            ["git", "-C", str(Path(args.product_git_repo)), "rev-parse", "--verify",
-             f"{product_ref}^{{commit}}"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
-        )
-        if completed.returncode:
-            raise IdentityAttestationError("ROOT_SOURCE_UNAVAILABLE", completed.stderr.strip())
-        candidate_sha = completed.stdout.strip()
-        if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", candidate_sha):
-            raise IdentityAttestationError("UNKNOWN", "fixture commit OID invalid")
-        phase = "candidate_commit"
-        subject = {"kind": "commit", "sha": candidate_sha}
-        snapshot_label = f"candidate-{candidate_sha}"
-
-    # FIX-404: same cleanup-crash family as FIX-403 — see the comment on
-    # _run_identity_attestation_fixture_only.  Cleanup failure must degrade
-    # to a no-op and never mask this function's raise/exit contract.
-    temp_value = tempfile.mkdtemp(prefix="fix216-scanner-")
-    try:
-        temporary = Path(temp_value)
-        product_root = materialize_loop_runtime_git_root(
-            Path(args.product_git_repo), product_ref, getattr(args, "product_prefix", ""),
-            temporary / "product",
-        )
-        plugin_home = materialize_loop_runtime_git_root(
-            Path(args.plugin_git_repo), plugin_ref, getattr(args, "plugin_prefix", ""),
-            temporary / "plugin", allow_tree=True,
-        )
-        try:
-            policy = json.loads(
-                (plugin_home / "core/loop-runtime-claim-allowlist.json").read_text(encoding="utf-8")
-            )
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise IdentityAttestationError("ROOT_SOURCE_UNAVAILABLE", f"policy: {exc}") from exc
-        required_rows = policy.get("required_paths")
-        if not isinstance(required_rows, list):
-            raise IdentityAttestationError("SCHEMA_MISSING", "required_paths")
-        required_paths = []
-        for row in required_rows:
-            if not isinstance(row, dict) or set(row) != {"root_owner", "path", "required"} \
-                    or row.get("required") is not True:
-                raise IdentityAttestationError("SCHEMA_UNKNOWN", "required_paths row")
-            required_paths.append((row.get("root_owner"), row.get("path")))
-        snapshot_leaf = Path(args.snapshot_dir) / snapshot_label
-        identity_report = attest_explicit_sources(
-            product_git_repo=args.product_git_repo,
-            product_git_ref=product_ref,
-            product_prefix=getattr(args, "product_prefix", ""),
-            plugin_git_repo=args.plugin_git_repo,
-            plugin_git_ref=plugin_ref,
-            plugin_prefix=getattr(args, "plugin_prefix", ""),
-            host_root=args.host_root,
-            snapshot_dir=snapshot_leaf,
-            required_paths=required_paths,
-            phase=phase,
-            subject=subject,
-            scan_mode="product_release",
-        )
-        scanner_report = scan_loop_runtime_claims(ClaimScanContext(
-            product_root=product_root,
-            plugin_home=plugin_home,
-            host_root=snapshot_leaf,
-            scan_mode="product_release",
-        ))
-        semantic_report = scanner_report.as_s1_dict()
-        aggregate = aggregate_claim_reports(
-            semantic_report, identity_report, fixture_only=True,
-            performance_budget_status="PENDING",
-        )
-        transition = None
-        if write_path:
-            attestation_sha256 = write_attestation(write_path, identity_report)
-        else:
-            staged = load_attestation(compare_path)
-            transition = compare_identity_attestations(
-                staged, identity_report, fixture_only=True,
-                verified_fixture_commit=candidate_sha,
-            )
-            attestation_sha256 = hashlib.sha256(
-                canonical_attestation_json_bytes(staged)
-            ).hexdigest()
-        issues = list(aggregate["issues"])
-        issues.extend(
-            f"{finding.code}:{finding.normalized_path}" for finding in scanner_report.findings
-        )
-        if transition is not None:
-            issues.extend(transition["issues"])
-        non_authorizing = {"PERFORMANCE_BUDGET_PENDING"}
-        blocking = [issue for issue in dict.fromkeys(issues) if issue not in non_authorizing]
-        verdict = "PASS" if scanner_report.verdict == "PASS" \
-            and identity_report["identity_verdict"] == "PASS" and not blocking else "FAIL"
-        payload = {
-            "schema_version": "loop-claim-aggregate/v1",
-            "phase": phase,
-            "fixture_only": True,
-            "release_authorized": False,
-            "authorized": False,
-            "performance_budget_status": "PENDING",
-            "verdict": verdict,
-            "issues": list(dict.fromkeys(issues)),
-            "attestation_sha256": attestation_sha256,
-            "semantic_report": semantic_report,
-            "identity_attestation": identity_report,
-            "aggregate": aggregate,
-            "transition": transition,
-        }
-        sys.stdout.write(canonical_attestation_json_bytes(payload).decode("utf-8"))
-        if verdict != "PASS":
-            sys.exit(1)
-    finally:
-        shutil.rmtree(temp_value, ignore_errors=True)
 
 
 def cmd_check_sequential_ids(args):
@@ -22684,11 +19951,10 @@ def cmd_check_lifecycle_registry(args):
     registry, load_issues = _load_lifecycle_registry()
     active_mode = registry.get("active_lifecycle_mode", "<unreadable>") if isinstance(registry, dict) else "<unreadable>"
     default_mode = registry.get("default_lifecycle_mode", "<unreadable>") if isinstance(registry, dict) else "<unreadable>"
-    issues = load_issues or check_lifecycle_registry()
+    issues = load_issues or check_lifecycle_registry(registry=registry)
     print("\n=== Lifecycle Registry Check ===")
     print(f"  Active lifecycle mode: {active_mode}")
     print(f"  Default lifecycle mode: {default_mode}")
-    print("  Runtime behavior: schema-only; flow-unit runtime is not activated")
     if issues:
         print(f"  Result: FAILED — {len(issues)} issue(s)")
         for issue in issues[:20]:
@@ -22698,111 +19964,19 @@ def cmd_check_lifecycle_registry(args):
         if getattr(args, "fail_on_issues", False):
             sys.exit(1)
     else:
-        print("  Result: PASSED — lifecycle registry is schema-only and classic-phase-gate remains active")
+        print("  Result: PASSED — work-unit routes and evidence requirements resolve")
     print()
 
 
 def cmd_check_flow_unit_runtime(args):
-    """Run optional flow-unit runtime hot-state guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    """Validate the same project snapshot consumed by the session and dashboard."""
+    from governance_readers import loop_state
     fixture = getattr(args, "fixture", None)
-    root = ROOT
-    if fixture:
-        fixture_path = Path(fixture)
-        root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
-    context = discover_flow_unit_runtime_context(root)
-    issues = check_flow_unit_runtime(root)
-    print("\n=== Flow Unit Runtime Check ===")
-    print(f"  Root: {_display_path(root, ROOT)}")
-    print(f"  Runtime state: {context['status']} ({context['path']})")
-    print(f"  Workflow model: {context['workflow_model']}")
-    print(f"  Active lanes: {context['active_lanes']}")
-    print(f"  Rollup status: {context['rollup_status']}")
-    print(f"  Blocked downstream units: {context['blocked_downstream_units']}")
-    print(f"  Loop counters: {context['loop_counters']}")
-    print(f"  Boundary: {context['no_overclaim_boundary']}")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — flow-unit runtime hot state is visibility-only or safely absent")
-    print()
-
-
-def cmd_dynamic_lifecycle_migration(args):
-    """Classic -> loop-engineering migration entry (FX-191/FIX-195).
-
-    ``--apply`` delegates to ``loop_migration.apply_migration``. FIX-195 then
-    validates the proposed payload before any host write; the current
-    experimental-scaffolding payload is rejected by the canonical validator
-    and this command exits non-zero. The ``--dry-run`` preview is preserved.
-    """
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    # Delegate before the preview guard. FIX-195 keeps the current proposal
-    # fail-closed in apply_migration before any host write.
-    if getattr(args, "apply", False):
-        from loop_migration import apply_migration  # deferred import (FX-191)
-        result = apply_migration(target_root=getattr(args, "target", None))
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        if not result.get("applied"):
-            sys.exit(1)
-        return
-    # --dry-run path (preserved, unchanged from 0.55.0).
-    if not getattr(args, "dry_run", False):
-        print("ERROR: dynamic-lifecycle-migration requires explicit --dry-run or --apply")
-        sys.exit(1)
-    preview = build_dynamic_lifecycle_migration_preview(getattr(args, "target", None))
-    print(json.dumps(preview, ensure_ascii=False, indent=2))
-    if preview["validation_issues"] and getattr(args, "fail_on_issues", False):
-        sys.exit(1)
-
-
-def cmd_loop_engineering_migration(args):
-    """Thin entry for loop-engineering migration (FX-191).
-
-    User-facing command that routes ``--apply`` / ``--rollback`` / dry-run
-    to the loop_migration module. Kept thin (<=20 lines) — all logic lives
-    in loop_migration.
-    """
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    from loop_migration import apply_migration, rollback_migration
-    if getattr(args, "apply", False):
-        result = apply_migration(
-            target_root=getattr(args, "target", None),
-            project_type=getattr(args, "project_type", None),
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        if not result.get("applied"):
-            sys.exit(1)
-    elif getattr(args, "rollback", False):
-        result = rollback_migration(
-            target_root=getattr(args, "target", None),
-            version=getattr(args, "version", None),
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        if not result.get("rolled_back"):
-            sys.exit(1)
-    else:  # dry-run / preview
-        result = build_dynamic_lifecycle_migration_preview(
-            getattr(args, "target", None)
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        if result.get("validation_issues") and getattr(args, "fail_on_issues", False):
-            sys.exit(1)
+    root = (ROOT / Path(fixture)) if fixture else HOST_PROJECT_ROOT
+    report = loop_state(root)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    if report["state"] == "invalid":
+        sys.exit(2)
 
 
 def cmd_check_host_capability_context(args):
@@ -22937,89 +20111,37 @@ def cmd_check_loop_health(args):
     except Exception:
         pass
     from loop_health import check_loop_health
-    result = check_loop_health(getattr(args, "target", None))
-    print("\n=== Loop Health Check (velocity + latency) ===")
+    result = check_loop_health(getattr(args, "target", None) or HOST_PROJECT_ROOT)
+    print("\n=== Loop Health Check (pause-point declarations) ===")
     findings = result.get("findings", [])
     for f in findings[:25]:
         print(f"  [{f.get('severity','?')}] {f.get('pause_point','')}: {f.get('message','')}")
     blocking = [f for f in findings if f.get("severity") == "FAIL"]
     print(f"\n  Result: {len(blocking)} BLOCKING, {len(findings)-len(blocking)} advisory")
+    telemetry = result["telemetry"]
+    print(f"  Loop observations: {telemetry['status']} (loop-telemetry --json)")
     if blocking and getattr(args, "fail_on_issues", False):
         sys.exit(1)
-    print()
 
 
 def _format_rollup(result):
-    """Format loop_state rollup for CLI display (FX-193 helper)."""
-    print("\n=== Loop State Rollup (per-flow-unit) ===")
-    units = result.get("units", [])
-    if not units:
-        print(f"  {result.get('message', 'No flow units found.')}")
-    else:
-        print(f"  {'Unit':<30} {'Tier':<10} {'Round':<8} {'Phase':<10} {'Gate':<15} {'Fuse':<6}")
-        print(f"  {'-'*30} {'-'*10} {'-'*8} {'-'*10} {'-'*15} {'-'*6}")
-        for u in units:
-            tier = u.get("active_loop_tier") or "?"
-            phase = u.get("agent_phase") or "?"
-            gate = u.get("last_gate_result") or "?"
-            print(f"  {u['flow_unit_id']:<30} {tier:<10} "
-                  f"{u.get('loop_count', 0):<8} {phase:<10} "
-                  f"{gate:<15} {'!' if u.get('fuse_tripped') else 'ok':<6}")
-    summary = result.get("summary", {})
-    print(f"\n  Total units: {summary.get('total_units', 0)} | "
-          f"Active loops: {summary.get('active_loops', 0)} | "
-          f"By tier: {summary.get('by_tier', {})}")
-    print(f"  No global stage: {result.get('no_global_stage', True)}")
-    print()
+    from bootstrap_aggregate import format_loop_lines
 
-
+    print("\n".join(format_loop_lines(result)))
 def _format_telemetry(report, json_out=False):
-    """Format a loop_telemetry MetricsReport for CLI display (FEAT-008 helper).
-
-    The human-readable form prints ``status: value`` per metric so ``unknown``
-    is visually distinct from ``0``. The JSON form serializes the report to a
-    plain dict (MetricValue dataclasses → dict). Pure presentation only.
-    """
-    import dataclasses as _dc
-    print("\n=== Loop Telemetry (honest flow/DORA from event log) ===")
+    from dataclasses import asdict
     if json_out:
-        def _mv_dict(mv):
-            return {
-                "name": mv.name, "status": mv.status, "value": mv.value,
-                "unit": mv.unit, "sample_size": mv.sample_size,
-                "reason": mv.reason, "window": mv.window,
-                "percentiles": mv.percentiles,
-            }
-        payload = {
-            "window": report.window, "computed_at": report.computed_at,
-            "flow": {k: _mv_dict(v) for k, v in report.flow.items()},
-            "dora": {k: _mv_dict(v) for k, v in report.dora.items()},
-            "units_considered": report.units_considered,
-            "event_count": report.event_count,
-            "diagnostics": report.diagnostics,
-            "scope_note": report.scope_note,
-        }
-        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        write_cli_json(asdict(report), indent=2)
         return
-    print(f"  Window: {report.window} | units: {report.units_considered} "
-          f"| events: {report.event_count} | open_fuse_trips: "
-          f"{report.diagnostics.get('open_fuse_trips', 0)}")
-    for section, label in (("flow", "Flow"), ("dora", "DORA (loop-scoped)")):
-        print(f"\n  --- {label} metrics ---")
-        for name, mv in getattr(report, section).items():
-            if mv.status == "measured":
-                val = mv.value
-                if isinstance(val, dict):
-                    val = "median={0:.1f} p90={1:.1f} n={2}".format(
-                        val.get("median", 0), val.get("p90", 0),
-                        val.get("sample_size", 0))
-                elif isinstance(val, float):
-                    val = "{0:.4g}".format(val)
-                print(f"    {name}: {val} ({mv.unit}, n={mv.sample_size})")
-            else:
-                print(f"    {name}: UNKNOWN — {mv.reason}")
-    print(f"\n  Scope: {report.scope_note}")
-    print()
+    print(f"Loop Telemetry ({report.window}): {report.units_considered} units, "
+          f"{report.event_count} events")
+    for name, metric in report.flow.items():
+        value = f"{metric.value} {metric.unit}" if metric.status == "measured" else f"unknown ({metric.reason})"
+        print(f"  {name}: {value}")
+    for observation in report.observations:
+        if "resolved_at" in observation and observation["resolved_at"] is None:
+            print(f"  Waiting: {observation['unit_id']} since {observation['timestamp']}")
+    print(report.scope_note)
 
 
 def cmd_loop_rollup(args):
@@ -23029,7 +20151,28 @@ def cmd_loop_rollup(args):
     except Exception:
         pass
     from loop_engine import rollup_loop_state
-    _format_rollup(rollup_loop_state(getattr(args, "target", None)))
+    view = rollup_loop_state(getattr(args, "target", None) or HOST_PROJECT_ROOT)
+    _format_rollup(view)
+    if view.get("state") == "invalid":
+        sys.exit(2)
+
+
+def write_cli_json(payload, *, indent=None):
+    """Write one JSON response from a governance command."""
+    json.dump(payload, sys.stdout, ensure_ascii=False, indent=indent)
+    sys.stdout.write("\n")
+
+
+def cmd_loop(args):
+    from loop_workflow import run
+    try:
+        result = run(HOST_PROJECT_ROOT, args)
+    except (OSError, ValueError) as exc:
+        write_cli_json({"error": str(exc)})
+        sys.exit(2)
+    write_cli_json(result, indent=2)
+    if result.get("state") == "invalid" or (args.action == "verify" and result["decision"] in ("iterate", "escalate")):
+        sys.exit(2)
 
 
 def cmd_loop_telemetry(args):
@@ -23046,8 +20189,7 @@ def cmd_loop_telemetry(args):
         pass
     from loop_event_log import read_events
     from loop_telemetry import compute_metrics
-    from resolve_entry import resolve_host_root
-    root = getattr(args, "target", None) or resolve_host_root(None)
+    root = getattr(args, "target", None) or HOST_PROJECT_ROOT
     log_path = Path(root) / ".governance" / "loop-event-log.jsonl" if root else None
     events = read_events(log_path=log_path) if log_path else []
     win = getattr(args, "window", None)
@@ -23320,9 +20462,10 @@ def cmd_review_record(args):
         gate_id=args.gate,
         scope=getattr(args, "scope", "full"),
         delta_base=getattr(args, "delta_base", None),
-        bind_files=getattr(args, "bind_file", None) or (),
+        bind_files=getattr(args, "bind_file", None) or (), bind_tree=getattr(args, "bind_tree", None),
         abort_reason=getattr(args, "abort_reason", None),
         root=HOST_PROJECT_ROOT,
+        require_loop=True, record_only=getattr(args, "record_only", False),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if summary.get("error"):
@@ -24739,14 +21882,39 @@ def cmd_change_triage(args):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    from change_triage import derive_project_current_version, run_triage, split_cli_items
-    if not SAMPLE_PATH.is_file():
-        print(
-            "change-triage: plan-tracker.md not found at {0}".format(SAMPLE_PATH),
-            file=sys.stderr,
-        )
+    from change_triage import derive_project_current_version, run_triage, split_cli_items, split_dep_ids
+    from loop_workflow import start, _payload, runtime_path
+    plan_tracker_text = SAMPLE_PATH.read_text(encoding="utf-8") if SAMPLE_PATH.is_file() else ""
+    if not args.title:
+        args.title = next((r["title"] for r in parse_task_table_rows(plan_tracker_text)
+                           if r["id"] == args.task and r.get("title")), "")
+    dependencies = list(split_dep_ids(args.depends_on))
+    declaration = dict(unit_id=args.task, goal=args.title, acceptance=args.acceptance,
+                       tier=getattr(args, "tier", "inner"), gate=getattr(args, "gate", None),
+                       parent=getattr(args, "parent", None), dependencies=dependencies)
+    record_path = GOVERNANCE_DIR / "change-triage" / (args.task + ".json")
+    try:
+        start(HOST_PROJECT_ROOT, **declaration, dry_run=True)
+        state = _payload(runtime_path(HOST_PROJECT_ROOT))
+        statuses = {u["flow_unit_id"]: u["runtime_status"] for u in state["flow_units"]}
+        if record_path.is_file():
+            stored = json.loads(record_path.read_text(encoding="utf-8"))
+            if (stored.get("loop_intake") != declaration or stored.get("files") != split_cli_items(args.files)
+                    or stored.get("priority") != args.priority or stored.get("demand_source") != args.demand_source
+                    or stored.get("reason") != args.reason or stored.get("target_version") != args.version
+                    or stored.get("demand_basis") != args.demand_basis
+                    or stored.get("prior_art", []) != split_cli_items(args.prior_art)):
+                raise ValueError("an immutable intake record already exists with different scope")
+            issues = _triage_write_structure_guard(GOVERNANCE_DIR / "evidence-log.md", record_path,
+                                                  record_id="TRIAGE-" + args.task)
+            if issues:
+                raise ValueError("; ".join(issues))
+            unit = start(HOST_PROJECT_ROOT, **declaration)
+            write_cli_json({"record_path": str(record_path), "unit": unit["flow_unit_id"], "replayed": True})
+            return
+    except (ValueError, OSError) as exc:
+        write_cli_json({"error": str(exc)})
         sys.exit(2)
-    plan_tracker_text = SAMPLE_PATH.read_text(encoding="utf-8")
     # FIX-288 ⑨: project current version from the host roadmap — two-layer
     # version semantics (workflow version ≠ project version).
     current_version = derive_project_current_version(plan_tracker_text)
@@ -24765,10 +21933,10 @@ def cmd_change_triage(args):
         prior_art=split_cli_items(getattr(args, "prior_art", None)),
         plan_tracker_text=plan_tracker_text,
         current_version=current_version,
-        governance_dir=GOVERNANCE_DIR,
+        governance_dir=GOVERNANCE_DIR, native_intake=declaration, native_status=statuses,
     )
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
     if summary.get("error"):
+        write_cli_json(summary)
         sys.exit(2)
     # FIX-278 G3: write-time structural guard over the artifacts just written.
     # ``record_id`` identifies the JUST-WRITTEN evidence row (append semantics:
@@ -24790,6 +21958,13 @@ def cmd_change_triage(args):
               "可能为旧行（列数漂移）——写入行符合当前格式时先核对标准行本身"
               .format(summary.get("task_id", "?")), file=sys.stderr)
         sys.exit(2)
+    try:
+        unit = start(HOST_PROJECT_ROOT, **declaration)
+    except (OSError, ValueError) as exc:
+        write_cli_json({**summary, "error": str(exc)})
+        sys.exit(2)
+    write_cli_json({**summary, "unit": unit["flow_unit_id"]}, indent=2)
+
 
 
 def cmd_demand_source_revise(args):
@@ -25835,7 +23010,7 @@ def cmd_web_console(args):
             api_popen_kwargs["start_new_session"] = True
         try:
             api_process = subprocess.Popen(
-                [sys.executable, str(api_server_script), "--port", str(api_port)],
+                [sys.executable, str(api_server_script), "--port", str(api_port), "--project-root", str(HOST_PROJECT_ROOT)],
                 **api_popen_kwargs,
             )
             api_started = True
@@ -26040,11 +23215,13 @@ def _build_cli_parser(parser_argv=()):
 
     # gate <id>
     gate_p = subparsers.add_parser("gate", help="Show details for a specific Gate")
+    gate_p.add_argument("--unit")
     gate_p.add_argument("gate_id", help="Gate ID (e.g. G3, 3, g5)")
 
     # gate-check <id> (auto-judge)
     gc_p = subparsers.add_parser("gate-check", help="Auto-judge a Gate's check items (B-level automation)")
     gc_p.add_argument("gate_id", help="Gate ID (e.g. G3, 3, g5)")
+    gc_p.add_argument("--review", help="Scoped review record id")
     gc_p.add_argument("--unit", default=None,
                       help="Flow-unit id — route the rendered verdict to the "
                            "loop engine (Wiring B, FIX-236.2)")
@@ -26052,7 +23229,7 @@ def _build_cli_parser(parser_argv=()):
                       help="Exit with non-zero code if gate is blocked")
 
     # gates (list all)
-    subparsers.add_parser("gates", help="List all Gates with current status")
+    subparsers.add_parser("gates", help="Show the current gate per work unit").add_argument("--unit")
 
     # stage <name>
     stage_p = subparsers.add_parser("stage", help="Show workflow SKILL.md for a stage")
@@ -26074,7 +23251,7 @@ def _build_cli_parser(parser_argv=()):
                          help="Detail level for --summary-only (REQ-145.7 / FIX-278 G1)")
     check_p.add_argument("--product-gates", action="store_true",
                          help="Run plugin product self-checks in host mode "
-                              "(Check 31/28o-28r/11/12/28b etc., FIX-270 — "
+                              "(Check 28o-28r/11/12/28b etc., FIX-270 — "
                               "skipped by default when host/plugin roots diverge)")
     check_p.add_argument("--quick", action="store_true",
                          help="Quick scan (FX-195 Slice-2): run only the FEAT-025 "
@@ -26095,12 +23272,16 @@ def _build_cli_parser(parser_argv=()):
     # execution-packet
     xp_p = subparsers.add_parser(
         "execution-packet",
-        help="Generate short AI execution packets for active P0/P1 tasks",
+        help="Prepare a selected handoff, or refresh previously selected packets",
     )
     xp_p.add_argument("--write", action="store_true",
                       help="Write .governance/execution-packets.json")
     xp_p.add_argument("--task", action="append",
                       help="Limit packet generation to a task id; may be repeated")
+    xp_p.add_argument("--contract", action="append", choices=("product_success_contract", "vertical_slice", "interruption_policy"),
+                      help="Include a contract specifically required by the receiving party")
+    xp_p.add_argument("--quality-dimension", action="append", choices=QUALITY_BUDGET_DIMENSIONS,
+                      help="Include the specified contractual quality threshold")
     xp_p.add_argument("--budget", type=int, default=None,
                       help="Advisory step budget (FEAT-092): stamp "
                            "budget.max_steps (positive integer) on the "
@@ -26133,6 +23314,7 @@ def _build_cli_parser(parser_argv=()):
     # check-release
     cr_p = subparsers.add_parser("check-release",
                                  help="Run release readiness checks used by stage-release")
+    cr_p.add_argument("--json", action="store_true", help="Output the scoped release checks as JSON")
     cr_p.add_argument("--version",
                       help="Release version to validate (semver X.Y.Z)")
     cr_p.add_argument("--require-changelog", action="store_true",
@@ -26144,6 +23326,7 @@ def _build_cli_parser(parser_argv=()):
     cr_p.add_argument("--require-delivery-evidence", action="store_true",
                       help="Require the local delivery contract and accepted artifact evidence, "
                            "including in released-mode verification")
+    cr_p.add_argument("--unit", help="Release work unit bound to the requested version")
     cr_p.add_argument("--lineage-mode", choices=("candidate", "released"), default=None,
                       help="candidate skips pre-tag validation; released requires local and remote tag lineage. "
                            "Default (unset): candidate — except that checks against an ALREADY-PUBLISHED "
@@ -26442,7 +23625,7 @@ def _build_cli_parser(parser_argv=()):
     # check-lifecycle-registry (FIX-135)
     clr_p = subparsers.add_parser(
         "check-lifecycle-registry",
-        help="Check dynamic lifecycle registry schema while keeping classic-phase-gate active",
+        help="Validate the active work-unit routes, local gates and evidence catalog",
     )
     clr_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit with non-zero code if lifecycle registry is incomplete or activates runtime behavior")
@@ -26459,67 +23642,7 @@ def _build_cli_parser(parser_argv=()):
     cfur_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if flow-unit runtime hot state is invalid")
 
-    # dynamic-lifecycle-migration (FIX-139)
-    dlm_p = subparsers.add_parser(
-        "dynamic-lifecycle-migration",
-        aliases=["dynamic-flow-gate-migration"],
-        help="Print a read-only classic-phase-gate to dynamic-flow-gate migration preview",
-    )
-    dlm_p.add_argument(
-        "--target",
-        required=True,
-        help="Project root/fixture to inspect without mutating it",
-    )
-    dlm_p.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Required in 0.55.0; prints a structured migration preview only",
-    )
-    dlm_p.add_argument(
-        "--apply",
-        action="store_true",
-        help="FX-191: delegates to loop_migration.apply_migration (writes runtime.json + evidence row, backs up first)",
-    )
-    dlm_p.add_argument("--fail-on-issues", action="store_true",
-                       help="Exit with non-zero code if preview is blocked")
 
-    # loop-engineering-migration (FX-191)
-    lem_p = subparsers.add_parser(
-        "loop-engineering-migration",
-        help="Apply / rollback / preview classic -> loop-engineering migration (0.65.0)",
-    )
-    lem_p.add_argument(
-        "--target",
-        default=None,
-        help="Host project root to migrate (defaults to cwd).",
-    )
-    lem_p.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print a read-only preview (default when no mode flag is given).",
-    )
-    lem_p.add_argument(
-        "--apply",
-        action="store_true",
-        help="Apply the migration: backs up plan-tracker + evidence-log, writes runtime.json, appends MIGRATION row.",
-    )
-    lem_p.add_argument(
-        "--rollback",
-        action="store_true",
-        help="Roll back the most recent migration (or --version): restores files, removes runtime.json, appends ROLLBACK row.",
-    )
-    lem_p.add_argument(
-        "--version",
-        default=None,
-        help="Select a specific migration version to roll back.",
-    )
-    lem_p.add_argument(
-        "--project-type",
-        default=None,
-        help="Project type for flow-unit derivation (apply only): game/cli-tool/library/web-app/mobile-app/ai-agent-plugin/internal-script.",
-    )
-    lem_p.add_argument("--fail-on-issues", action="store_true",
-                       help="Exit with non-zero code if dry-run preview is blocked")
 
     # check-host-capability-context (FIX-117)
     chc_p = subparsers.add_parser(
@@ -26574,57 +23697,19 @@ def _build_cli_parser(parser_argv=()):
     # check-loop-health (FX-192 / ADR §9.5 — advisory-only, NOT a Check 28 sub-item)
     clh_p = subparsers.add_parser(
         "check-loop-health",
-        help="Loop-engineering velocity/latency health (ADR §9.5; advisory in 0.65.0)",
+        help="Check pause-point declarations and report whether unit observations are available",
     )
     clh_p.add_argument("--target", default=None,
                        help="Host project root (defaults to verify_workflow ROOT)")
     clh_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit non-zero if any blocking (FAIL) findings are present")
 
-    # check-loop-runtime-claims (FIX-197 / DEC-106 — release blocking)
-    clrc_p = subparsers.add_parser(
-        "check-loop-runtime-claims",
-        help="Fail-closed semantic Loop runtime capability claim gate",
-    )
-    clrc_p.add_argument("--product-root", default=None,
-                        help="Product repository or installed plugin root")
-    clrc_p.add_argument("--project-root", dest="claim_project_root", default=None,
-                        help="Explicit governed host root")
-    clrc_p.add_argument("--scan-mode", choices=("product_release", "installed_host"),
-                        default="product_release")
-    clrc_p.add_argument("--fail-on-issues", action="store_true",
-                        help="Compatibility flag; blocking semantic findings always exit non-zero")
-    clrc_p.add_argument("--product-git-repo", default=None,
-                        help="Explicit product Git repository for FIX-216 identity mode")
-    clrc_p.add_argument("--product-git-ref", default=None,
-                        help="Exact product commit or :index")
-    clrc_p.add_argument("--product-prefix", default="",
-                        help="Normalized product tree prefix")
-    clrc_p.add_argument("--plugin-git-repo", default=None,
-                        help="Explicit plugin Git repository for FIX-216 identity mode")
-    clrc_p.add_argument("--plugin-git-ref", default=None,
-                        help="Exact plugin commit or :index")
-    clrc_p.add_argument("--plugin-prefix", default="",
-                        help="Normalized plugin tree prefix")
-    clrc_p.add_argument("--host-root", default=None,
-                        help="Explicit host workspace root to snapshot")
-    clrc_p.add_argument("--snapshot-dir", default=None,
-                        help="Artifact parent outside all scanned roots")
-    attestation_mode = clrc_p.add_mutually_exclusive_group()
-    attestation_mode.add_argument("--write-attestation", default=None,
-                                  help="Write exact staged-index I1 artifact")
-    attestation_mode.add_argument("--compare-attestation", default=None,
-                                  help="Compare exact candidate tree with staged I1 artifact")
-    clrc_p.add_argument("--require-identity", action="store_true",
-                        help="Require FIX-216 independent identity aggregation")
-    clrc_p.add_argument("--fixture-identity", action="store_true",
-                        help="FIX-300: also run the identity sub-phase through the "
-                             "engine Check-31 fixture assembly (staged_index over the "
-                             "plugin Git index + HOST_PROJECT_ROOT) and aggregate its "
-                             "verdict, so the standalone CLI is directly comparable "
-                             "with the engine caliber on the same input")
-    clrc_p.add_argument("--fixture-only", action="store_true",
-                        help="Mark disposable FIX-216 evidence non-authorizing")
+
+
+    loop_p = subparsers.add_parser("loop", help="Work in nested goal and evidence-bound loops")
+    if "loop" in parser_argv:
+        from loop_workflow import add_arguments
+        add_arguments(loop_p)
 
     # loop-rollup (FX-193 — per-flow-unit loop_state rollup; RISK-037 criterion 2)
     lr_p = subparsers.add_parser(
@@ -26634,10 +23719,10 @@ def _build_cli_parser(parser_argv=()):
     lr_p.add_argument("--target", default=None,
                       help="Host project root (defaults to verify_workflow ROOT)")
 
-    # loop-telemetry (FEAT-008 / ADR-015 — honest flow/DORA from event log; 0.69.0)
+    # Unit observations from the host event log.
     lt_p = subparsers.add_parser(
         "loop-telemetry",
-        help="Honest flow/DORA metrics from loop-event-log.jsonl (ADR-015; 0.69.0)",
+        help="Show unit completions, rework and observed waits from loop-event-log.jsonl",
     )
     lt_p.add_argument("--target", default=None,
                       help="Host project root (defaults to HOST_PROJECT_ROOT; RISK-040)")
@@ -26811,6 +23896,7 @@ def _build_cli_parser(parser_argv=()):
                             "the record, FEAT-094)")
     rr_p.add_argument("--reviewer", default=None,
                       help="Reviewer/agent name")
+    rr_p.add_argument("--record-only", action="store_true", help="Archive an independent review without a gate decision")
     rr_p.add_argument("--unit", default=None,
                       help="Flow-unit id (wiring; optional — else registry mapping)")
     rr_p.add_argument("--gate", default=None,
@@ -26824,6 +23910,7 @@ def _build_cli_parser(parser_argv=()):
     rr_p.add_argument("--delta-base", default=None,
                       help="Delta anchor for --scope delta (FEAT-091): "
                            "prev-round review report path or diff anchor")
+    rr_p.add_argument("--bind-tree", help="Full Git tree OID declared in the signed review report")
     rr_p.add_argument("--bind-file", action="append", default=None,
                       metavar="PATH",
                       help="FEAT-094: pin one reviewed repo file with a "
@@ -26859,6 +23946,9 @@ def _build_cli_parser(parser_argv=()):
                         help="New task id (PREFIX-NNN, e.g. FIX-241)")
     ctri_p.add_argument("--title", default="",
                         help="One-line task title")
+    ctri_p.add_argument("--tier", choices=("setup", "inner", "middle", "outer"), default="inner")
+    ctri_p.add_argument("--gate")
+    ctri_p.add_argument("--parent")
     ctri_p.add_argument("--priority", required=True,
                         choices=["P0", "P1", "P2"],
                         help="Proposed priority (determined with in-flight + "

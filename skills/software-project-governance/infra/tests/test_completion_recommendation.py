@@ -255,12 +255,13 @@ class ContractPinningTests(unittest.TestCase):
         `/governance` router layer into the on-demand
         `commands/governance/snapshot-schema.md`; the router must point at it."""
         root = _INFRA_DIR.parent.parent.parent
-        text = (root / "commands" / "governance" / "snapshot-schema.md"
-                ).read_text(encoding="utf-8")
+        schema = root / "commands" / "governance" / "snapshot-schema.md"
+        text = schema.read_text(encoding="utf-8")
         self.assertIn("下次会话优先级", text)
         self.assertIn("RECO-", text)
         router = (root / "commands" / "governance.md").read_text(encoding="utf-8")
-        self.assertIn("commands/governance/snapshot-schema.md", router)
+        self.assertIn(f"`{schema.parent.relative_to(root).as_posix()}/`", router)
+        self.assertIn(f"`{schema.name}`", router)
 
 
 if __name__ == "__main__":

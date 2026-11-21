@@ -1,19 +1,21 @@
 # Software Project Governance
 
-> AI coding delivery trust layer for evidence-backed planning, review, risk, quality, and release control.
+> Govern AI coding work in nested loops, from a local fix to independent product acceptance and authorized release.
 
-Software Project Governance helps AI coding agents keep delivery trustworthy while you stay focused on product and technical decisions. It is designed for marketplace reviewers, AI coding users, and teams who need a repeatable way to stop drift, missing evidence, weak review loops, and premature release claims.
+Software Project Governance keeps each work unit tied to the user's goal and acceptance criteria. When a session resumes, the agent reads the unit, its parent, its current loop and its latest evidence. The role responsible for the next action can then repair a failed result, review the deliverable or ask the user for a decision.
 
 ## Marketplace Review Ready
 
 Use this workflow when your AI coding setup needs:
 
 - **Evidence-backed delivery**: every meaningful task can carry facts about what changed, why it changed, how it was verified, and what remains risky.
-- **Gate and risk control**: stage gates, task status, risks, decisions, and release readiness stay connected instead of living in scattered chat memory.
+- **Gates within each loop.** A gate checks the evidence and authorization required for this unit's current action. A failed check returns work to the responsible unit for repair and another attempt.
 - **Reviewer separation with degraded-mode honesty**: the workflow distinguishes real independent review from degraded or environment-dependent execution, and does not present every agent as fully supported.
-- **5-minute orientation for new users**: start with `/governance`, initialize `.governance/`, then let the agent resume state, check gates, and surface only critical decisions.
+- **Getting started.** Open `/governance` and initialize `.governance/`. On return, use `loop status --unit <id>` to see the current attempt, its evidence and the next action.
 
 ## Release and validation
+
+For the source layout, runtime entry points and project data locations, see the [repository navigation](https://github.com/peterwangze/software-project-governance/blob/master/project/references/architecture.md#当前目录导航). The [version history](https://github.com/peterwangze/software-project-governance/blob/master/project/CHANGELOG.md) records release changes.
 
 See the [release checklist](docs/release/release-checklist-0.99.0.md) and [rollback plan](docs/release/rollback-plan-0.99.0.md) for the current release. Earlier reviews, experiment results and release checklists remain available in the [project history](https://github.com/peterwangze/software-project-governance/tree/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs).
 
@@ -90,7 +92,7 @@ The first success path is intentionally small: get one local trust signal before
 1. Install through one of the paths above.
 2. Open your project root in your AI coding environment.
 3. Run `/governance`; if your environment exposes status directly, the same first signal is the status output.
-4. Look for the **Delivery Trust Snapshot**: goal, stage, gate/setup status, risk, evidence, next action, preset guidance, verification signal, and no-overclaim boundary.
+4. Look for the **Delivery Trust Snapshot**: the intended outcome, current work unit, outstanding evidence, blockers and next action.
 5. For a local demo-only check that needs no external credentials, run:
 
 ```bash
@@ -100,6 +102,8 @@ python skills/software-project-governance/infra/verify_workflow.py first-run-dem
 The snapshot is the first trust signal: it proves the workflow can show what it knows, what remains missing, and the next evidence-backed action. It is not a claim of official approval, marketplace approval, universal/full runtime support, or 1.0.0 production-ready status.
 
 The original first-session study recorded local_demo=PASS and external_pilot=NOT_MEASURED. [First-session measurement](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/first-session-measurement-0.43.0.md).
+
+For a real task, give the work unit the user's words with `loop start --intent` and describe the observable result with `--acceptance`. If a trial changes the approach, use `loop learn --kind decision` to keep its evidence and repeat the original acceptance check. After delivery, record feedback with `--kind opportunity`. A later session can inspect the proposal and its success criteria with `loop status --unit <id> --json`, then select it for a new work unit. [Worked invoice reconciliation example](skills/software-project-governance/core/lifecycle.md)
 
 ## Optional Local Web Console
 
@@ -174,7 +178,7 @@ For full Chinese installation details and daily usage guidance, continue below.
 你的 AI 编程助手（Claude / Codex / 其他）安装这个工作流后，会自动帮你做这些事：
 
 - 每完成一个任务，**自动记录证据**（改了什么、为什么改、怎么验证的）
-- 每推进一个阶段，**自动检查 Gate**（有没有遗漏、质量达标没）
+- 一次修改、一次交付或一轮运营反馈需要作决定时，核对**本轮的工件、独立回执和待验条件**
 - 遇到方向选择时，**帮你列出选项和后果**，你做判断
 - 风险、决策、计划变更——**全程留痕，可复盘**
 
@@ -184,7 +188,7 @@ For full Chinese installation details and daily usage guidance, continue below.
 
 本工作流对「自动/看护」的承诺按 [plugin-contract.md 三级划分](skills/software-project-governance/core/protocol/plugin-contract.md)；**禁止用笼统的「自动」一词同时指向 A 级与 C 级能力**（plugin-contract.md L114 禁令——README 和对外文档必须显式说明当前各项能力处于哪一级）：
 
-- **A 级（Agent Protocol Automation）**：行为协议自动化——agent 按协议纪律自动执行。本 README「一句话说明」「日常体验」中的自动承诺（「过程管理全自动」「自动记录证据」「自动检查 Gate」「工作流自动做的事」「记录更新、文件编辑、状态跟踪——全自动」等）与会话内 agent 动作（自动升级 bootstrap + 补全缺失结构、自动创建 `.governance/` 治理文件、自动标记阶段、自动检查质量等）均属本级——agent 按协议纪律自动推进并记录，**不是**系统后台触发。
+- **A 级（Agent Protocol Automation）**：行为协议自动化——agent 按协议纪律自动执行。本 README「一句话说明」「日常体验」中的自动承诺（「过程管理全自动」「自动记录证据」「自动检查 Gate」「工作流自动做的事」「记录更新、文件编辑、状态跟踪——全自动」等）与会话内 agent 动作（自动升级 bootstrap + 补全缺失结构、创建 `.governance/` 治理文件和首个工作单元、记录当前单元的活动与观察结果、按本轮验收条件检查质量等）均属本级——agent 按协议纪律自动推进并记录，**不是**系统后台触发。
 - **B 级（CLI-Enforced Automation）**：CLI/脚本强制——`verify_workflow.py check-governance`、`status` 与 commit hooks 在命令/commit 时点强制（= B 级）；「唯一命令」「5 分钟开始」「验证」中的 `/governance` 自动场景检测、自动诊断修复路由属本级（命令时点、事件驱动，非持续）。
 - **C 级（System Automation）**：后台系统自动触发、不依赖 agent 记忆——**未实现（roadmap）**（plugin-contract.md L102：MCP/headless runner 仅有协议样例，无可用实现）。0.76.0 起经会话 bootstrap 的 `check-governance --summary-only` 自动运行的「会话级」健康摘要不是 C 级后台 daemon。
 
@@ -361,7 +365,7 @@ zcode 读取 `.claude-plugin/marketplace.json`（市场清单）和 `.zcode-plug
 | 首次使用（无 `.governance/`） | 引导初始化——收集项目信息 → 创建治理文件 |
 | 会话恢复（上次有未完成工作） | 恢复遗留任务 + 待确认决策 + 活跃风险 |
 | 异常检测（hook 缺失等） | 自动诊断 → 一键修复 |
-| 日常状态查看 | 展示完整治理面板（阶段/Gate/任务/风险） |
+| 日常状态查看 | 显示工作单元、父子关系、待验条件、阻塞和下一动作 |
 | 工作流版本更新 | 自动升级 bootstrap + 补全缺失结构 |
 
 **所有场景，一条命令，零记忆负担。**
@@ -372,7 +376,7 @@ zcode 读取 `.claude-plugin/marketplace.json`（市场清单）和 `.zcode-plug
 
 ### 第一步：看到 Delivery Trust Snapshot
 
-**首次使用时，先初始化并看到快照，再谈完整阶段、证据和发布治理。**
+**首次使用时，确认目标和验收操作，再创建首个工作单元。**
 
 在 Claude Code 中直接运行：
 
@@ -380,13 +384,13 @@ zcode 读取 `.claude-plugin/marketplace.json`（市场清单）和 `.zcode-plug
 /governance
 ```
 
-如果你的环境能直接显示 status，status 输出里的 Delivery Trust Snapshot 也是同一个第一信号。它会用很短的字段告诉你：当前目标、阶段、Gate/setup 状态、风险、证据、下一步动作、预设建议、验证命令，以及不得过度宣称的边界。
+如果你的环境能直接显示 status，status 输出里的 Delivery Trust Snapshot 也是同一个第一信号。它会用很短的字段告诉你：用户目标、当前单元、待验条件、阻塞、证据、下一步动作、预设建议、验证命令，以及不得过度宣称的边界。
 
 首次运行会自动检测到项目尚未初始化，引导你完成：
 1. 输入项目名称和目标
-2. 确认项目阶段（新项目/已有项目）
+2. 确认成品验收条件和本轮工作的范围
 3. 选择治理强度（lite/standard/strict）
-4. 自动创建 `.governance/` 治理文件
+4. 创建 `.governance/` 治理文件和首个工作单元
 
 ### 第二步：跑本地 demo-only 验收
 
@@ -422,18 +426,11 @@ Pack 归属不是完成证据。`pack enabled` 不等于任务证据存在、独
 
 **仓库里已有的 `.governance/` 是本项目自己的运行样例，不是你的初始化模板。** 不要直接复制仓库根目录下已有的治理记录来当你的项目初始状态。
 
-### 新项目
+### 开始一个交付目标
 
-1. 告诉你的 agent："我要开始一个新项目，项目目标是 XXX"
-2. 工作流自动从**立项阶段**开始，引导你明确目标、范围和关键决策
-3. 每推进一个阶段，agent 会自动检查是否达到质量标准
+在项目根运行 `/governance`，告诉助手成品要交给谁、用户会如何操作、怎样判断成功。例如，“让成员导出本月账单，金额须与账本一致”。助手用立项时的 G1 核实投入依据，再按实际需要开设准备、内层、交付或反馈单元。已经有原型的团队可登记本次要验收的改动。
 
-### 已在进行的项目
-
-1. 告诉你的 agent："我的项目目前在开发阶段，想接入治理工作流"
-2. 工作流会要求你补充最少的信息（当前状态、关键决策、已知风险）
-3. 之前的阶段自动标记为"已通过"，不需要补齐历史记录
-4. 立即从当前阶段开始治理
+在会话结束前或换宿主后，用 `loop status --unit <id>` 查看同一单元。金额对账失败时，测试者交回差异样本；开发者修复后，独立复验消除该笔差异。上级交付保留未解条件。
 
 ### 只用某个功能
 
@@ -444,47 +441,18 @@ Pack 归属不是完成证据。`pack enabled` 不等于任务证据存在、独
 - "帮我做发布 checklist" → 加载发布检查清单
 - "帮我做项目复盘" → 加载回顾会议模板
 
-## 项目规模选择
+## 治理强度与日常使用
 
-安装后第一次使用，工作流会问你的项目规模：
+轻量档按本次风险记录必要证据，标准档覆盖团队所需的分工和复验，严格档增加独立取证与审批。各档使用相同的目标、工作单元和适用门禁。
 
-| 选择 | 适合 | 工作流做什么 | 你需要做什么 |
-|------|------|------------|------------|
-| **轻量** | 个人项目、MVP、探索 | 只跟踪核心阶段，最少记录 | 几乎不管，只在关键节点确认 |
-| **标准** | 团队项目、正式产品 | 全流程 11 阶段，完整记录 | 方向决策和质量审核 |
-| **严格** | 大型项目、合规系统 | 全流程 + 双重证据 + 不允许跳步 | 每个决策审核 + 审批 |
+| 工作发生在哪里 | 需要决定的事 |
+| --- | --- |
+| 立项及准备 | G1 核实投入依据。准备循环的 G2、G3、G4 看护调研、试用选型和运行环境。 |
+| 一次修改 | 内层 G6、G7 核实修改和测试的实际效果，失败样本交回原单元修复。 |
+| 一次交付 | 中层 G5 看护设计，G9 凭独立成品回执看护交付。显式发布还需 G8 发布保护及当次授权。 |
+| 使用后反馈 | 外层 G10、G11 核对真实使用效果，决定下一轮目标。 |
 
-不确定选哪个？先选"标准"，随时可以调整。
-
-## 日常体验
-
-### 工作流自动做的事（不打扰你）
-
-- 记录每个任务完成后的证据
-- 检查 Gate 是否通过
-- 跟踪风险状态变化
-- 更新项目状态面板
-- 在阶段转换时提醒你补齐必要记录
-
-### 需要你做的事
-
-- **方向决策**：多条路线时选择走哪条
-- **需求澄清**：确认你到底要做什么
-- **质量审核**：确认产出物是否满足要求
-
-### 你不会被打扰的事
-
-- 记录更新、文件编辑、状态跟踪——全自动
-- Gate 通过时不会打断你
-- 两个紧密关联的任务之间不会停下来请示
-
-## 覆盖的项目阶段
-
-```
-立项 → 调研 → 技术选型 → 环境搭建 → 架构设计 → 开发 → 测试 → CI/CD → 发布 → 运营 → 维护
-```
-
-每个阶段有独立的子工作流，包含：进入条件、活动清单、产出标准、退出检查。你可以从任意阶段开始。
+助手可自行补证、复验和更新记录。范围变化、风险接受或发布授权由有权人裁决。
 
 ## 验证
 
@@ -504,6 +472,8 @@ CI 使用 Python 3.11。维护者运行全量单测时，先执行 CI 中的 `In
 
 以下文档供工作流开发者和贡献者参考，普通用户不需要阅读：
 
+- [当前代码与文档导航](https://github.com/peterwangze/software-project-governance/blob/master/project/references/architecture.md#当前目录导航)
+- [版本变更记录](https://github.com/peterwangze/software-project-governance/blob/master/project/CHANGELOG.md)
 - [从项目治理记录提炼的演进方向](docs/governance/evolution.md)
 - [协议层定义](skills/software-project-governance/core/protocol/plugin-contract.md)
 - [生命周期规则](skills/software-project-governance/core/lifecycle.md)

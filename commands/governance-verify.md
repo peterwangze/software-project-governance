@@ -38,12 +38,9 @@
 - **IF** 找到至少 1 条证据 → PASS
 - **IF** 未找到任何证据 → 记录为 `missing_evidence`，任务 ID 列入缺口清单
 
-### Step 4: Gate 一致性检查（类别 C）
-- 遍历 plan-tracker Gate 状态跟踪表
-- **IF** Gate 状态为 passed / passed-on-entry / passed-with-conditions → 检查 evidence-log 中是否存在关联该 Gate 的证据条目
-  - **IF** 存在 → PASS
-  - **IF** 不存在 → 记录为 `gate_evidence_gap`
-- **IF** Gate 状态为 pending → 不检查（尚未执行）
+### Step 4: 当前单元的证据一致性（类别 C）
+
+读取 `loop status --json`。逐个核对本轮已消费回执的单元 ID、门、轮次、证据和审查者。缺失或错配记录为 `gate_evidence_gap`。未开始或正在返工的单元按实际状态呈现。
 
 ### Step 5: 风险过期检查（类别 D）
 - 读取 risk-log 中状态为"活跃"的风险条目

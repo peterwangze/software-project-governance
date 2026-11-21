@@ -300,7 +300,7 @@ def _would_create_cycle(task_id: str, depends_on: list, report) -> bool:
 
 def run_dependency_analysis(plan_tracker_text: str, depends_on: list,
                             task_id: str = "",
-                            archive_completed_ids=None) -> dict:
+                            archive_completed_ids=None, native_status=None) -> dict:
     """Step a — run task-priority-analysis and snapshot its full output.
 
     Args:
@@ -333,6 +333,12 @@ def run_dependency_analysis(plan_tracker_text: str, depends_on: list,
     blocked_by = []
     archive_resolved = []
     for dep in depends_on:
+        if native_status is not None:
+            if dep not in native_status:
+                unknown_deps.append(dep)
+            elif native_status[dep] != "completed":
+                blocked_by.append(dep)
+            continue
         task = status_map.get(dep)
         if task is None:
             if dep in archive_done:
@@ -1530,7 +1536,7 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
                prior_art=None, plan_tracker_text: str,
                current_version: str = "",
                governance_dir, existing_records=None, records_dir=None,
-               evidence_path=None) -> dict:
+               evidence_path=None, native_intake=None, native_status=None) -> dict:
     """Run the mandatory five-step triage and write the machine record.
 
     Fail-closed: any step-ERROR (unknown dependency, invalid priority, empty
@@ -1668,7 +1674,7 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     # the triage flow) and inject it into the pure step-a analysis — a dep
     # with no hot row but proven archived-completed no longer fails closed.
     dependency = run_dependency_analysis(
-        plan_tracker_text, depends_on, task_id=task_id,
+        plan_tracker_text, depends_on, task_id=task_id, native_status=native_status,
         archive_completed_ids=task_priority.read_archive_index_completed_ids(
             governance_dir))
     if dependency["unknown_deps"]:
@@ -1685,6 +1691,8 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         records = load_triage_records(governance_dir)
     tasks = parse_task_dependencies(plan_tracker_text)
     completed_ids = {t.task_id for t in tasks if t.is_completed()}
+    if native_status is not None:
+        completed_ids = {uid for uid, status in native_status.items() if status == "completed"}
     conflicts = check_conflicts(files, records, completed_ids)
 
     # Step e (FIX-271 / AUDIT-146 §7.2 R2): execution side-effect
@@ -1709,6 +1717,8 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
     except OSError as exc:
         return {"error": "cannot create triage record dir: {0}".format(exc)}
 
+    if native_intake is not None:
+        record["loop_intake"] = native_intake
     write_error = _write_triage_record(
         record, records_dir, record_name, evidence_path, task_id,
         demand_source)

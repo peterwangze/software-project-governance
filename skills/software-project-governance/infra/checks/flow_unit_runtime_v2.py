@@ -1,33 +1,13 @@
-"""Canonical Loop Runtime Contract v2 validator (FEAT-002, ADR-013 / 0.67.0).
+"""Read the versioned loop schema and validate work-unit state.
 
-This stdlib-only leaf is the v2 counterpart to ``flow_unit_runtime.py``. It
-validates payloads that declare ``schema_version: "2.0"`` +
-``runtime_contract: "loop-runtime-contract/v2"`` against the canonical contract
-schema in ``core/loop-runtime-contract.json`` (the single source of truth,
-mirroring ``loop_engine.load_loop_registry``).
-
-**Boundary (ADR-013 §9):** this validator is the FEAT-002 contract-enforcement
-surface. It enforces the field/type/enum rules of §3.2/§3.3/§3.4, the
-``last_gate_result == gate_state.last_result`` unification invariant (§3.4),
-the ``decomposition_confirmed == true`` requirement (§3.2, the FEAT-004 hook
-the validator enforces now), and the ``runtime_status`` ⇔ ``active_loop``
-bidirectional implication (§3.4, the FEAT-004 guard enforced by the validator
-now). It does NOT implement the FEAT-003 planner or the FEAT-004 decomposition
-step — those are separate tasks. RISK-037 and RISK-042 remain open: this
-validator does NOT activate any runtime execution engine.
-
-**v1 byte-frozen:** the existing ``flow_unit_runtime.validate_flow_unit_runtime_payload``
-(the 0.52.0/0.66.1 containment boundary) is preserved byte-for-byte. A version
-router on ``schema_version`` dispatches v1 → v1 validator (unchanged) and v2 →
-this module. See ``validate_flow_unit_runtime_payload_dispatch`` in
-``flow_unit_runtime.py``.
-
-**Loader contract:** ``load_loop_runtime_contract`` mirrors
-``loop_engine.load_loop_registry`` — returns ``(data_or_None, issues_list)``
-and never raises (fail-closed on missing/corrupt schema).
+Live readers and writers use validate_native_loop_payload. It verifies native
+origin and the schema before they consume the unit's goal, gate and evidence.
+load_loop_runtime_contract resolves the schema in the installed plugin and
+returns diagnostics for missing or invalid input.
 """
 
 import json
+from graphlib import TopologicalSorter, CycleError
 import re
 from pathlib import Path
 
@@ -86,10 +66,72 @@ def load_loop_runtime_contract(plugin_home=None):
 
 
 def _string_list(value):
-    """A non-empty list of non-empty strings (mirrors flow_unit_runtime._string_list)."""
+    """A non-empty list of non-empty strings."""
     return isinstance(value, list) and bool(value) and all(
         isinstance(item, str) and item.strip() for item in value
     )
+
+
+def _unit_learning_issues(unit, unit_by_id):
+    """Optional native planning fields. Historical units need no migration."""
+    uid = unit["flow_unit_id"]
+    if "intent" in unit:
+        intent = unit["intent"]
+        if (not isinstance(intent, dict)
+                or not all(isinstance(intent.get(k), str) and intent[k].strip() for k in ("basis", "source"))
+                or not isinstance(intent.get("prior_art"), list)
+                or not all(isinstance(ref, str) and ref.strip() for ref in intent["prior_art"])):
+            yield f"{uid}: invalid intent basis, source or prior art"
+
+    entries = unit.get("learning", [])
+    if not isinstance(entries, list):
+        yield f"{uid}: learning must be a list"
+    elif entries:
+        from loop_learning import entry_issue
+        seen = set()
+        for entry in entries:
+            if issue := entry_issue(entry, uid):
+                yield f"{uid}: {issue}"
+            elif entry["id"] in seen:
+                yield f"{uid}: duplicate learning id {entry['id']}"
+            else:
+                seen.add(entry["id"])
+
+    if "source_learning" in unit:
+        previous = unit.get("previous_unit_id")
+        source = unit_by_id.get(previous, {}) if isinstance(previous, str) else {}
+        records = source.get("learning", [])
+        if not (isinstance(records, list) and isinstance(unit["source_learning"], str) and any(
+            isinstance(e, dict) and e.get("unit") == previous and e.get("kind") == "opportunity"
+            and e.get("id") == unit["source_learning"] and e.get("action") == unit.get("goal")
+            and e.get("validation") == unit.get("acceptance")
+            for e in records
+        )):
+            yield f"{uid}: source_learning must match the previous unit's opportunity, goal and acceptance"
+
+
+def native_origin_issue(state, display="flow-unit-runtime.json"):
+    if not isinstance(state, dict) or state.get("origin") != "native-loop":
+        return f"{display}: expected origin=native-loop; the existing file cannot authorize current work"
+    return None
+
+
+def missing_runtime_issue(path):
+    """Identify a lost execution snapshot without replaying the event journal."""
+    events = path.with_name("loop-event-log.jsonl")
+    try:
+        if path.is_symlink() or events.is_file() and events.stat().st_size > 0:
+            return f"{path.name}: native work-unit state is missing while project execution evidence exists; restore the state"
+    except OSError as exc:
+        return f"{path.name}: cannot verify execution evidence: {exc}"
+    return None
+
+
+def validate_native_loop_payload(state, display="flow-unit-runtime.json", plugin_home=None):
+    origin = native_origin_issue(state, display)
+    if origin:
+        return [origin]
+    return validate_flow_unit_runtime_payload_v2(state, display, plugin_home)
 
 
 def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-runtime.json", plugin_home=None):
@@ -122,12 +164,14 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
         # discipline extended to the contract schema per ADR §8.2 item 4).
         return [f"{display}: cannot load v2 contract schema: {schema_issues}"]
 
-    required_top = schema["required_top_level_fields"]
-    required_per_unit = schema["required_per_unit_fields"]
-    allowed_gate_statuses = set(schema["allowed_gate_statuses"])
-    allowed_loop_tiers = set(schema["allowed_loop_tiers"])
-    allowed_agent_phases = set(schema["allowed_agent_phases"])
-    allowed_runtime_statuses = set(schema["allowed_runtime_statuses"])
+    contract = schema["native_contract"]
+    native = state.get("origin") == contract["origin"]
+    required_top = schema["required_top_level_fields"] + ([] if native else schema["archived_migration_fields"])
+    required_per_unit = schema["required_per_unit_fields"] + (contract["required_per_unit_fields"] if native else schema["archived_unit_fields"])
+    allowed_gate_statuses = schema["allowed_gate_statuses"]
+    allowed_loop_tiers = schema["allowed_loop_tiers"]
+    allowed_agent_phases = schema["allowed_agent_phases"]
+    allowed_runtime_statuses = schema["allowed_runtime_statuses"]
     loop_state_fields = schema["loop_state_fields"]
     gate_state_fields = schema["gate_state_fields"]
     mandatory_boundary_tokens = schema["no_overclaim_boundary_mandatory_tokens"]
@@ -189,7 +233,7 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
 
     # decomposition_confirmed MUST be true (FEAT-004 hook, enforced now).
     decomposition_confirmed = state.get("decomposition_confirmed")
-    if decomposition_confirmed is not True:
+    if not native and decomposition_confirmed is not True:
         failures.append(
             f"{display}: decomposition_confirmed must be true for a v2 payload "
             f"(FEAT-004 decomposition-confirmation hook)"
@@ -197,11 +241,11 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
 
     # no_overclaim_boundary: non-empty string list + every mandatory token present.
     boundary = state.get("no_overclaim_boundary")
-    if not _string_list(boundary):
+    if not native and not _string_list(boundary):
         failures.append(f"{display}: no_overclaim_boundary must be a non-empty string list")
         boundary = []
-    boundary_text = " ".join(boundary).lower()
-    for token in mandatory_boundary_tokens:
+    boundary_text = " ".join(boundary).lower() if _string_list(boundary) else ""
+    for token in (() if native else mandatory_boundary_tokens):
         if token.lower() not in boundary_text:
             failures.append(
                 f"{display}: missing no_overclaim_boundary mandatory token `{token}`"
@@ -287,7 +331,7 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
             # active_loop_tier: when the loop is active, tier must be in the enum.
             active_loop_tier = loop_state.get("active_loop_tier")
             if "active_loop_tier" in loop_state:
-                if active_loop is True and active_loop_tier not in allowed_loop_tiers:
+                if active_loop_tier not in allowed_loop_tiers and (active_loop is True or active_loop_tier is not None):
                     failures.append(
                         f"{label}: loop_state.active_loop_tier must be one of "
                         f"{sorted(allowed_loop_tiers)} when active_loop is true"
@@ -331,6 +375,8 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
                 if not isinstance(fuse, dict):
                     failures.append(f"{label}: loop_state.fuse must be an object")
                 else:
+                    if not {"max_rounds", "tripped"}.issubset(fuse):
+                        failures.append(f"{label}: fuse requires tripped and max_rounds")
                     fuse_tripped = fuse.get("tripped")
                     if "tripped" in fuse and not isinstance(fuse_tripped, bool):
                         failures.append(
@@ -366,8 +412,11 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
             ):
                 failures.append(f"{label}: gate_state.gate_id must be a non-empty string")
             evidence_refs = gate_state.get("evidence_refs")
-            if "evidence_refs" in gate_state and not isinstance(evidence_refs, list):
+            if "evidence_refs" in gate_state and (not isinstance(evidence_refs, list) or not all(isinstance(r, str) and r.strip() for r in evidence_refs)):
                 failures.append(f"{label}: gate_state.evidence_refs must be a list")
+
+        if gate_state.get("last_result") is not None and not isinstance(gate_state["last_result"], str):
+            failures.append(f"{label}: last_result must be a string or null")
 
         # ── FEAT-002 unification invariant: last_gate_result == gate_state.last_result.
         last_gate_result = loop_state.get("last_gate_result")
@@ -428,6 +477,105 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
                         f"{display}: flow unit {uid} has unknown dependency `{dep}`"
                     )
 
+    if native:
+        waits = TopologicalSorter()
+        for uid, u in unit_by_id.items():
+            deps = u.get("dependencies")
+            if isinstance(deps, list):
+                waits.add(uid, *(key for key in deps if isinstance(key, str)))
+            parent = u.get("parent_unit_id")
+            if parent is not None:
+                if not isinstance(parent, str) or parent not in unit_by_id:
+                    failures.append(f"{display}: {uid} has unknown or invalid parent")
+                else:
+                    waits.add(parent, uid)
+        try:
+            waits.prepare()
+        except CycleError as exc:
+            failures.append(f"{display}: cyclic child/dependency waits: {' -> '.join(exc.args[1])}")
+        for unit_id, unit in unit_by_id.items():
+            failures.extend(f"{display}: {issue}" for issue in _unit_learning_issues(unit, unit_by_id))
+            for key in ("goal", "acceptance", "task_id"):
+                if not isinstance(unit.get(key), str) or not unit[key].strip():
+                    failures.append(f"{display}: {unit_id} requires {key}")
+            loop = unit.get("loop_state")
+            gate = unit.get("gate_state")
+            if not isinstance(loop, dict) or not isinstance(gate, dict):
+                continue
+            def natural(value):
+                return type(value) is int and value >= 0
+            def gate_id(value):
+                return isinstance(value, str) and re.fullmatch(r"G(?:[1-9]|10|11)", value)
+            def text(value):
+                return isinstance(value, str) and bool(value.strip())
+            history = unit.get("gate_history", [])
+            frames = loop.get("return_to", [])
+            if (unit.get("runtime_status") != "dormant" and not natural(loop.get("cas_version"))) or not gate_id(gate.get("gate_id")):
+                failures.append(f"{display}: {unit_id} requires a valid CAS version and gate")
+            if unit.get("entry_tier") not in allowed_loop_tiers or not gate_id(unit.get("entry_gate")):
+                failures.append(f"{display}: {unit_id} has invalid intake tier or gate")
+            if not isinstance(frames, list) or any(
+                not isinstance(f, dict) or not all(k in f for k in contract["return_to_fields"])
+                or f["tier"] not in allowed_loop_tiers or not gate_id(f["gate"])
+                or not natural(f["loop_count"]) for f in frames
+            ):
+                failures.append(f"{display}: {unit_id} has an invalid rework return path")
+            if not isinstance(history, list) or any(
+                not isinstance(h, dict) or not all(k in h for k in contract["gate_history_fields"])
+                or h["tier"] not in allowed_loop_tiers or not gate_id(h["gate"])
+                or not natural(h["iteration"]) or not natural(h["cas_version"])
+                or h["result"] not in contract["allowed_results"] or h["decision"] not in contract["decisions"]
+                or not text(h["evidence_ref"]) or not text(h["actor"]) for h in history
+            ):
+                failures.append(f"{display}: {unit_id} has invalid gate history")
+            elif history:
+                if any(h["result"] not in contract["outcomes_by_decision"][h["decision"]] for h in history):
+                    failures.append(f"{display}: {unit_id} gate decision disagrees with its verdict")
+                if gate.get("last_result") != history[-1]["result"]:
+                    failures.append(f"{display}: {unit_id} gate result disagrees with the latest attempt")
+                versions = [h["cas_version"] for h in history]
+                refs = [h["evidence_ref"] for h in history]
+                if sorted(set(versions)) != versions or len(set(refs)) != len(refs) or (
+                    natural(loop.get("cas_version")) and versions[-1] > loop["cas_version"]
+                ):
+                    failures.append(f"{display}: {unit_id} has inconsistent gate history")
+                last = history[-1]
+                if gate.get("status") == "failed" and last["decision"] != "iterate":
+                    failures.append(f"{display}: {unit_id} failed gate requires a rework decision")
+                if gate.get("status") in ("blocked", "escalated") and last["decision"] != "escalate":
+                    failures.append(f"{display}: {unit_id} blocked gate requires an escalation decision")
+                if last["decision"] == "exit" and unit.get("runtime_status") != "completed":
+                    failures.append(f"{display}: {unit_id} recorded an exit without completing the unit")
+            elif gate.get("last_result") is not None or gate.get("evidence_refs"):
+                failures.append(f"{display}: {unit_id} gate verdict or evidence requires a recorded attempt")
+            status = unit.get("runtime_status")
+            allowed_gate_states = contract["gate_status_by_unit_status"].get(status, []) if isinstance(status, str) else []
+            if gate.get("status") not in allowed_gate_states:
+                failures.append(f"{display}: {unit_id} {status} conflicts with gate {gate.get('status')}")
+            if gate.get("status") in ("failed", "blocked", "escalated") and not (
+                isinstance(history, list) and history and isinstance(history[-1], dict)
+                and history[-1].get("gate") == gate.get("gate_id") and isinstance(gate.get("evidence_refs"), list)
+                and history[-1].get("evidence_ref") in gate["evidence_refs"]
+            ):
+                failures.append(f"{display}: {unit_id} gate requires its recorded failure evidence")
+            if unit.get("runtime_status") == "completed" and not (
+                loop.get("active_loop") is False and gate.get("status") == "passed"
+                and isinstance(history, list) and history and isinstance(history[-1], dict)
+                and history[-1].get("gate") == gate.get("gate_id") and history[-1].get("decision") == "exit"
+                and isinstance(gate.get("evidence_refs"), list)
+                and history[-1].get("evidence_ref") in gate["evidence_refs"]
+            ):
+                failures.append(f"{display}: {unit_id} completion requires an evidenced exit")
+            previous = unit.get("previous_unit_id")
+            if previous is not None:
+                source = unit_by_id.get(previous) if isinstance(previous, str) else None
+                source_history = source.get("gate_history") if source else None
+                dependencies = unit.get("dependencies")
+                if (not source or not isinstance(dependencies, list) or previous not in dependencies
+                    or source.get("runtime_status") != "completed" or not isinstance(source_history, list)
+                    or not source_history or not isinstance(source_history[-1], dict)
+                    or ("previous_evidence_ref" in unit and unit["previous_evidence_ref"] != source_history[-1].get("evidence_ref"))):
+                    failures.append(f"{display}: {unit_id} previous iteration lacks its declared completion receipt")
     return failures
 
 

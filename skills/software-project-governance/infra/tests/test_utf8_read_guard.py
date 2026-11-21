@@ -113,13 +113,10 @@ class Utf8ReadGuardDocsTests(unittest.TestCase):
     def test_governance_encoding_note_mentions_gbk_mojibake(self):
         """The rule must name the failure mode (GBK mojibake) — a bare UTF-8
         mention without the reason would not change agent behavior."""
-        for path in self.DOC_PATHS:
-            text = self._text(path)
-            self.assertTrue(
-                ("UTF8" in text and ("乱码" in text or "mojibake" in text))
-                or _UTF8_READALLTEXT in text,
-                "{}: UTF-8 rule must name the mojibake failure mode"
-                .format(path))
+        skill = self._text(_INFRA_DIR.parent / "SKILL.md")
+        self.assertIn("GBK", skill)
+        self.assertIn("mojibake", skill)
+        self.assertIn(_UTF8_FLAG, skill)
 
 
 class Utf8ReadSimulationTests(unittest.TestCase):

@@ -28,6 +28,32 @@ def _read_locks(governance_dir: Path) -> dict:
     return data["active_tasks"]
 
 
+def has_active_goal_work(governance_dir: Path, goal, task_ref, session=None):
+    import stat
+    from delivery_acceptance import _plain_stat
+    from execution_packet import read_goal_packets
+
+    try:
+        info = _plain_stat(governance_dir / LOCKS_FILE_NAME)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise ValueError("expected a regular goal lock record")
+    active = _read_locks(governance_dir)
+    if goal in active or task_ref in active or (session and any(
+        item["coordinator_session"] == session for item in active.values()
+    )):
+        return True
+    if active:
+        packets, _ = read_goal_packets(governance_dir)
+        for task in active:
+            packet = packets.get(task, {})
+            link = packet.get("goal_link") if isinstance(packet, dict) else None
+            if isinstance(link, dict) and link.get("goal_id") == goal:
+                return True
+    return False
+
+
 def _goal_link(packet: object, goal_id: str, contract_sha256: str, required_criteria: set) -> tuple | None:
     if packet is None:
         return None
@@ -204,6 +230,7 @@ def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_
     except (ValueError, TypeError, OverflowError, OSError) as exc:
         return dict(output, state="ERROR", diagnostics=[f"invalid goal state: {exc}"])
     output.update(
+        unit_id=goal_id if goal.get("intent_sha256") else None,
         original_intent=goal.get("original_intent"), intent_sha256=goal.get("intent_sha256"),
         contract_sha256=goal.get("contract_sha256"), goal_state=goal["state"],
         revision=goal["revision"], task_ref=goal["task_ref"],
@@ -241,7 +268,7 @@ def plan_goal_candidates(project_root: Path, goal_id: str, *, load_packets, top_
     if acceptance["pass"]:
         return dict(output, state="CHECK_COMPLETION", diagnostics=[
             "delivery passed; reconcile recovered obligations, active locks and existing authorization, then run "
-            "goal-bridge --action check-completion before completing the goal",
+            "the host acceptance action (non-DSH: goal-bridge --action accept-delivery)",
         ])
 
     output["criterion_gaps"] = gaps = _gap_report(acceptance)

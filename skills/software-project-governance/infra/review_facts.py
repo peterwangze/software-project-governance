@@ -1,6 +1,7 @@
 """Read formal review records against a single immutable staged or committed Git tree."""
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -23,7 +24,7 @@ def _original(root, path):
 def _git(root, *args, env=None):
     try:
         result = subprocess.run(["git", "--no-optional-locks", "-C", str(root), *args],
-                                capture_output=True, timeout=30, env=env, check=True)
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=30, env=env, check=True)
         return result.stdout.decode("utf-8")
     except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
         raise ValueError(f"Git could not verify {args[0]}: {exc}") from exc
@@ -38,13 +39,21 @@ def _delivery_diff(root, base, commit):
     if commit:
         if _git(root, "rev-parse", "--verify", commit + "^{commit}").strip() != commit:
             raise ValueError("commit does not identify a commit object")
+    initial = False
     if base is None:
+        if commit:
+            initial = len(_git(root, "rev-list", "--parents", "-n", "1", commit).split()) == 1
+        else:
+            initial = "# branch.oid (initial)" in _git(
+                root, "status", "--porcelain=v2", "--branch", "--untracked-files=no").splitlines()
         base = commit + "^1" if commit else "HEAD"
-    base_sha = _git(root, "rev-parse", "--verify", "--end-of-options", base + "^{commit}").strip()
+    base_sha = (_git(root, "hash-object", "-t", "tree", "--stdin").strip() if initial else
+                _git(root, "rev-parse", "--verify", "--end-of-options", base + "^{commit}").strip())
     with tempfile.TemporaryDirectory() as temp:
         env = os.environ.copy()
         if commit:
-            _git(root, "merge-base", "--is-ancestor", base_sha, commit)
+            if not initial:
+                _git(root, "merge-base", "--is-ancestor", base_sha, commit)
             tree = _git(root, "rev-parse", commit + "^{tree}").strip()
         else:
             index = _git(root, "rev-parse", "--path-format=absolute", "--git-path", "index").strip()
@@ -69,13 +78,14 @@ def _delivery_diff(root, base, commit):
         changed[path] = (old_mode, mode, blob)
     if not changed:
         raise ValueError("the requested base and target have no changed files")
-    return changed, summary, {"base": base_sha, "tree": tree, "commit": commit}
+    return changed, summary, {"base": base_sha, "tree": tree, "commit": commit,
+                              **({"initial": True} if initial else {})}
 
 
-def _record(root, task, review_id, event):
+def _record(root, task, review_id, event, changed=()):
     from review_record import _MODE_FIELD_RE, _conflicting_blocker_fields, _report_verdict_tokens
 
-    match = re.fullmatch(r"REVIEW-([A-Z]+-[0-9]+)-R(0|[1-9][0-9]*)(?:-([A-Z0-9]+(?:-[A-Z0-9]+)*))?", review_id)
+    match = re.fullmatch(r"REVIEW-([A-Za-z0-9][A-Za-z0-9_.-]*)-R(0|[1-9][0-9]*)(?:-([A-Z0-9]+(?:-[A-Z0-9]+)*))?", review_id)
     if not match or match[1] != task or not event:
         raise ValueError(f"{review_id}: no formal record for task {task}")
     name = f"review-{task}-R{match[2]}" + ("-" + match[3].lower() if match[3] else "") + ".md"
@@ -118,14 +128,34 @@ def _record(root, task, review_id, event):
     signed_modes = {path: mode for path, mode in modes.items() if mode}
     if bindings is not None and dict(_MODE_FIELD_RE.findall(text)) != signed_modes:
         raise ValueError(f"{review_id}: record file modes differ from the ledger")
+    if event.get("observed_loop") is not None and json.loads(field("observed_loop")) != event["observed_loop"]:
+        raise ValueError(f"{review_id}: observed unit scope differs from the ledger")
+    tree = event.get("tree")
+    if tree is not None:
+        if (not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", tree) or field("snapshot_tree") != tree
+                or tree not in report_text or _git(root, "cat-file", "-t", tree).strip() != "tree"):
+            raise ValueError(f"{review_id}: invalid or unavailable reviewed tree")
+        entries = _git(root, "ls-tree", "-r", "-z", "--full-tree", tree).split("\0")
+        by_path = {}
+        for entry in filter(None, entries):
+            header, name = entry.split("\t", 1)
+            mode, _, blob = header.split()
+            by_path[name] = (blob, mode)
+        for path in changed:
+            blob, mode = by_path.get(path, ("0" * len(tree), "000000"))
+            if path in pins and (pins[path] != blob or modes.get(path) != mode):
+                raise ValueError(f"{review_id}: file pin disagrees with reviewed tree at {path}")
+            pins[path], modes[path] = blob, mode
     origin = {"id": review_id, "path": record_rel,
               "sha256": hashlib.sha256(data).hexdigest(), "report": report_rel, "report_sha256": digest,
               "conclusion": verdict, "reviewer": reviewer, "round": int(match[2]),
               "binding_source": "ledger" if bindings is not None else "historical record"}
+    if tree:
+        origin["tree"] = tree
     return origin, pins, modes
 
 
-def derive_review_facts(root, task, review_ids, *, base=None, commit=None):
+def derive_review_facts(root, task, review_ids, *, base=None, commit=None, path_filter=None):
     """Reuse signed rounds only when their per-file pins cover the delivery diff."""
     refs = list(review_ids)
     if not refs or len(set(refs)) != len(refs):
@@ -142,10 +172,20 @@ def derive_review_facts(root, task, review_ids, *, base=None, commit=None):
                    if e["kind"] == "review_recorded" and e.get("actor") == "review_record"
                    and e["payload"]["task_id"] == task}
         changed, summary, git = _delivery_diff(root, base, commit)
-        rounds = sorted((_record(root, task, ref, reviews.get(ref)) for ref in refs),
+        if path_filter is not None:
+            changed = {p: entry for p, entry in changed.items() if path_filter(p)}
+            if not changed:
+                raise ValueError("no staged changes in the requested review scope")
+        rounds = sorted((_record(root, task, ref, reviews.get(ref), changed) for ref in refs),
                         key=lambda item: (item[0]["round"], item[0]["id"]))
         target = commit or "HEAD"
-        for revision in {git["base"], *(reviews[ref]["commit"] for ref in refs)}:
+        revisions = {git["base"], *(reviews[ref]["commit"] for ref in refs)}
+        if git.get("initial"):
+            if (any(reviews[ref]["commit"] != "git:unborn" for ref in refs) or
+                    not any(reviews[ref].get("tree") == git["tree"] for ref in refs)):
+                raise ValueError("the first product commit requires review of its exact complete Git tree")
+            revisions.clear()
+        for revision in revisions:
             if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision):
                 raise ValueError(f"review has no verifiable Git commit: {revision}")
             _git(root, "merge-base", "--is-ancestor", revision, target)
@@ -162,6 +202,8 @@ def derive_review_facts(root, task, review_ids, *, base=None, commit=None):
         for record, pin, signed_mode in applicable:
             if record["round"] != latest:
                 continue
+            if record.get("tree") and record["tree"] != git["tree"]:
+                raise ValueError(f"{record['id']}: staged or committed tree differs from the reviewed tree")
             if pin != blob or (signed_mode != mode and not (
                     signed_mode is None and mode == "100644" and old_mode in ("100644", "000000"))):
                 raise ValueError(f"{record['id']}: reviewed content or mode differs at {path}")

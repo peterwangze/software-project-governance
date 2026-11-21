@@ -160,6 +160,26 @@ def get_loop_gate_semantics(gate_id, plugin_home=None):
     return _entry_by_id(data.get("loop_gate_semantics"), "gate_id", gate_id)
 
 
+def gate_requires_children(gate, plugin_home=None):
+    registry, issues = load_loop_registry(plugin_home)
+    if issues:
+        raise ValueError("; ".join(issues))
+    return gate in registry["child_completion_gates"]
+
+
+def reviewer_gates(reviewer, plugin_home=None):
+    """Resolve formal roles; projects can also name their own independent signatory."""
+    registry, issues = load_loop_registry(plugin_home)
+    if issues:
+        raise ValueError("; ".join(issues))
+    identity = " ".join(reviewer.lower().replace("-", " ").replace("_", " ").split()).removeprefix("governance ")
+    identity = identity.removeprefix("independent ")
+    for role, allowed in registry["reviewer_gates"].items():
+        if identity == role or identity.startswith(role + " "):
+            return allowed
+    return None
+
+
 def get_pause_point(pp_id, plugin_home=None):
     """Return a PausePoint declaration by id.
 
@@ -946,151 +966,7 @@ def _vw():
     return _VW_CACHE
 
 
-def _load_runtime_state(root=None):
-    """Load flow-unit-runtime.json via verify_workflow's path resolver.
-
-    Returns the parsed dict, or ``None`` if the file is missing or unreadable.
-    Never raises — callers rely on a graceful "no data" response. This mirrors
-    the ``_load_runtime`` helper in loop_health.py.
-    """
-    try:
-        vw = _vw()
-        path = vw._flow_unit_runtime_path(root)
-    except Exception:  # pragma: no cover - defensive (vw loader shape changed)
-        return None
-    if path is None or not Path(path).exists():
-        return None
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-# The four canonical loop tiers (ADR §4.6). Used to key the by_tier summary.
-_LOOP_TIERS = ("setup", "inner", "middle", "outer")
-
-
 def rollup_loop_state(root=None, plugin_home=None):
-    """Roll up per-flow-unit loop_state from flow-unit-runtime.json.
-
-    Returns a per-unit view — NOT a single global stage. This resolves
-    RISK-037 criterion 2: the plan-tracker's single ``当前阶段`` field is
-    replaced by a per-unit decomposition ("chapter 1 released, chapter 2 in
-    Inner loop round 2, chapter 3 in Middle design iteration").
-
-    PURE READ — no writes, no side effects. Fail-closed: a missing or corrupt
-    runtime.json yields safe defaults (empty units, ``runtime_found=False``)
-    and NEVER raises.
-
-    LOAD-BEARING INVARIANT: the returned dict ALWAYS sets
-    ``no_global_stage: True`` and contains NO field that collapses multiple
-    units into one stage (no ``current_stage``, ``global_stage``,
-    ``single_stage``, etc.). This is the RISK-037 criterion 2 executable
-    guarantee — proven by ``tests/test_loop_rollup.py``.
-
-    Args:
-        root: Optional host project root (path or str). Used to locate
-            ``flow-unit-runtime.json`` via verify_workflow's loader. Defaults
-            to the verify_workflow ROOT.
-        plugin_home: Optional plugin-home override (accepted for symmetry with
-            the other loop_engine functions; the rollup is runtime-only and
-            does not read the registry, so this is currently unused but kept
-            for API consistency with FX-188/189 peers).
-
-    Returns:
-        dict with:
-          - ``units``: list of per-unit dicts, each with keys
-            ``{flow_unit_id, unit_type, active_loop_tier, loop_count,
-            agent_phase, last_gate_result, fuse_tripped}``.
-          - ``summary``: ``{total_units, active_loops,
-            by_tier: {setup, inner, middle, outer}}``.
-          - ``no_global_stage``: always ``True`` (the load-bearing invariant).
-          - ``runtime_found``: bool — False when runtime.json is absent/corrupt.
-
-        If flow-unit-runtime.json doesn't exist (pre-migration), returns::
-
-            {"units": [], "summary": {...}, "no_global_stage": True,
-             "runtime_found": False,
-             "message": "flow-unit-runtime.json not found — project not yet "
-                        "migrated to loop-engineering"}
-    """
-    runtime = _load_runtime_state(root)
-    if not isinstance(runtime, dict):
-        return {
-            "units": [],
-            "summary": {
-                "total_units": 0,
-                "active_loops": 0,
-                "by_tier": {tier: 0 for tier in _LOOP_TIERS},
-            },
-            "no_global_stage": True,
-            "runtime_found": False,
-            "message": (
-                "flow-unit-runtime.json not found — project not yet migrated "
-                "to loop-engineering"
-            ),
-        }
-
-    flow_units = runtime.get("flow_units")
-    if not isinstance(flow_units, list):
-        flow_units = []
-
-    units = []
-    by_tier = {tier: 0 for tier in _LOOP_TIERS}
-    active_loops = 0
-
-    for unit in flow_units:
-        if not isinstance(unit, dict):
-            continue
-        ls = unit.get("loop_state")
-        if not isinstance(ls, dict):
-            ls = {}
-
-        active_loop = bool(ls.get("active_loop", False))
-        raw_tier = ls.get("active_loop_tier")
-
-        # Dormant units (active_loop false) report tier=None regardless of any
-        # stale active_loop_tier value. Active units report their tier as-is.
-        tier = raw_tier if (active_loop and isinstance(raw_tier, str)) else None
-
-        # Count active units into the by_tier buckets (case-insensitive key).
-        if tier is not None:
-            tier_key = tier.lower()
-            if tier_key in by_tier:
-                by_tier[tier_key] += 1
-
-        try:
-            loop_count = int(ls.get("loop_count", 0))
-        except (TypeError, ValueError):
-            loop_count = 0
-
-        if active_loop:
-            active_loops += 1
-
-        # Fuse tripped flag — nested under loop_state.fuse.tripped (FX-189 shape).
-        fuse = ls.get("fuse")
-        if isinstance(fuse, dict):
-            fuse_tripped = bool(fuse.get("tripped", False))
-        else:
-            fuse_tripped = False
-
-        units.append({
-            "flow_unit_id": unit.get("flow_unit_id"),
-            "unit_type": unit.get("unit_type"),
-            "active_loop_tier": tier,
-            "loop_count": loop_count,
-            "agent_phase": ls.get("agent_phase"),
-            "last_gate_result": ls.get("last_gate_result"),
-            "fuse_tripped": fuse_tripped,
-        })
-
-    return {
-        "units": units,
-        "summary": {
-            "total_units": len(units),
-            "active_loops": active_loops,
-            "by_tier": by_tier,
-        },
-        "no_global_stage": True,
-        "runtime_found": True,
-    }
+    """Read the same committed project state used by bootstrap and the dashboard."""
+    from governance_readers import loop_state
+    return loop_state(root if root is not None else _vw().HOST_PROJECT_ROOT)

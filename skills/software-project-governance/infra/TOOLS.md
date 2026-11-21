@@ -20,15 +20,15 @@
 | TOOL-012 | Git hooks 防护网 | hook | `infra/hooks/` | commit 前后执行治理门禁、证据检查、锁清理时 | 全部阶段 | 否（由 Git 自动触发） |
 | TOOL-013 | 交叉引用检查 | script | `infra/verify_workflow.py check-cross-references` | 路径迁移、文档/skill/agent 引用变更后 | 架构/维护 | 是 |
 | TOOL-014 | 真实 agent runtime E2E harness | script | `infra/verify_workflow.py agent-runtime-e2e` | Claude/Codex/Gemini/opencode 真实运行环境入口验证时 | 测试/发布/维护 | 是 |
-| TOOL-015 | AI execution packet 生成与检查 | script | `infra/verify_workflow.py execution-packet` + `check-governance` Check 18c | 活跃 P0/P1 任务开始前生成短上下文执行包，提交前验证短包存在且字段有效 | 全部阶段 | 是 |
+| TOOL-015 | AI execution packet 生成与检查 | script | `infra/verify_workflow.py execution-packet` + `check-governance` Check 18c | 按接收方需要生成目标单元的执行包并验证已声明的交接 | 全部阶段 | 是 |
 | TOOL-016 | Projection sync guard | script | `infra/verify_workflow.py check-projection-sync` + `check-governance` Check 28b | workflow source、target fixture、native entry、plugin manifest 变更后 | 测试/发布/维护 | 是 |
 | TOOL-017 | Hot fact-source consistency guard | script | `infra/verify_workflow.py check-hot-fact-source` + `check-governance` Check 28c | plan-tracker 热区项目配置、总览、活跃事项、路线图、依赖链和需求矩阵变更后 | 发布/维护 | 是 |
-| TOOL-018 | Product Success Contract guard | script | `infra/verify_workflow.py check-product-success-contracts` + `check-governance` Check 18d | P0/P1 任务启动和关闭前检查产品成功契约 | 开发/测试/发布/维护 | 是 |
-| TOOL-019 | Executable Acceptance Contract guard | script | `infra/verify_workflow.py check-acceptance-contracts` + `check-governance` Check 18e | P0/P1 任务启动和关闭前检查可运行验收契约 | 开发/测试/发布/维护 | 是 |
-| TOOL-020 | Quality Budget Gate | script | `infra/verify_workflow.py check-quality-budget` + `check-governance` Check 18f | P0/P1 任务启动和关闭前检查六维质量预算 | 开发/测试/CI/CD/发布/维护 | 是 |
-| TOOL-021 | Vertical Slice Delivery Packet guard | script | `infra/verify_workflow.py check-vertical-slices` + `check-governance` Check 18g | P0/P1 任务启动和关闭前检查用户可见切片、demo、scope guard 和 rollback | 开发/测试/发布/维护 | 是 |
+| TOOL-018 | Product Success Contract guard | script | `infra/verify_workflow.py check-product-success-contracts` + `check-governance` Check 18d | 对接收方要求的交接检查产品成功契约 | 开发/测试/发布/维护 | 是 |
+| TOOL-019 | Executable Acceptance Contract guard | script | `infra/verify_workflow.py check-acceptance-contracts` + `check-governance` Check 18e | 对接收方要求的交接检查可运行验收契约 | 开发/测试/发布/维护 | 是 |
+| TOOL-020 | Quality Budget Gate | script | `infra/verify_workflow.py check-quality-budget` + `check-governance` Check 18f | 检查已声明的质量阈值及验证证据 | 开发/测试/CI/CD/发布/维护 | 是 |
+| TOOL-021 | Vertical Slice Delivery Packet guard | script | `infra/verify_workflow.py check-vertical-slices` + `check-governance` Check 18g | 对接收方要求的交接检查用户可见切片、demo、scope guard 和 rollback | 开发/测试/发布/维护 | 是 |
 | TOOL-022 | Weak-LLM Deterministic Scaffold generator/check | script + template | `infra/verify_workflow.py generate-deterministic-scaffold` + `check-deterministic-scaffolds` + `check-governance` Check 18h | 弱 LLM 或新项目启动时生成 PRD-lite、验收、质量预算、垂直切片和 demo checklist 脚手架 | 立项/开发/测试/发布/维护 | 是 |
-| TOOL-023 | User Interruption Policy v2 guard | script + template | `infra/verify_workflow.py check-interruption-policy` + `check-governance` Check 18i | P0/P1 任务启动和关闭前检查 critical-only 打断边界、assumption record 和打断预算 | 立项/开发/测试/发布/维护 | 是 |
+| TOOL-023 | User Interruption Policy v2 guard | script + template | `infra/verify_workflow.py check-interruption-policy` + `check-governance` Check 18i | 对接收方要求的交接检查 critical-only 打断边界、assumption record 和打断预算 | 立项/开发/测试/发布/维护 | 是 |
 | TOOL-024 | Runtime Readiness Matrix guard | script + doc | `infra/verify_workflow.py check-runtime-readiness-matrix` + `check-governance` Check 28d | adapter runtime facts、公开 readiness matrix 或 release gate 变更后 | 测试/发布/维护 | 是 |
 | TOOL-025 | First-Session Measurement guard | script + doc | `infra/verify_workflow.py check-first-session-measurement` + `check-governance` Check 28e | local demo / external pilot 证据或 release note boundary 变更后 | 测试/发布/维护 | 是 |
 | TOOL-026 | Governance Pack Registry guard | script + registry | `infra/verify_workflow.py check-governance-packs` + `check-governance` Check 28f | composable governance pack registry、pack 文件/检查归属或 no-overclaim boundary 变更后 | 架构/测试/发布/维护 | 是 |
@@ -42,10 +42,9 @@
 | TOOL-035 | Mainstream Agent Loading guard | script + README/adapter docs contract | `infra/verify_workflow.py check-mainstream-agent-loading` + `check-governance` Check 28n | 0.47.0 README mainstream loading matrix、Tier 1 adapter loading guide、Tier 2 compatibility/research rows 或 no-overclaim boundary 变更后 | 调研/测试/发布/维护 | 是 |
 | TOOL-036 | External Project Validation harness | script + temporary workspace | `infra/verify_workflow.py external-project-validation --target <path> --fail-on-issues` | 1.0.0 前外部项目验证、VAL-001 复跑、真实外部 target 的完整 workflow surface 验证 | 测试/发布/维护 | 是 |
 | TOOL-037 | Dynamic Lifecycle Registry guard | script + registry | `infra/verify_workflow.py check-lifecycle-registry` + `core/lifecycle-registry.json` | 0.51.0 lifecycle registry、classic-phase-gate 兼容 preset、flow unit schema 或 schema-only/no-overclaim 边界变更后 | 架构/测试/发布/维护 | 是 |
-| TOOL-038 | Flow Unit Runtime hot-state guard | script + optional hot state | `infra/verify_workflow.py check-flow-unit-runtime [--fixture <path>] --fail-on-issues` + optional `.governance/flow-unit-runtime.json` | 0.52.0 flow-unit runtime visibility、active lanes、per-unit gate state、loop counters、blocked downstream units 或 rollup status 变更后 | 架构/测试/发布/维护 | 是 |
+| TOOL-038 | 工作单元状态检查 | CLI | `check-flow-unit-runtime [--fixture <path>]` | 核对宿主当前单元、适用门禁或其证据 | 架构/测试/维护 | 是 |
 | TOOL-039 | Project-Type Gate Presets guard | script + registry presets | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `core/lifecycle-registry.json` `project_type_gate_presets` | 0.53.0 project type gate presets、profile/project-type 正交边界、默认 packs、质量预算、验收模板、release checks、gate policy 或 gate standards 变更后 | 架构/测试/发布/维护 | 是 |
-| TOOL-040 | Classic Gate Execution Registry guard | script + registry execution metadata | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `infra/verify_workflow.py gate-check <G1-G11>` + `core/lifecycle-registry.json` `gate_execution_registry` | 0.54.0 classic G1-G11 registry execution、gate checks、evidence query、automation metadata、human-confirmation policy、severity 或 project-type overrides 变更后 | 架构/测试/发布/维护 | 是 |
-| TOOL-041 | Dynamic Lifecycle Migration dry-run preview | script + migration guide | `infra/verify_workflow.py dynamic-lifecycle-migration --target <path> --dry-run` + `docs/migration/dynamic-flow-gate-migration-0.55.0.md` | classic 项目迁移前清点现有事务、plan/evidence 文件及阻塞原因时 | 架构/测试/发布/维护 | 是 |
+| TOOL-040 | Gate Execution Registry guard | script + registry execution metadata | `infra/verify_workflow.py check-lifecycle-registry --fail-on-issues` + `infra/verify_workflow.py gate-check <G1-G11>` + `core/lifecycle-registry.json` `gate_execution_registry` | 0.54.0 classic G1-G11 registry execution、gate checks、evidence query、automation metadata、human-confirmation policy、severity 或 project-type overrides 变更后 | 架构/测试/发布/维护 | 是 |
 | TOOL-043 | ArchGuard Architecture Health | CLI check (advisory) | `infra/verify_workflow.py check-architecture-health` + `core/architecture-health.json` | 0.58.0 模块/函数/模块常量大小阈值 + 重复常量检测（3 级 PASS/WARN/ERROR，advisory 不阻断 release） | 架构/维护 | 是 |
 | TOOL-044 | ArchGuard Duplicate Code | CLI check (advisory) | `infra/verify_workflow.py check-duplicate-code` | 0.58.0 source/projection 语义重复检测（normalize 换行符 + 忽略空白，避免 CRLF/LF 误判） | 架构/维护 | 是 |
 | TOOL-045 | ArchGuard Technical Debt | CLI check (advisory) | `infra/verify_workflow.py check-technical-debt` + `core/technical-debt-ledger.md` | 0.58.0 根目录游离脚本/历史 release 文档/hooks 内容漂移/技术债登记交叉验证 | 维护 | 是 |
@@ -115,7 +114,7 @@
 ### TOOL-006：校验脚本
 
 - **文件**：`infra/verify_workflow.py`
-- **子命令**：`verify`（全量校验）、`status`（治理状态摘要）、`gate <G1-G11>`（Gate 详情）、`gate-check <G1-G11>`（registry-backed Gate 自动判定）、`gates`（全部 Gate 状态）、`stage <stage-id>`（阶段状态）、`stages`（全部阶段状态）、`check-governance --fail-on-issues`（治理健康检查）、`e2e-check`（E2E proxy + fixture 分层检查）、`external-project-validation --target <path> --fail-on-issues`（外部项目临时验证 workspace）、`check-version-consistency`、`check-manifest-consistency`、`check-governance-packs`、`check-capability-registry`、`check-lifecycle-registry`、`check-host-capability-context`、`check-readme-pack-guidance`、`check-governance-pack-status`、`capability-context`、`check-deterministic-scaffolds`、`check-interruption-policy`、`generate-deterministic-scaffold`、`check-locks`、`check-archive-integrity`
+- **子命令**：`verify` 检查产品一致性，`governance-bootstrap` 和 `loop status` 恢复项目。工作单元的建立、动作和独立回执消费见 TOOL-054。`gate-check <Gx>` 可诊断相关工件。
 - **输入**：无（自动读取项目文件）
 - **输出**：校验结果（PASSED/FAILED）+ 治理状态摘要
 - **触发条件**：工作流资产变更后、Gate 检查时、定期巡检
@@ -132,16 +131,9 @@
 - **依赖**：`commands/governance-init.md` 中的 canonical bootstrap 模板
 - **被以下子工作流使用**：维护（maintenance）
 
-### TOOL-008：发布就绪检查
+### TOOL-008 发布就绪检查
 
-- **文件**：`infra/verify_workflow.py`
-- **子命令**：`check-release [--version X.Y.Z] [--require-changelog] [--runtime-adapters] [--skip-execution-gates] [--lineage-mode candidate|released] [--release-commit COMMIT] [--lineage-remote REMOTE]`
-- **输入**：可选版本号；可选要求 CHANGELOG 已包含该版本；可选本机 agent runtime probe；默认执行发布门禁命令。`candidate` 是提交/tag 创建前的兼容模式；`released` 要求显式 release commit，并验证本地 tag、tag 指向和 remote tag 状态。
-- **输出**：发布就绪检查结果（PASSED/FAILED）+ 版本一致性、release fact source、release lineage、agent adapter、交叉引用、归档完整性、`verify`、`check-governance --fail-on-issues`、`e2e-check`、unittest 分项结果
-- **触发条件**：`stage-release` 执行发布 checklist 时；0.35.0 及后续版本发布前
-- **依赖**：`check_version_consistency()`、`check_release_readiness_fact_source()`、`check_agent_adapter_contract()`、`check_cross_references()`、`check_archive_integrity()`、`verify_workflow.py verify`、`check-governance --fail-on-issues`、`e2e-check`、`python -m unittest skills/software-project-governance/infra/tests/test_verify_workflow.py -v`
-- **降级口径**：`--skip-execution-gates` 仅用于诊断静态聚合，不作为正式发布 checklist 通过证据；`candidate` 通过也不证明 tag 已创建或推送，发布完成后必须以 `--lineage-mode released --release-commit <commit>` 复验。
-- **被以下子工作流使用**：版本发布（release）
+`check-release --version X.Y.Z --unit <发布单元> [--json]` 复核该版本的 G9 审查、候选身份、子单元证据和交付契约。在宿主仓读取本项目的 CI 声明与凭证。治理插件发布还检查插件的入口、投影、适配器和发行材料，并运行适用的集成验证。`--skip-execution-gates` 供诊断使用，候选版本仍须提交自己的签核。发布后运行 `check-release --lineage-mode released --version X.Y.Z --release-commit <commit>` 核对本地和远端标签。
 
 ### TOOL-009：主流 agent adapter 检查
 
@@ -210,8 +202,8 @@
 - **文件**：`infra/verify_workflow.py`
 - **子命令**：`execution-packet [--write] [--task TASK_ID]`
 - **输入**：`.governance/plan-tracker.md` 的 `## 当前活跃事项`
-- **输出**：`.governance/execution-packets.json`，包含每个活跃 P0/P1 任务的 `goal`、`allowed_change_scope`、`required_evidence`、`next_commands`、`done_definition`
-- **触发条件**：每个 P0/P1 任务启动前；`check-governance` Check 18c 发现缺包或短包无效时
+- **输出**：`.governance/execution-packets.json`，包含每个已选交接单元的 `goal`、`allowed_change_scope`、`required_evidence`、`next_commands`、`done_definition`
+- **触发条件**：当用户或宿主明确要求交接；`check-governance` Check 18c 发现缺包或短包无效时
 - **依赖**：`check-governance`、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：全部阶段，尤其是维护、开发、发布
 
@@ -239,9 +231,9 @@
 
 - **文件**：`infra/verify_workflow.py`
 - **子命令**：`check-product-success-contracts [--fail-on-issues]`
-- **输入**：`.governance/execution-packets.json` 中活跃 P0/P1 任务的 `product_success_contract`
+- **输入**：`.governance/execution-packets.json` 中交接单元的 `product_success_contract`
 - **输出**：每个活跃任务的用户、JTBD、非目标、成功指标、竞争基线和完成定义完整性检查结果；拒绝占位草案和仅 governance/review/evidence 完成的流程型指标
-- **触发条件**：P0/P1 任务启动前、任务关闭前、发布前产品成功门禁复核时
+- **触发条件**：交接方要求对应契约时或发布前产品成功门禁复核时
 - **依赖**：`check-governance` Check 18d、`core/templates/product-success-contract.md`、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：立项（initiation）、开发（development）、测试（testing）、发布（release）、维护（maintenance）
 
@@ -249,9 +241,9 @@
 
 - **文件**：`infra/verify_workflow.py`
 - **子命令**：`check-acceptance-contracts [--fail-on-issues]`
-- **输入**：`.governance/execution-packets.json` 中活跃 P0/P1 任务的 `acceptance_contract`
+- **输入**：`.governance/execution-packets.json` 中交接单元的 `acceptance_contract`
 - **输出**：每个活跃任务的验收场景、可运行命令、预期输出、最近运行结果和 demo 证据检查结果；拒绝占位草案、不可运行命令和未 PASS 的最近运行结果
-- **触发条件**：P0/P1 任务启动前、任务关闭前、发布前验收门禁复核时
+- **触发条件**：交接方要求对应契约时或发布前验收门禁复核时
 - **依赖**：`check-governance` Check 18e、`core/templates/executable-acceptance-contract.md`、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：开发（development）、测试（testing）、发布（release）、维护（maintenance）
 
@@ -259,9 +251,9 @@
 
 - **文件**：`infra/verify_workflow.py`
 - **子命令**：`check-quality-budget [--fail-on-issues]`
-- **输入**：`.governance/execution-packets.json` 中活跃 P0/P1 任务的 `quality_budget`
-- **输出**：每个活跃任务的 performance、reliability、security、accessibility、ux、maintainability 六维质量预算检查结果；拒绝占位草案、缺维度、失败状态和无理由例外
-- **触发条件**：P0/P1 任务启动前、任务关闭前、发布前质量门禁复核时
+- **输入**：`.governance/execution-packets.json` 中交接单元的 `quality_budget`
+- **输出**：实际约定维度的检查结果；占位数据、失败状态和无依据的例外须修正
+- **触发条件**：交接方要求对应契约时或发布前质量门禁复核时
 - **依赖**：`check-governance` Check 18f、`core/templates/quality-budget.md`、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：开发（development）、测试（testing）、CI/CD、发布（release）、维护（maintenance）
 
@@ -269,9 +261,9 @@
 
 - **文件**：`infra/verify_workflow.py`
 - **子命令**：`check-vertical-slices [--fail-on-issues]`
-- **输入**：`.governance/execution-packets.json` 中活跃 P0/P1 任务的 `vertical_slice`
+- **输入**：`.governance/execution-packets.json` 中交接单元的 `vertical_slice`
 - **输出**：每个活跃任务的用户可见切片、demo 路径、范围边界、回滚方案、状态和证据检查结果；拒绝占位草案、纯技术层切片、不可演示路径、全仓范围和 review/prose-only 证据
-- **触发条件**：P0/P1 任务启动前、任务关闭前、发布前垂直切片门禁复核时
+- **触发条件**：交接方要求对应契约时或发布前垂直切片门禁复核时
 - **依赖**：`check-governance` Check 18g、`core/templates/vertical-slice-delivery-packet.md`、`core/templates/execution-packet.md`
 - **被以下子工作流使用**：开发（development）、测试（testing）、发布（release）、维护（maintenance）
 
@@ -289,7 +281,7 @@
 
 - **文件**：`infra/verify_workflow.py` + `core/templates/user-interruption-policy.md` + `references/interaction-boundary.md`
 - **子命令**：`check-interruption-policy [--fail-on-issues]`；alias `check-user-interruption-policy [--fail-on-issues]`
-- **输入**：interaction boundary 规则、用户打断策略模板、`.governance/execution-packets.json` 中活跃 P0/P1 任务的 `interruption_policy`
+- **输入**：interaction boundary 规则、用户打断策略模板、`.governance/execution-packets.json` 中交接单元的 `interruption_policy`
 - **输出**：critical-only 策略完整性、产品意图/验收标准/不可逆决策分类 examples、assumption record 五字段和 interruption budget 检查结果
 - **触发条件**：P0/P1 任务启动前、任务关闭前、用户反馈打断过多或关键处漏问、发布前 0.39.0 产品成功门禁复核时
 - **依赖**：`check-governance` Check 18i、`core/templates/execution-packet.md`
@@ -429,27 +421,13 @@
 - **边界**：temporary workspace only；不修改 `--target`；不是 official approval；不是 marketplace approval；不是 external validation full PASS；不是 Desktop lifecycle E2E PASS；不关闭 RISK-036；不是 1.0.0 production-ready
 - **被以下子工作流使用**：测试（testing）、发布（release）、维护（maintenance）
 
-### TOOL-037：Dynamic Lifecycle Registry guard
+### TOOL-037：生命周期登记校验
 
-- **文件**：`infra/verify_workflow.py` + `core/lifecycle-registry.json`
-- **子命令**：`check-lifecycle-registry [--fail-on-issues]`
-- **输入**：canonical lifecycle registry 中的 `active_lifecycle_mode`、`default_lifecycle_mode`、classic/dynamic lifecycle modes、stage/subphase vocabulary、loop policy、allowed transitions、gate references、project type hooks、flow unit schema
-- **输出**：active/default lifecycle mode 是否仍为 `classic-phase-gate`；dynamic-flow-gate 是否保持 schema-only inactive；flow unit schema 是否覆盖必需字段；是否阻断 RISK-037 closure 或 1.0.0 readiness overclaim
-- **触发条件**：新增或调整 lifecycle registry、flow-unit schema、project-type hooks、stage/subphase vocabulary、loop policy、allowed transitions、gate references 或 schema-only release boundary 后
-- **依赖**：`core/manifest.json`、`check-manifest-consistency`、classic G1-G11 `core/stage-gates.md`
-- **边界**：schema-only registry；不激活 flow-unit runtime；不迁移项目；不替代 classic G1-G11；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready
-- **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
+`check-lifecycle-registry` 校验活跃默认 `loop-engineering`、活动目录、按单元使用的实质检查条款和拓扑引用。运行状态以 `loop status` 为准。
 
-### TOOL-038：Flow Unit Runtime hot-state guard
+### TOOL-038 工作单元状态检查
 
-- **文件**：`infra/verify_workflow.py`
-- **子命令**：`check-flow-unit-runtime [--fixture <path>] [--fail-on-issues]`
-- **输入**：可选热状态文件 `.governance/flow-unit-runtime.json`，包含 `workflow_model`、`flow_units`、`active_lanes`、per-unit `gate_state`、`loop_state.loop_count`、`blocked_downstream_units`、`rollup_status` 和 no-overclaim boundary；文件缺失时安全通过并报告 NOT_FOUND。
-- **输出**：flow-unit runtime hot-state 检查结果，展示 workflow model、active lanes、rollup status、blocked downstream units 和 loop counters。
-- **触发条件**：0.52.0 flow-unit runtime visibility、status/context output、python_game 多章节热状态、dependency blocking 或 loop counter 语义变更后。
-- **依赖**：`check-lifecycle-registry`、classic G1-G11 vocabulary、optional hot project state。
-- **边界**：runtime visibility only；不激活 declarative gate engine；不迁移项目；classic G1-G11 保持兼容；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready。
-- **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
+`check-flow-unit-runtime [--fixture <path>]` 使用会话与面板的同一读面，列出每个单元的目标、验收条件、所属循环、当前门禁、最近证据和下一步。新项目没有单元时显示空状态。无法验证的原件或损坏状态返回非零。
 
 ### TOOL-039：Project-Type Gate Presets guard
 
@@ -458,31 +436,15 @@
 - **输入**：canonical lifecycle registry 中的 `project_type_hooks` 与 `project_type_gate_presets`，覆盖 game、web-app、mobile-app、library、cli-tool、ai-agent-plugin、internal-script；每个 preset 的 profile 正交边界、默认 packs、质量预算、验收模板、release checks、gate policy 和 gate standards。
 - **输出**：required project types 是否完整；preset 是否有 hook 对应项；default flow unit type 是否同时属于 preset/hook templates 和 `flow_unit_schema.allowed_unit_types`；profile/project-type 是否声明正交；game 是否覆盖 chapter/level/asset/narrative/playability gate standards；library 是否覆盖 api/semver/docs/downstream-tests gate standards；no-overclaim 文本是否阻断 declarative gate engine、项目迁移、dynamic default、RISK-036/RISK-037 closure 和 1.0.0 readiness。
 - **触发条件**：0.53.0 project-type gate presets、项目类型默认 packs、质量预算、验收模板、release checks、gate policy、gate standards 或 profile/project-type 正交边界变更后。
-- **依赖**：TOOL-037、`core/manifest.json`、classic G1-G11 `core/stage-gates.md`、`check-manifest-consistency`。
+- **依赖**：TOOL-037、`core/manifest.json`、`core/stage-gates.md`、`check-manifest-consistency`。
 - **边界**：preset data contract only；classic-phase-gate 保持 active/default；dynamic-flow-gate 保持 inactive/schema-only；不激活 declarative gate engine；不迁移项目；不把 dynamic-flow-gate 设为默认；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready。
 - **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
-### TOOL-040：Classic Gate Execution Registry guard
+### TOOL-040：门禁检查目录校验
 
-- **文件**：`infra/verify_workflow.py` + `core/lifecycle-registry.json`
-- **子命令**：`check-lifecycle-registry [--fail-on-issues]`；运行时检查使用 `gate-check <G1-G11>`
-- **输入**：canonical lifecycle registry 中的 `gate_execution_registry`，覆盖 G1-G11 的 `required_artifacts`、`checks`、`evidence_query`、`automation_command`、`human_confirmation_policy`、`severity` 和 `project_type_overrides`。
-- **输出**：`classic_registry_execution` 是否启用；G1-G11 是否按顺序完整声明；check executor/function/severity 是否可识别；project-type override 是否只引用已声明项目类型并 fail-closed；automation command 是否仅作为 metadata 且不由 gate judgment 执行。
-- **触发条件**：0.54.0 classic G1-G11 registry execution、`auto_judge_gate` 判定路径、gate/check metadata 或 project-type override schema 变更后。
-- **依赖**：TOOL-037、TOOL-039、`core/stage-gates.md`、`check-manifest-consistency`。
-- **边界**：classic registry execution only；`runtime_activation.declarative_gate_engine` 保持 false；不激活 flow-unit runtime；不迁移项目；不把 dynamic-flow-gate 设为默认；不执行 registry 中声明的 automation command；不关闭 RISK-036/RISK-037；不是 1.0.0 production-ready。
-- **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
+`check-gate-execution-registry` 核对每个门所需的工件、检查函数、授权和实质条件。`loop gate` 将适用条件与本单元的独立证据绑定。
 
-### TOOL-041：Dynamic Lifecycle Migration dry-run preview
 
-- **文件**：`infra/verify_workflow.py` + `docs/migration/dynamic-flow-gate-migration-0.55.0.md`
-- **子命令**：`dynamic-lifecycle-migration --target <path> --dry-run [--fail-on-issues]`；别名 `dynamic-flow-gate-migration`
-- **输入**：目标项目根目录或 fixture。读取 `.governance/plan-tracker.md`、`.governance/evidence-log.md`、可选 `.governance/flow-unit-runtime.json` 和 canonical lifecycle registry。
-- **输出**：JSON 预览列出当前模型、项目已记录的事务和泳道、plan/evidence 原文哈希及阻塞原因。缺少 runtime 时，`flow_units.source` 为 `none`，记录数为 0。已有但不可读或结构损坏时返回 `BLOCKED`。
-- **触发条件**：迁移前需要清点目标项目的现有状态并核对证据。
-- **依赖**：TOOL-037、TOOL-038、TOOL-040、`check-manifest-consistency`。
-- **边界**：`--dry-run` 只读。现有事务由项目 runtime 提供，包括无 schema 版本的旧记录。拟迁移事务及计划哈希可从 `infra/loop_migration.py --target <path> --dry-run` 获取。
-- **被以下子工作流使用**：架构设计（architecture）、测试（testing）、发布（release）、维护（maintenance）
 
 ### TOOL-042：Local Web Console launcher
 
@@ -564,16 +526,14 @@
   `python <plugin_home>/infra/verify_workflow.py governance-cost-report --sessions-root "$env:DSH_SESSIONS_ROOT" --workspace project_management_workflow --ttfa-acceptance --format text`
 - **被以下子工作流使用**：架构、开发、测试、维护（FEAT-033/034/039 消费其指标；RISK-055 复验）
 
-### TOOL-054：只读 bootstrap 聚合命令（FEAT-033 / AUDIT-154 切片 A-2）
+### TOOL-054：工作单元启动、恢复和门禁
 
-- **文件**：`infra/bootstrap_aggregate.py`（核心模块，engine-free）、`infra/tests/test_bootstrap_aggregate.py`；参数入口在 `verify_workflow.py`，命令处理函数由 `registry.py` 声明
-- **子命令**：`governance-bootstrap [--budget-ms N] [--format json|text] [--profile lite|standard|strict]`（`--project-root` 走引擎全局参数；缺省 cwd，fail-closed）
-- **输入**：`.governance/` 活数据只读（plan-tracker.md / risk-log.md / decision-log.md，UTF-8 行级解析）+ `resolve_entry.resolve()` envelope（dual-root 权威，DEC-096）+ `task_priority` 轻量依赖分析（纯 stdlib 复用，非重新推导）
-- **输出**：机读 JSON（schema `governance-bootstrap/1`，≤8KB 投影 / ≤2K token）或 ≤40 行 text 摘要。聚合面：`resolve`（envelope 子集）+ `migration`（active vs plan 版本比较**仅标志不执行**）+ `project`/`gates`（计数 + 首 pending gate）/`tasks`（tpa 口径统计：total/completed/unblocked/blocked/non_executable/p0_pending）/`risks`（open/overdue/soon + ≤3 overdue ids）/`recent`（≤3/5 决策，lite 档省略）/`candidates`（recommended_next ≤1/3/5，空推荐携带 `empty_reason`+`unblock_recommendation` 结构化原因——REQ-110，禁止机械枚举）+ `health`（**v1 恒 `deferred`**：`pending_checks` + 指向 `check-governance` 的 next_action——本命令未做健康检查，不得伪装已检查）+ `next_actions`（≤5 条派生指引）
-- **预算契约**：`--budget-ms`（默认 3000）单调钟相位间检查；超时返回已完成部分 + `deferred: [{section, reason: budget_exhausted}]` 明示未完成范围（fail-safe 不猜测通过；health 的 deferred 是 v1 契约，与预算 deferred 是两回事）
-- **只读红线**：零 `.governance` 写入、零 git 写入、零子进程派发、不调用 archive/迁移；连续两次运行输出一致（仅 `generated_at`/`duration_ms` 易变）——测试以 fixture 树哈希 + 双跑 payload 相等断言看护
-- **边界**：不 import `verify_workflow`（ArchGuard R2 零新增反向边——状态投影为**已披露镜像**，与 resolve_entry 镜像引擎 regex 同一纪律）；`status` 仍是全量投影依赖（Delivery Trust Snapshot/Gate 全表以 status 为准）；协议重排（Scenario 顺序/交互时序）是 FEAT-034 边界，本命令只做数据面聚合
-- **被以下子工作流使用**：立项/架构/开发/测试/发布/运营/维护（每会话 bootstrap 快路径；governance 命令文档的 Scenario F/D 数据源段与入口 SKILL 的 bootstrap 健康摘要段已接线指向）
+- `governance-bootstrap [--budget-ms N] [--format json|text] [--profile lite|standard|strict]` 在项目根只读运行。`governance-bootstrap/2` 返回 `resolve`、当前 `loops`、任务、风险、近期决策、建议和延期项。未初始化、数据损坏和已有阻塞分别呈现。详情用 `loop status [--unit <id>] [--json]` 核对。
+- `loop start --unit <id> --intent "<用户原话>" --goal "<目标>" --acceptance "<复验操作>" --tier <setup|inner|middle|outer>` 建立工作单元。已受理的工作沿用立项依据，DSH 已绑定的目标沿原生契约继续。首次立项显式指定 `--tier setup --gate G1`，子项用 `--parent`，发布用 `--release-version`。
+- `loop learn --unit <id> --id <记录ID> --kind decision --observation "<实测结果>" --action "<选定的做法>" --validation "<如何复验>" --evidence <项目相对路径>` 保留本轮取舍，再按原验收操作检验成品。交付反馈可用同一命令加 `--kind opportunity` 记录建议和成功条件。选定后用 `loop start --unit <新单元> --tier <层级> --after <已完成单元> --from-learning <机会ID>` 开始后继工作。
+- 可重放的局部修复可在 `loop start` 同时提供 `--check-command`（参数数组）和 `--expect-output`。`loop verify --unit <id>` 从项目根执行操作，要求退出码为零、完整 UTF-8 标准输出与预期相符。LF 与 CRLF 等价，末尾可有一个换行；其余空格和额外内容参与比较。复杂检查可用项目断言命令验证结果，将日志发往标准错误，仅将预期结果写到标准输出。
+- 操作者用 `loop step --unit <id> --phase act|observe|reflect` 记录当前尝试。独立审查者用 `review-record` 登记工件和裁决；`loop gate --unit <id> --gate <Gx> --review <review-id>` 消费对应回执，得到允许的动作或返工原因。参见 [运行协议](../core/lifecycle.md)。
+- 超过 bootstrap 的时间预算会保留 `deferred` 项。`resolve.resolved_root_ok` 为假时先处理根路径诊断。
 
 ### TOOL-055：注入面体积预算门禁（FEAT-039 / AUDIT-154 切片 A-8）
 
@@ -618,16 +578,7 @@
 - **发版管线自举面（FIX-383，0.88.0 B2——rollback §8 #7 ⑩拆票之一）**：`write-guard-bootstrap` 子命令——版本切换期发布链（M-1~M-8）依赖的检查器自身状态工件的自举恢复。**converge 模式**（默认）= 一次 guard persist 路径运行（基线 regen/推进 + FEAT-060 三分支查世界事务 resume + 违规重检测/资格消费）+ 收敛后世界判定——只写守卫自身工件，治理记录零写入；未收敛 → 结构化 `manual_intervention` 拒绝 + exit 1（响亮阻断，不静默吸收）。**`--check-only` 模式** = 只读世界判定（五检查：`guard_state_current` 基线在场且 schema 当前 / `row_families_clean` probe 面零问题〔零写入零消费〕/ `violation_ledger_healthy` 台账健康〔R6 损坏不吸收〕/ `no_pending_txn` 待完成消费事务为空 / `ledger_no_drift` 无行号漂移 open 记录——账本行号漂移 = open 违规登记内容摘要不再命中其登记身份；不可判定面缺席记录按资格规则消费，其余 R1/R4 保持 open 响亮）——发布窗口 preflight/审计面 + closure-chain 自举链 `release-window-bootstrap` 的效果探针（FIX-383：查世界不信日志，中断后重入零人工修复）。退出码：0 收敛 / 1 未收敛
 - **被以下子工作流使用**：全部阶段（Coordinator 直写后复跑）；CI/CD（post-commit hook 自动面板）；发布（M-1~M-8 版本切换期自举——closure-chain `release-window-bootstrap` 链承载）
 
-### TOOL-050：Loop Runtime Claim Gate
 
-- **文件**：`infra/checks/loop_runtime_claims.py`、`core/loop-runtime-claim-allowlist.json`、`core/loop-runtime-claim-authority.json`
-- **子命令**：`check-loop-runtime-claims --product-root <path> --project-root <host> [--scan-mode product_release|installed_host]`
-- **输入**：产品根下 `docs/`、`project/`、`skills/` 的全部 Markdown/Python/JSON 候选，以及显式 host root 的四个热治理文件
-- **输出**：完整 inventory digest、解析/semantic-unit 数量、notice/fingerprint 计数、typed blocking findings、zero skip/truncate 计数
-- **触发条件**：Loop capability wording、review SKILL、历史 0.65.0 解释、policy/authority、发布候选变化后；作为 `check-governance` Check 31 和 release gate 的阻断检查
-- **依赖**：packaged policy/authority、AUDIT-133、EVD-707、DEC-104；stdlib-only scanner leaf
-- **边界**：只证明 capability claim 与当前证据一致；不激活 Loop runtime、不修复 migration contract、不关闭 RISK-037/RISK-042；无 accept-current/refresh/auto-update
-- **被以下子工作流使用**：架构、开发、测试、发布、维护
 
 ### TOOL-044：ArchGuard Duplicate Code check
 
@@ -702,7 +653,7 @@
 | External Project Validation harness | | | | | | | ● | | ● | | ● |
 | Dynamic Lifecycle Registry guard | | | | | ● | | ● | | ● | | ● |
 | Flow Unit Runtime hot-state guard | | | | | ● | | ● | | ● | | ● |
-| Classic Gate Execution Registry guard | | | | | ● | | ● | ● | ● | | ● |
+| Gate Execution Registry guard | | | | | ● | | ● | ● | ● | | ● |
 | Dynamic Lifecycle Migration dry-run preview | | | | | ● | | ● | | ● | | ● |
 | Local Web Console launcher | ● | | | | | | ● | | | ● | ● |
 | 入口引导 bootstrap（resolve_entry 超时兜底） | | | | ● | | | | | ● | ● | ● |

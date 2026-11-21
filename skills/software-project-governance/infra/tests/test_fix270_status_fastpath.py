@@ -176,6 +176,7 @@ def _install_fixture(td):
     (gov / "evidence-log.md").write_text(_evidence_log_text(), encoding="utf-8")
     (gov / "session-snapshot.md").write_text(_snapshot_text(), encoding="utf-8")
     patchers = [
+        mock.patch.object(vw, "HOST_PROJECT_ROOT", Path(td)),
         mock.patch.object(vw, "SAMPLE_PATH", plan_path),
         mock.patch.object(vw, "SESSION_SNAPSHOT_PATH", gov / "session-snapshot.md"),
         mock.patch.object(vw, "EVIDENCE_PATH", gov / "evidence-log.md"),
@@ -284,63 +285,25 @@ class StatusCommandTests(unittest.TestCase):
             for p in patchers:
                 p.stop()
 
-    def test_status_text_sections_present(self):
+    def test_status_text_recovers_units_from_the_selected_root(self):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
             output = self._run_status(td)
-            # Legacy strings preserved (e2e validators depend on them)
-            for token in (
-                "Project Config",
-                "Project Overview",
-                "Delivery Trust Snapshot",
-                "Task Status",
-                "Gate Status",
-            ):
-                self.assertIn(token, output, f"legacy section {token} missing")
+            self.assertIn("No work units recorded", output)
             self.assertIn("maximum-autonomy", output)
-            # 新增 Scenario F sections
-            for token in (
-                "Active Risks",
-                "Recent Activity",
-                "Plugin Freshness",
-                "Next step",
-            ):
-                self.assertIn(token, output, f"new section {token} missing")
-            # Gate 表修复：G1-G11 全部打印（现状 bug 只打印最后一行）
-            for g in range(1, 12):
-                self.assertIn(f" G{g} ", output)
+            self.assertNotIn("Gate Status", output)
 
     def test_status_json_contract(self):
         import tempfile
         with tempfile.TemporaryDirectory() as td:
-            output = self._run_status(td, json_mode=True).strip()
-            data = json.loads(output)
-            self.assertEqual(
-                data["project_config"]["profile"].strip().split()[0], "standard"
-            )
-            self.assertIn("trigger_mode", data["project_config"])
-            self.assertIn("permission_mode", data["project_config"])
-            self.assertIn("workflow_version", data["project_config"])
-            gates = data["gates"]
-            self.assertGreaterEqual(len(gates), 11)
-            self.assertEqual(gates[0]["gate"], "G1")
-            self.assertIn("date", gates[0])
-            self.assertIn("evidence", gates[0])
-            stats = data["stats"]
-            self.assertEqual(stats["total"], 3)
-            self.assertEqual(stats["completed"], 1)
-            self.assertEqual(stats["blocked"], 0)
-            self.assertIn("p0_pending", stats)
-            risks = data["risks"]
-            self.assertEqual(len(risks), 2)  # F3：仅"打开"语义两条活跃风险
-            self.assertIn("escalation_soon", risks[0])
-            recent = data["recent_activity"]
-            self.assertEqual(len(recent["completed_tasks"]), 1)
-            self.assertEqual(len(recent["decisions"]), 5)
-            self.assertIn("status", data["plugin_freshness"])
-            self.assertIn("next_steps", data)
-            self.assertIn("delivery_trust_snapshot", data)
-
+            data = json.loads(self._run_status(td, json_mode=True))
+            self.assertEqual(data["project"]["profile"], "standard")
+            self.assertEqual(data["project"]["permission_mode"], "maximum-autonomy")
+            self.assertEqual(data["loops"]["state"], "empty")
+            self.assertEqual(data["loops"]["units"], [])
+            self.assertNotIn("gates", data)
+            self.assertIn("risks", data)
+            self.assertNotIn("session_closure", data["behavior"])
     def test_status_does_not_read_evidence_log(self):
         # F1（R0）：fixture 含多行 evidence-log（活跃行 EVD-002/003 备注=进行中/待处理），
         # 若 discover_governance_context 链路全量读取该文件，此处必然触发断言（先红后绿）。

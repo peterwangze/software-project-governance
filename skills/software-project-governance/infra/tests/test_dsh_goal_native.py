@@ -165,6 +165,44 @@ class NativeGoalTests(unittest.TestCase):
         (self.root / PROFILE).unlink()
         self.native("HOLD", "CONFIG_MISSING", revision=3)
 
+    def test_native_goal_reuses_one_unit_and_original_packet_until_verified_delivery(self):
+        goal = self.request["goal_id"]
+        for revision in (1, 2):
+            result = self.native("ALLOW", "ADMITTED", revision=revision)
+            self.assertEqual(goal, result["unit_id"])
+        runtime_path = self.gov / "flow-unit-runtime.json"
+        unit, = json.loads(runtime_path.read_text(encoding="utf-8"))["flow_units"]
+        self.assertEqual(goal, unit["flow_unit_id"])
+        self.assertEqual(self.objective, unit["goal"])
+        self.assertEqual(unit["delivery_contract_sha256"], result["contract_sha256"])
+        self.assertIn(self.template["criteria"]["journey"], unit["acceptance"])
+        self.assertFalse((self.gov / "change-triage").exists())
+        command = [sys.executable, "-X", "utf8", str(_INFRA / "verify_workflow.py"),
+                   "--project-root", str(self.root), "execution-packet", "--task", goal, "--write"]
+        for _ in range(2):
+            subprocess.run(command, cwd=self.root, capture_output=True, check=True, timeout=15)
+        packet = json.loads((self.gov / "execution-packets.json").read_text(encoding="utf-8"))["packets"][goal]
+        self.assertEqual(self.objective, packet["goal"])
+        self.assertEqual(unit["acceptance"], packet["acceptance_contract"]["expected_output"])
+        self.assertEqual(goal, packet["work_units"][0]["flow_unit_id"])
+        self.native("HOLD", "DELIVERY_ACCEPTANCE_FAILED", action="complete", revision=2)
+        self.receipt()
+        self.bridge("accept-delivery", exit_code=2)
+        self.native("ALLOW", "DELIVERY_ACCEPTED", action="complete", revision=2)
+        self.native("ALLOW", "DELIVERY_ACCEPTED", action="complete", revision=2)
+        closed, = json.loads(runtime_path.read_text(encoding="utf-8"))["flow_units"]
+        self.assertEqual("completed", closed["runtime_status"])
+        self.assertIsNone(closed["release_version"])
+
+    def test_generic_goal_consumes_verified_product_and_native_owner_cannot_be_bypassed(self):
+        self.write_json(self.root / CONTRACT, {**self.template, "schema_version": 1, "goal_id": self.request["goal_id"]})
+        bound = self.bridge("bind-intent", "--intent", self.objective)
+        self.assertEqual(self.request["goal_id"], bound["unit_id"])
+        self.bridge("accept-delivery", exit_code=2)
+        self.receipt()
+        self.assertEqual("exit", self.bridge("accept-delivery")["decision"])
+        self.assertTrue(self.bridge("accept-delivery")["replayed"])
+
     def test_conflicting_contract_is_preserved_and_bound_contract_bytes_cannot_drift(self):
         self.write_json(self.root / CONTRACT, {**self.template, "schema_version": 1, "goal_id": "other"})
         before = (self.root / CONTRACT).read_bytes()
@@ -182,10 +220,25 @@ class NativeGoalTests(unittest.TestCase):
     def test_p0_blocks_missing_failure_and_tampering_then_accepts_matching_receipt(self):
         self.native("ALLOW", "ADMITTED")
         self.native("HOLD", "DELIVERY_ACCEPTANCE_FAILED", action="complete")
+        runtime_file = self.gov / "flow-unit-runtime.json"
+        unit, = json.loads(runtime_file.read_bytes())["flow_units"]
+        self.assertFalse(unit.get("gate_history"))
         self.receipt("FAIL")
-        self.native("HOLD", "DELIVERY_ACCEPTANCE_FAILED", action="complete")
+        for _ in range(2):
+            failure = self.native("HOLD", "DELIVERY_ACCEPTANCE_FAILED", action="complete")
+            self.assertEqual("iterate", failure["loop_decision"])
+        unit, = json.loads(runtime_file.read_bytes())["flow_units"]
+        failed, = unit["gate_history"]
+        self.assertEqual("G9", failed["gate"])
+        self.assertEqual("G7", unit["gate_state"]["gate_id"])
+        bound = json.loads((self.gov / failed["evidence_ref"]).read_bytes())
+        self.assertEqual("FAIL", bound["receipt_verdict"])
         self.receipt()
         result = self.native("ALLOW", "DELIVERY_ACCEPTED", action="complete")
+        closed, = json.loads(runtime_file.read_bytes())["flow_units"]
+        self.assertEqual(["G9", "G7", "G9"], [item["gate"] for item in closed["gate_history"]])
+        from checks.loop_receipts import receipt_issues
+        self.assertEqual([], receipt_issues(self.root))
         self.assertEqual("PASS", result["acceptance_state"])
         self.assertEqual(["tokens", "wall_clock"], result["budget"]["unmeasured_dimensions"])
         (self.root / self.template["artifact"]).write_bytes(b"Changed after independent check")

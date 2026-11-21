@@ -102,9 +102,9 @@ class InjectionZeroDriftTests(unittest.TestCase):
                           f"{profile} M2 compressed")
 
     def test_face_thin_and_agents_carry_keyword_pointers(self):
+        self.assertIn("skills/software-project-governance/SKILL.md", self.templates["secondary-thin"])
         for keyword in ("推荐必标需求源", "发现即闭环"):
-            self.assertIn(keyword, self.templates["secondary-thin"],
-                          f"secondary-thin pointer {keyword}")
+            self.assertIn(keyword, self.texts["SKILL.md"])
             self.assertIn(keyword, self.texts["AGENTS.md.template"],
                           f"AGENTS.md.template pointer {keyword}")
 

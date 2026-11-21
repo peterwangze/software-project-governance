@@ -55,7 +55,10 @@ if str(_INFRA_DIR) not in sys.path:
 
 import loop_admission as admit  # noqa: E402
 import loop_event_log as elog  # noqa: E402
+from functools import partial
 import loop_gate_processor as gp  # noqa: E402
+_apply_verified = partial(gp.process_gate_result, verified_native_review=True)
+
 import loop_paro_engine as paro  # noqa: E402
 
 # Reuse the FEAT-005 fixture builders so the v2 payload shapes stay in sync
@@ -694,7 +697,7 @@ class Feat006WiringTests(unittest.TestCase):
         runtime_path = _write_payload(tmpdir, _activated_payload())
         unit_id = "shitu.story.Skeleton"
         _drive_to_reflect(unit_id, runtime_path)
-        outcome = gp.process_gate_result(
+        outcome = _apply_verified(
             unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="review-code-Skeleton-R1.md",
             actor="code-reviewer-agent",
@@ -719,7 +722,7 @@ class Feat006WiringTests(unittest.TestCase):
         # Drive forward with the log on (3 phase_transition events).
         _drive_to_reflect(unit_id, runtime_path, log_path=lp)
         # Now process a failed gate (appends gate_result + back_edge).
-        gp.process_gate_result(
+        _apply_verified(
             unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="rev.md", actor="reviewer",
             runtime_file=runtime_path, event_log=lp,
@@ -745,7 +748,7 @@ class Feat006WiringTests(unittest.TestCase):
             gate_state=_valid_gate_state(status="failed", last_result="NEEDS_CHANGE"),
         )
         runtime_path = _write_payload(tmpdir, _valid_payload(units=[unit]))
-        outcome = gp.process_gate_result(
+        outcome = _apply_verified(
             "shitu.story.Skeleton", "G6", "NEEDS_CHANGE",
             evidence_ref="rev.md", actor="reviewer",
             runtime_file=runtime_path, event_log=lp,
@@ -763,7 +766,7 @@ class Feat006WiringTests(unittest.TestCase):
         runtime_path = _write_payload(tmpdir, _activated_payload())
         unit_id = "shitu.story.Skeleton"
         _drive_to_reflect(unit_id, runtime_path)
-        outcome = gp.process_gate_result(
+        outcome = _apply_verified(
             unit_id, "G6", "NEEDS_CHANGE",
             evidence_ref="rev.md", actor="reviewer",
             runtime_file=runtime_path,
@@ -785,7 +788,7 @@ class DependencyBlockTests(unittest.TestCase):
     def _payload_with_dep(self, dep_status="failed"):
         """Two units: 'child' depends on 'parent'; parent gate is dep_status."""
         parent = _valid_unit(
-            unit_id="a.parent", runtime_status="dormant",
+            unit_id="a.parent", runtime_status="completed" if dep_status == "passed" else "dormant",
             gate_state=_valid_gate_state(status=dep_status, gate_id="G5",
                                           last_result=None),
         )

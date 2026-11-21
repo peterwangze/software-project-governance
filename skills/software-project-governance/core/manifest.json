@@ -119,14 +119,6 @@
         "type": "file"
       },
       {
-        "path": "skills/software-project-governance/core/loop-runtime-claim-allowlist.json",
-        "type": "file"
-      },
-      {
-        "path": "skills/software-project-governance/core/loop-runtime-claim-authority.json",
-        "type": "file"
-      },
-      {
         "path": "skills/software-project-governance/core/architecture-health.json",
         "type": "file"
       },
@@ -167,6 +159,10 @@
         "type": "file"
       },
       {
+        "path": "skills/software-project-governance/infra/governance_readers.py",
+        "type": "file"
+      },
+      {
         "path": "skills/software-project-governance/infra/checks/__init__.py",
         "type": "file"
       },
@@ -179,23 +175,15 @@
         "type": "file"
       },
       {
-        "path": "skills/software-project-governance/infra/checks/flow_unit_runtime.py",
+        "path": "skills/software-project-governance/infra/claim_negation.py",
         "type": "file"
       },
       {
-        "path": "skills/software-project-governance/infra/checks/loop_runtime_claims.py",
-        "type": "file"
-      },
-      {
-        "path": "skills/software-project-governance/infra/checks/loop_runtime_claim_attestation.py",
+        "path": "skills/software-project-governance/infra/checks/flow_unit_runtime_v2.py",
         "type": "file"
       },
       {
         "path": "skills/software-project-governance/infra/checks/loop_gate_processor.py",
-        "type": "file"
-      },
-      {
-        "path": "skills/software-project-governance/infra/tests/test_loop_runtime_claim_attestation.py",
         "type": "file"
       },
       {
@@ -263,6 +251,10 @@
         "type": "dir"
       },
       {
+        "path": "adapters/manifest_report.py",
+        "type": "file"
+      },
+      {
         "path": "adapters/dsh/host-contract.json",
         "type": "file"
       },
@@ -319,10 +311,6 @@
         "type": "dir"
       },
       {
-        "path": "docs/migration/dynamic-flow-gate-migration-0.55.0.md",
-        "type": "file"
-      },
-      {
         "path": "commands/governance/scenario-a.md",
         "type": "file"
       },
@@ -356,6 +344,22 @@
       },
       {
         "path": "commands/governance/overview.md",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/loop_workflow.py",
+        "type": "file"
+      },
+      {
+        "path": "skills/software-project-governance/infra/checks/loop_receipts.py",
+        "type": "file"
+      },
+      {
+        "path": "adapters/pi/extension/dispatch-agent.ts",
+        "type": "file"
+      },
+      {
+        "path": "adapters/pi/extension/work-unit.ts",
         "type": "file"
       }
     ],
@@ -391,7 +395,8 @@
       ".zcode-plugin/*.json",
       ".zcode-plugin/assets/*",
       ".agents/plugins/*.json",
-      "commands/governance/*.md"
+      "commands/governance/*.md",
+      "adapters/pi/extension/*.ts"
     ]
   },
   "canonical_product_artifacts": {
@@ -437,39 +442,6 @@
         "required": true,
         "artifact_role": "loop-engineering-registry",
         "validation_commands": [
-          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
-        ]
-      },
-      {
-        "id": "loop-runtime-claim-policy",
-        "path": "skills/software-project-governance/core/loop-runtime-claim-allowlist.json",
-        "type": "file",
-        "required": true,
-        "artifact_role": "loop-runtime-claim-policy",
-        "validation_commands": [
-          "python skills/software-project-governance/infra/verify_workflow.py check-loop-runtime-claims --product-root . --project-root .",
-          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
-        ]
-      },
-      {
-        "id": "loop-runtime-claim-authority",
-        "path": "skills/software-project-governance/core/loop-runtime-claim-authority.json",
-        "type": "file",
-        "required": true,
-        "artifact_role": "loop-runtime-claim-authority",
-        "validation_commands": [
-          "python skills/software-project-governance/infra/verify_workflow.py check-loop-runtime-claims --product-root . --project-root .",
-          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
-        ]
-      },
-      {
-        "id": "loop-runtime-identity-attestor",
-        "path": "skills/software-project-governance/infra/checks/loop_runtime_claim_attestation.py",
-        "type": "file",
-        "required": true,
-        "artifact_role": "loop-runtime-identity-attestor",
-        "validation_commands": [
-          "python -m unittest discover -s skills/software-project-governance/infra/tests -p test_loop_runtime_claim_attestation.py -v",
           "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
         ]
       },
@@ -527,6 +499,39 @@
         "validation_commands": [
           "python skills/software-project-governance/infra/verify_workflow.py dsh-doctor --offline --stage S0",
           "python skills/software-project-governance/infra/verify_workflow.py check-dsh-boundary --fail-on-issues"
+        ]
+      },
+      {
+        "id": "native-loop-workflow",
+        "path": "skills/software-project-governance/infra/loop_workflow.py",
+        "type": "file",
+        "required": true,
+        "artifact_role": "workflow-runtime",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py loop --help",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "native-loop-receipts",
+        "path": "skills/software-project-governance/infra/checks/loop_receipts.py",
+        "type": "file",
+        "required": true,
+        "artifact_role": "evidence-verifier",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py check-governance --summary-only",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
+        ]
+      },
+      {
+        "id": "pi-work-unit-dispatch",
+        "path": "adapters/pi/extension/work-unit.ts",
+        "type": "file",
+        "required": true,
+        "artifact_role": "host-adapter",
+        "validation_commands": [
+          "python skills/software-project-governance/infra/verify_workflow.py check-agent-adapters",
+          "python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues"
         ]
       }
     ]

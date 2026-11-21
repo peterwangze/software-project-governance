@@ -434,6 +434,7 @@ def process_gate_result(
     max_retries=0,
     event_log=None,
     event_log_path=None,
+    verified_native_review=False,
 ):
     """Process a flow-unit gate result and drive the PARO state machine (§4.1).
 
@@ -537,6 +538,11 @@ def process_gate_result(
         )
 
     unit = _find_unit(payload, unit_id)
+    from checks.flow_unit_runtime_v2 import native_origin_issue
+    origin = native_origin_issue(payload, runtime_path.name)
+    if origin:
+        return GateOutcome(unit_id=unit_id, decision=DECISION_ESCALATE, status=loop_paro_engine.STATUS_ILLEGAL,
+                           reason=origin)
     if unit is None:
         return GateOutcome(
             unit_id=unit_id, decision=DECISION_ESCALATE,
@@ -544,6 +550,10 @@ def process_gate_result(
             reason="flow_unit_id {0!r} not found in runtime file".format(unit_id),
             events=events,
         )
+    if (not verified_native_review or
+                   _gate_state_of(unit).get("gate_id") != gate_id):
+        return GateOutcome(unit_id=unit_id, decision=DECISION_ESCALATE, status=loop_paro_engine.STATUS_ILLEGAL,
+                           reason="native work units require a verified review for the unit's own gate")
     if unit.get("runtime_status") != "active":
         return GateOutcome(
             unit_id=unit_id, decision=DECISION_ESCALATE,
@@ -564,6 +574,7 @@ def process_gate_result(
             status=loop_paro_engine.STATUS_ERROR, reason=sem_issue, events=events,
         )
 
+    tier = _loop_state_of(unit)["active_loop_tier"]
     # max_rounds: the unit's own ``loop_state.fuse.max_rounds`` is the
     # AUTHORITATIVE per-unit threshold — it is populated from the registry fuse
     # at activation (:func:`loop_paro_engine.activate_unit` writes the tier's
@@ -741,6 +752,50 @@ def process_gate_result(
     #     to loop_state.round_evidence (the §4.3 dual representation)
     # All mutations share the single cas_version bump apply_transition applies.
     capture = {"new_unit": None}
+    continuation = None
+    registry, problems = loop_engine.load_loop_registry(plugin_home)
+    if problems:
+        return GateOutcome(unit_id=unit_id, decision=DECISION_ESCALATE,
+                           status=loop_paro_engine.STATUS_ERROR, reason="; ".join(problems))
+    current_tier = unit["loop_state"]["active_loop_tier"]
+    frames = list(unit["loop_state"].get("return_to", []))
+    if decision == DECISION_ITERATE and gate_id in registry["rework_targets"]:
+        next_tier, next_gate = registry["rework_targets"][gate_id]
+        frames.append({"tier": current_tier, "gate": gate_id, "loop_count": new_loop_count})
+        continuation = (next_tier, next_gate, 0 if next_tier != current_tier else new_loop_count)
+    elif decision == DECISION_EXIT:
+        if frames:
+            resume = frames.pop()
+            continuation = (resume["tier"], resume["gate"], resume["loop_count"])
+        else:
+            path = registry["iteration_paths"][current_tier]
+            if current_tier == "middle":
+                kind = "release" if unit.get("release_version") or unit.get("entry_gate") == "G8" else "delivery"
+                path = registry["middle_delivery_paths"][kind]
+            if gate_id in path and path.index(gate_id) < len(path) - 1:
+                continuation = (current_tier, path[path.index(gate_id) + 1], loop_count)
+    if continuation and decision == DECISION_EXIT:
+        events = [ev for ev in events if ev["event_type"] != "loop_exit"]
+    if continuation:
+        events[0]["payload"]["next_gate"] = continuation[1]
+        events[0]["payload"]["next_tier"] = continuation[0]
+
+    action = "advance" if decision == DECISION_EXIT and continuation else decision
+    reason = f"{unit_id}: {tier} {gate_id} {mapped} for {unit.get('goal', unit_id)}"
+    if continuation:
+        if decision == DECISION_ITERATE:
+            verb = "rework at"
+        elif unit["loop_state"].get("return_to"):
+            verb = "return for recheck at"
+        else:
+            verb = "advance to"
+        reason += f"; {verb} {continuation[0]} {continuation[1]} (round {continuation[2]})"
+    elif decision == DECISION_EXIT:
+        reason += "; work unit completed"
+    elif decision == DECISION_ITERATE:
+        reason += f"; rework at {tier} {gate_id} (round {new_loop_count})"
+    else:
+        reason += "; work unit requires an escalation decision"
 
     def _side_effects(new_unit, ev):
         # 4(a): gate_state.evidence_refs append (the evidence pointer).
@@ -754,6 +809,22 @@ def process_gate_result(
             gs["evidence_refs"] = refs
             # 4(b): gate_state.status ← mapped status (passed/failed/blocked).
             gs["status"] = _gate_status_for(mapped, decision)
+            ls = _loop_state_of(new_unit)
+            new_unit.setdefault("gate_history", []).append({
+                "gate": gate_id, "tier": current_tier, "iteration": loop_count,
+                "result": result, "evidence_ref": evidence_ref, "actor": actor,
+                "decision": action, "reason": reason,
+                "cas_version": unit["loop_state"]["cas_version"] + 1,
+            })
+            if continuation:
+                next_tier, next_gate, next_count = continuation
+                ls.update(active_loop_tier=next_tier, agent_phase=PLAN, loop_count=next_count, return_to=frames)
+                ls["fuse"] = {"max_rounds": registry["loop_fuses"][loop_engine._tier_to_fuse_id(next_tier)]["max_rounds"],
+                              "tripped": False}
+                gs.update(gate_id=next_gate, status="pending", evidence_refs=[])
+            elif decision == DECISION_EXIT:
+                new_unit["runtime_status"] = "completed"
+                ls["active_loop"] = False
 
         # terminal_override: for operator/gate BLOCKED and G1 escalate-directly
         # we drove the WITHDRAWN terminal (legal from any phase, no fuse facts
@@ -824,11 +895,11 @@ def process_gate_result(
         final_phase = _loop_state_of(committed_unit).get("agent_phase") if committed_unit else target_phase
         final_count = _loop_state_of(committed_unit).get("loop_count") if committed_unit else None
         return GateOutcome(
-            unit_id=unit_id, decision=decision, new_agent_phase=final_phase,
+            unit_id=unit_id, decision=action, new_agent_phase=final_phase,
             new_loop_count=final_count, fuse_tripped=fuse_tripped,
             escalation_payload=escalation, cas_version=committed_cas,
             events=events, status=loop_paro_engine.STATUS_SUCCESS,
-            reason="gate {0} {1} → {2}".format(gate_id, mapped, decision),
+            reason=reason,
             mapped_status=mapped,
         )
 

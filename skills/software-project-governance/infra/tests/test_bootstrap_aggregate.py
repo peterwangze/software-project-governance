@@ -356,7 +356,7 @@ class AggregateFieldCompletenessTests(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_schema_and_budget_faces(self):
-        self.assertEqual(self.payload["schema"], "governance-bootstrap/1")
+        self.assertEqual(self.payload["schema"], "governance-bootstrap/2")
         self.assertEqual(self.payload["task"], "FEAT-033")
         self.assertEqual(self.payload["budget_ms"], ba.DEFAULT_BUDGET_MS)
         self.assertEqual(self.payload["deferred"], [])
@@ -388,15 +388,13 @@ class AggregateFieldCompletenessTests(unittest.TestCase):
         self.assertEqual(project["trigger_mode"], "always-on")
         self.assertEqual(project["permission_mode"], "default-confirm")
         self.assertEqual(project["workflow_version"], _ACTIVE_VERSION)
-        self.assertIn("维护", project["stage"])
+        self.assertNotIn("stage", project)
+        self.assertNotIn("latest_gate", project["overview"])
 
-    def test_gate_summary_counts(self):
-        gates = self.payload["gates"]
-        self.assertEqual(gates["total"], 3)
-        self.assertEqual(gates["passed"], 1)
-        self.assertEqual(gates["pending"], 1)
-        self.assertEqual(gates["failed"], 1)
-        self.assertEqual(gates["next_gate"], "G2")
+    def test_empty_runtime_is_not_replaced_with_classic_gates(self):
+        self.assertNotIn("gates", self.payload)
+        self.assertEqual(self.payload["loops"]["state"], "empty")
+        self.assertIn("loop start", self.payload["next_actions"][0])
 
     def test_task_stats_from_light_parse(self):
         tasks = self.payload["tasks"]
@@ -718,31 +716,6 @@ class RecentTopicFallbackTests(unittest.TestCase):
                          [d["date"] for d in engine])
 
 
-class GateBucketContractTests(unittest.TestCase):
-    """R0 P2-2: closed word-form vocabulary — domain forms keep their
-    buckets; superset word forms can no longer mis-bucket via substrings."""
-
-    def test_domain_word_forms_keep_their_buckets(self):
-        cases = {
-            "passed": "passed", "pass": "passed",
-            "passed-on-entry": "passed",
-            "passed-with-conditions": "passed",
-            "`passed-on-entry`": "passed", "**passed**": "passed",
-            "pending": "pending",
-            "failed": "failed", "fail": "failed",
-        }
-        for cell, bucket in cases.items():
-            self.assertEqual(ba._gate_bucket(cell), bucket, cell)
-
-    def test_superset_word_forms_cannot_mis_bucket(self):
-        # The R0 vector: substring scans bucket these WRONG ("passed" in
-        # "unpassed"); the closed vocabulary sends them to "other", where a
-        # live anomaly stays visible instead of being silently absorbed.
-        for cell in ("unpassed", "pending-review", "failed-pending",
-                     "passed (见 DEC-1)"):
-            self.assertEqual(ba._gate_bucket(cell), "other", cell)
-
-
 class ProjectionClampTests(unittest.TestCase):
     """R0 P2-3: the ≤8KB projection promise gets a hard output-side clamp
     with disclosed trims — deterministic across runs, idempotent."""
@@ -754,10 +727,7 @@ class ProjectionClampTests(unittest.TestCase):
     @classmethod
     def _oversize_tracker(cls):
         prose = "冗" * 12000  # KB-sized live-like overview cell prose
-        return PLAN_TRACKER.replace(
-            cls.OVERSIZE_ROW,
-            "| 聚合命令夹具项目 | %s | 4 | 1 | 1 | 1 | G11 passed |"
-            " 2026-09-01 |" % prose)
+        return PLAN_TRACKER.replace(cls.OVERSIZE_ROW, cls.OVERSIZE_ROW.replace("2026-09-01", prose))
 
     @classmethod
     def _oversize_fixture(cls, root):
@@ -778,7 +748,7 @@ class ProjectionClampTests(unittest.TestCase):
         # A clamp is NOT a budget defer; the core faces stay intact.
         self.assertEqual(payload["deferred"], [])
         self.assertEqual(payload["project"]["name"], "聚合命令夹具项目")
-        self.assertIn("gates", payload)
+        self.assertIn("loops", payload)
 
     def test_clamp_is_deterministic_across_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -793,6 +763,57 @@ class ProjectionClampTests(unittest.TestCase):
             payload = _run_aggregate(tmp)
         self.assertNotIn("notes", payload)
         self.assertIn("overview", payload["project"])
+
+    def test_many_long_work_units_preserve_a_resumable_first_unit(self):
+        import loop_workflow as workflow
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_fixture(tmp)
+            for index in range(30):
+                workflow.start(Path(tmp), unit_id=f"work-{index}", tier="inner",
+                               goal="Implement " + "x" * 8000, acceptance="Exercise a quoted path.")
+            payload = _run_aggregate(tmp)
+        loops = payload["loops"]
+        self.assertEqual(loops["summary"]["total_units"], 30)
+        self.assertEqual(len(loops["units"]) + loops["omitted_units"], 30)
+        self.assertGreater(loops["omitted_units"], 0)
+        self.assertEqual(loops["units"][0]["flow_unit_id"], "work-0")
+        self.assertIn("Exercise a quoted path.", ba.format_text(payload))
+        self.assertLessEqual(ba._payload_bytes(payload), ba.MAX_JSON_BYTES)
+
+        # A later unit with a missing original must survive both preview limits.
+        records = [dict(loops["units"][0], flow_unit_id=f"r{index}") for index in range(30)]
+        records[-1].update(state="invalid", gate_status="unverified", next_action="Restore the final review.")
+        projected = ba._enforce_projection_budget({"loops": {"units": records, "state": "invalid"}})
+        self.assertLessEqual(ba._payload_bytes(projected), ba.MAX_JSON_BYTES)
+        self.assertEqual(projected["loops"]["units"][0]["flow_unit_id"], "r29")
+        self.assertIn("Restore the final review.", ba.format_text(projected))
+
+
+    def test_late_rework_child_survives_the_budget_ahead_of_closed_siblings(self):
+        import governance_readers
+        import loop_workflow as workflow
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow.start(root, tier="middle", unit_id="parent", gate="G7",
+                           goal="Deliver the host command", acceptance="All child outputs match.")
+            for key, actual in (("first", "ready"), ("second", "ready"), ("repair", "unexpected")):
+                workflow.start(root, tier="inner", unit_id=key, parent="parent", goal="Restore " + key,
+                               acceptance="The command emits ready.", check_command=[sys.executable, "-c", f"print('{actual}')"],
+                               expect_output="ready")
+                workflow.verify_command(root, key)
+            full = governance_readers.loop_state(root)
+        records = full["units"]
+        self.assertEqual([u["flow_unit_id"] for u in records], ["parent", "first", "second", "repair"])
+        self.assertEqual([u["gate_status"] for u in records], ["pending", "passed", "passed", "failed"])
+        self.assertIn("repair [inner", ba.format_loop_lines(full, limit=1)[0])
+        short = ba._enforce_projection_budget({"loops": dict(full)}, limit=3100)["loops"]
+        self.assertGreater(short["omitted_units"], 0)
+        ids = [u["flow_unit_id"] for u in short["units"]]
+        self.assertEqual(ids, ["repair", "parent", "first", "second"][:len(ids)])
+        self.assertIn("repair", ids)
+        self.assertEqual(len(ids) + short["omitted_units"], full["summary"]["total_units"])
 
 
 class FailClosedRootTests(unittest.TestCase):

@@ -1,268 +1,108 @@
-"""FIX-261 — pre-commit/commit-msg review-evidence regex alignment tests.
-
-The hook's ``has_approved_review_evidence()`` must accept BOTH pass forms:
-
-  (a) legacy end-column — ``| APPROVED_WITH_NOTES |`` as the final column;
-  (b) review-record machine row — 11-column row ending
-      ``| APPROVED_WITH_NOTES | unresolved_blockers=0 |``
-      (infra/review_record.py ``_evidence_row``; FIX-193 four-state protocol).
-
-The function lives as an identical copy in BOTH hooks (pre-commit Step 7 and
-commit-msg); these tests extract each copy from the hook SOURCE and execute
-it in bash, so the assertion pins the actual shipped regex, not a re-typed
-one, and pins the two copies staying in sync.
-
-Run:
-    python -m pytest skills/software-project-governance/infra/tests/test_pre_commit_review_evidence.py -v
-"""
-
-import re
+"""A governed Git host can authorize a staged delivery only with the current work-unit receipt."""
+import os
+from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
-from pathlib import Path
 
-_INFRA_DIR = Path(__file__).resolve().parent.parent
-_HOOKS_DIR = _INFRA_DIR / "hooks"
-_REPO_ROOT = _INFRA_DIR.parent.parent.parent  # <repo>/skills/<skill>/infra → <repo>
-
-_PRE_COMMIT = _HOOKS_DIR / "pre-commit"
-_COMMIT_MSG = _HOOKS_DIR / "commit-msg"
-_EVIDENCE = _REPO_ROOT / ".governance" / "evidence-log.md"
-
-_FN_RE = re.compile(
-    r"^has_approved_review_evidence\(\) \{.*?^\}", re.MULTILINE | re.DOTALL)
+INFRA = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(INFRA))
 
 
-def _extract_function(hook_path):
-    text = hook_path.read_text(encoding="utf-8")
-    m = _FN_RE.search(text)
-    if not m:
-        raise AssertionError(
-            "has_approved_review_evidence() not found in {0}".format(hook_path))
-    return m.group(0)
+def create_fixture_commit(root):
+    subprocess.run(["git", "-c", "core.hooksPath=" + str(root / "no-hooks"),
+                    "commit", "--allow-empty", "-m", "fixture baseline"], cwd=root, check=True, capture_output=True)
 
 
-# Machine 11-column row shape mirrors review_record._evidence_row exactly.
-# ``tail_cols`` carries the columns AFTER the conclusion column, pipes
-# included ("" would leave the row unclosed): " |" = plain 10-column row;
-# " | unresolved_blockers=0 |" = the APPROVED_WITH_NOTES 11-column form.
-MACHINE_ROW = (
-    "| REVIEW-{task}-R0 | {task} | 治理记录 | review-record CLI 机器写入 review 结论记录"
-    "（round 0） | 事实依据：review-record 输出摘要（机器写入） | report.md; "
-    "review-{task}-R0.md | Code Reviewer | 2026-08-22 | G11 | {result}{tail_cols}"
-)
-LEGACY_ROW = (
-    "| REVIEW-{task}-CODE-R0 | {task} | 产品代码 | Code Review R0（独立 Reviewer，"
-    "2026-08-22）：{result}（unresolved_blockers=0） | 事实依据：diff 逐行 | "
-    "r0.patch | Code Reviewer | 2026-08-22 | G11 | {result} |"
-)
+def record_candidate(root, task, verdict="APPROVED", *, review_round=0, reviewer="Code Reviewer", files=()):
+    from loop_workflow import start
+    from review_record import write_review_record
+
+    start(root, unit_id=task, tier="inner", goal="Deliver " + task,
+          acceptance="The observed staged artifact matches its specification")
+    tree = subprocess.check_output(["git", "write-tree"], cwd=root, text=True).strip()
+    report = root / ".governance" / f"observation-{reviewer}-{review_round}.md"
+    report.write_text(f"Candidate {tree} reviewed.\n**审查结论**: **{verdict}**\n", encoding="utf-8")
+    receipt = write_review_record(root=root, task_id=task, round_n=review_round, result=verdict, reviewer=reviewer,
+                                  report_path=report.relative_to(root).as_posix(), bind_tree=None if files else tree,
+                                  bind_files=files,
+                                  unit_id=task, record_only=True, require_loop=True)
+    if "error" in receipt:
+        raise AssertionError(receipt)
+    return receipt
 
 
-def _row(form, task="FIX-261", result="APPROVED_WITH_NOTES", tail_cols=" |"):
-    if form == "machine":
-        return MACHINE_ROW.format(
-            task=task, result=result, tail_cols=tail_cols)
-    return LEGACY_ROW.format(task=task, result=result)
+class GovernedHostCommitTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.env = {**os.environ, "SOFTWARE_PROJECT_GOVERNANCE_HOME": str(INFRA.parent)}
+        self.git("init", "-q")
+        self.git("config", "user.name", "Hook verifier")
+        self.git("config", "user.email", "hook@example.invalid")
+        for name in ("pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"):
+            hook = self.root / ".git" / "hooks" / name
+            shutil.copyfile(INFRA / "hooks" / name, hook)
+            hook.chmod(0o755)
+        self.gov = self.root / ".governance"
 
+    def git(self, *args, ok=True):
+        result = subprocess.run(["git", *args], cwd=self.root, env=self.env, capture_output=True,
+                                encoding="utf-8", errors="replace")
+        self.assertEqual(ok, result.returncode == 0, result.stdout + result.stderr)
+        return (result.stdout + result.stderr).strip()
 
-def _win_to_msys_or_wsl(path_text):
-    """``C:/Users/x`` → ``/mnt/c/Users/x`` (WSL form; git-bash /c/ form is
-    produced by cygpath at runtime when the /mnt form does not exist)."""
-    m = re.match(r"^([A-Za-z]):/(.*)$", path_text)
-    if not m:
-        return path_text
-    return "/mnt/{0}/{1}".format(m.group(1).lower(), m.group(2))
+    def stage(self, path):
+        file = self.root / path
+        file.parent.mkdir(exist_ok=True, parents=True)
+        file.write_text("new product\n", encoding="utf-8")
+        self.git("add", "--", path)
 
+    def test_same_candidate_requires_unit_even_with_historical_approval(self):
+        create_fixture_commit(self.root)
+        self.gov.mkdir()
+        self.stage("src/invoice.py")
+        original = self.git("rev-parse", "HEAD")
+        self.assertIn("loop start", self.git("commit", "-m", "FIX-711: invoice", ok=False))
+        (self.gov / "plan-tracker.md").write_text("| P1 | FIX-711 | Historical work |")
+        self.assertIn("loop start", self.git("commit", "-m", "FIX-711: invoice", ok=False))
+        (self.gov / "plan-tracker.md").write_bytes(
+            (INFRA / "tests" / "fixtures" / "plan-tracker-id-first-20col.md").read_bytes())
+        self.stage("skills/invoice.py")
+        legacy = self.gov / "evidence-log.md"
+        legacy.write_text("| REVIEW-FIX-711-R0-CODE-REVIEWER | FIX-711 | old work | APPROVED_WITH_NOTES | unresolved_blockers=0 |")
+        old = legacy.read_bytes()
+        self.assertIn("loop start", self.git("commit", "-m", "FIX-711: invoice", ok=False))
+        self.assertEqual(original, self.git("rev-parse", "HEAD"))
+        self.assertEqual(old, legacy.read_bytes())
+        record_candidate(self.root, "FIX-711")
+        self.git("commit", "-m", "FIX-711: invoice")
+        self.assertNotEqual(original, self.git("rev-parse", "HEAD"))
 
-def _find_bash():
-    """Return a FUNCTIONAL bash executable, or None (WSL stub excluded).
+    def test_ordinary_unmanaged_git(self):
+        self.stage("src/invoice.py")
+        self.git("commit", "-m", "Invoice work")
 
-    FIX-359 (RISK-056): ``subprocess.run(["bash", ...])`` resolves through
-    the Windows CreateProcess search order, where the ``System32\bash.exe``
-    WSL launcher stub wins over PATH — on hosts without a WSL distro it
-    exits 1 with WSL_E_DEFAULT_DISTRO_NOT_FOUND and every bash-backed test
-    drowns in environment failures before the hook regex is ever exercised.
-    Probe the candidates and keep the first one that actually executes
-    (same harness as test_hooks.py ``_find_bash`` — parity by precedent).
-    """
-    candidates = []
-    which = shutil.which("bash")
-    if which:
-        candidates.append(which)
-    for p in (
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files\Git\usr\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-    ):
-        if Path(p).is_file():
-            candidates.append(p)
-    for cand in candidates:
-        try:
-            proc = subprocess.run(
-                [cand, "-c", ":"], capture_output=True, timeout=10,
-                check=False, stdin=subprocess.DEVNULL)
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if proc.returncode == 0:
-            return cand
-    return None
+    def test_governance_intake_can_be_committed_before_a_unit_exists(self):
+        self.stage(".governance/plan-tracker.md")
+        self.git("commit", "-m", "Initialize project notes")
 
+    def test_first_product_commit_requires_the_exact_reviewed_tree(self):
+        from review_facts import derive_review_facts
 
-_BASH = _find_bash()
-
-
-def _run_hook_function(hook_path, task_id, evidence_text, repo_root=None):
-    """Extract the function from hook source and execute it in bash.
-
-    Harness notes (all discovered the hard way on Windows):
-      * The script is fed to ``bash -s`` as raw UTF-8 BYTES via stdin — in
-        text mode Python's newline translation rewrites every ``\\n`` to
-        ``\\r\\n`` (os.linesep), which breaks bash parsing.
-      * ``\\r`` is stripped from the extracted function text (hook sources
-        may carry CRLF endings).
-      * The repo root is probed as a WSL ``/mnt/<drive>/...`` path first,
-        then via ``cygpath -u`` (git-bash), then the raw forward-slash
-        Win32 path — covering WSL bash, git-bash, and native bash alike.
-    Returns True/False (hit/miss)."""
-    fn = _extract_function(hook_path)
-    with tempfile.TemporaryDirectory() as td:
-        root = Path(repo_root) if repo_root else Path(td)
-        if repo_root is None:
-            gov = root / ".governance"
-            gov.mkdir(exist_ok=True)
-            (gov / "evidence-log.md").write_text(
-                evidence_text, encoding="utf-8")
-        root_posix = str(root).replace("\\", "/")
-        root_wsl = _win_to_msys_or_wsl(root_posix)
-        script = (
-            "REPO_ROOT={0!r}\n"
-            "[ -d \"$REPO_ROOT\" ] || REPO_ROOT=$(cygpath -u {1!r} 2>/dev/null || echo {1!r})\n"
-            "{2}\n"
-            'if has_approved_review_evidence "{3}"; then echo HIT; else echo MISS; fi\n'
-        ).format(root_wsl, root_posix, fn, task_id)
-        script = script.replace("\r\n", "\n").replace("\r", "\n")
-        assert _BASH, "no functional bash (git-bash/WSL/native)"
-        proc = subprocess.run(
-            [_BASH, "-s"], input=script.encode("utf-8"),
-            capture_output=True, timeout=30,
-        )
-        out = proc.stdout.decode("utf-8", "replace").strip()
-        if out not in ("HIT", "MISS"):
-            raise AssertionError(
-                "hook function run failed: rc={0} stdout={1!r} stderr={2!r}".format(
-                    proc.returncode, proc.stdout, proc.stderr[:400]))
-        return out == "HIT"
-
-
-@unittest.skipUnless(_BASH, "no functional bash (git-bash/WSL/native)")
-class ReviewEvidenceRegexTests(unittest.TestCase):
-    """FIX-261 four-form fixtures, run against BOTH hook copies."""
-
-    def _self_and_commit_msg(self):
-        """Run the same assertion against pre-commit AND its commit-msg twin."""
-        return ((_PRE_COMMIT, "pre-commit"), (_COMMIT_MSG, "commit-msg"))
-
-    def test_a_legacy_end_column_hits(self):
-        """Form (a): legacy end-column APPROVED_WITH_NOTES → HIT (compat)."""
-        for hook, name in self._self_and_commit_msg():
-            with self.subTest(hook=name):
-                self.assertTrue(
-                    _run_hook_function(hook, "FIX-261", _row("legacy") + "\n"))
-
-    def test_b_machine_row_with_zero_blockers_hits(self):
-        """Form (b): machine 11-col + tail unresolved_blockers=0 → HIT.
-
-        Red before FIX-261: the old end-column regex missed this row and
-        blocked FIX-260's own commit (the C8 dogfood incident)."""
-        for hook, name in self._self_and_commit_msg():
-            with self.subTest(hook=name):
-                self.assertTrue(_run_hook_function(
-                    hook, "FIX-261",
-                    _row("machine",
-                         tail_cols=" | unresolved_blockers=0 |") + "\n"))
-
-    def test_c_machine_row_with_nonzero_blockers_misses(self):
-        """Form (c): APPROVED_WITH_NOTES + unresolved_blockers=1 → MISS."""
-        for hook, name in self._self_and_commit_msg():
-            with self.subTest(hook=name):
-                self.assertFalse(_run_hook_function(
-                    hook, "FIX-261",
-                    _row("machine",
-                         tail_cols=" | unresolved_blockers=1 |") + "\n"))
-
-    def test_d_needs_change_misses_both_forms(self):
-        """Form (d): NEEDS_CHANGE never passes — legacy or machine shape."""
-        for hook, name in self._self_and_commit_msg():
-            with self.subTest(hook=name, form="legacy"):
-                self.assertFalse(_run_hook_function(
-                    hook, "FIX-261",
-                    _row("legacy", result="NEEDS_CHANGE") + "\n"))
-            with self.subTest(hook=name, form="machine"):
-                self.assertFalse(_run_hook_function(
-                    hook, "FIX-261",
-                    _row("machine", result="NEEDS_CHANGE") + "\n"))
-
-    def test_blocked_never_passes(self):
-        """BLOCKED is not an approval — machine shape must MISS."""
-        for hook, name in self._self_and_commit_msg():
-            with self.subTest(hook=name):
-                self.assertFalse(_run_hook_function(
-                    hook, "FIX-261",
-                    _row("machine", result="BLOCKED") + "\n"))
-
-    def test_machine_plain_approved_still_hits(self):
-        """Machine APPROVED row (no blockers tail, 10 cols) → HIT via (a)."""
-        for hook, name in self._self_and_commit_msg():
-            with self.subTest(hook=name):
-                self.assertTrue(_run_hook_function(
-                    hook, "FIX-261", _row("machine", result="APPROVED") + "\n"))
-
-    def test_blockers_tail_must_be_exactly_zero(self):
-        """unresolved_blockers=01 / =0;extra must not smuggle through."""
-        for tail_cols in (" | unresolved_blockers=01 |",
-                          " | unresolved_blockers=0 extra |"):
-            for hook, name in self._self_and_commit_msg():
-                with self.subTest(hook=name, tail_cols=tail_cols):
-                    self.assertFalse(_run_hook_function(
-                        hook, "FIX-261",
-                        _row("machine", tail_cols=tail_cols) + "\n"))
-
-    def test_plain_approved_with_blockers_tail_misses(self):
-        """Only APPROVED_WITH_NOTES may take form (b): APPROVED + tail → MISS."""
-        for hook, name in self._self_and_commit_msg():
-            with self.subTest(hook=name):
-                self.assertFalse(_run_hook_function(
-                    hook, "FIX-261",
-                    _row("machine", result="APPROVED",
-                         tail_cols=" | unresolved_blockers=0 |") + "\n"))
-
-    def test_other_task_machine_row_does_not_hit(self):
-        """Prefix binding: a machine row for FIX-999 must not unblock FIX-261."""
-        for hook, name in self._self_and_commit_msg():
-            with self.subTest(hook=name):
-                self.assertFalse(_run_hook_function(
-                    hook, "FIX-261",
-                    _row("machine", task="FIX-999",
-                         tail_cols=" | unresolved_blockers=0 |") + "\n"))
-
-    def test_hook_copies_stay_identical(self):
-        """The pre-commit and commit-msg copies must remain byte-identical."""
-        self.assertEqual(_extract_function(_PRE_COMMIT),
-                         _extract_function(_COMMIT_MSG))
-
-    def test_replay_real_evidence_log_fix260(self):
-        """FIX-261 acceptance replay: the REAL evidence-log machine row for
-        FIX-260 (R0 APPROVED_WITH_NOTES/0, written via review-record CLI)
-        must HIT the updated hook function."""
-        if not _EVIDENCE.is_file():
-            self.skipTest("live evidence-log unavailable")
-        for hook, name in self._self_and_commit_msg():
-            with self.subTest(hook=name):
-                self.assertTrue(_run_hook_function(
-                    hook, "FIX-260", "", repo_root=_REPO_ROOT))
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.stage("src/invoice.py")
+        record_candidate(self.root, "invoice", files=["src/invoice.py"])
+        self.assertIn("exact complete Git tree", self.git("commit", "-m", "invoice: first release", ok=False))
+        signed = record_candidate(self.root, "invoice", review_round=1)
+        reviewed_tree = self.git("write-tree")
+        self.stage("app/extra.js")
+        self.assertIn("M7.4 BLOCKED", self.git("commit", "-m", "invoice: first release", ok=False))
+        self.git("rm", "--cached", "--", "app/extra.js")
+        self.git("commit", "-m", "invoice: first release")
+        head = self.git("rev-parse", "HEAD")
+        self.assertEqual(reviewed_tree, self.git("rev-parse", "HEAD^{tree}"))
+        replay = derive_review_facts(self.root, "invoice", [signed["review_id"]], commit=head)
+        self.assertTrue(replay["git"]["initial"])

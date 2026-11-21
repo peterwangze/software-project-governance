@@ -212,7 +212,7 @@ def merge_intake_contract(scaffold, existing, plan_acceptance, governance_dir):
 def generate_packet_document(tasks, *, task_ids, existing, governance_dir, build_packet):
     from governance_readers import loop_state
 
-    view = loop_state(governance_dir.parent)
+    view = loop_state(governance_dir.parent, latest_learning_only=True)
     if view["state"] == "invalid":
         raise ValueError(view["message"])
     units_by_task = {}
@@ -236,11 +236,18 @@ def generate_packet_document(tasks, *, task_ids, existing, governance_dir, build
                                        task.get("acceptance", ""), governance_dir)
         units = units_by_task.get(task_id, [])
         if units:
-            packet["work_units"] = [
-                {field: unit[field] for field in ("flow_unit_id", "parent_unit_id", "task_id", "goal", "acceptance",
-                                                  "active_loop_tier", "gate_id", "loop_count", "next_action")}
-                for unit in units
-            ]
+            packet["work_units"] = []
+            for unit in units:
+                summary = {field: unit[field] for field in (
+                    "flow_unit_id", "parent_unit_id", "task_id", "goal", "acceptance",
+                    "active_loop_tier", "gate_id", "loop_count", "next_action",
+                )}
+                for field in ("intent", "previous_unit_id", "source_learning", "learning_count", "learning"):
+                    if unit.get(field) is not None:
+                        summary[field] = unit[field]
+                if "learning_count" in summary:
+                    summary["learning_history"] = f"loop status --unit {unit['flow_unit_id']} --json"
+                packet["work_units"].append(summary)
             if len(units) == 1:
                 packet["goal"] = units[0]["goal"]
                 if packet["done_definition"] == scaffold["done_definition"]:

@@ -88,6 +88,8 @@
 
 恢复或查看本身只读；健康检查延期标为待检查。各宿主共用 `core/lifecycle.md` 的运行命令。
 
+对照单元的 `intent` 和 `acceptance` 选择能验证用户结果的下一步。试用改变方案时记录 `loop learn --kind decision` 并复验原条件。交付后向用户说明实测结果，也可从 `opportunity` 给出有反馈依据的下一项试验及通过条件。跨会话按单元 ID 查阅完整记录。[运行示例](../skills/software-project-governance/core/lifecycle.md)
+
 ## 现有命令路由（按需 Read）
 
 旧 5 个命令（`/governance-init` `/governance-status` `/governance-gate` `/governance-verify` `/governance-update`）保留为快捷方式，各自的等价场景映射见 `commands/governance/overview.md`。

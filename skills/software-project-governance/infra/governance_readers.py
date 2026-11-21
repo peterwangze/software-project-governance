@@ -6,7 +6,26 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def loop_state(root):
+def _learning_view(root, unit, *, latest_only):
+    fields = {key: unit[key] for key in ("intent", "source_learning") if unit.get(key)}
+    entries = unit.get("learning") or []
+    if entries:
+        from loop_learning import learning_evidence_issue
+
+        fields["learning_count"] = len(entries)
+        if latest_only:
+            # Keep the latest choice and the latest opportunity, in recorded order.
+            last = {entry["kind"]: index for index, entry in enumerate(entries)}
+            entries = [entries[index] for index in sorted(last.values())]
+        projected = []
+        for entry in entries:
+            issue = learning_evidence_issue(root, entry)
+            projected.append(dict(entry, evidence_issue=issue))
+        fields["learning"] = projected
+    return fields
+
+
+def loop_state(root, *, latest_learning_only=False):
     """Read and validate one committed snapshot for every unit in this project."""
     from checks.flow_unit_runtime_v2 import missing_runtime_issue, validate_native_loop_payload
 
@@ -73,6 +92,8 @@ def loop_state(root):
                     pending.append((dependent, original))
     unfinished = {unit["flow_unit_id"] for unit in units if unit["runtime_status"] != "completed"} | set(issues_by_id)
     children = defaultdict(list)
+    selected = {(unit.get("previous_unit_id"), unit["source_learning"])
+                for unit in units if unit.get("source_learning")}
     for unit in units:
         if unit.get("parent_unit_id") and unit["flow_unit_id"] in unfinished:
             children[unit["parent_unit_id"]].append(unit["flow_unit_id"])
@@ -93,6 +114,14 @@ def loop_state(root):
         issue = issues_by_id.get(unit_id)
         receipt = receipts.get(unit_id)
         return_to = returns[-1] if returns else None
+        learning = _learning_view(root, unit, latest_only=latest_learning_only)
+        next_action = issue or _unit_action(unit, waiting, open_children, return_to)
+        if not issue and unit["runtime_status"] == "completed":
+            opportunity = next((entry for entry in reversed(learning.get("learning", []))
+                                if entry["kind"] == "opportunity"), None)
+            if (opportunity and not opportunity["evidence_issue"]
+                    and (unit_id, opportunity["id"]) not in selected):
+                next_action += f" Optional next step: review opportunity {opportunity['id']}."
         view["units"].append({
             "flow_unit_id": unit_id, "title": unit.get("title") or unit["goal"],
             "task_id": unit.get("task_id"), "unit_type": unit.get("unit_type", "work-unit"),
@@ -110,7 +139,8 @@ def loop_state(root):
             "evidence_refs": gate["evidence_refs"], "blockers": unit["blockers"],
             "dependencies": unit["dependencies"], "waiting_on": waiting,
             "open_children": open_children,
-            "next_action": issue or _unit_action(unit, waiting, open_children, return_to),
+            "next_action": next_action,
+            **learning,
             **({"state": "invalid", "recorded_runtime_status": unit["runtime_status"],
                 "recorded_gate_status": gate["status"]} if issue else {}),
         })

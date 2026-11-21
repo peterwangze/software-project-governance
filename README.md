@@ -103,6 +103,8 @@ The snapshot is the first trust signal: it proves the workflow can show what it 
 
 The original first-session study recorded local_demo=PASS and external_pilot=NOT_MEASURED. [First-session measurement](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/first-session-measurement-0.43.0.md).
 
+For a real task, give the work unit the user's words with `loop start --intent` and describe the observable result with `--acceptance`. If a trial changes the approach, use `loop learn --kind decision` to keep its evidence and repeat the original acceptance check. After delivery, record feedback with `--kind opportunity`. A later session can inspect the proposal and its success criteria with `loop status --unit <id> --json`, then select it for a new work unit. [Worked invoice reconciliation example](skills/software-project-governance/core/lifecycle.md)
+
 ## Optional Local Web Console
 
 The primary user interface remains your AI coding CLI or client: Claude Code, Codex, Gemini CLI, opencode, or another agent host. The `web/` console is an optional local companion view for users who want a cleaner status surface while still driving work from the CLI/client.

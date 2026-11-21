@@ -529,7 +529,8 @@
 ### TOOL-054：工作单元启动、恢复和门禁
 
 - `governance-bootstrap [--budget-ms N] [--format json|text] [--profile lite|standard|strict]` 在项目根只读运行。`governance-bootstrap/2` 返回 `resolve`、当前 `loops`、任务、风险、近期决策、建议和延期项。未初始化、数据损坏和已有阻塞分别呈现。详情用 `loop status [--unit <id>] [--json]` 核对。
-- `loop start --unit <id> --goal "<目标>" --acceptance "<复验操作>" --tier <setup|inner|middle|outer>` 建立工作单元。首次立项显式指定 `--gate G1`，子项用 `--parent`，发布用 `--release-version`。
+- `loop start --unit <id> --intent "<用户原话>" --goal "<目标>" --acceptance "<复验操作>" --tier <setup|inner|middle|outer>` 建立工作单元。已受理的工作沿用立项依据，DSH 已绑定的目标沿原生契约继续。首次立项显式指定 `--tier setup --gate G1`，子项用 `--parent`，发布用 `--release-version`。
+- `loop learn --unit <id> --id <记录ID> --kind decision --observation "<实测结果>" --action "<选定的做法>" --validation "<如何复验>" --evidence <项目相对路径>` 保留本轮取舍，再按原验收操作检验成品。交付反馈可用同一命令加 `--kind opportunity` 记录建议和成功条件。选定后用 `loop start --unit <新单元> --tier <层级> --after <已完成单元> --from-learning <机会ID>` 开始后继工作。
 - 可重放的局部修复可在 `loop start` 同时提供 `--check-command`（参数数组）和 `--expect-output`。`loop verify --unit <id>` 从项目根执行操作，要求退出码为零、完整 UTF-8 标准输出与预期相符。LF 与 CRLF 等价，末尾可有一个换行；其余空格和额外内容参与比较。复杂检查可用项目断言命令验证结果，将日志发往标准错误，仅将预期结果写到标准输出。
 - 操作者用 `loop step --unit <id> --phase act|observe|reflect` 记录当前尝试。独立审查者用 `review-record` 登记工件和裁决；`loop gate --unit <id> --gate <Gx> --review <review-id>` 消费对应回执，得到允许的动作或返工原因。参见 [运行协议](../core/lifecycle.md)。
 - 超过 bootstrap 的时间预算会保留 `deferred` 项。`resolve.resolved_root_ok` 为假时先处理根路径诊断。

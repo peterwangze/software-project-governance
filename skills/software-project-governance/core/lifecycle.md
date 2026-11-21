@@ -17,10 +17,26 @@
 从目标项目目录执行安装技能内的 `infra/verify_workflow.py`。下列参数中的单位 ID、任务 ID 和目标取自本次事务。CI 和无交互宿主可用同一 CLI。
 
 1. `governance-bootstrap --format json` 定位项目，读取 `loops`。新事务先确认目标、验收操作和责任人。
-2. `loop start --unit <id> --goal "<成品目标>" --acceptance "<可复验条件>" --tier <层级>` 创建有依据的工作单元。默认使用本层入口门。首次立项显式指定 `--tier setup --gate G1`。有所属交付时提供 `--parent <父单元>`，依赖其他单元时提供 `--depends-on <单元>`，已有任务提供 `--task <任务编号>`。发布单元提供 `--release-version <版本号>`。
+2. `loop start --unit <id> --intent "<用户原话或来源>" --goal "<成品目标>" --acceptance "<可复验条件>" --tier <层级>` 创建工作单元。原意说明谁在什么情境下需要什么结果，验收说明对方通过什么操作看见该结果。通过 `change-triage` 受理时，沿用 `--demand-basis` 和 `--prior-art`。默认使用本层入口门。首次立项显式指定 `--tier setup --gate G1`。有所属交付时提供 `--parent <父单元>`，依赖其他单元时提供 `--depends-on <单元>`，已有任务提供 `--task <任务编号>`。发布单元提供 `--release-version <版本号>`。
    可直接重放的局部修复可在同一命令指定 `--check-command '["python","tests/check_export.py"]' --expect-output "totals match"`。修复后 `loop verify --unit <id>` 保存退出码与实际输出。退出码为零且完整 UTF-8 标准输出与预期相符时收口，LF、CRLF 等价，末尾可有一个换行。其余情形返回内层处理。独立成品或发布验收沿对应契约执行。
 3. 保留实际输入和产出。用 `loop step --unit <id> --phase act` 开始尝试，观察后记录 `observe`，形成判断后记录 `reflect`。
 4. 独立审查者用 `review-record --task <任务或单元ID> --reviewer <角色> --round <轮次> --result <裁决> --report <报告文件> --bind-file <本轮工件>` 记录裁决。读取返回的回执 ID 与本单元状态。需要显式应用或复核时用 `loop gate --unit <id> --gate <Gx> --review <REVIEW-TASK-Rn>` 消费本次回执。以 `loop status` 给出的局部动作继续。内层 G7 退回 G6 修改后重审，中层 G5、外层 G10 等过程门允许该单元继续取证。需返工时把原失败样本交还执行者；达到轮次上限或触及风险接受、范围或发布边界时交用户裁决。
 5. `loop status --unit <id> --json` 读取该单元的真实状态。新会话重新读取运行记录，沿最近证据、依赖及阻塞继续。缺数据时显示尚未开始或数据错误。
+
+## 试用方案与交付后的反馈
+
+例如用户说「我要从导出的文件核对发票总额」，可以把验收定为重新打开导出文件后逐行加总，与账单上的 19.99 美元一致。如果屏幕显示正确，文件重开却只有第一行，保留失败输出，在这张发票上试用逐行导出的方案。用以下命令记录实际观察、取舍和复验方法，证据路径相对于项目根。
+
+```text
+loop learn --unit invoice --id export-rows --kind decision --observation "首版只写出首行，重开后总额为 15.00；逐行方案保留了两行" --action "采用逐行导出" --validation "在原发票上重新导出、打开并加总，对账单核对 19.99" --evidence checks/export-comparison.txt
+```
+
+再用原验收命令或独立成品验收核对交付。交接时说明用户能完成的操作、实际结果及仍待验证的边界。`loop status` 保留本单元的原意、历次取舍与反馈。证据内容变化后，读取者能看到哪条记录需要复核。
+
+若用户要求达到同类优秀产品的水平，选出在相同任务上可比较的产品或上一版本，记录版本、来源和关键体验指标。先用同一输入、环境和预算测基线，冻结成功条件，再用同口径复测候选。采用现有成品契约时，在 `product_success_contract.competitive_baseline` 和 `success_metrics` 写入对照与用户可见结果，在 `quality_budget` 记录适用指标的阈值、测法和证据。保留双方实测原件，向用户报告收益、代价和缺测项，据此采纳、返工或回退。例如核对发票时可比较首次核对正确率、所需人工步骤和耗时。
+
+交付后，若试用者为核对退款还需手算，以 `--kind opportunity` 写入观察、建议试验、成功条件和反馈原件。用 `loop start --unit refund-export --tier inner --after invoice --from-learning <机会ID>` 选用这条建议，后继单元按其建议和验证条件开始。其余候选供日后选择。
+
+工作流自身沿同一入口演进。比如真实交付曾在导出界面通过、重开时失败，可以保留该失败任务和一次正常交付作为对照，固定用户输入、权限、预算和成品标准。下一单元用原任务验证新工作流能发现失败并引导修复，同时让合格成品通过。多次采用后再比较首次验收通过率、误放、返工次数及从受理至成品验收的耗时，保留失败和未完成的样本。
 
 Gate 的适用层与返工规则以 [循环登记表](loop-engineering-registry.json) 为准；材料要核实的内容见[检查目录](stage-gates.md)。[审查映射](../references/loop-role-mapping.md)说明由谁签收。

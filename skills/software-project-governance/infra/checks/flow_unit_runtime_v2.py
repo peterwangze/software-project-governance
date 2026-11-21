@@ -72,6 +72,44 @@ def _string_list(value):
     )
 
 
+def _unit_learning_issues(unit, unit_by_id):
+    """Optional native planning fields. Historical units need no migration."""
+    uid = unit["flow_unit_id"]
+    if "intent" in unit:
+        intent = unit["intent"]
+        if (not isinstance(intent, dict)
+                or not all(isinstance(intent.get(k), str) and intent[k].strip() for k in ("basis", "source"))
+                or not isinstance(intent.get("prior_art"), list)
+                or not all(isinstance(ref, str) and ref.strip() for ref in intent["prior_art"])):
+            yield f"{uid}: invalid intent basis, source or prior art"
+
+    entries = unit.get("learning", [])
+    if not isinstance(entries, list):
+        yield f"{uid}: learning must be a list"
+    elif entries:
+        from loop_learning import entry_issue
+        seen = set()
+        for entry in entries:
+            if issue := entry_issue(entry, uid):
+                yield f"{uid}: {issue}"
+            elif entry["id"] in seen:
+                yield f"{uid}: duplicate learning id {entry['id']}"
+            else:
+                seen.add(entry["id"])
+
+    if "source_learning" in unit:
+        previous = unit.get("previous_unit_id")
+        source = unit_by_id.get(previous, {}) if isinstance(previous, str) else {}
+        records = source.get("learning", [])
+        if not (isinstance(records, list) and isinstance(unit["source_learning"], str) and any(
+            isinstance(e, dict) and e.get("unit") == previous and e.get("kind") == "opportunity"
+            and e.get("id") == unit["source_learning"] and e.get("action") == unit.get("goal")
+            and e.get("validation") == unit.get("acceptance")
+            for e in records
+        )):
+            yield f"{uid}: source_learning must match the previous unit's opportunity, goal and acceptance"
+
+
 def native_origin_issue(state, display="flow-unit-runtime.json"):
     if not isinstance(state, dict) or state.get("origin") != "native-loop":
         return f"{display}: expected origin=native-loop; the existing file cannot authorize current work"
@@ -456,6 +494,7 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
         except CycleError as exc:
             failures.append(f"{display}: cyclic child/dependency waits: {' -> '.join(exc.args[1])}")
         for unit_id, unit in unit_by_id.items():
+            failures.extend(f"{display}: {issue}" for issue in _unit_learning_issues(unit, unit_by_id))
             for key in ("goal", "acceptance", "task_id"):
                 if not isinstance(unit.get(key), str) or not unit[key].strip():
                     failures.append(f"{display}: {unit_id} requires {key}")

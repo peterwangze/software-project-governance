@@ -399,6 +399,7 @@ function WorkUnit({ unit }) {
   const review = unit.last_review;
   const returnTo = unit.return_to;
   const evidence = unit.evidence_refs.filter((ref) => ref !== review?.evidence_ref);
+  const learningIssues = unit.learning?.filter((entry) => entry.evidence_issue).length ?? 0;
   const gateTone = ['failed', 'blocked', 'escalated', 'unverified'].includes(unit.gate_status) ? 'warning' : 'neutral';
   return (
     <article className="panel work-unit">
@@ -411,12 +412,17 @@ function WorkUnit({ unit }) {
       </header>
       <dl className="unit-facts">
         {unit.goal && unit.goal !== unit.title && <><dt>Goal</dt><dd>{unit.goal}</dd></>}
+        {unit.intent && <><dt>Request basis</dt><dd>{unit.intent.basis}<br />
+          Source · {unit.intent.source}
+          {unit.intent.prior_art.length > 0 && <><br />References · {unit.intent.prior_art.join(', ')}</>}
+        </dd></>}
         {unit.acceptance && <><dt>Acceptance</dt><dd>{unit.acceptance}</dd></>}
         <dt>Next action</dt><dd>{unit.next_action}</dd>
         <dt>Local gate</dt><dd><span className={`value-chip ${gateTone}`}>{unit.gate_id} · {unit.gate_status}</span></dd>
         {returnTo && <><dt>Return after rework</dt><dd>{returnTo.tier} loop · {returnTo.gate} · round {returnTo.loop_count}</dd></>}
         {unit.previous_unit_id && <><dt>Previous iteration</dt><dd>{unit.previous_unit_id}
           {unit.previous_review ? <> · {unit.previous_review.gate} · round {unit.previous_review.iteration} · {unit.previous_review.result}<br />{unit.previous_review.evidence_ref}</> : ' · acceptance unverified'}
+          {unit.source_learning && <><br />Selected opportunity · {unit.source_learning}</>}
         </dd></>}
         {review ? <><dt>{unit.state === 'invalid' ? 'Recorded decision (unverified)' : 'Last review'}</dt><dd>{review.gate} · round {review.iteration} · {review.result}<br />{review.evidence_ref}</dd></>
           : unit.last_gate_result && <><dt>Last decision</dt><dd>{unit.last_gate_result}</dd></>}
@@ -425,6 +431,26 @@ function WorkUnit({ unit }) {
         {unit.open_children.length > 0 && <><dt>Open child units</dt><dd>{unit.open_children.join(', ')}</dd></>}
         {evidence.length > 0 && <><dt>Evidence</dt><dd>{evidence.join(', ')}</dd></>}
       </dl>
+      {unit.learning?.length > 0 && (
+        <details>
+          <summary>Decisions and opportunities ({unit.learning.length})
+            {learningIssues > 0 && ` · ${learningIssues} with unverified evidence`}
+          </summary>
+          {unit.learning.map((entry) => (
+            <section key={entry.id}>
+              <h3>{entry.kind === 'decision' ? 'Approach decision' : 'Optional next step'} · {entry.id}</h3>
+              <dl className="unit-facts">
+                <dt>Observed</dt><dd>{entry.observation}</dd>
+                <dt>Action</dt><dd>{entry.action}</dd>
+                <dt>Validation</dt><dd>{entry.validation}</dd>
+                <dt>Evidence</dt><dd>{entry.evidence}
+                  {entry.evidence_issue && <><br />Evidence unverified · {entry.evidence_issue}</>}
+                </dd>
+              </dl>
+            </section>
+          ))}
+        </details>
+      )}
     </article>
   );
 }

@@ -16,7 +16,11 @@
 
 ### Step 2: 登记首个工作单元
 
-从宿主根执行 `python "<plugin_home>/infra/verify_workflow.py" loop start --unit <id> --goal "<用户成品目标>" --acceptance "<可复验条件>" --tier <setup|inner|middle|outer>`。若已有父单元或已受理任务，分别传 `--parent <父单元>` 和 `--task <任务编号>`。首次立项指定 `--tier setup --gate G1`；其他单元采用该层入口门。发布单元提供 `--release-version <版本号>`。具体范围见 `core/lifecycle.md`。重复接入先用 `loop status --json` 读取已有单元。损坏或目标冲突时保留原件，报告诊断。
+先保留用户原话，再用受益者的操作、约束和可见结果复述目标。把执行者补充的推断标在复述中。两种解释会改变交付物、验收或范围时，向用户核实具体分歧；意图清楚时沿既有授权推进。
+
+直接接收用户请求时，从宿主根执行 `python "<plugin_home>/infra/verify_workflow.py" loop start --unit <id> --intent "<用户原话>" --goal "<用户要得到的成品>" --acceptance "<用户可复验的结果>" --tier <setup|inner|middle|outer>`。例如，用户说「我要从导出的文件核对发票总额」，验收就要打开导出文件，将各行加总与原账单核对。
+
+已用 `change-triage` 受理时，按任务编号恢复已有单元，沿用登记的需求依据与候选来源；需要关联既有任务的单元可传 `--task <任务编号>`。DSH 已绑定的目标沿原生入口读取目标原文和既有验收契约。子项传 `--parent <父单元>`。首次立项指定 `--tier setup --gate G1`；其他单元采用该层入口门。发布单元提供 `--release-version <版本号>`。具体范围见 `core/lifecycle.md`。重复接入先用 `loop status --json` 读取已有单元。损坏或目标冲突时保留原件，报告诊断。
 
 ### Step 7: 注入 governance bootstrap 到 agent 入口文件
 

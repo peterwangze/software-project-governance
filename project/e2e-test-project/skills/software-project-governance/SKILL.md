@@ -99,6 +99,8 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 **1. 读取运行状态。** 从宿主注入位置运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。同次启动复用已验证的结果。退出失败、JSON 无效、`resolve.resolved_root_ok` 不为 true 时停止并展示诊断。按 `loops` 恢复目标、单元、层级、当前轮次、最新判定与待办。数据缺失时按[多层循环](core/lifecycle.md)登记第一项实际工作，内容损坏时保留原件。`loop status --unit <id> --json` 可独立复读同一状态。
 
+从 `intent` 读取用户原意与来源，以 `acceptance` 核对当前工作是否仍交付其预期结果。新观察改变方案时，在该单元用 `loop learn --kind decision` 记录试用证据、选择和复验方法，并回到原验收。交付时汇报独立验收或实测的用户结果。将有依据的后续方向和成功条件记为 `opportunity`；选定后在授权范围内开后继单元。工作流自身的改动也用真实失败任务和正常对照重放。[参数及实测示例](core/lifecycle.md)
+
 首次交互只显示对本次工作的实质影响。已明确的目标直接沿获授权范围执行；需用户决定的输入和发布边界沿 M5 办理。深检按 §B2 执行。
 
 **2. 任务短包**。按本文件「AI Execution Packet」读取当前任务的范围、证据和完成条件。

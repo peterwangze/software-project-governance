@@ -117,27 +117,89 @@ def _unfinished(root, state, unit, children=False):
     return sorted(waiting)
 
 
+def _triage_intake(root, task):
+    """Read the immutable intake belonging to this task, when it has one."""
+    if not TASK_ID.fullmatch(task):
+        return {}
+    from change_triage import DEMAND_SOURCES, TRIAGE_SCHEMA_VERSION
+    from delivery_acceptance import _json_object, _project_path, _regular_stat
+
+    try:
+        path = _project_path(Path(root), f".governance/change-triage/{task}.json")
+    except FileNotFoundError:
+        return {}
+    _regular_stat(path)
+    record = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_json_object)
+    if (not isinstance(record, dict) or record.get("task_id") != task
+            or type(record.get("schema_version")) is not int or record["schema_version"] != TRIAGE_SCHEMA_VERSION):
+        raise ValueError(f"{path}: incompatible triage record for {task}")
+    if not isinstance(record.get("acceptance", ""), str):
+        raise ValueError(f"{path}: intake acceptance must be text")
+    if "demand_source" in record and record["demand_source"] not in DEMAND_SOURCES:
+        raise ValueError(f"{path}: unknown intake demand source")
+    basis = record.get("demand_basis", "")
+    if not isinstance(basis, str) or (record.get("demand_source") == "user-named" and not basis.strip()):
+        raise ValueError(f"{path}: invalid basis for the registered demand")
+    return record
+
+
+def _intake_intent(task, intake, explicit, delivery_goal, goal, enclosing, previous):
+    prior_art = intake.get("prior_art", [])
+    if not isinstance(prior_art, list) or not all(isinstance(s, str) and s.strip() for s in prior_art):
+        raise ValueError(f"invalid prior_art in intake for {task}")
+    if explicit is not None:
+        if not isinstance(explicit, str) or not explicit.strip():
+            raise ValueError("intent must contain the original request")
+        if delivery_goal and explicit != goal:
+            raise ValueError("intent differs from the bound delivery goal")
+        return {"basis": explicit, "source": "user", "prior_art": prior_art}
+    if delivery_goal:
+        # bind_delivery_unit supplies the original text from the goal bridge.
+        return {"basis": goal, "source": "goal-bridge", "prior_art": prior_art}
+    if intake.get("demand_basis") or prior_art:
+        basis = intake.get("demand_basis") or f".governance/change-triage/{task}.json"
+        source = intake.get("demand_source") or "unspecified"
+        return {"basis": basis, "source": f"change-triage/{task}:{source}", "prior_art": prior_art}
+    parent_intent = enclosing.get("intent")
+    prior_intent = previous.get("intent")
+    if parent_intent and prior_intent and parent_intent != prior_intent:
+        raise ValueError("parent and previous unit have different intent; provide the applicable --intent")
+    return parent_intent or prior_intent
+
+
 def start(root, *, unit_id, goal, tier, gate=None, acceptance=None, parent=None, task=None,
           dependencies=(), release_version=None, release_reviewer=None, after=None, check_command=None,
-          expect_output=None, delivery_goal=None, delivery_contract_sha256=None, dry_run=False):
+          expect_output=None, delivery_goal=None, delivery_contract_sha256=None, dry_run=False,
+          intent=None, from_learning=None):
     """Declare exactly one unit. Replaying the same declaration preserves its progress."""
     if not UNIT_ID.fullmatch(unit_id) or (task and not UNIT_ID.fullmatch(task)) or tier not in TIERS:
         raise ValueError("invalid unit id or loop tier")
     gate = _validate_gate(gate, tier)
     task = task or unit_id
-    intake = Path(root) / ".governance" / "change-triage" / f"{task}.json"
-    if not acceptance and TASK_ID.fullmatch(task) and intake.is_file():
-        acceptance = json.loads(intake.read_text(encoding="utf-8")).get("acceptance")
+    if from_learning is not None and not after:
+        raise ValueError("--from-learning requires --after to identify its source unit")
     path = runtime_path(root)
     with loop_event_log._cross_process_lock(path), loop_paro_engine._commit_lock(path):
         state = _payload(path)
+        intake = _triage_intake(root, task)
+        enclosing = _unit(state, parent) if parent else {}
+        previous = _unit(state, after) if after else {}
         if after:
-            previous = _unit(state, after)
             if previous["runtime_status"] != "completed":
                 raise ValueError("the previous iteration must have completed with evidence")
-            goal = goal or previous["goal"]
-            acceptance = acceptance or previous["acceptance"]
             dependencies = [*dependencies, after]
+        if from_learning is not None:
+            from loop_learning import opportunity
+            selected = opportunity(root, previous, from_learning)
+            if ((goal is not None and goal != selected["action"]) or
+                    (acceptance is not None and acceptance != selected["validation"])):
+                raise ValueError("goal and acceptance must match the selected opportunity")
+            if intake.get("acceptance") and intake["acceptance"] != selected["validation"]:
+                raise ValueError(f"opportunity validation differs from the registered acceptance for {task}")
+            goal, acceptance = selected["action"], selected["validation"]
+        else:
+            goal = goal or previous.get("goal")
+            acceptance = acceptance or intake.get("acceptance") or previous.get("acceptance")
         if not isinstance(goal, str) or not goal.strip() or not isinstance(acceptance, str) or not acceptance.strip():
             raise ValueError("a goal and verifiable acceptance condition are required")
         if release_version and (tier != "middle" or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", release_version)):
@@ -169,16 +231,22 @@ def start(root, *, unit_id, goal, tier, gate=None, acceptance=None, parent=None,
         }
         if after:
             definition["previous_evidence_ref"] = previous["gate_history"][-1]["evidence_ref"]
+        if from_learning is not None:
+            definition["source_learning"] = from_learning
+        context = _intake_intent(task, intake, intent, delivery_goal, goal, enclosing, previous)
         for existing in state["flow_units"]:
             if existing["flow_unit_id"].casefold() == unit_id.casefold():
                 if (any(existing.get(k) != v for k, v in definition.items())
+                        or existing.get("source_learning") != from_learning
+                        or (("intent" in existing or intent is not None) and existing.get("intent") != context)
                         or existing.get("entry_gate") != gate or existing.get("entry_tier") != tier):
                     raise ValueError(f"unit {unit_id} already exists with a different contract")
                 if after:
                     _unfinished(root, state, existing)
                 return existing
+        if context:
+            definition["intent"] = context
         if parent:
-            enclosing = _unit(state, parent)
             _assert_open(enclosing)
             ranks = {"outer": 2, "middle": 1, "inner": 0}
             parent_tier = enclosing["loop_state"]["active_loop_tier"]
@@ -252,10 +320,12 @@ def add_arguments(parser):
     new = actions.add_parser("start", help="Open one goal and its acceptance condition")
     new.add_argument("--unit", required=True)
     new.add_argument("--goal", help="Defaults to the previous unit goal with --after")
+    new.add_argument("--intent", help="Exact original user request that this unit serves")
     new.add_argument("--acceptance", help="Defaults to registered task acceptance")
     new.add_argument("--tier", required=True, choices=TIERS)
     new.add_argument("--gate", help="Defaults to the entry condition of the selected loop tier")
     new.add_argument("--after", help="Continue from a completed unit and its acceptance")
+    new.add_argument("--from-learning", help="Use this opportunity from --after as the new goal and acceptance")
     new.add_argument("--check-command", type=json.loads, help="JSON argument array for a scoped inner-loop acceptance")
     new.add_argument("--expect-output", help="Exact UTF-8 stdout (LF/CRLF equivalent; one final newline optional)")
     new.add_argument("--parent")
@@ -263,6 +333,14 @@ def add_arguments(parser):
     new.add_argument("--depends-on", action="append", default=[])
     new.add_argument("--release-reviewer", help="Identified release signatory (defaults to Release Reviewer)")
     new.add_argument("--release-version", help="Version certified by a release work unit")
+    learn = actions.add_parser("learn", help="Record an observed decision or a proposed follow-up")
+    learn.add_argument("--unit", required=True)
+    learn.add_argument("--id", dest="learning_id", required=True)
+    learn.add_argument("--kind", choices=("decision", "opportunity"), required=True)
+    learn.add_argument("--observation", required=True, help="What the evidence showed")
+    learn.add_argument("--action", dest="action_text", required=True, help="The chosen approach or proposed next goal")
+    learn.add_argument("--validation", required=True, help="How to check the result")
+    learn.add_argument("--evidence", required=True, help="Project-relative file supporting this observation")
     reopen = actions.add_parser("resume", help="Resume rework after a documented blocker resolution")
     reopen.add_argument("--unit", required=True)
     reopen.add_argument("--evidence", required=True, help="Project-relative resolution evidence file")
@@ -286,7 +364,12 @@ def run(root, args):
         return start(root, unit_id=args.unit, goal=args.goal, tier=args.tier, gate=args.gate,
                      acceptance=args.acceptance, parent=args.parent, task=args.task,
                      dependencies=args.depends_on, release_version=args.release_version, after=args.after,
+                     intent=args.intent, from_learning=args.from_learning,
                      check_command=args.check_command, expect_output=args.expect_output, release_reviewer=args.release_reviewer)
+    if args.action == "learn":
+        from loop_learning import record
+        return record(root, args.unit, args.learning_id, args.kind, args.observation,
+                      args.action_text, args.validation, args.evidence)
     if args.action == "resume":
         return resume(root, args.unit, args.evidence, args.actor)
     if args.action == "verify":

@@ -737,7 +737,7 @@ def _build_payload(host_root, envelope, budget_ms, profile, started, *, include_
     try:
         from governance_readers import loop_state, project_name
         builder.check_budget("loops")
-        payload["loops"] = loop_state(host_root)
+        payload["loops"] = loop_state(host_root, latest_learning_only=True)
         builder.check_budget("project")
         config = parse_project_config(plan_text)
         project = {
@@ -921,6 +921,33 @@ def _unit_recovery_order(unit):
     return 2
 
 
+def _unit_preview(unit):
+    """Bound variable-length fields while retaining evidence for the next action."""
+    preview = dict(unit)
+    for key in ("title", "goal", "acceptance", "next_action"):
+        if preview.get(key):
+            preview[key] = _clip(preview[key], 100)
+    for key in ("blockers", "waiting_on", "open_children", "dependencies", "evidence_refs"):
+        preview[key] = [_clip(value, 80) for value in preview[key][-2:]]
+    for key in ("last_review", "previous_review", "return_to"):
+        if preview.get(key):
+            preview[key] = _clamp_strings(preview[key], 100)
+    if intent := preview.get("intent"):
+        preview["intent"] = {
+            "basis": _clip(intent["basis"], 100), "source": _clip(intent["source"], 80),
+            "prior_art": [_clip(ref, 60) for ref in intent["prior_art"][:2]],
+        }
+    if entries := preview.get("learning"):
+        preview["learning"] = []
+        for entry in entries:
+            brief = dict(entry)
+            for key in ("observation", "action", "validation", "evidence", "evidence_issue"):
+                if brief.get(key):
+                    brief[key] = _clip(brief[key], 80)
+            preview["learning"].append(brief)
+    return preview
+
+
 def _enforce_projection_budget(payload, limit=MAX_JSON_BYTES):
     """Hard output-side clamp behind the ≤8KB projection promise (R0 P2-3).
 
@@ -985,15 +1012,20 @@ def _enforce_projection_budget(payload, limit=MAX_JSON_BYTES):
         loops["units"] = []
         disclose("work unit text and lists shortened; see loop status --json for full details")
         for unit in sorted(units, key=_unit_recovery_order):
-            preview = dict(unit)
-            for key in ("title", "goal", "acceptance"):
-                if preview.get(key):
-                    preview[key] = _clip(preview[key], 100)
-            for key in ("blockers", "waiting_on", "open_children", "dependencies", "evidence_refs"):
-                preview[key] = preview[key][-2:]
-            preview["blockers"] = [_clip(blocker, 80) for blocker in preview["blockers"]]
+            preview = _unit_preview(unit)
             loops["units"].append(preview)
             loops["omitted_units"] -= 1
+            if over() and len(loops["units"]) == 1:
+                # Keep an actionable first unit even when its history or references
+                # would otherwise displace the unit itself from a full bootstrap.
+                for key in ("previous_review", "intent", "last_review"):
+                    if preview.get(key):
+                        preview[key] = _clamp_strings(preview[key], 32)
+                if preview.get("learning"):
+                    preview["learning"] = [
+                        {key: item[key] for key in ("id", "kind", "action", "evidence_issue")}
+                        for item in preview["learning"]
+                    ]
             if over():
                 loops["units"].pop()
                 loops["omitted_units"] += 1
@@ -1040,6 +1072,24 @@ def format_loop_lines(loops, *, limit=None):
             verdict = (f"{predecessor['gate']} R{predecessor['iteration']} {predecessor['result']} "
                        f"{predecessor['evidence_ref']}" if predecessor else "acceptance unverified")
             details.append(f"previous unit {previous}: {verdict}")
+        if chosen := unit.get("source_learning"):
+            details.append(f"selected opportunity {chosen}")
+        if intent := unit.get("intent"):
+            details.append(f"request basis ({intent['source']}): {intent['basis']}")
+            if intent.get("prior_art"):
+                details.append("references: " + ", ".join(intent["prior_art"]))
+        for entry in unit.get("learning", []):
+            label = "optional next step" if entry["kind"] == "opportunity" else "approach decision"
+            item = f"{label} {entry['id']}: {entry['action']}"
+            if entry.get("observation"):
+                item += f" | observed: {entry['observation']} | validate: {entry['validation']}"
+            if entry.get("evidence"):
+                item += f" | evidence: {entry['evidence']}"
+            if entry.get("evidence_issue"):
+                item += f" | evidence unverified: {entry['evidence_issue']}"
+            details.append(item)
+        if unit.get("learning_count", 0) > len(unit.get("learning", [])):
+            details.append(f"earlier records: loop status --unit {unit['flow_unit_id']} --json")
         lines.append("%s [%s, round %s] %s — %s" % (
             unit["flow_unit_id"], unit["active_loop_tier"] or unit["runtime_status"], unit["loop_count"],
             _clip(" ".join((unit.get("goal") or unit["title"]).splitlines()), 160), unit["next_action"]))
@@ -1200,7 +1250,7 @@ def cmd_governance_bootstrap(args):
     payload = _enforce_projection_budget(payload)
 
     if getattr(args, "format", "json") == "json":
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     else:
         print(format_text(payload))
 

@@ -786,7 +786,14 @@ def _commit_lock(runtime_path):
 
 def _replace_unit(runtime_path, current, unit):
     identity = unit["flow_unit_id"]
-    current["flow_units"] = [unit if u.get("flow_unit_id") == identity else u for u in current["flow_units"]]
+    for index, stored in enumerate(current["flow_units"]):
+        if stored.get("flow_unit_id") == identity:
+            # Feedback can arrive while a PARO transition is computing. It
+            # belongs to the unit, independently of the phase CAS version.
+            if "learning" in stored:
+                unit["learning"] = stored["learning"]
+            current["flow_units"][index] = unit
+            break
     _atomic_replace_bytes(runtime_path, _serialize(current))
 
 

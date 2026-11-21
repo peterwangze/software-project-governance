@@ -11,17 +11,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Fetch the source used by the v0.87.0 compatibility tests
+        run: git fetch --no-tags --depth=1 origin refs/tags/v0.87.0:refs/tags/v0.87.0
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.13.1'
       - name: Install test dependencies
-        run: python -m pip install zstandard==0.25.0 markdown-it-py==4.3.0
+        run: |
+          python -m pip install zstandard==0.25.0 markdown-it-py==4.3.0 PyYAML==6.0.3
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libnss-wrapper
+          npm install --prefix "$RUNNER_TEMP/dsh-oracle" --ignore-scripts --no-save --package-lock=false --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.2
       - name: Verify workflow integrity
         run: python skills/software-project-governance/infra/verify_workflow.py
       - name: Verify manifest consistency
         run: python skills/software-project-governance/infra/verify_workflow.py check-manifest-consistency --fail-on-issues
       - name: Run unit tests
-        run: python -m unittest discover -s skills/software-project-governance/infra/tests -v
+        env:
+          SPG_TEST_DSH_INSTALL_DIR: ${{ runner.temp }}/dsh-oracle/node_modules
+        run: python .github/scripts/run_ubuntu_tests.py
       - name: Verify cross-references
         run: python skills/software-project-governance/infra/verify_workflow.py check-cross-references
+
+  windows-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run native lock, bootstrap and encoding tests
+        working-directory: skills/software-project-governance/infra/tests
+        run: >-
+          python -m unittest -v
+          test_loop_learning.LearningTest.test_windows_state_lock_timeout_preserves_state
+          test_verify_workflow.BootstrapScriptTests.test_bootstrap_cmd_success_emits_envelope_on_windows
+          test_verify_workflow.BootstrapScriptTests.test_bootstrap_cmd_timeout_classified_on_windows
+          test_utf8_read_guard.Utf8ReadSimulationTests.test_bare_getcontent_reproduces_gbk_mojibake_on_gbk_codepage

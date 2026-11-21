@@ -252,6 +252,8 @@
         "commands/",
         "agents/",
         "adapters/dsh/",
+        "adapters/*/adapter-manifest.json",
+        "docs/reviews/review-FEAT-086-DESIGN-R0.md",
         "!**/__pycache__/",
         "!**/*.pyc",
         "cordis.patch.yml",

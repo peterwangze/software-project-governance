@@ -1012,22 +1012,22 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.99.0",
+        "0.100.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.99.0",
+        "0.100.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.99.0",
+        "0.100.0",
     ],
     ROOT / ".zcode-plugin/plugin.json": [
-        "0.99.0",
+        "0.100.0",
     ],
     ROOT / "package.json": [
-        "0.99.0",
+        "0.100.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.99.0",
+        "0.100.0",
     ],
 }
 
@@ -9935,7 +9935,7 @@ def check_cross_references():
 
                 # Backticked explicit paths with a directory separator are
                 # intentional references and should still be validated.
-                for m in re.finditer(r"`([^`]+/[^\s`]+\.(?:md|py))`", line):
+                for m in re.finditer(r"`([^`]+/[^\s`]+\.(?:md|py)(?:\.template)?)`", line):
                     refs[source].append((m.group(1), i))
 
                 # ── Strip inline code (backtick-quoted) from the line ──
@@ -9951,13 +9951,13 @@ def check_cross_references():
                 # caused hundreds of dangling-reference false positives after
                 # archive cleanup. Markdown links still cover explicit
                 # same-directory references.
-                for m in re.finditer(r'(?<!["\w/\-.])([a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-/]+\.(?:md|py))(?!\w)', stripped_line):
+                for m in re.finditer(r'(?<!["\w/\-.])([a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-/]+\.(?:md|py)(?:\.template)?)(?!\w|\.\w)', stripped_line):
                     refs[source].append((m.group(1), i))
 
     # ── Detect dangling references ──
     dangling = []
     root_relative_prefixes = (
-        "skills/", "agents/", "commands/", "adapters/", "project/", "docs/",
+        "skills/", "agents/", "agent-presets/", "commands/", "adapters/", "project/", "docs/",
         ".governance/", ".github/", ".agents/", ".claude-plugin/", ".codex-plugin/",
     )
     skill_root_relative_prefixes = ("core/", "infra/", "references/")

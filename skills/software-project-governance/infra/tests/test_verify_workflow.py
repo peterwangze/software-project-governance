@@ -11604,7 +11604,7 @@ class QualityBudgetTests(unittest.TestCase):
         # FIX-475: 「🚧 派发中」 live cells (FIX-475 shape) must not be structurally rejected.
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [
-                "| **P1** | FIX-093 | Dispatch Fix | TRIAGE | 0.100.0 | code | 🚧 派发中 (Coordinator spawn Developer) |",
+                "| **P1** | FIX-093 | Dispatch Fix | TRIAGE | 0.0.1 | code | 🚧 派发中 (Coordinator spawn Developer) |",
             ])
             with patch.object(vw, "SAMPLE_PATH", sp):
                 payload = vw.generate_execution_packets()
@@ -11618,7 +11618,7 @@ class QualityBudgetTests(unittest.TestCase):
         # vocabulary word still cannot claim NOT_RUN_YET.
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [
-                "| **P0** | FIX-094 | Blocked Gate | — | 0.100.0 | code | 🚧 blocked 证据已交付 |",
+                "| **P0** | FIX-094 | Blocked Gate | — | 0.0.1 | code | 🚧 blocked 证据已交付 |",
             ])
             with patch.object(vw, "SAMPLE_PATH", sp):
                 payload = vw.generate_execution_packets()
@@ -11842,7 +11842,7 @@ class VerticalSliceTests(unittest.TestCase):
         # FIX-475: 「🚧 派发中」 live cells (FIX-475 shape) must not be structurally rejected.
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [
-                "| **P1** | FIX-093 | Dispatch Fix | TRIAGE | 0.100.0 | code | 🚧 派发中 (Coordinator spawn Developer) |",
+                "| **P1** | FIX-093 | Dispatch Fix | TRIAGE | 0.0.1 | code | 🚧 派发中 (Coordinator spawn Developer) |",
             ])
             with patch.object(vw, "SAMPLE_PATH", sp):
                 payload = vw.generate_execution_packets()
@@ -11856,7 +11856,7 @@ class VerticalSliceTests(unittest.TestCase):
         # vocabulary word still cannot claim NOT_RUN_YET.
         with tempfile.TemporaryDirectory() as td:
             _, sp, packet_path = self._setup_plan(td, [
-                "| **P0** | FIX-094 | Blocked Gate | — | 0.100.0 | code | 🚧 blocked 证据已交付 |",
+                "| **P0** | FIX-094 | Blocked Gate | — | 0.0.1 | code | 🚧 blocked 证据已交付 |",
             ])
             with patch.object(vw, "SAMPLE_PATH", sp):
                 payload = vw.generate_execution_packets()
@@ -24854,7 +24854,7 @@ class Fix481ActiveTaskHeaderSemanticMappingTests(unittest.TestCase):
             self._id_first_row("ARC-001", "✅ committed", priority="P1"),
             self._id_first_row("SYS-001", "✅ 完成", priority="P1"),
             *self._COMPACT_TABLE,
-            "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.100.0 | tests | ⏳ 待实施 |",
+            "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.0.1 | tests | ⏳ 待实施 |",
         ])
         self.assertEqual([t["task_id"] for t in packet], ["NEW-001"])
 
@@ -24907,7 +24907,7 @@ class Fix481ActiveTaskHeaderSemanticMappingTests(unittest.TestCase):
             *self._COMPACT_TABLE,
             "| P1 | FIX-001 | 紧凑表任务 | TRIAGE-X | 0.55.0 "
             "| 独立审查 | ✅ 已完成 (2026-10-31) |",
-            "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.100.0 "
+            "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.0.1 "
             "| tests | ⏳ 待实施 |",
         ])
         by_id = {t["task_id"]: t for t in parsed}
@@ -24933,7 +24933,7 @@ class Fix481ActiveTaskHeaderSemanticMappingTests(unittest.TestCase):
             self._id_first_row("DEV-001", "✅ 已完成", priority="P0"),
             self._id_first_row("ARC-001", "🔄 进行中", priority="P2"),
             *self._COMPACT_TABLE,
-            "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.100.0 | tests | ⏳ 待实施 |",
+            "| P1 | NEW-001 | 真实活跃任务 | 用户点名 | 0.0.1 | tests | ⏳ 待实施 |",
         ]
         plan = "\n".join(["# 计划跟踪", "", "## 当前活跃事项", "", *lines, ""])
         with tempfile.TemporaryDirectory() as td:
@@ -25080,6 +25080,20 @@ class ReleaseChangelogScopeTests(unittest.TestCase):
             self.assertTrue(any("missing changelog" in issue for issue in missing["issues"]))
             (host / "CHANGELOG.md").write_text(f"## [{version}]\n", encoding="utf-8")
             self.assertTrue(changelog()["pass"])
+
+
+class TemplateReferenceTests(unittest.TestCase):
+    def test_template_references_use_the_complete_filename(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(vw, "ROOT", Path(td)):
+            root = Path(td)
+            (root / "commands").mkdir()
+            (root / "commands/entry.md").write_text(
+                "See agent-presets/preset.md.template and `agent-presets/missing.md.template`.\n",
+                encoding="utf-8")
+            (root / "agent-presets").mkdir()
+            (root / "agent-presets/preset.md.template").write_text("persona", encoding="utf-8")
+            issues = vw.check_cross_references()["dangling"]
+            self.assertEqual(["agent-presets/missing.md.template"], [issue["target"] for issue in issues])
 
 
 if __name__ == "__main__":

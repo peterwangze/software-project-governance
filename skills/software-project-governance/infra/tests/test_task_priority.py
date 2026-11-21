@@ -2716,9 +2716,9 @@ class CollapsedPremiseReportTests(unittest.TestCase):
 
     def _tasks(self):
         leaning = TaskDep("FIX-444", "P2", "⏸ 暂停", (), ("DEC-368",),
-                          "0.100.0")
+                          "0.0.1")
         other = TaskDep("FIX-490", "P1", "⏳ 待执行", (), ("DEC-401",),
-                        "0.100.0")
+                        "0.0.1")
         return [leaning, other]
 
     def test_standing_premise_renders_no_section(self):

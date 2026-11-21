@@ -1,55 +1,9 @@
-"""Self-check unit tests for the V1 DSH host-dependency contract data layer.
+"""Test the packaged DSH host contract and its consumers.
 
-FEAT-029 (0.81.0 slice V1) lands three new artifacts and one declaration:
-
-  * ``adapters/dsh/host-contract.json`` — the single machine-readable source of
-    the dsh host facts this plugin consumes (design
-    ``docs/requirements/dsh-compat-design-0.81.0.md`` §2.4);
-  * ``infra/dsh_contract.py`` — the stdlib-only accessor (§2.5.1: four APIs,
-    three exception classes, no registry import — ADR-018 §8);
-  * ``infra/tests/dsh_fixtures.py`` — the deterministic fixture emitter (§5.4);
-  * ``core/manifest.json`` — the canonical-product-artifact declaration
-    (§2.9.1).
-
-This module is the **unit-level** form of the Check 28w judgments that land in
-V8 (§2.8). Covered here, at unit scope:
-
-  - **K-1** — the contract parses, ``schema_version`` is known, every field of
-    the §2.4 field table exists (including the "present but may be empty"
-    recorded sub-block, R0 F-5), and the three failure classes of §2.5.1
-    (``ContractUnreadable`` / ``ContractMalformed`` / ``ContractSchemaUnknown``)
-    classify unreadable / malformed / unknown-schema inputs. Every message
-    names the contract path, the exception class and the offending field.
-  - **K-3** — the composition template's rows and ``host.rows[]`` agree **in
-    both directions over the full platform-independent set of 29 rows**: the
-    template's row ids, package names, config keys, ``disabled:`` forms and
-    group membership are re-derived from the template text here (independently
-    of the JSON), so a row added on either side turns this red. The 23 enabled
-    rows per platform (29 − 3 groups − 2 ``disabled: true`` − 1 short-circuited
-    platform row) are recomputed too.
-  - **K-4** — the template's ``__…__`` token set equals ``own.render.tokens``
-    and a rendered template leaves no ``__[A-Za-z0-9_]+__`` behind.
-  - **K-9** — ``elimination.dispositions[]`` covers every ``D-nn`` of
-    AUDIT-153 exactly once, ``coverage.entries[].audit_ids`` covers the
-    necessary-dependency set, no ``subject`` repeats, and every declared
-    subject resolves inside the contract (the K-8 ``guard`` /
-    ``negative_fixtures`` resolution rules are checked at unit level too).
-
-Two invariants of this slice are asserted directly, because they are the
-failure mode the design calls out:
-
-  * **R0 F-5 — no hand-copied real-plane facts.** The recorded sub-block of
-    every ``host.rows[]`` entry MUST still be empty and flagged
-    ``source: recorded`` / ``recorded: false``. A hand-transcribed schema key
-    set would turn this red; only ``dsh-doctor --record-evidence`` (V8) may
-    fill it.
-  * **R0 F-6 — the probe side stays fail-closed.** ``host.env.probe_side``
-    declares ``require_explicit`` / ``no_fallback`` and the write side is a
-    separate block; the two are never conflated into a "three implementations
-    agree" claim.
-
-Run:
-    python -m unittest discover -s skills/software-project-governance/infra/tests -p "test_dsh_contract.py" -v
+Checks include schema/error classification, rejection of retired frozen
+composition inputs, overlay tokens, host dependency coverage, deterministic
+fixture emission and contract mutation probes. The executable boundary check
+and its negative fixtures are covered in test_dsh_boundary.py.
 """
 
 import contextlib
@@ -78,7 +32,7 @@ import dsh_compat  # noqa: E402
 import dsh_contract  # noqa: E402
 import dsh_fixtures  # noqa: E402
 
-TEMPLATE = _REPO_ROOT / "agent-presets" / "governance" / "agent.cordis.yml.template"
+TEMPLATE = _REPO_ROOT / "agent-presets" / "governance" / "overlay.cordis.yml"
 AUDIT_REPORT = (
     _REPO_ROOT / "docs" / "requirements" / "dsh-host-dependency-inventory-0.81.0.md")
 PATCH_FILE = _REPO_ROOT / "cordis.patch.yml"
@@ -90,21 +44,8 @@ REGISTRY_PY = (_REPO_ROOT / "skills" / "software-project-governance" / "infra"
                / "registry.py")
 SHIMS_DIR = _REPO_ROOT / "adapters" / "dsh" / "skill-shims"
 
-# Design §0.2 E-10②: 16 top-level + 13 nested = the platform-independent set.
-_EXPECTED_ROWS_TOP_LEVEL = 16
-_EXPECTED_ROWS_NESTED = 13
-_EXPECTED_ROW_TOTAL = _EXPECTED_ROWS_TOP_LEVEL + _EXPECTED_ROWS_NESTED
-# Design §0.2 E-10②: 29 − 3 groups − 2 `disabled: true` − 1 short-circuited
-# platform row = the 23 rows AUDIT-153 measured as `rows_enabled`.
-_EXPECTED_ENABLED_PER_PLATFORM = 23
-# Design §0.2 E-10③: 14 non-group rows with a config mapping + 3 groups.
-_EXPECTED_CONFIG_DECLARED = 17
-
 _AUDIT_ID_RE = re.compile(r"^D-\d{2,3}$")
 _TEMPLATE_TOKEN_RE = re.compile(r"__[A-Za-z0-9_]+__")
-_ROW_ID_RE = re.compile(r"^(\s*)- id: (\S+)\s*$")
-_ROW_KEY_RE = re.compile(r"^(\s*)(name|disabled|config|group|isolate):\s*(.*)$")
-_CONFIG_KEY_RE = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
 
 _NECESSARY = "necessary"
 _WEAKENABLE = "weakenable"
@@ -125,124 +66,8 @@ def _contract():
 
 
 def _template_text():
-    return _read(TEMPLATE)
-
-
-def _parse_template_rows(text=None):
-    """Re-derive the row table from the template text, independently of JSON.
-
-    Strict by construction: a row is a ``- id: <name>`` entry at indent 0 or 4
-    (the two row depths of this composition) and its row keys must sit at
-    ``row_indent + 2``. Anything that looks like a row but does not match this
-    shape raises, so a template mutation cannot be silently absorbed.
-    """
-    text = _template_text() if text is None else text
-    lines = text.split("\n")
-    rows = []
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        match = _ROW_ID_RE.match(line)
-        if not match:
-            index += 1
-            continue
-        indent = len(match.group(1))
-        if indent not in (0, 4):
-            raise AssertionError(
-                f"{TEMPLATE.name}:{index + 1}: row at unexpected indent {indent}")
-        row = {
-            "row_id": match.group(2),
-            "indent": indent,
-            "line": index + 1,
-            "package": None,
-            "disabled_expr": None,
-            "config_declared": False,
-            "config_keys": [],
-            "group": None,
-            "is_group": False,
-            "children": [],
-        }
-        index += 1
-        while index < len(lines):
-            probe = lines[index]
-            if not probe.strip():
-                index += 1
-                continue
-            if _ROW_ID_RE.match(probe) or _ROW_ID_RE.match(probe.lstrip()):
-                break
-            key_match = _ROW_KEY_RE.match(probe)
-            if not key_match or len(key_match.group(1)) != indent + 2:
-                if len(probe) - len(probe.lstrip()) <= indent:
-                    break
-                index += 1
-                continue
-            key = key_match.group(2)
-            value = key_match.group(3).strip()
-            if key == "name":
-                row["package"] = value.strip("'\"") if value else None
-            elif key == "disabled":
-                row["disabled_expr"] = value or None
-            elif key == "group":
-                row["is_group"] = value == "true"
-            elif key == "config":
-                row["config_declared"] = True
-                index += 1
-                while index < len(lines):
-                    child = lines[index]
-                    if not child.strip():
-                        index += 1
-                        continue
-                    child_indent = len(child) - len(child.lstrip())
-                    if child_indent <= indent + 2:
-                        break
-                    nested_row = _ROW_ID_RE.match(child)
-                    if nested_row:
-                        break
-                    config_key = _CONFIG_KEY_RE.match(child)
-                    if config_key and child_indent == indent + 4:
-                        row["config_keys"].append(config_key.group(2))
-                    index += 1
-                continue
-            index += 1
-        rows.append(row)
-    return rows
-
-
-def _link_template_rows(rows):
-    """Attach nested rows to their group and derive the effective `group`."""
-    stack = None
-    for row in rows:
-        if row["indent"] == 0:
-            stack = row if row["is_group"] else None
-            row["group"] = None
-        else:
-            if stack is None:
-                raise AssertionError(
-                    f"row {row['row_id']} is nested but no top-level group "
-                    f"precedes it")
-            row["group"] = stack["row_id"]
-            stack["children"].append(row["row_id"])
-    return rows
-
-
-def _enabled_on(row):
-    """Derive the per-row enablement from the template's own disabled form."""
-    if row["is_group"]:
-        return None
-    expr = row["disabled_expr"]
-    if expr is None:
-        return "any"
-    if expr == "true":
-        return "never"
-    if expr == "!!js process.platform === 'win32'":
-        return "posix"
-    if expr == "!!js process.platform !== 'win32'":
-        return "win32"
-    raise AssertionError(f"row {row['row_id']}: unknown disabled form {expr!r}")
-
-
-def _platform_conditional(row):
-    return (row["disabled_expr"] or "").startswith("!!js process.platform")
+    import dsh_fixtures
+    return dsh_fixtures._template_text()
 
 
 def _audit_marker_sets():
@@ -353,7 +178,7 @@ K2_CONSUMERS = (
     "adapters/dsh/launch.py",
     "skills/software-project-governance/infra/dsh_compat.py",
     "skills/software-project-governance/infra/verify_workflow.py",
-    "agent-presets/governance/agent.cordis.yml.template",
+    "agent-presets/governance/overlay.cordis.yml",
     "skills/software-project-governance/infra/hooks/pre-commit",
     "skills/software-project-governance/infra/hooks/commit-msg",
     "skills/software-project-governance/infra/hooks/post-commit",
@@ -378,7 +203,8 @@ def _declared_literal_sets(contract=None):
     """
     contract = _contract() if contract is None else contract
     host = contract["host"]
-    packages = ({row["package"] for row in host["rows"]}
+    packages = ({value for key, value in contract["own"]["native"].items()
+                 if key.endswith("_row_name")}
                 | {contract["own"]["package"]["name"]}
                 | {"{0}/{1}".format(host["install"]["scope"],
                                     host["install"]["cli_package"])}
@@ -514,57 +340,6 @@ def k2_report(violations):
         for relative, line, kind, literal in violations)
 
 
-def _correct(a, b):
-    """Like :func:`unittest.TestCase.assertEqual`, but returning the mismatch."""
-    return "" if a == b else f"{a!r} != {b!r}"
-
-
-def template_row_mismatches(contract=None, template_text=None):
-    """K-3's comparison as a value: how the template's rows disagree with the
-    contract's.
-
-    Extracted so the idempotent tests and the mutation matrix share one
-    implementation — the mutation test must observe *this* judgment changing
-    when `host.rows[]` changes, otherwise it proves nothing about the reader.
-    Order-independent by construction: the caller gets one message per
-    disagreement, and the empty list means "the two sides agree".
-    """
-    contract = _contract() if contract is None else contract
-    declared = contract["host"]["rows"]
-    template_text = _template_text() if template_text is None else template_text
-
-    # Both sides are values: the template rows are re-derived from the text
-    # (independently of the JSON) and the contract rows come from the accessor,
-    # so a mutation on either side shows up here and only here.
-    rows = _link_template_rows(_parse_template_rows(template_text))
-    by_id = {row["row_id"]: row for row in declared}
-    template_ids = [row["row_id"] for row in rows]
-    mismatch = []
-    if len(template_ids) != len(set(template_ids)):
-        mismatch.append(f"template row ids are not unique: {template_ids}")
-    for missing in sorted(set(by_id) - set(template_ids)):
-        mismatch.append(f"contract row absent from template: {missing}")
-    for extra in sorted(set(template_ids) - set(by_id)):
-        mismatch.append(f"template row not in contract: {extra}")
-    for row in rows:
-        declared_row = by_id.get(row["row_id"])
-        if declared_row is None:
-            continue
-        for key, value in (
-                ("package", row["package"]),
-                ("disabled_expr", row["disabled_expr"]),
-                ("platform_conditional", _platform_conditional(row)),
-                ("enabled_on", _enabled_on(row)),
-                ("config_keys", row["config_keys"]),
-                ("config_declared", row["config_declared"]),
-                ("group", row["group"]),
-        ):
-            message = _correct(declared_row[key], value)
-            if message:
-                mismatch.append(f"{row['row_id']}.{key}: {message}")
-    return mismatch
-
-
 class TestAccessorContract(unittest.TestCase):
     """K-1: load + minimal validation + the §2.5.1 exception classification."""
 
@@ -654,57 +429,29 @@ class TestAccessorContract(unittest.TestCase):
             self.assertIn(dotted, message, dotted)
             self.assertIn("host-contract.json", message)
 
-    def test_row_shape_violation_is_malformed_and_names_the_row(self):
+    def test_foreign_overlay_row_is_malformed(self):
         payload = json.loads(json.dumps(_contract()))
-        payload["host"]["rows"][0].pop("config_declared")
-        with self.assertRaises(dsh_contract.ContractMalformed) as caught:
+        payload["own"]["overlay"]["rows"].append("tool-fs")
+        with self.assertRaisesRegex(dsh_contract.ContractMalformed, "own.overlay.rows"):
             dsh_contract.load_contract(raw=json.dumps(payload))
-        message = str(caught.exception)
-        self.assertIn("host.rows[persona].config_declared", message)
 
-    def test_a_non_false_recorded_flag_is_malformed(self):
-        # R0 F-2: `recorded.source` was value-checked while `recorded.recorded`
-        # was only key-checked. V1 ships every row unrecorded, so the flag must
-        # be *exactly* the JSON literal `false` on all 29 rows (design §2.4/
-        # §2.7 + R0 F-5) — `null`, `0` and the string "false" are malformed,
-        # not merely "not yet recorded".
-        for mutated in (None, "false", 0, "False", True):
-            payload = json.loads(json.dumps(_contract()))
-            payload["host"]["rows"][0]["recorded"]["recorded"] = mutated
-            with self.assertRaises(dsh_contract.ContractMalformed) as caught:
-                dsh_contract.load_contract(raw=json.dumps(payload))
-            self.assertIn("host.rows[persona].recorded.recorded",
-                          str(caught.exception), repr(mutated))
-        # The key check this replaces is not lost: an absent flag is not
-        # `false` either.
-        payload = json.loads(json.dumps(_contract()))
-        del payload["host"]["rows"][0]["recorded"]["recorded"]
-        with self.assertRaises(dsh_contract.ContractMalformed) as caught:
-            dsh_contract.load_contract(raw=json.dumps(payload))
-        self.assertIn("host.rows[persona].recorded.recorded",
-                      str(caught.exception))
-        # Positive control: the shipped `source: "recorded"` + `false` loads.
-        payload = json.loads(json.dumps(_contract()))
-        loaded = dsh_contract.load_contract(raw=json.dumps(payload))
-        self.assertIs(loaded["host"]["rows"][0]["recorded"]["recorded"], False)
 
-    def test_duplicate_row_id_is_malformed(self):
+    def test_duplicate_overlay_row_is_malformed(self):
         payload = json.loads(json.dumps(_contract()))
-        payload["host"]["rows"].append(dict(payload["host"]["rows"][0]))
-        with self.assertRaises(dsh_contract.ContractMalformed) as caught:
+        payload["own"]["overlay"]["rows"] = ["persona", "persona"]
+        with self.assertRaisesRegex(dsh_contract.ContractMalformed, "own.overlay.rows"):
             dsh_contract.load_contract(raw=json.dumps(payload))
-        self.assertIn("persona", str(caught.exception))
 
     def test_get_resolves_documented_paths(self):
         contract = _contract()
         self.assertEqual(dsh_contract.get("host.install.scope", contract),
                          "@deepseek-ai")
         self.assertEqual(
-            dsh_contract.get("host.rows[persona].package", contract),
+            dsh_contract.get("own.native.persona_row_name", contract),
             "@deepseek-ai/dsh-persona")
         self.assertEqual(
-            dsh_contract.get("host.rows[persona].config_keys", contract),
-            ["prefix"])
+            dsh_contract.get("own.overlay.rows", contract),
+            ["persona", "skill-filesystem"])
         self.assertIsInstance(dsh_contract.get("coverage.entries", contract), list)
 
     def test_get_raises_for_an_undeclared_path(self):
@@ -1011,30 +758,12 @@ class TestContractV2AdditiveKeys(unittest.TestCase):
         self.assertIn("host-contract.json", message)
 
     # ── deprecated ≠ optional ──────────────────────────────────────────────
-    def test_deprecated_keys_stay_required_and_are_reported_deprecated(self):
-        for dotted in ("host.rows", "own.preset.template"):
-            with self.subTest(path=dotted):
-                # (a) still in the accessor's required-paths table…
-                self.assertIn(dotted, dsh_contract.REQUIRED_PATHS)
-                # (b) …recorded as deprecated by the sidecar, readable
-                #     through the accessor's single-source predicate…
-                self.assertTrue(dsh_contract.is_deprecated(dotted,
-                                                           self.contract))
-                self.assertEqual(
-                    self.contract["deprecations"]["entries"][dotted],
-                    {"deprecated_in": 2})
-                # (c) …and still load-bearing: deleting one is malformed,
-                #     exactly like any other required key ("弃用 ≠ 允许缺失").
-                payload = json.loads(json.dumps(_contract()))
-                node = payload
-                parts = dotted.split(".")
-                for part in parts[:-1]:
-                    node = node[part]
-                node.pop(parts[-1])
-                with self.assertRaises(
-                        dsh_contract.ContractMalformed) as caught:
-                    dsh_contract.load_contract(raw=json.dumps(payload))
-                self.assertIn(dotted, str(caught.exception), dotted)
+    def test_retired_frozen_inputs_are_refused_even_if_empty(self):
+        for path, key, value in (("host", "rows", []), ("own.preset", "template", "")):
+            payload = json.loads(json.dumps(_contract()))
+            dsh_contract.get(path, payload)[key] = value
+            with self.assertRaisesRegex(dsh_contract.ContractMalformed, "retired frozen"):
+                dsh_contract.load_contract(raw=json.dumps(payload))
 
     def test_is_deprecated_is_false_for_every_undeprecated_path(self):
         # The predicate must not degrade into "true for anything old": only
@@ -1045,7 +774,7 @@ class TestContractV2AdditiveKeys(unittest.TestCase):
                              dotted)
         self.assertEqual(
             sorted(self.contract["deprecations"]["entries"]),
-            ["host.rows", "own.preset.template"])
+            [])
 
     def test_deprecations_sidecar_entries_are_shape_checked(self):
         for dotted, bad, expected in (
@@ -1063,7 +792,7 @@ class TestContractV2AdditiveKeys(unittest.TestCase):
                               str(caught.exception))
                 self.assertIn(expected, str(caught.exception))
         payload = json.loads(json.dumps(_contract()))
-        payload["deprecations"]["entries"] = {}
+        payload["deprecations"]["entries"] = []
         with self.assertRaises(dsh_contract.ContractMalformed) as caught:
             dsh_contract.load_contract(raw=json.dumps(payload))
         self.assertIn("deprecations.entries", str(caught.exception))
@@ -1177,49 +906,14 @@ class TestContractFields(unittest.TestCase):
         self.assertEqual(row_contract["ctx_logger"], "optional")
         guard_text = _read(GUARD_PY)
         self.assertIn("startsWith('cordis:')", guard_text)
-        self.assertIn("{ baseUrl: pathToFileURL(file.path).href, process, console }",
-                      guard_text)
+        self.assertIn("baseUrl: pathToFileURL(file.path).href", guard_text)
+        self.assertEqual(set(self.contract["host"]["apis"]["loader_ctx"]["members"]),
+                         {"baseUrl", "process", "console", "get", "has"})
         # The declared field names are the template's own keys.
-        for field in ("id_field", "name_field", "config_field", "group_field",
-                      "disabled_field"):
+        for field in ("id_field", "name_field", "config_field"):
             self.assertIn(f"{row_contract[field]}:", _template_text())
 
-    def test_host_rows_full_set_and_arithmetic(self):
-        rows = self.contract["host"]["rows"]
-        self.assertEqual(len(rows), _EXPECTED_ROW_TOTAL)
-        self.assertEqual(sum(1 for row in rows if row["group"] is None),
-                         _EXPECTED_ROWS_TOP_LEVEL)
-        self.assertEqual(sum(1 for row in rows if row["group"] is not None),
-                         _EXPECTED_ROWS_NESTED)
-        groups = [row for row in rows
-                  if row["package"] == self.contract["host"]["row_contract"]
-                  ["builtin_group_name"]]
-        self.assertEqual(len(groups), 3)
-        self.assertEqual(sum(1 for row in rows if row["disabled_expr"] == "true"), 2)
-        platform_rows = [row for row in rows if row["platform_conditional"]]
-        self.assertEqual(len(platform_rows), 2)
-        self.assertTrue(all(row["disabled_expr"].startswith("!!js ")
-                            for row in platform_rows))
-        self.assertEqual(
-            sorted(row["enabled_on"] for row in platform_rows),
-            ["posix", "win32"])
-        self.assertEqual(sum(1 for row in rows if row["enabled_on"] == "any"),
-                         _EXPECTED_ROW_TOTAL - 3 - 2 - 2)
-        enabled = sum(1 for row in rows
-                      if row["enabled_on"] in ("any", "win32", "posix")) - 1
-        self.assertEqual(enabled, _EXPECTED_ENABLED_PER_PLATFORM)
-        self.assertEqual(sum(1 for row in rows if row["config_declared"]),
-                         _EXPECTED_CONFIG_DECLARED)
 
-    def test_host_rows_recorded_subblock_is_empty_and_flagged(self):
-        for row in self.contract["host"]["rows"]:
-            recorded = row["recorded"]
-            self.assertEqual(recorded["source"], "recorded", row["row_id"])
-            self.assertIs(recorded["recorded"], False, row["row_id"])
-            self.assertIsNone(recorded["schema_export"], row["row_id"])
-            self.assertIsNone(recorded["probe_result"], row["row_id"])
-            self.assertEqual(recorded["required_keys"], [], row["row_id"])
-            self.assertEqual(recorded["accepted_keys"], [], row["row_id"])
 
     def test_host_skill_frontmatter_matches_every_shim(self):
         contract = self.contract["host"]["skill_frontmatter"]
@@ -1288,8 +982,6 @@ class TestContractFields(unittest.TestCase):
         notes = self.contract["host"]["notes"]
         self.assertEqual(notes["profile_declaration"],
                          "host-install-mechanism-not-ours")
-        for key in ("rows_field_semantics", "rows_recorded_subblock"):
-            self.assertTrue(notes[key], key)
 
     def test_own_package_matches_package_json(self):
         own = self.contract["own"]["package"]
@@ -1310,7 +1002,7 @@ class TestContractFields(unittest.TestCase):
         self.assertEqual(preset["id"], "governance")
         self.assertEqual(preset["version_marker"], ".dsh-bundle-version")
         self.assertEqual(preset["skill_root_marker"], "skill-root.txt")
-        self.assertTrue((_REPO_ROOT / preset["template"]).is_file())
+        self.assertTrue((_REPO_ROOT / self.contract["own"]["overlay"]["path"]).is_file())
         self.assertTrue((_REPO_ROOT / preset["metadata"]).is_file())
         # V2: the renderers no longer spell the values — they declare which
         # contract field supplies each one. The traceability assertion is
@@ -1365,7 +1057,7 @@ class TestContractFields(unittest.TestCase):
     def test_own_patch_shape_invariants_hold_in_the_shipped_patch(self):
         invariants = self.contract["own"]["patch"]["shape_invariants"]
         self.assertEqual(sorted(invariants),
-                         ["exactly-one-insert-row", "no-!!js", "no-id-update",
+                         ["exactly-one-insert-row", "insert-row-requires-id", "no-!!js", "no-id-update",
                           "no-trust"])
         lines = [line for line in _read(PATCH_FILE).split("\n")
                  if line.strip() and not line.lstrip().startswith("#")]
@@ -1465,70 +1157,6 @@ class TestContractFields(unittest.TestCase):
                          ["necessary"], 62)
         self.assertEqual(reconciliation["derived_from_section_2_markers"]
                          ["necessary"], len(derived[_NECESSARY]))
-
-
-class TestTemplateContractAgreement(unittest.TestCase):
-    """K-3: template rows ↔ `host.rows[]`, both directions, full set."""
-
-    def setUp(self):
-        self.contract = _contract()
-        self.rows = _link_template_rows(_parse_template_rows())
-        self.declared = self.contract["host"]["rows"]
-        self.by_id = {row["row_id"]: row for row in self.declared}
-
-    def test_template_row_ids_are_unique_and_total_29(self):
-        ids = [row["row_id"] for row in self.rows]
-        self.assertEqual(len(ids), len(set(ids)), ids)
-        self.assertEqual(len(ids), _EXPECTED_ROW_TOTAL)
-
-    def test_template_row_set_equals_the_contract_row_set(self):
-        template_ids = {row["row_id"] for row in self.rows}
-        contract_ids = set(self.by_id)
-        self.assertEqual(
-            template_ids - contract_ids, set(),
-            "template row not in contract")
-        self.assertEqual(
-            contract_ids - template_ids, set(),
-            "contract row absent from template")
-
-    def test_every_row_agrees_field_by_field(self):
-        for row in self.rows:
-            declared = self.by_id[row["row_id"]]
-            self.assertEqual(declared["package"], row["package"], row["row_id"])
-            self.assertEqual(declared["disabled_expr"], row["disabled_expr"],
-                             row["row_id"])
-            self.assertEqual(declared["platform_conditional"],
-                             _platform_conditional(row), row["row_id"])
-            self.assertEqual(declared["enabled_on"], _enabled_on(row),
-                             row["row_id"])
-            self.assertEqual(declared["config_keys"], row["config_keys"],
-                             row["row_id"])
-            self.assertEqual(declared["config_declared"],
-                             row["config_declared"], row["row_id"])
-            self.assertEqual(declared["group"], row["group"], row["row_id"])
-
-    def test_group_children_are_attached_to_their_group(self):
-        groups = [row for row in self.rows if row["is_group"]]
-        self.assertEqual([row["row_id"] for row in groups],
-                         ["planning", "compaction", "delegation"])
-        counts = {row["row_id"]: len(row["children"]) for row in groups}
-        self.assertEqual(sum(counts.values()), _EXPECTED_ROWS_NESTED)
-        self.assertEqual(counts, {"planning": 1, "compaction": 3,
-                                  "delegation": 9})
-
-    def test_platform_and_disabled_rows_are_both_visible_in_the_contract(self):
-        # A one-sided addition is exactly what K-3 has to catch: the platform
-        # conditional rows and the `disabled: true` rows must be declared.
-        declared_platform = {row["row_id"] for row in self.declared
-                             if row["platform_conditional"]}
-        declared_disabled = {row["row_id"] for row in self.declared
-                             if row["disabled_expr"] == "true"}
-        self.assertEqual(declared_platform, {"tool-bash", "tool-pwsh"})
-        self.assertEqual(declared_disabled,
-                         {"tool-subagent-codex", "tool-subagent-claude-code"})
-        self.assertEqual(
-            {row["row_id"] for row in self.rows if _platform_conditional(row)},
-            declared_platform)
 
 
 class TestTokenAgreement(unittest.TestCase):
@@ -1694,13 +1322,12 @@ class TestCoverageAndElimination(unittest.TestCase):
                 self.assertIn(requirement, {"node", "dsh-plane"},
                               entry["subject"])
 
-    def test_design_example_subject_path_resolves(self):
-        # Design §2.4/§4.1 use `host.rows[persona].config_keys` as the canonical
-        # subject spelling: `[<row id>]` indexes the row list by `row_id`.
-        self.assertEqual(
-            dsh_contract.get("host.rows[persona].config_keys"), ["prefix"])
-        self.assertEqual(
-            dsh_contract.get("host.rows[plan-mode].config_keys"), ["section"])
+    def test_overlay_coverage_subjects_resolve(self):
+        contract = _contract()
+        subjects = {entry["subject"] for entry in contract["coverage"]["entries"]}
+        for key in ("own.overlay.rows", "host.row_contract.config_field"):
+            self.assertIn(key, subjects)
+            self.assertTrue(dsh_contract.get(key, contract))
 
 
 class TestOutsideContractScan(unittest.TestCase):
@@ -1855,7 +1482,7 @@ class TestOutsideContractScan(unittest.TestCase):
                 'b = "agent.cordis.yml"\n'
                 'c = ".dsh-bundle-version"\n'
                 'd = "other-bundle-version"\n'
-                'e = "agent-presets/governance/agent.cordis.yml.template"\n',
+                'e = "agent-presets/governance/overlay.cordis.yml"\n',
                 encoding="utf-8")
             self.assertEqual(k2_scan(paths=("adapters/dsh/launch.py",), root=root), [])
             target.write_text(
@@ -1902,7 +1529,7 @@ class TestOutsideContractScan(unittest.TestCase):
             target = root / "lib" / "index.js"
             target.parent.mkdir(parents=True)
             target.write_text(
-                "// agent-presets/governance/agent.cordis.yml.template\n",
+                "// agent-presets/governance/overlay.cordis.yml\n",
                 encoding="utf-8")
             self.assertEqual(k2_scan(paths=("lib/index.js",), root=root), [])
 
@@ -2117,7 +1744,7 @@ class TestConsumerContractReads(unittest.TestCase):
         )
         payload = json.loads(self._node(
             root, script, argv=(str(root / "agent-presets" / "governance"
-                                    / "agent.cordis.yml.template"),
+                                    / "overlay.cordis.yml"),
                                 str(root).replace("\\", "/"))))
         # The template's real token is left in the text and reported: the
         # renderer followed the contract rather than a fixed three-token table.
@@ -2134,7 +1761,7 @@ class TestConsumerContractReads(unittest.TestCase):
             "process.stdout.write(JSON.stringify(renderComposition("
             "readFileSync(process.argv[1], 'utf8'), process.argv[2])));",
             argv=(str(pristine / "agent-presets" / "governance"
-                      / "agent.cordis.yml.template"),
+                      / "overlay.cordis.yml"),
                   str(pristine).replace("\\", "/"))))
         self.assertEqual(payload["leftovers"], [], payload)
 
@@ -2148,7 +1775,7 @@ class TestConsumerContractReads(unittest.TestCase):
         root = self._mutated_repo(mutate)
         out = self._pyprobe(root, (
             "import json, launch\n"
-            "print(json.dumps({'rendered': launch.render_composition(),\n"
+            "print(json.dumps({'rendered': launch.render_overlay(),\n"
             "                  'tokens': sorted(launch._token_paths())}))\n"))
         payload = json.loads(out)
         # The Python renderer refuses to emit a composition with an unresolved
@@ -2162,7 +1789,7 @@ class TestConsumerContractReads(unittest.TestCase):
         pristine = self._mutated_repo(lambda _contract: None)
         out = self._pyprobe(pristine, (
             "import launch\n"
-            "print(len(launch.render_composition()))\n"))
+            "print(len(launch.render_overlay()))\n"))
         self.assertGreater(int(out.strip()), 0, out)
 
     def test_mutation_own_preset_id_never_renders_a_legacy_preset(self):
@@ -2196,7 +1823,7 @@ class TestConsumerContractReads(unittest.TestCase):
             out = self._pyprobe(root, (
                 "import json, launch\n"
                 f"ok = launch.write_rendered_preset(__import__('pathlib')"
-                f".Path({str(Path(tmp) / 'staging')!r}))\n"
+                f".Path({str(Path(tmp) / 'staging')!r}), derived={{'composition': '[]', 'provenance': {{}}}})\n"
                 "import pathlib\n"
                 "names = sorted(p.name for p in "
                 f"pathlib.Path({str(Path(tmp) / 'staging')!r}).iterdir())\n"
@@ -2235,53 +1862,6 @@ class TestConsumerContractReads(unittest.TestCase):
             self._assert_row_warns_and_writes_nothing(root, [td])
             self.assertFalse((Path(td) / ".mutated-presets").exists(),
                              "the row wrote through the mutated preset root")
-        self._assert_copy_restored(root)
-
-    def test_mutation_host_rows_flips_the_template_agreement_judgment(self):
-        # The consumer of `host.rows[]` at V2 is the template cross-check
-        # (design §2.8 K-3; the rule engine reads the composition, never the
-        # contract). So the observable consumer output here IS that judgment:
-        # with the real contract it is empty, and a one-row mutation must make
-        # it non-empty.
-        self.assertEqual(template_row_mismatches(), [])
-        # The affected row is chosen from the declared set, not hard-coded.
-        target = next(row for row in self.original["host"]["rows"]
-                      if row["config_keys"] and row["config_declared"])
-
-        def mutate(contract):
-            for row in contract["host"]["rows"]:
-                if row["row_id"] == target["row_id"]:
-                    row["config_declared"] = False
-
-        root = self._mutated_repo(mutate)
-        out = self._pyprobe(root, (
-            "import json, dsh_contract\n"
-            "document = dsh_contract.load_contract()\n"
-            "print(json.dumps([r['config_declared'] for r in "
-            "document['host']['rows'] if r['row_id'] == "
-            f"{target['row_id']!r}]))\n"))
-        self.assertIn(False, json.loads(out),
-                      "the copy's mutated row was not read")
-        self._assert_copy_restored(root)
-        # The judgment itself is contract-driven: feeding it the mutated
-        # document (as the copy's accessor returns it) reports the mismatch.
-        mutated = json.loads((root / dsh_contract.CONTRACT_REL).read_text("utf-8"))
-        mismatches = template_row_mismatches(mutated)
-        self.assertTrue(mismatches, target["row_id"])
-        self.assertTrue(any(target["row_id"] in item for item in mismatches),
-                        mismatches)
-
-    def test_mutation_host_rows_removal_is_a_one_sided_row(self):
-        dropped = self.original["host"]["rows"][0]["row_id"]
-
-        def mutate(contract):
-            contract["host"]["rows"] = [
-                row for row in contract["host"]["rows"]
-                if row["row_id"] != dropped]
-        root = self._mutated_repo(mutate)
-        mutated = json.loads((root / dsh_contract.CONTRACT_REL).read_text("utf-8"))
-        mismatches = template_row_mismatches(mutated)
-        self.assertIn(f"template row not in contract: {dropped}", mismatches)
         self._assert_copy_restored(root)
 
 
@@ -2495,6 +2075,8 @@ class TestGuardContractFailureVerdicts(unittest.TestCase):
 
     def test_healthy_contract_without_host_is_not_run(self):
         root = self._guard_repo()
+        composition = root / "agent-presets/governance/agent.cordis.yml"
+        composition.write_text("- id: persona\n  name: '@deepseek-ai/dsh-persona'\n", encoding="utf-8")
         outcome = self._run_guard(root, without_host=True)
         self.assertTrue(outcome["import_ok"], outcome)
         self.assertEqual(outcome["verdict"], "NOT_RUN", outcome)
@@ -2597,7 +2179,7 @@ class TestGuardContractFailureVerdicts(unittest.TestCase):
                              "apply() threw without a contract")
             # 2. leftovers is the template's token set — nothing was substituted
             self.assertEqual(payload["tokens"],
-                             ["__GOVERNANCE_REPO_ROOT__",
+                             ["__GOVERNANCE_PERSONA_BODY__",
                               "__GOVERNANCE_SKILLS_ROOT__",
                               "__GOVERNANCE_SHIMS_ROOT__"])
             self.assertIsInstance(payload["leftovers"], list, payload)

@@ -18,7 +18,6 @@
       "hook-commit-msg",
       "hook-post-commit",
       "hook-prepare-commit-msg",
-      "dsh-persona-version",
       "dsh-persona-body-version",
       "dsh-agents-bootstrap-version",
       "canonical-bootstrap-version",
@@ -279,7 +278,7 @@
         "type": "dir"
       },
       {
-        "path": "agent-presets/governance/agent.cordis.yml.template",
+        "path": "agent-presets/governance/overlay.cordis.yml",
         "type": "file"
       },
       {

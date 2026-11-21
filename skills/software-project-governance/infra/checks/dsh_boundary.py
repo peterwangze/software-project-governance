@@ -40,7 +40,7 @@ statement about *subprocess and host-plane probing*, not about reading files.
 The two domains are therefore:
 
   * **file-level criteria** — K-1 … K-11 and K-13 — read only files inside the
-    package (the contract, the template, the hooks, the patch, the manifest,
+    package (the contract, the overlay, the hooks, the patch, the manifest,
     the test tree, ``package.json``, ``cleanup.py``, the manifest declaration).
     They run unchanged under ``--offline``, and they are the reason ``--offline``
     can still FAIL.
@@ -80,6 +80,8 @@ Public surface:
 from __future__ import annotations
 
 import argparse
+import ast
+import importlib.util
 import json
 import re
 import sys
@@ -106,7 +108,7 @@ __all__ = [
 
 #: The frozen judgment list, in the order the design's §2.8 table lists it.
 CRITERIA: Tuple[str, ...] = tuple(
-    f"K-{index}" for index in range(1, 14))
+    f"K-{index}" for index in range(1, 15))
 
 #: K-12: the command key whose verdict must equal this check's exit code.
 DOCTOR_COMMAND_KEY = "dsh-doctor"
@@ -114,16 +116,6 @@ DOCTOR_COMMAND_KEY = "dsh-doctor"
 #: K-1: the two `allowlist` keys V8 adds to the contract (design §2.1 / O-9).
 CONTRACT_ALLOWLIST_PATH = "allowlist"
 CONTRACT_ALLOWLIST_BUDGET_PATH = "allowlist_budget"
-
-#: K-3 / §0.2 E-10: 16 top-level + 13 nested platform-independent rows. The
-#: template must carry exactly this set, and so must `host.rows[]`.
-EXPECTED_ROWS_TOP_LEVEL = 16
-EXPECTED_ROWS_NESTED = 13
-EXPECTED_ROW_TOTAL = EXPECTED_ROWS_TOP_LEVEL + EXPECTED_ROWS_NESTED
-
-#: K-3: the four row keys K-6's patch reading and K-3's comparison share.
-ROW_KEYS = ("package", "disabled_expr", "platform_conditional", "enabled_on",
-            "config_keys", "config_declared", "group")
 
 #: K-6: the four `own.patch.shape_invariants` spellings.
 PATCH_INVARIANT_EXACTLY_ONE_INSERT = "exactly-one-insert-row"
@@ -153,9 +145,6 @@ COVERAGE_TARGETS = ("strong", "medium", "weak", "none")
 LITERAL_CLASSES = ("package", "env", "path", "marker")
 
 _TEMPLATE_TOKEN_RE = re.compile(r"__[A-Za-z0-9_]+__")
-_ROW_ID_RE = re.compile(r"^(\s*)- id: (\S+)\s*$")
-_ROW_KEY_RE = re.compile(r"^(\s*)(name|disabled|config|group|isolate):\s*(.*)$")
-_CONFIG_KEY_RE = re.compile(r"^(\s*)([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$")
 _TEST_REF_RE = re.compile(r"^test_[A-Za-z0-9_]+\.py::(test_[A-Za-z0-9_]+)$")
 _SEGMENT_ID_RE = re.compile(r"^\d\d[a-z]?$")
 _FIXTURE_ID_RE = re.compile(r"^FX-[A-Z0-9-]+$")
@@ -259,8 +248,8 @@ class Subject:
         # the mutation test would then judge the real file and pass.
         self.contract_path = (overrides["contract"] if "contract" in overrides
                               else dsh_contract.contract_path(self.root))
-        self.template = overrides.get("template") or (
-            self.root / "agent-presets" / "governance" / "agent.cordis.yml.template")
+        self.overlay = overrides.get("overlay")
+        self.persona = overrides.get("persona")
         self.manifest = overrides.get("manifest") or (
             self.root / "adapters" / "dsh" / "adapter-manifest.json")
         self.package_json = overrides.get("package_json") or (self.root / "package.json")
@@ -396,13 +385,13 @@ def k1_contract_readable(facts: ContractFacts) -> Criterion:
     may downgrade to NOT_RUN, the gate that judges the contract must report.
     """
     if facts.ok:
-        rows = facts.get("host.rows")
+        rows = facts.get("own.overlay.rows")
         entries = facts.get("coverage.entries")
         dispositions = facts.get("elimination.dispositions")
         return criterion_result(
             "K-1", "PASS",
             f"contract readable: schema_version {facts.get('schema_version')}, "
-            f"{len(rows)} host row(s), {len(entries)} coverage claim(s), "
+            f"{len(rows)} overlay row(s), {len(entries)} coverage claim(s), "
             f"{len(dispositions)} disposition(s)",
             details=[f"read {len(facts.raw)} byte(s) from "
                      f"{_rel(facts.subject.contract_path)}"])
@@ -420,7 +409,8 @@ def _declared_literal_sets(document: Dict[str, Any]) -> Dict[str, set]:
     without the reader seeing it.
     """
     host = document["host"]
-    packages = ({row["package"] for row in host["rows"]}
+    packages = ({value for key, value in document["own"]["native"].items()
+                 if key.endswith("_row_name")}
                 | {document["own"]["package"]["name"]}
                 | {"{0}/{1}".format(host["install"]["scope"],
                                     host["install"]["cli_package"])}
@@ -453,7 +443,7 @@ K2_CONSUMERS: Tuple[str, ...] = (
     "adapters/dsh/launch.py",
     "skills/software-project-governance/infra/dsh_compat.py",
     "skills/software-project-governance/infra/verify_workflow.py",
-    "agent-presets/governance/agent.cordis.yml.template",
+    "agent-presets/governance/overlay.cordis.yml",
     "skills/software-project-governance/infra/hooks/pre-commit",
     "skills/software-project-governance/infra/hooks/commit-msg",
     "skills/software-project-governance/infra/hooks/post-commit",
@@ -586,185 +576,23 @@ def k2_no_outside_literal(subject: Subject, facts: ContractFacts) -> Criterion:
         f"consumer(s) scanned)")
 
 
-# ── template row derivation (K-3) ───────────────────────────────────────────
-
-
-def parse_template_rows(text: str, origin: str = "<template>") -> List[Dict[str, Any]]:
-    """Re-derive the row table from the template text, independently of JSON.
-
-    Strict by construction (mirrors the V1 caliber): a row is a
-    ``- id: <name>`` entry at indent 0 or 4 — the two depths this composition
-    uses — and its row keys sit at ``row_indent + 2``. A row-looking line at any
-    other indent raises, so a mutation cannot be silently absorbed.
-    """
-    lines = text.split("\n")
-    rows: List[Dict[str, Any]] = []
-    index = 0
-    while index < len(lines):
-        match = _ROW_ID_RE.match(lines[index])
-        if not match:
-            index += 1
-            continue
-        indent = len(match.group(1))
-        if indent not in (0, 4):
-            raise ValueError(
-                f"{origin}:{index + 1}: row at unexpected indent {indent}")
-        row = {
-            "row_id": match.group(2),
-            "indent": indent,
-            "line": index + 1,
-            "package": None,
-            "disabled_expr": None,
-            "config_declared": False,
-            "config_keys": [],
-            "group": None,
-            "is_group": False,
-            "children": [],
-        }
-        index += 1
-        while index < len(lines):
-            probe = lines[index]
-            if not probe.strip():
-                index += 1
-                continue
-            if _ROW_ID_RE.match(probe) or _ROW_ID_RE.match(probe.lstrip()):
-                break
-            key_match = _ROW_KEY_RE.match(probe)
-            if not key_match or len(key_match.group(1)) != indent + 2:
-                if len(probe) - len(probe.lstrip()) <= indent:
-                    break
-                index += 1
-                continue
-            key = key_match.group(2)
-            value = key_match.group(3).strip()
-            if key == "name":
-                row["package"] = value.strip("'\"") if value else None
-            elif key == "disabled":
-                row["disabled_expr"] = value or None
-            elif key == "group":
-                row["is_group"] = value == "true"
-            elif key == "config":
-                row["config_declared"] = True
-                index += 1
-                while index < len(lines):
-                    child = lines[index]
-                    if not child.strip():
-                        index += 1
-                        continue
-                    child_indent = len(child) - len(child.lstrip())
-                    if child_indent <= indent + 2:
-                        break
-                    if _ROW_ID_RE.match(child):
-                        break
-                    config_key = _CONFIG_KEY_RE.match(child)
-                    if config_key and child_indent == indent + 4:
-                        row["config_keys"].append(config_key.group(2))
-                    index += 1
-                continue
-            index += 1
-        rows.append(row)
-    return link_template_rows(rows)
-
-
-def link_template_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Attach nested rows to their group and derive the effective ``group``."""
-    stack: Optional[Dict[str, Any]] = None
-    for row in rows:
-        if row["indent"] == 0:
-            stack = row if row["is_group"] else None
-            row["group"] = None
-        else:
-            if stack is None:
-                raise ValueError(
-                    f"row {row['row_id']} is nested but no top-level group "
-                    f"precedes it")
-            row["group"] = stack["row_id"]
-            stack["children"].append(row["row_id"])
-    return rows
-
-
-def enabled_on_of(row: Dict[str, Any]) -> Optional[str]:
-    """Derive the per-row enablement from the template's own disabled form."""
-    if row["is_group"]:
-        return None
-    expr = row["disabled_expr"]
-    if expr is None:
-        return "any"
-    if expr == "true":
-        return "never"
-    match = _PLATFORM_EXPR_RE.match(expr)
-    if match:
-        operator, platform = match.group(1), match.group(2)
-        return "posix" if (platform == "win32") == (operator == "===") else "win32"
-    raise ValueError(f"row {row['row_id']}: unknown disabled form {expr!r}")
-
-
-def platform_conditional_of(row: Dict[str, Any]) -> bool:
-    return (row["disabled_expr"] or "").startswith("!!js process.platform")
-
-
-def template_row_mismatches(rows: Sequence[Dict[str, Any]],
-                            declared: Sequence[Dict[str, Any]]) -> List[str]:
-    """K-3's comparison as a value: how the two sides disagree.
-
-    Order-independent by construction; the empty list means "they agree".
-    """
-    by_id = {row["row_id"]: row for row in declared}
-    template_ids = [row["row_id"] for row in rows]
-    mismatches: List[str] = []
-    if len(template_ids) != len(set(template_ids)):
-        mismatches.append(f"template row ids are not unique: {template_ids}")
-    for missing in sorted(set(by_id) - set(template_ids)):
-        mismatches.append(f"contract row absent from template: {missing}")
-    for extra in sorted(set(template_ids) - set(by_id)):
-        mismatches.append(f"template row not in contract: {extra}")
-    for row in rows:
-        declared_row = by_id.get(row["row_id"])
-        if declared_row is None:
-            continue
-        derived = {
-            "package": row["package"],
-            "disabled_expr": row["disabled_expr"],
-            "platform_conditional": platform_conditional_of(row),
-            "enabled_on": enabled_on_of(row),
-            "config_keys": row["config_keys"],
-            "config_declared": row["config_declared"],
-            "group": row["group"],
-        }
-        for key in ROW_KEYS:
-            if declared_row.get(key) != derived[key]:
-                mismatches.append(
-                    f"{row['row_id']}.{key}: {declared_row.get(key)!r} != "
-                    f"{derived[key]!r}")
-    return mismatches
-
-
-def k3_template_rows_match_contract(subject: Subject,
-                                    facts: ContractFacts) -> Criterion:
-    """K-3 — template rows ↔ ``host.rows[]``, both directions, full set."""
+def k3_overlay_shape(subject: Subject, facts: ContractFacts) -> Criterion:
+    """Check the same governance-owned delta accepted by the installer."""
     if not facts.ok:
-        return criterion_result("K-3", "FAIL",
-                                "row comparison needs a readable contract")
-    text = _read(subject.template)
-    if not text:
-        return criterion_result("K-3", "FAIL",
-                                f"template missing: {_rel(subject.template)}")
+        return criterion_result("K-3", "FAIL", "overlay check needs a readable contract")
+    old = subject.root / facts.get("own.preset.payload_dir") / "agent.cordis.yml.template"
+    if old.exists():
+        return criterion_result("K-3", "FAIL", f"frozen host composition still shipped: {old}")
+    path = subject.overlay or subject.root / facts.get("own.overlay.path")
+    loader = Path(__file__).resolve().parents[4] / "adapters/dsh/composition_merge.py"
+    spec = importlib.util.spec_from_file_location("_spg_boundary_merge", loader)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     try:
-        rows = parse_template_rows(text, origin=subject.template.name)
-    except ValueError as error:
-        return criterion_result("K-3", "FAIL", str(error), findings=[str(error)])
-    declared = facts.get("host.rows")
-    mismatches = template_row_mismatches(rows, declared)
-    if mismatches:
-        return criterion_result(
-            "K-3", "FAIL", f"{len(mismatches)} row disagreement(s)",
-            findings=mismatches)
-    return criterion_result(
-        "K-3", "PASS",
-        f"template rows == contract host.rows[]: {len(rows)} row(s) "
-        f"({EXPECTED_ROWS_TOP_LEVEL} top-level + {EXPECTED_ROWS_NESTED} nested)",
-        details=[f"both sides declare rows, packages, disabled forms, config "
-                 f"keys and group links identically"])
+        module.validate_overlay(path.read_text(encoding="utf-8"), facts.get("own"))
+    except (OSError, ValueError) as exc:
+        return criterion_result("K-3", "FAIL", f"invalid governance overlay: {exc}")
+    return criterion_result("K-3", "PASS", "overlay contains only the declared persona and skill roots")
 
 
 # ── K-4 ─────────────────────────────────────────────────────────────────────
@@ -775,10 +603,13 @@ def k4_tokens_match(subject: Subject, facts: ContractFacts) -> Criterion:
     if not facts.ok:
         return criterion_result("K-4", "FAIL",
                                 "token comparison needs a readable contract")
-    text = _read(subject.template)
-    if not text:
-        return criterion_result("K-4", "FAIL",
-                                f"template missing: {_rel(subject.template)}")
+    path = subject.overlay or subject.root / facts.get("own.overlay.path")
+    source = subject.persona or subject.root / facts.get("own.overlay.persona_body_source")
+    overlay, persona = _read(path), _read(source)
+    body_token = facts.get("own.overlay.persona_body_token")
+    if not persona.strip() or overlay.count(body_token) != 1:
+        return criterion_result("K-4", "FAIL", "overlay requires one body token and a nonempty persona source")
+    text = overlay.replace(body_token, persona)
     tokens = facts.get("own.render.tokens")
     found = set(_TEMPLATE_TOKEN_RE.findall(text))
     findings: List[str] = []
@@ -807,14 +638,7 @@ def k4_tokens_match(subject: Subject, facts: ContractFacts) -> Criterion:
 
 
 def _composition_file_expr(facts: ContractFacts) -> str:
-    """The declared composition file name, derived from `own.preset.template`.
-
-    Built from the template path rather than restated: the composition file is
-    the template's name minus the render suffix, so a rename in the contract
-    moves this derivation with it.
-    """
-    name = Path(facts.get("own.preset.template")).name
-    return name[:-len(".template")] if name.endswith(".template") else name
+    return facts.get("host.home.composition_file")
 
 
 def k5_hook_paths(facts: ContractFacts, subject: Subject) -> Criterion:
@@ -900,6 +724,14 @@ def patch_shape_findings(text: str, invariants: Sequence[str]) -> List[str]:
         if re.match(r"^\s*-\s*id:\s*\S+", line):
             id_rows.append(line)
     findings: List[str] = []
+    if "insert-row-requires-id" in invariants:
+        # Each inserted row must identify its owner; a nested config id does not count.
+        bodies = re.split(r"(?m)^- insert:\s*$", text)[1:]
+        for body in bodies:
+            rows = re.split(r"(?m)^    - ", body.split("\n- ", 1)[0])[1:]
+            if not rows or any(not re.search(r"^(?:id:|.*\n      id:)\s*[A-Za-z0-9_-]+\s*$",
+                                             row, re.MULTILINE) for row in rows):
+                findings.append("insert-row-requires-id: each inserted row needs a nonempty id")
     if PATCH_INVARIANT_EXACTLY_ONE_INSERT in invariants and len(inserts) != 1:
         findings.append(
             f"{PATCH_INVARIANT_EXACTLY_ONE_INSERT}: found {len(inserts)} "
@@ -1196,7 +1028,6 @@ def _registered_command_keys() -> set:
 
 def _fixture_vocabulary() -> set:
     """The declared fixture ids (emittable + deferred), from the fixture module."""
-    import importlib.util  # noqa: PLC0415 — lazy so the check works without it
 
     path = (Path(__file__).resolve().parents[1] / "tests" / "dsh_fixtures.py")
     if not path.is_file():
@@ -1457,6 +1288,28 @@ def k10_structural_invariants(subject: Subject, facts: ContractFacts) -> Criteri
     elif "adapters" not in plugin_scope:
         findings.append("`adapters` is not in the cleanup scope — the contract's "
                         "directory is not covered")
+    patch_text = _read(subject.patch)
+    findings.extend(patch_shape_findings(patch_text, ["insert-row-requires-id"]))
+    native_overlay = _read(subject.root / "lib/dsh-native/overlay.js")
+    if not re.search(r"^\s*\w+\s*=\s*structuredClone\(rows\)", native_overlay, re.MULTILINE):
+        findings.append("native registration must clone the host payload before overlaying it")
+    # The package entry and native derivation may read inputs but may not open
+    # or mutate the host's Cordis configuration. The isolated native bridge
+    # acceptance exercises registration against an existing .cordis sentinel.
+    for module in (subject.host_row, subject.root / "lib/dsh-native/overlay.js"):
+        script = _read(module)
+        imports = re.findall(r"""import\s+(.+?)\s+from\s+['"]node:fs(?:/promises)?['"]""",
+                             script, re.MULTILINE)
+        for declaration in imports:
+            names = {part.strip().split()[0] for part in declaration.strip("{} ").split(",") if part.strip()}
+            if not names.issubset({"readFileSync", "statSync", "existsSync", "realpathSync"}):
+                findings.append(f"{_rel(module)}: native preset source must have read-only file access")
+    names = set(re.findall(r"^\s*def (test_\w+)", _read(subject.tests_dir / "test_dsh_native_bridge.py"),
+                           re.MULTILINE))
+    for proof in ("test_apply_writes_nothing_on_a_native_host",
+                  "test_uncloneable_native_row_refuses_before_registration"):
+        if proof not in names:
+            findings.append(f"missing native registration regression: {proof}")
     if findings:
         return criterion_result("K-10", "FAIL",
                                 f"{len(findings)} declaration gap(s)",
@@ -1465,7 +1318,7 @@ def k10_structural_invariants(subject: Subject, facts: ContractFacts) -> Criteri
         "K-10", "PASS",
         f"contract in `files` + canonical_product_artifacts; "
         f"{len(fixture_paths)} host-facts fixture(s) declared; cleanup scope == "
-        f"PLUGIN_SCOPE_DIRS ({len(manifest_dirs)} dir(s))")
+        f"PLUGIN_SCOPE_DIRS ({len(manifest_dirs)} dir(s)); insert ids, cloned payload and read-only native registration guarded")
 
 
 # ── K-11 ────────────────────────────────────────────────────────────────────
@@ -1737,6 +1590,24 @@ def k13_rehearsal_baseline(subject: Subject, facts: ContractFacts,
 # ── the judgment ────────────────────────────────────────────────────────────
 
 
+def k14_plane_reader_bindings(subject: Subject, facts: ContractFacts) -> Criterion:
+    """Ensure the asar and discovery readers consume the declared plane facts."""
+    if not facts.ok:
+        return criterion_result("K-14", "FAIL", "plane bindings need a readable contract")
+    engine = subject.root / "skills/software-project-governance/infra"
+    findings = []
+    for filename, keys in (("dsh_asar.py", ("host.planes.asar.entry_count_cap",)),
+                           ("dsh_plane.py", ("host.planes.precedence", "host.planes.asar.runtime_rel"))):
+        tree = ast.parse((engine / filename).read_text(encoding="utf-8"))
+        strings = {node.value for node in ast.walk(tree)
+                   if isinstance(node, ast.Constant) and isinstance(node.value, str)}
+        for key in keys:
+            if key not in strings or facts.get(key) is None:
+                findings.append(f"{filename}: missing contract binding {key}")
+    return criterion_result("K-14", "FAIL" if findings else "PASS",
+                            "plane reader bindings", findings=findings)
+
+
 def check_dsh_boundary(repo_root: Optional[Path] = None,
                        *, subject: Optional[Subject] = None,
                        today: Optional[date] = None) -> Dict[str, Any]:
@@ -1756,7 +1627,7 @@ def check_dsh_boundary(repo_root: Optional[Path] = None,
     runners = (
         ("K-1", lambda: k1_contract_readable(facts)),
         ("K-2", lambda: k2_no_outside_literal(subject, facts)),
-        ("K-3", lambda: k3_template_rows_match_contract(subject, facts)),
+        ("K-3", lambda: k3_overlay_shape(subject, facts)),
         ("K-4", lambda: k4_tokens_match(subject, facts)),
         ("K-5", lambda: k5_hook_paths(facts, subject)),
         ("K-6", lambda: k6_patch_shape(subject, facts)),
@@ -1767,6 +1638,7 @@ def check_dsh_boundary(repo_root: Optional[Path] = None,
         ("K-11", lambda: k11_allowlist_ratchet(facts, subject)),
         ("K-12", lambda: k12_single_verdict_anchor(facts)),
         ("K-13", lambda: k13_rehearsal_baseline(subject, facts, today=today)),
+        ("K-14", lambda: k14_plane_reader_bindings(subject, facts)),
     )
     criteria: List[Dict[str, Any]] = []
     for ident, runner in runners:

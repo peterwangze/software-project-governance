@@ -84,7 +84,8 @@ def _posix(path) -> str:
 
 
 def _join(*parts: str) -> str:
-    return "/".join(part.strip("/\\") for part in parts if part.strip("/\\"))
+    head, *tail = (_posix(part) for part in parts)
+    return head.rstrip("/") + "/" + "/".join(part.strip("/") for part in tail)
 
 
 def _anchor_rel() -> Tuple[str, ...]:
@@ -194,9 +195,6 @@ def _profile_plane(directory: str, node_modules: str,
     )
 
 
-_identity_memo: Dict[Tuple[str, int], Dict[str, Any]] = {}
-
-
 def _asar_runtime(fs: dsh_asar.FsPort, asar_path: str) -> Dict[str, Any]:
     """The §3.2 runtime fact: node version from ``runtime_rel`` beside the app.
 
@@ -277,11 +275,7 @@ def _asar_plane(fs: dsh_asar.FsPort, asar_path: str, source: str,
         return None, f"install anchor unreadable inside archive: {error}"
     if not isinstance(version, str):
         return None, "install anchor carries no version string"
-    key = (str(asar_path), reader.file_size)
-    identity = _identity_memo.get(key)
-    if identity is None:
-        identity = reader.identity()
-        _identity_memo[key] = identity
+    identity = reader.identity()
     program = runner_program or _sibling_executable(fs, asar_path)
     return Plane(
         kind=_KIND_ASAR, source=source, anchor=str(asar_path),
@@ -415,8 +409,7 @@ def _asar_rel_from_runtime(fs: dsh_asar.FsPort, app_dir: str) -> Optional[str]:
 
 def _split_asar_component(value: str) -> Optional[Tuple[str, Tuple[str, ...]]]:
     """Split ``<…>/x.asar/<internal prefix>`` into (asar, prefix) — or None."""
-    segments = [part for part in str(value).replace("\\", "/").split("/")
-                if part]
+    segments = _posix(value).split("/")
     for index in range(len(segments) - 1, -1, -1):
         if segments[index].lower().endswith(".asar"):
             return "/".join(segments[:index + 1]), tuple(segments[index + 1:])

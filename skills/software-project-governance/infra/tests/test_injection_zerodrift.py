@@ -33,7 +33,7 @@ FACES = {
     "SKILL.md": _REPO_ROOT
     / "skills/software-project-governance/SKILL.md",
     "persona-template": _REPO_ROOT
-    / "agent-presets/governance/agent.cordis.yml.template",
+    / "agent-presets/governance/persona.md.template",
     "governance-init.md": _REPO_ROOT / "commands/governance-init.md",
     "AGENTS.md.template": _REPO_ROOT / "adapters/dsh/AGENTS.md.template",
 }

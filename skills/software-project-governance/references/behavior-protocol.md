@@ -580,7 +580,7 @@ Agent 从项目 profile 推断模式。用户可随时通过说"仅在关键决�
 
 **为什么审查在 commit 之前（Failure Mode 11 的结构性修复）**：M5 使用不足重复出现了 7 次，因为旧的顺序（commit → 审查）制造了一个结构性陷阱：commit 提供了认知闭合，而之后的摘要满足了"告诉用户发生了什么"的冲动。独立摘要与 AskUserQuestion 争夺终端位置——摘要总是胜出，因为它更简单且不需要等待输入。两个结构性变更打破了这个陷阱：(1) 审查移到 commit 之前，使 commit 成为通过审查的奖励而非跳过审查的触发器；(2) 摘要嵌入在 AskUserQuestion 内部——没有独立的摘要输出。AskUserQuestion 就是交付物审查。
 
-> **关键行为契约第 5/6 条（FEAT-078 / ADR-021 §2.1·§3.1 canonical 全文；压缩形式由 SKILL.md「关键行为契约」段、DSH persona 契约块（agent-presets/governance/agent.cordis.yml.template）与 governance-init.md Step 7 入口模板携带，secondary-thin 薄指针与 AGENTS.md.template 携带指针；锚点关键词「推荐必标需求源」「发现即闭环」——`check-injection-contract` 锚点守护）**：
+> **关键行为契约第 5/6 条（FEAT-078 / ADR-021 §2.1·§3.1 canonical 全文；压缩形式由 SKILL.md「关键行为契约」段、DSH persona 契约块（agent-presets/governance/persona.md.template）与 governance-init.md Step 7 入口模板携带，secondary-thin 薄指针与 AGENTS.md.template 携带指针；锚点关键词「推荐必标需求源」「发现即闭环」——`check-injection-contract` 锚点守护）**：
 >
 > 5. **推荐必标需求源（DEC-286(7)/DEC-287(5)）**：凡向用户呈现推荐或排序（含完成必推荐的候选清单、交互询问工具中的待选清单、任务进度表摘要），MUST 逐项标注需求源（三类之一：用户点名、活性缺陷、机器信号），标注 MUST 可追溯到 triage 记录或用户原话；不标即违规。**同优先级内** user-named 项未闭合时，machine-signal 项不得排位其前（推荐位倒挂=违规，判据见 Check 41/INV-1；跨 P 级压序经 Check 41 披露 WARN + 发布门拦截，见 ADR-021 §2.2.3/§2.2.4）。
 >

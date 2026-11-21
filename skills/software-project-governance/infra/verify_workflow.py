@@ -5094,7 +5094,7 @@ INJECTION_CONTRACT_ANCHORS = {
     #     (`治理工作流（vX.Y.Z）` must track the SKILL.md authority; the
     #     dsh-persona-version projection guards it too, the dynamic marker here
     #     is the belt-and-braces layer that also covers a hand-edited file).
-    "agent-presets/governance/agent.cordis.yml.template": [
+    "agent-presets/governance/persona.md.template": [
         "关键行为契约", "复审必达", "NEEDS_CHANGE", "完成必推荐",
         "task-priority-analysis", "选项必带依据",
         # FIX-260 / REQ-107: 4th contract line — review conclusions MUST be
@@ -5142,7 +5142,7 @@ INJECTION_CONTRACT_STAGED_ANCHORS = {
     "ADR-021-B1a": {
         # persona face: M1 clause + the persona-only 用户点名 (ADR-021 §2.1
         # file table) + M2 clause.
-        "agent-presets/governance/agent.cordis.yml.template": [
+        "agent-presets/governance/persona.md.template": [
             "推荐必标需求源", "用户点名", "发现即闭环",
         ],
         "skills/software-project-governance/SKILL.md": [
@@ -5502,6 +5502,12 @@ def check_dsh_preset_smoke(root=None, timeout=120):
                 "a concurrent active session and excluded (time-window + "
                 "entry-semantics dual factor, FIX-442)")
         result["reason"] = reason + ")"
+        return result
+
+    if proc.returncode == 2 and re.search(
+            r"^\[SMOKE\] Result: NOT_RUN \(exit 2\) HOST_PLANE_ABSENT:", output, re.MULTILINE):
+        result["verdict"] = "NOT_RUN"
+        result["reason"] = "no installed DSH host plane for the isolated upgrade smoke"
         return result
 
     diagnostics = [
@@ -15198,6 +15204,8 @@ def _run_full_engine_checks(args):
         print(header28u)
         if dsmk28u["verdict"] == "PASS":
             print(f"│  [PASS] {dsmk28u['reason']}")
+        elif dsmk28u["verdict"] == "NOT_RUN":
+            print(f"│  [NOT_RUN] {dsmk28u['reason']}")
         else:
             all_issues += 1
             print(f"│  [FAIL] {dsmk28u['reason']}")
@@ -19742,6 +19750,10 @@ def cmd_check_dsh_preset_smoke(args):
     print(summary_line)
     if result["verdict"] == "PASS":
         print(f"\n  Result: PASSED — {result['reason']}")
+    elif result["verdict"] == "NOT_RUN":
+        print(f"\n  Result: NOT_RUN — {result['reason']}")
+        if getattr(args, "fail_on_issues", False):
+            sys.exit(2)
     else:
         print(f"\n  Result: FAILED — {result['reason']}")
         for detail in result["details"][:20]:

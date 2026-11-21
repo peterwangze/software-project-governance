@@ -35,7 +35,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _NATIVE = _REPO_ROOT / "lib" / "dsh-native"
 _CONTRACT = _REPO_ROOT / "adapters" / "dsh" / "host-contract.json"
 _PERSONA = _REPO_ROOT / "agent-presets" / "governance" / "persona.md.template"
-_TEMPLATE = _REPO_ROOT / "agent-presets" / "governance" / "agent.cordis.yml.template"
+_TEMPLATE = _REPO_ROOT / "agent-presets" / "governance" / "overlay.cordis.yml"
 _LIB_INDEX = _REPO_ROOT / "lib" / "index.js"
 
 
@@ -440,13 +440,31 @@ class NativeBridgeTests(unittest.TestCase):
         # caller's real `~/.dsh` (or an external DSH_HOME) while the repo-cwd
         # assertion below still passed — a green test that writes a real home.
         with tempfile.TemporaryDirectory() as td:
+            cordis = Path(td) / ".cordis"
+            cordis.mkdir()
+            sentinel = cordis / "settings.yml"
+            sentinel.write_bytes(b"# private user settings")
             payload = self._run(_APPLY_PROBE, "native", env={"DSH_HOME": td})
+            self.assertEqual(sentinel.read_bytes(), b"# private user settings")
+            self.assertEqual(sorted(p.relative_to(td).as_posix() for p in Path(td).rglob("*")),
+                             [".cordis", ".cordis/settings.yml"])
             self.assertEqual(payload["registered"], 1, "the native registration must be issued")
             self.assertFalse(
                 (Path(td) / ".agent-presets").exists(),
                 "a native host must never get a preset directory under its DSH_HOME")
         # The probe runs in the repo cwd; no preset root may appear beside it.
         self.assertFalse((_REPO_ROOT / ".agent-presets").exists())
+
+    def test_uncloneable_native_row_refuses_before_registration(self):
+        program = r"""
+import { pathToFileURL } from 'node:url'
+const module = await import(pathToFileURL(process.argv[1] + '/lib/dsh-native/overlay.js').href)
+const base = {plugins: [{id:'runtime', name:'runtime', config:{callback: () => 0}}]}
+const result = module.deriveDefinition(base, {})
+console.log(JSON.stringify({ok:result.ok,code:result.code,kept:typeof base.plugins[0].config.callback}))
+"""
+        result = self._run(program)
+        self.assertEqual(result, {"ok": False, "code": "BASE_NOT_CLONEABLE", "kept": "function"})
 
     def test_apply_refuses_an_unreadable_tree_instead_of_rendering_legacy(self):
         """CODE R0 F1: `entries()` throwing is NOT "old host" (fail-closed)."""
@@ -580,7 +598,7 @@ class PersonaAndContractTests(unittest.TestCase):
         # renderer must stay documented as the only writer.
         lib_source = _LIB_INDEX.read_text(encoding="utf-8")
         self.assertIn("never renders the legacy user-root directory", lib_source)
-        self.assertIn("Explicit install face only", lib_source)
+        self.assertIn("Deprecated directory-writer export", lib_source)
 
         shared_entries = [
             _REPO_ROOT / "README.md",
@@ -625,35 +643,12 @@ class PersonaAndContractTests(unittest.TestCase):
         so it needs its own identity); the native path APPENDS the body to the
         host's prefix. Everything from the Coordinator paragraph on must match.
         """
-        composition = _TEMPLATE.read_text(encoding="utf-8")
-        lines = composition.splitlines()
-        start = lines.index("    prefix: |-") + 1
-        body = []
-        for line in lines[start:]:
-            if line.strip() == "":
-                body.append("")
-                continue
-            if not line.startswith("      "):
-                break
-            body.append(line[6:])
-        # The block starts with a blank line and the host identity paragraph; the
-        # governance body begins at the Coordinator line.
-        start_of_body = next(
-            index for index, line in enumerate(body)
-            if line.startswith("你是 software-project-governance")
-        )
-        legacy_body = "\n".join(body[start_of_body:]).strip()
-        # Both sides carry the same render token; compare them normalized so the
-        # check is about the governance text, not about whitespace or the token.
-        def normalize(text: str) -> str:
-            return re.sub(r"\s+", " ", text.replace("__GOVERNANCE_REPO_ROOT__", "<ROOT>")).strip()
-
-        persona = _PERSONA.read_text(encoding="utf-8")
-        self.assertEqual(
-            normalize(legacy_body),
-            normalize(persona),
-            "the native persona body drifted from the legacy composition",
-        )
+        contract = json.loads((_REPO_ROOT / "adapters/dsh/host-contract.json").read_bytes())
+        own = contract["own"]
+        overlay = _TEMPLATE.read_text(encoding="utf-8")
+        self.assertEqual(overlay.count(own["overlay"]["persona_body_token"]), 1)
+        self.assertEqual(own["overlay"]["persona_body_source"], own["native"]["persona_source"])
+        self.assertEqual((_REPO_ROOT / own["native"]["persona_source"]).resolve(), _PERSONA.resolve())
 
     def test_contract_native_skill_roots_match_the_render_tokens(self):
         contract = json.loads(_CONTRACT.read_text(encoding="utf-8"))

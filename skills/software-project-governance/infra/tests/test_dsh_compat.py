@@ -79,12 +79,7 @@ import dsh_contract  # noqa: E402
 import dsh_fixtures  # noqa: E402
 import dsh_plane  # noqa: E402 — FEAT-113 S1: the plane resolver under wiring test
 
-# FIX-310: the composition template IS the preset payload's render source
-# (there is no second, self-locating composition any more), so the same file
-# is both the "preset composition" and the "template composition" under test.
-_PRESET_COMPOSITION = (
-    _REPO_ROOT / "agent-presets" / "governance" / "agent.cordis.yml.template")
-_TEMPLATE_COMPOSITION = _PRESET_COMPOSITION
+_PRESET_COMPOSITION = _REPO_ROOT / dsh_contract.get("own.overlay.path")
 _HAS_YAML = importlib.util.find_spec("yaml") is not None
 
 
@@ -496,8 +491,8 @@ class CompositionDiscoveryTests(unittest.TestCase):
         # FIX-310: one shipped composition form — the preset payload's render
         # source. It must be discovered by the `*.cordis.yml.template` glob so
         # the schema guard covers what the renderers actually write.
-        self.assertEqual(
-            found, ["agent-presets/governance/agent.cordis.yml.template"], found)
+        self.assertEqual(found, [], "the package ships an overlay, not a frozen host composition")
+        self.assertTrue((_REPO_ROOT / dsh_contract.get("own.overlay.path")).is_file())
 
     def test_discovery_is_sorted_and_skips_vendored_trees(self):
         with _scratch("spg-test-disc-") as td:
@@ -1567,18 +1562,11 @@ class CompositionRowContractTests(unittest.TestCase):
         label, config = self._persona_config(_PRESET_COMPOSITION)
         _check_persona_contract(self, _PRESET_COMPOSITION, label, config)
 
-    def test_shipped_template_persona_row_declares_prefix_not_text(self):
-        label, config = self._persona_config(_TEMPLATE_COMPOSITION)
-        _check_persona_contract(self, _TEMPLATE_COMPOSITION, label, config)
-
     def test_persona_config_is_not_a_placeholder(self):
-        # The pair above would also pass on an empty prefix; a persona that
-        # renders nothing is the same user-facing failure by another route.
-        for path in (_PRESET_COMPOSITION, _TEMPLATE_COMPOSITION):
-            label, config = self._persona_config(path)
-            with self.subTest(composition=path.name):
-                self.assertTrue(str(config.get("prefix", "")).strip(),
-                                f"{path}: persona row {label} has an empty prefix")
+        _, config = self._persona_config(_PRESET_COMPOSITION)
+        self.assertIn(dsh_contract.get("own.overlay.persona_body_token"), config["prefix"])
+        source = _REPO_ROOT / dsh_contract.get("own.overlay.persona_body_source")
+        self.assertTrue(source.read_text(encoding="utf-8").strip())
 
     def test_structural_floor_fires_on_the_pre_fix_shape(self):
         # Negative control for the floor ITSELF: on the shape that shipped
@@ -1628,6 +1616,25 @@ _LIVE_SKIP = ("live dsh oracle unavailable (node and/or the installed dsh "
 
 class InstalledSchemaTests(unittest.TestCase):
     """The regression net: real compositions, real installed Config schemas."""
+
+    @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
+    def test_absent_profile_service_and_unknown_context_member(self):
+        with _scratch("spg-test-profile-context-") as td:
+            file = Path(td) / "agent.cordis.yml"
+            for expression, verdict in [("ctx.get('profileContext')", "PASS"),
+                                        ("ctx.undeclared()", "FAIL")]:
+                with self.subTest(expression=expression):
+                    file.write_text("- id: persona\n"
+                                    "  name: '@deepseek-ai/dsh-persona'\n"
+                                    f'  disabled: !!js "{expression}"\n'
+                                    "  config: {prefix: test}\n", encoding="utf-8")
+                    report = dsh_compat.check_dsh_preset_compat(
+                        root=Path(td), compositions=[file], install=_LIVE_INSTALL, node=_LIVE_NODE)
+                    self.assertEqual(report["verdict"], verdict, report["reason"])
+                    if verdict == "PASS":
+                        self.assertEqual(report["compositions"][0]["ctx_members_used"], ["get"])
+                    else:
+                        self.assertIn("undeclared loader context member", str(report["issues"]))
 
     @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
     def test_persona_row_using_text_is_rejected_naming_persona_and_prefix(self):
@@ -2064,7 +2071,7 @@ class InstalledSchemaTests(unittest.TestCase):
         self.assertEqual(report["issues"], [], report["issues"])
         paths = [entry["path"] for entry in report["compositions"]]
         self.assertEqual(
-            paths, ["agent-presets/governance/agent.cordis.yml.template"], paths)
+            paths, ["derived/agent.cordis.yml"], paths)
 
     @unittest.skipUnless(_LIVE_INSTALL and _LIVE_NODE, _LIVE_SKIP)
     def test_shipped_composition_discloses_its_unverified_rows(self):
@@ -2187,6 +2194,10 @@ class RenderAndDecodeGuardTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if str(_HERE) not in sys.path:
+            sys.path.insert(0, str(_HERE))
+        from dsh_render_fixture import bind_render_host
+        bind_render_host(cls)
         spec = importlib.util.spec_from_file_location(
             "dsh_launch_render_guard",
             _REPO_ROOT / "adapters" / "dsh" / "launch.py")
@@ -2243,7 +2254,7 @@ class RenderAndDecodeGuardTests(unittest.TestCase):
         # entry count and the declared token form).
         source = self.launch._read_text_with_newline_mode(
             _REPO_ROOT / "agent-presets" / "governance"
-            / "agent.cordis.yml.template")
+            / "overlay.cordis.yml")
         self.assertEqual(
             self.launch._shape_violations(source, stage="template"), [])
         self.assertEqual(self.launch._shape_violations(self._render_text(source)), [])
@@ -2430,7 +2441,7 @@ class RenderAndDecodeGuardTests(unittest.TestCase):
     def test_crlf_template_folds_to_lf(self):
         # The half that must NOT change: a CRLF checkout still renders LF, so
         # `core.autocrlf` cannot change the preset's bytes.
-        source = _REPO_ROOT / "agent-presets" / "governance" / "agent.cordis.yml.template"
+        source = _REPO_ROOT / "agent-presets" / "governance" / "overlay.cordis.yml"
         lf_text = source.read_text(encoding="utf-8")
         crlf_text = lf_text.replace("\n", "\r\n")
         self.assertEqual(self._render_text(crlf_text), self._render_text(lf_text))
@@ -2673,7 +2684,7 @@ class RenderAndDecodeGuardTests(unittest.TestCase):
         try:
             with contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()):
-                return self.launch.render_composition()
+                return self.launch.render_overlay()
         finally:
             self.launch._composition_template = original
 
@@ -2918,6 +2929,10 @@ class WriteEntryGuardTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if str(_HERE) not in sys.path:
+            sys.path.insert(0, str(_HERE))
+        from dsh_render_fixture import bind_render_host
+        bind_render_host(cls)
         spec = importlib.util.spec_from_file_location(
             "dsh_launch_write_guard",
             _REPO_ROOT / "adapters" / "dsh" / "launch.py")
@@ -3138,7 +3153,7 @@ class WriteEntryGuardTests(unittest.TestCase):
             self.assertEqual(
                 sorted(p.name for p in preset.iterdir()),
                 [".dsh-bundle-version", "agent.cordis.yml", "preset.yml",
-                 "skill-root.txt"])
+                 "render-provenance.json", "skill-root.txt"])
             # newline_policy "lf" applies to the whole preset, not just the
             # composition: copying the metadata as raw bytes made its line
             # endings depend on the checkout.
@@ -3207,14 +3222,26 @@ class PublicEntryDecodeBoundaryTests(unittest.TestCase):
 
     COPIES = (
         "adapters/dsh/launch.py",
+        "adapters/dsh/composition_merge.py",
+        "adapters/dsh/preset_transaction.py",
+        "agent-presets/governance/persona.md.template",
+        "skills/software-project-governance/infra/dsh_plane.py",
+        "skills/software-project-governance/infra/dsh_asar.py",
         "adapters/dsh/AGENTS.md.template",
         "adapters/dsh/adapter-manifest.json",
         "adapters/dsh/host-contract.json",
-        "agent-presets/governance/agent.cordis.yml.template",
+        "agent-presets/governance/overlay.cordis.yml",
         "agent-presets/governance/preset.yml",
         "package.json",
         "skills/software-project-governance/infra/dsh_contract.py",
     )
+
+    @classmethod
+    def setUpClass(cls):
+        if str(_HERE) not in sys.path:
+            sys.path.insert(0, str(_HERE))
+        from dsh_render_fixture import bind_render_host
+        bind_render_host(cls)
 
     def _copy_repo(self, root: Path) -> Path:
         for relative in self.COPIES:
@@ -3311,7 +3338,7 @@ class PublicEntryDecodeBoundaryTests(unittest.TestCase):
                 if (home / ".agent-presets" / "governance").is_dir() else []
         self.assertEqual(code, 0, output)
         self.assertEqual(written, [".dsh-bundle-version", "agent.cordis.yml",
-                                   "preset.yml", "skill-root.txt"])
+                                   "preset.yml", "render-provenance.json", "skill-root.txt"])
 
     # ── N-1: the guard must refuse when the profile is unresolvable ────────
     _PROFILE_VARS = ("USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH")
@@ -3465,12 +3492,59 @@ class StagingCleanupTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if str(_HERE) not in sys.path:
+            sys.path.insert(0, str(_HERE))
+        from dsh_render_fixture import bind_render_host
+        bind_render_host(cls)
         spec = importlib.util.spec_from_file_location(
             "dsh_launch_staging", _REPO_ROOT / "adapters" / "dsh" / "launch.py")
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         cls.launch = module
+
+    def test_interrupted_promotion_recovers_old_payload_on_retry(self):
+        with _scratch("spg-test-recover-") as td:
+            home = Path(td) / "home"
+            env = {**os.environ, "DSH_HOME": str(home)}
+            cmd = [sys.executable, str(_REPO_ROOT / "adapters/dsh/launch.py"), "--install"]
+            first = subprocess.run(cmd, env=env, capture_output=True)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            target = home / ".agent-presets/governance"
+            expected = (target / "agent.cordis.yml").read_bytes()
+            driver = (
+                "import sys, os; from pathlib import Path;"
+                "sys.path.insert(0, sys.argv[1]); import launch;"
+                "rename = Path.rename\n"
+                "def interrupt(path, dst):\n"
+                "    result = rename(path, dst)\n"
+                "    if dst.name == 'old': os._exit(91)\n"
+                "    return result\n"
+                "Path.rename = interrupt; sys.exit(launch.install_preset())"
+            )
+            for attempt in range(2):
+                crash = subprocess.run([sys.executable, "-c", driver, str(_REPO_ROOT / "adapters/dsh")],
+                                       env=env, capture_output=True)
+                self.assertEqual(crash.returncode, 91, crash.stderr)
+                self.assertFalse(target.exists())
+                retry = subprocess.run(cmd, env=env, capture_output=True)
+                self.assertEqual(retry.returncode, 0, retry.stderr)
+                self.assertEqual((target / "agent.cordis.yml").read_bytes(), expected)
+                self.assertEqual([p.name for p in target.parent.iterdir()], ["governance"])
+
+    def test_private_file_in_existing_preset_survives_repeated_failed_updates(self):
+        with _scratch("spg-test-retain-") as td:
+            home = Path(td) / "home"
+            with mock.patch.dict(os.environ, {"DSH_HOME": str(home)}):
+                self.assertEqual(self.launch.install_preset(), 0)
+                target = self.launch.preset_dir()
+                note = target / "personal-note"
+                note.write_bytes(b"private content")
+                snapshot = {p.name:p.read_bytes() for p in target.iterdir()}
+                for attempt in range(2):
+                    self.assertEqual(self.launch.install_preset(), 2)
+                    self.assertEqual({p.name:p.read_bytes() for p in target.iterdir()}, snapshot)
+                self.assertEqual([p.name for p in target.parent.iterdir()], ["governance"])
 
     def test_write_failure_leaves_no_staging_directory(self):
         # Fail *inside* the write loop, which is strictly after `staging` was
@@ -3522,7 +3596,7 @@ class StagingCleanupTests(unittest.TestCase):
         # `rmtree(staging, ...)` lines turns this red.
         original = self.launch.write_rendered_preset
 
-        def aborting_writer(destination, version=None):
+        def aborting_writer(destination, version=None, *, derived=None):
             Path(destination).mkdir(parents=True, exist_ok=True)
             (Path(destination) / "partial.tmp").write_text(
                 "partial\n", encoding="utf-8")
@@ -4444,7 +4518,9 @@ class PlaneIdentityWiringTests(unittest.TestCase):
                                    _ScratchFs):
                 probe = dsh_compat.locate_dsh_install(
                     env={}, which=_which_map({}), processes=port)
-        self.assertEqual(probe["status"], "NOT_RUN")  # no disk install here
+        self.assertEqual(probe["status"], "OK")
+        self.assertEqual(probe["plane"], "asar-desktop")
+        self.assertEqual(probe["dsh_version"], "0.2.2-rc.1")
         self.assertEqual(probe["planes"]["verdict"], "OK")
         asar_faces = [identity for identity in
                       probe["planes"]["identities"]
@@ -4493,8 +4569,8 @@ class RepoRootWalkTests(unittest.TestCase):
         found = [path.relative_to(_REPO_ROOT).as_posix()
                  for path in dsh_compat.discover_compositions(
                      _REPO_ROOT, report=report)]
-        self.assertEqual(
-            found, ["agent-presets/governance/agent.cordis.yml.template"], found)
+        self.assertEqual(found, [], "runtime compositions are derived from the host")
+        self.assertTrue((_REPO_ROOT / dsh_contract.get("own.overlay.path")).is_file())
         # A complete scan says so; the 30 s clock ceiling is the performance
         # guard here — a regression past it raises instead of returning late.
         self.assertFalse(report["bounded_out"], report)
@@ -4590,9 +4666,9 @@ class DefaultScanFaceTests(unittest.TestCase):
         details = "\n".join(report["details"])
         self.assertIn("excluded by discovery.exclude_names", details)
         self.assertIn("overlay.cordis.yml", details)
-        # The empty face names the roots it walked, not just the package root.
-        self.assertIn("declared discovery roots agent-presets, adapters/dsh",
-                      report["reason"], report["reason"])
+        self.assertEqual(report["scan"]["roots"], counters["roots"])
+        self.assertEqual(report["verdict"], "NOT_RUN")
+        self.assertIn("no dsh install discovered", report["reason"])
 
     def test_a_default_face_overflow_aggregates_and_maps_to_not_run(self):
         # The contract's bounds are consumed, not DEFAULT_SCAN_BUDGET: forcing

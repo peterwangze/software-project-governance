@@ -5422,6 +5422,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             result = vw.check_release_readiness(
                 run_execution_gates=True,
                 execution_gate_runner=fake_runner,
+                dsh_upgrade_regression_runner=lambda: {"results": [], "issues": [], "isolation": {}},
             )
 
         self.assertTrue(result["pass"])
@@ -5534,6 +5535,12 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
     on the --skip-execution-gates and BR-4 released-history paths."""
 
     REGRESSION_LABEL = "dsh preset-session smoke (isolated upgrade regression)"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from dsh_render_fixture import bind_render_host
+        bind_render_host(cls)
 
     def _release_patches(self):
         return [
@@ -5878,14 +5885,26 @@ class Fix442Check28uConcurrentWriteToleranceTests(unittest.TestCase):
     never something the engine re-derives)."""
 
     @staticmethod
-    def _fake_launcher(root, lines):
+    def _fake_launcher(root, lines, exit_code=0):
         adapter = Path(root) / "adapters" / "dsh"
         adapter.mkdir(parents=True, exist_ok=True)
         script = ["import sys"]
         script += [f"print({line!r})" for line in lines]
-        script.append("sys.exit(0)")
+        script.append(f"sys.exit({exit_code})")
         (adapter / "launch.py").write_text(
             "\n".join(script) + "\n", encoding="utf-8")
+
+    def test_absent_host_is_disclosed_and_release_still_requires_a_run(self):
+        for code, diagnostic, verdict in [
+                (2, "[SMOKE] Result: NOT_RUN (exit 2) HOST_PLANE_ABSENT: no host", "NOT_RUN"),
+                (2, "[SMOKE] Result: NOT_RUN (exit 2) PLANE_UNUSABLE: bad desktop", "FAIL"),
+                (1, "[SMOKE] Result: NOT_RUN (exit 2) HOST_PLANE_ABSENT: no host", "FAIL")]:
+            with self.subTest(diagnostic=diagnostic, code=code), _governance_temp_dir("delta-smoke-") as td:
+                self._fake_launcher(td, [diagnostic], exit_code=code)
+                result = vw.check_dsh_preset_smoke(root=td)
+                self.assertEqual(result["verdict"], verdict)
+                regression = vw.run_dsh_upgrade_regression_gates(smoke_runner=lambda **_: result)
+                self.assertTrue(regression["issues"])
 
     def test_pass_with_attributed_concurrent_writes_is_accepted_and_disclosed(self):
         # A launcher that attributed N concurrent-session writes reports
@@ -17605,7 +17624,7 @@ class InjectionContractPresetVersionLineTests(unittest.TestCase):
 
     The shipped preset payload's persona version line
     (``治理工作流（vX.Y.Z）``) in
-    ``agent-presets/governance/agent.cordis.yml.template`` must be guarded
+    ``agent-presets/governance/persona.md.template`` must be guarded
     against the authoritative SKILL.md frontmatter version — FIX-250
     precedent: the version line silently drifted to bundle end users, and
     without a machine guard the next release would drift again. The anchor
@@ -17631,7 +17650,7 @@ class InjectionContractPresetVersionLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             self._copy_injection_surfaces(root)
-            preset = root / "agent-presets/governance/agent.cordis.yml.template"
+            preset = root / "agent-presets/governance/persona.md.template"
             text = preset.read_text(encoding="utf-8")
             authority = vw._extract_skill_version(
                 root / "skills/software-project-governance/SKILL.md")
@@ -17643,7 +17662,7 @@ class InjectionContractPresetVersionLineTests(unittest.TestCase):
             preset.write_text(stale, encoding="utf-8")
             result = vw.check_injection_contract(root)
             self.assertTrue(
-                any("agent-presets/governance/agent.cordis.yml.template" in issue
+                any("agent-presets/governance/persona.md.template" in issue
                     and "anchor missing" in issue
                     for issue in result["issues"]),
                 result["issues"],
@@ -17663,7 +17682,7 @@ class InjectionContractPresetVersionLineTests(unittest.TestCase):
             skill.write_text(masked, encoding="utf-8")
             result = vw.check_injection_contract(root)
             self.assertTrue(
-                any("agent-presets/governance/agent.cordis.yml.template" in issue
+                any("agent-presets/governance/persona.md.template" in issue
                     and "unresolved" in issue
                     for issue in result["issues"]),
                 result["issues"],
@@ -17691,7 +17710,7 @@ def _strip_staged_clause_anchors(root):
     """
     anchors = ("推荐必标需求源", "发现即闭环", "用户点名")
     line_drop_files = (
-        "agent-presets/governance/agent.cordis.yml.template",
+        "agent-presets/governance/persona.md.template",
         "commands/governance-init.md",
     )
     word_strip_files = (
@@ -18670,7 +18689,7 @@ class InjectionContractStagedAnchorTests(unittest.TestCase):
         adds 用户点名 (ADR-021 §2.1 file table: persona 另加「用户点名」)."""
         staged = vw.INJECTION_CONTRACT_STAGED_ANCHORS[self.STAGE]
         self.assertEqual(set(staged), set(vw.INJECTION_CONTRACT_ANCHORS))
-        persona = "agent-presets/governance/agent.cordis.yml.template"
+        persona = "agent-presets/governance/persona.md.template"
         for path, anchors in staged.items():
             self.assertIn("推荐必标需求源", anchors, path)
             self.assertIn("发现即闭环", anchors, path)
@@ -18801,7 +18820,7 @@ class ContractTierBudgetTests(unittest.TestCase):
             shutil.copyfile(vw.ROOT / surface["path"], target)
         _strip_staged_clause_anchors(root)
         if persona_extra_lines:
-            rel = "agent-presets/governance/agent.cordis.yml.template"
+            rel = "agent-presets/governance/persona.md.template"
             preset = root / rel
             text = preset.read_text(encoding="utf-8")
             anchor_line = next(
@@ -20344,78 +20363,29 @@ class Feat039InjectionBudgetTests(unittest.TestCase):
             text = vw.load_injection_surface(surface, vw.ROOT)
             self.assertTrue(text, surface["name"])
 
-    def test_persona_surface_is_prompt_not_template_file(self):
-        """The persona surface must price the injected prompt, not the whole
-        composition template (YAML host config + comments are not injected).
+    def test_persona_surface_prices_the_governance_owned_body(self):
+        surface = next(s for s in vw.INJECTION_BUDGET_SURFACES if s["name"] == "persona")
+        self.assertEqual(vw.load_injection_surface(surface, vw.ROOT),
+                         (vw.ROOT / surface["path"]).read_text(encoding="utf-8"))
 
-        Distinctness anchors the sub-block extraction: a resolver that
-        regressed to whole-file reading would make the two identical.
-        """
-        surfaces = {s["name"]: s for s in vw.set_injection_budget_surface_profiles(
-            vw.INJECTION_BUDGET_DEFAULT_PROFILE)}
-        persona = vw.load_injection_surface(surfaces["persona"], vw.ROOT)
-        template = vw.load_injection_surface(
-            surfaces["agent-instructions"], vw.ROOT)
-        self.assertNotEqual(persona, template)
-        self.assertLess(len(persona.encode("utf-8")),
-                        len((vw.ROOT / surfaces["persona"]["path"]).read_bytes()))
-        self.assertNotIn("agent-instructions", persona)
-
-    def test_persona_prefix_resolver_fails_closed_on_missing_anchor(self):
-        """Rewriting the persona target away from ``@deepseek-ai/dsh-persona``
-        must resolve to "" (FAIL), never fall back to another scalar."""
-        with tempfile.TemporaryDirectory(prefix="feat039_persona_") as td:
+    def test_persona_body_needs_the_package_root_token(self):
+        surface = next(s for s in vw.INJECTION_BUDGET_SURFACES if s["name"] == "persona")
+        with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            rel = "agent-presets/governance/agent.cordis.yml.template"
-            target = root / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            text = (vw.ROOT / rel).read_text(encoding="utf-8")
-            self.assertTrue(
-                vw.extract_persona_prefix_from_template(text),
-                "canonical template must resolve before the negative case")
-            rewritten = text.replace("@deepseek-ai/dsh-persona",
-                                      "@deepseek-ai/dsh-someone-else")
-            target.write_text(rewritten, encoding="utf-8")
-            self.assertEqual(
-                vw.extract_persona_prefix_from_template(
-                    rewritten, display=rel),
-                "")
-            loaded = vw.load_injection_surface(
-                [s for s in vw.set_injection_budget_surface_profiles(
-                    vw.INJECTION_BUDGET_DEFAULT_PROFILE)
-                 if s["scope"] == vw.INJECTION_SURFACE_SCOPE_PERSONA_PREFIX][0],
-                root)
-            self.assertEqual(loaded, "")
+            target = root / surface["path"]
+            target.parent.mkdir(parents=True)
+            text = (vw.ROOT / surface["path"]).read_text(encoding="utf-8")
+            target.write_text(text.replace("__GOVERNANCE_REPO_ROOT__", "/wrong"), encoding="utf-8")
+            self.assertEqual(vw.load_injection_surface(surface, root), "")
 
-    def test_persona_prefix_resolver_rejects_wrong_body(self):
-        """The anchor alone is not enough: the block scalar must still look
-        like the rendered persona prompt (first sentence anchor), so a
-        re-purposed ``prefix:`` under the persona plugin cannot masquerade."""
-        with tempfile.TemporaryDirectory(prefix="feat039_persona_body_") as td:
+    def test_persona_body_rejects_a_different_role(self):
+        surface = next(s for s in vw.INJECTION_BUDGET_SURFACES if s["name"] == "persona")
+        with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            rel = "agent-presets/governance/agent.cordis.yml.template"
-            target = root / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            text = (vw.ROOT / rel).read_text(encoding="utf-8")
-            swapped = text.replace(
-                "You are a coding agent powered by", "Something else entirely")
-            target.write_text(swapped, encoding="utf-8")
-            # a DIFFERENT file in the same tree, to prove per-surface
-            # independence: one broken anchor must not zero the whole run.
-            other = "adapters/dsh/AGENTS.md.template"
-            (root / other).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(vw.ROOT / other, root / other)
-            self.assertEqual(
-                vw.extract_persona_prefix_from_template(swapped, display=rel),
-                "")
-            surfaces = vw.set_injection_budget_surface_profiles(
-                vw.INJECTION_BUDGET_DEFAULT_PROFILE)
-            persona_surface = [s for s in surfaces
-                               if s["scope"] == vw.INJECTION_SURFACE_SCOPE_PERSONA_PREFIX][0]
-            self.assertEqual(vw.load_injection_surface(persona_surface, root), "")
-            self.assertTrue(vw.load_injection_surface(
-                [s for s in surfaces if s["name"] == "agent-instructions"][0],
-                root))
+            target = root / surface["path"]
+            target.parent.mkdir(parents=True)
+            target.write_text("Other role in __GOVERNANCE_REPO_ROOT__", encoding="utf-8")
+            self.assertEqual(vw.load_injection_surface(surface, root), "")
 
     def test_entry_template_resolver_fails_closed_on_missing_marker(self):
         """Dropping a profile's template label must yield "" (FAIL) — for every

@@ -577,7 +577,7 @@ SEGMENTS = (
     SegmentSpec("33", "injection", (
         "plugin:asset:skills/software-project-governance/SKILL.md",
         "plugin:asset:adapters/dsh/AGENTS.md.template",
-        "plugin:asset:agent-presets/governance/agent.cordis.yml.template",
+        "plugin:asset:agent-presets/governance/overlay.cordis.yml",
     ), _excluded("PLUGIN_PACKAGE_ASSET")),
     SegmentSpec("34", "recommendation", (
         "host:governance:.governance/evidence-log.md",

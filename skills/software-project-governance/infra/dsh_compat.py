@@ -87,6 +87,7 @@ Verdicts (repo optional-tooling policy)
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -747,6 +748,17 @@ function resolveBare(spec) {
 }
 const fileUrl = (spec) => pathToFileURL(resolveBare(spec)).href
 out.resolutionAnchor = request.resolutionAnchor
+if (request.registryPackage) {
+  for (const dir of contextRoots) {
+    const manifest = join(dir, request.registryPackage, 'package.json')
+    if (!existsSync(manifest)) continue
+    const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
+    if (pkg.name === request.registryPackage) {
+      out.registry_package = { version: pkg.version, path: dirname(manifest) }
+      break
+    }
+  }
+}
 out.oracle_packages = {}
 for (const name of request.oraclePackages) {
   try {
@@ -1124,8 +1136,18 @@ for (const file of request.files) {
     out.files.push(entry)
     continue
   }
-  const ctx = { baseUrl: pathToFileURL(file.path).href, process, console }
+  const used = new Set()
+  const ctx = { baseUrl: pathToFileURL(file.path).href, process, console,
+                get: () => undefined, has: () => false }
+  ctx.ctx = new Proxy(ctx, {
+    get(target, key) {
+      if (!request.contextMembers.includes(key)) throw new Error('undeclared loader context member: ' + String(key))
+      used.add(key)
+      return target[key]
+    }
+  })
   await walk(rows, '', ctx, entry, '')
+  entry.ctx_members_used = [...used].sort()
   out.files.push(entry)
 }
 
@@ -1303,12 +1325,11 @@ _PROBE_DEFAULT = object()
 
 
 def _plane_listing(env, processes):
-    """The FEAT-113 §3.2 plane-identity face — additive report fields only.
+    """Resolve candidate installations in contract order, including desktop archives.
 
-    The listing never feeds the legacy resolution fields below: the selected
-    install plane, its verdict semantics and `other_planes` are computed by
-    the pre-existing logic untouched (design §10 S1: wire the capability,
-    change no verdict). `dsh_plane` reads every host fact from the contract
+    The selected desktop archive supplies both the resolution anchor and its
+    Electron runtime. Disk and profile installations keep the existing CLI
+    fallback for packages outside a partial mirror. `dsh_plane` reads every host fact from the contract
     and raises the accessor's own failure classes on a contract defect — the
     §2.5.1 classification this module already applies to its other reads.
     The one downgraded failure is the sibling module itself being unimportable
@@ -1402,6 +1423,23 @@ def locate_dsh_install(env: Optional[dict] = None,
     # Computed before any return so every path (OK and NOT_RUN) carries it.
     result["planes"] = _plane_listing(env, processes)
 
+    listing = result["planes"]
+    identities = [face for face in listing["identities"] if not face["informational"]]
+    selected = identities[0] if identities else None
+    if selected and not selected["usable"]:
+        result.update(source=selected["source"],
+                      reason=f"{selected['source']}: {listing['reason']}; refusing to fall back to another install")
+        return result
+    if selected and selected["kind"] == "asar-desktop":
+        result.update(status="OK", source=selected["source"], plane=selected["kind"],
+                      selected_plane=selected, resolution_context="cli",
+                      node_modules=selected["node_modules"],
+                      resolution_anchor=selected["resolution_anchor"],
+                      dsh_version=selected["dsh_version"], runner=selected["runner"],
+                      cli_package={"version": selected["dsh_version"],
+                                   "path": str(Path(selected["resolution_anchor"]).parent)})
+        return result
+
     chosen = None
     chosen_plane = None
     chosen_context = None
@@ -1453,6 +1491,9 @@ def locate_dsh_install(env: Optional[dict] = None,
         return result
 
     anchor = _resolution_anchor(chosen, context=chosen_context)
+    result["selected_plane"] = next((face for face in listing["identities"]
+                                     if face["usable"] and face.get("node_modules") and
+                                     Path(face["node_modules"]) == chosen), None)
     result.update(status="OK", source=chosen_plane, plane=chosen_plane,
                   node_modules=str(chosen),
                   resolution_context=chosen_context,
@@ -1734,6 +1775,8 @@ def _probe_request(install: dict, compositions: Sequence[Path],
                                context=install.get("resolution_context") or "profile")),
         "fallbackAnchor": install.get("fallback_anchor") or "",
         "oraclePackages": list(_fact("_oracle_packages")),
+        "registryPackage": _fact("_registry_package"),
+        "contextMembers": _contract_value("LOADER_CTX_MEMBERS"),
         "output": str(output),
         "files": [{"path": str(path)} for path in compositions],
     }
@@ -1751,6 +1794,11 @@ def _render_probe_script() -> str:
     import dsh_contract  # noqa: PLC0415 — classify local render defects consistently
 
     apis = oracle_api_symbols()
+    context = dsh_contract.get("host.apis.loader_ctx")
+    if (set(context["members"]) != {"baseUrl", "process", "console", "get", "has"}
+            or context["unlisted_member"] != "throw"
+            or context["stub_values"] != {"get": "undefined", "has": False}):
+        raise dsh_contract.ContractMalformed("unsupported probe contract in host.apis.loader_ctx")
 
     def package_exporting(*symbols: str) -> tuple:
         for package, exports in apis.items():
@@ -1831,6 +1879,27 @@ def _stderr_head(text: str, lines: int = 6) -> str:
     return " | ".join(head)
 
 
+def _load_preset_renderer():
+    root = Path(__file__).resolve().parents[3]
+    spec = importlib.util.spec_from_file_location(
+        "spg_composition_merge", root / "adapters/dsh/composition_merge.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _runner_environment(install: dict) -> dict:
+    import dsh_contract
+
+    environment = os.environ.copy()
+    flag = dsh_contract.get("host.planes.asar.runner.flag")
+    if (install.get("runner") or {}).get("electron_run_as_node"):
+        environment[flag] = "1"
+    else:
+        environment.pop(flag, None)
+    return environment
+
+
 def _run_probe(node: str, install: dict, compositions: Sequence[Path],
                root: Path, timeout: int) -> dict:
     """Run the Node probe once for every composition; return its report.
@@ -1893,7 +1962,7 @@ def _run_probe(node: str, install: dict, compositions: Sequence[Path],
         _remove_scratch_dir(scratch)
         _remove_scratch_dir(home)
         return result
-    child_env = os.environ.copy()
+    child_env = _runner_environment(install)
     child_env[_fact("_home_env")] = str(home)
     try:
         completed = subprocess.run(
@@ -2056,6 +2125,7 @@ def _composition_entry(payload: dict, root: Path) -> dict:
         "error": payload.get("error") or "",
         "enabled": int(payload.get("enabled") or 0),
         "checked": int(payload.get("checked") or 0),
+        "ctx_members_used": list(payload.get("ctx_members_used") or []),
         "inherited_disabled": int(payload.get("inherited_disabled") or 0),
         # Rows under a group whose `disabled` expression threw: the mount is
         # rejected, so they cannot be known to start. Their own counter, kept
@@ -2374,7 +2444,11 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         else:
             paths = [Path(item) for item in compositions]
         paths = [path if path.is_absolute() else root / path for path in paths]
-        if not paths:
+        import dsh_contract
+        package_root = Path(__file__).resolve().parents[3]
+        render_shipped = (compositions is None and root.resolve() == package_root
+                          and (package_root / dsh_contract.get("own.overlay.path")).is_file())
+        if not paths and not render_shipped:
             where = (f", walked the declared discovery roots "
                      f"{', '.join(_fact('_discovery_roots'))}"
                      if not root_explicit else "")
@@ -2393,23 +2467,40 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
             report["details"].append(report["reason"])
             return report
 
-        node_path = node if node is not None else which("node")
+        desktop = (install_probe.get("runner") or {}).get("electron_run_as_node")
+        node_path = install_probe["runner"].get("program") if desktop else node or which("node")
         report["install"]["node"] = node_path
         if not node_path:
             report["reason"] = (
-                "node executable not found on PATH — the installed harness's own "
+                "node executable not found for the selected plane — the installed harness's own "
                 "YAML dialect and Config schemas cannot be reached without it")
             report["details"].append(report["reason"])
             return report
         try:
             version = subprocess.run([node_path, "--version"], capture_output=True,
                                      text=True, encoding="utf-8", errors="replace",
-                                     timeout=30)
+                                     env=_runner_environment(install_probe), timeout=30)
             report["install"]["node_version"] = (version.stdout or "").strip() or None
         except (OSError, subprocess.TimeoutExpired):
             report["install"]["node_version"] = None
 
-        probe = probe_runner(node_path, install_probe, paths, root, timeout)
+        if render_shipped:
+            renderer = _load_preset_renderer()
+            try:
+                product = renderer.derive_preset(package_root, plane=install_probe.get("selected_plane"), env=env)
+            except renderer.RenderRefused as exc:
+                report.update(verdict=VERDICT_FAIL, reason=str(exc), issues=[str(exc)])
+                return report
+            with tempfile.TemporaryDirectory(prefix="spg-rendered-preset-") as temp:
+                composition = Path(temp) / "agent.cordis.yml"
+                composition.write_bytes(product["composition"].encode("utf-8"))
+                report["render_provenance"] = product["provenance"]
+                probe = probe_runner(node_path, install_probe, [*paths, composition], root, timeout)
+                for item in (probe.get("report") or {}).get("files", []):
+                    if item.get("path") == str(composition):
+                        item["path"] = "derived/agent.cordis.yml"
+        else:
+            probe = probe_runner(node_path, install_probe, paths, root, timeout)
         if probe["status"] == PROBE_STATUS_CONTRACT_FAIL:
             # The contract itself could not supply the probe facts: a product
             # defect, never an environment gap (CODE R0 F-03).
@@ -2500,6 +2591,11 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
             item, root, report, report["coverage"]))
 
     report["issues"] = failures
+    if (install_probe.get("runner") or {}).get("electron_run_as_node"):
+        registry = payload.get("registry_package")
+        install_probe = dict(install_probe, registry_package=registry,
+                             protocol="native" if registry else "legacy")
+        report["install"].update(registry_package=registry, protocol=install_probe["protocol"])
     protocol = install_probe.get("protocol") or "unknown"
     report["protocol"] = protocol
     registry = install_probe.get("registry_package") or {}
@@ -2507,7 +2603,7 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         report["details"].append(
             f"delivery protocol: native declarations ({_fact('_registry_package')}@"
             f"{registry.get('version') or '?'} installed) — the preset is derived at boot; "
-            "the shipped composition template is validated for legacy hosts only")
+            "row checks use the composition and installation identified in this report")
     elif protocol == "legacy":
         report["details"].append(
             "delivery protocol: legacy user-root directory (no agent-presets registry "

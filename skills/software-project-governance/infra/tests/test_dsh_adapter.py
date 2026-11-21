@@ -82,7 +82,7 @@ _HOOKS_DIR = _INFRA_DIR / "hooks"
 # FIX-310: the composition template and the preset metadata are the payload
 # of the preset they render, not adapter-side siblings.
 _PACKAGE_PRESET = _REPO_ROOT / "agent-presets" / "governance"
-_TEMPLATE_PATH = _PACKAGE_PRESET / "agent.cordis.yml.template"
+_TEMPLATE_PATH = _PACKAGE_PRESET / "overlay.cordis.yml"
 _PRESET_METADATA_PATH = _PACKAGE_PRESET / "preset.yml"
 _BOOTSTRAP_TEMPLATE_PATH = _ADAPTER_DIR / "AGENTS.md.template"
 _SHIMS_DIR = _ADAPTER_DIR / "skill-shims"
@@ -92,7 +92,7 @@ _LAUNCH_PATH = _ADAPTER_DIR / "launch.py"
 _TOKENS = (
     "__GOVERNANCE_SKILLS_ROOT__",
     "__GOVERNANCE_SHIMS_ROOT__",
-    "__GOVERNANCE_REPO_ROOT__",
+    "__GOVERNANCE_PERSONA_BODY__",
 )
 
 
@@ -181,38 +181,6 @@ def _bash():
     return shutil.which("bash") or "bash"
 
 
-# FIX-313 (design §6.1 V10): the catch/cleanup path of `ensurePreset()`.
-#
-# The review root was that cleanup matched directories by NAME (every entry of
-# the preset root starting with `<presetId>.staging-`) and deleted them without
-# any predicate proving the row had created them. A name prefix is not proof of
-# ownership, so these tests fix the observable contract of the cleanup path:
-# a directory this attempt did not create is never removed, and the staging
-# directory this attempt DID create is still cleaned up.
-_ROGUE_STAGING_NAME = "governance.staging-personal-scratch"
-
-# The row's live catch entry point. `lib/index.js` writes the whole staging tree
-# BEFORE it reads the payload metadata, so an unreadable `preset.yml` reproduces
-# exactly the case the cleanup exists for: "the rename did not happen but the
-# staging tree WAS written". A directory in the metadata's place is listed by
-# `readdirSync` (so `payloadIncomplete` stays false — the row takes its normal
-# path and not an early return) and then fails `readFileSync` with EISDIR.
-_LIB_CATCH_PROBE = (
-    "import { pathToFileURL } from 'node:url';\n"
-    "// argv[1] is this script itself (node file mode), so the row is argv[2].\n"
-    "try {\n"
-    "const { ensurePreset } = await import(pathToFileURL(process.argv[2]).href);\n"
-    "const warns = [];\n"
-    "const outcome = ensurePreset({ logger: { warn: (m) => warns.push(String(m)),"
-    " info: () => {} } });\n"
-    "process.stdout.write(JSON.stringify({ outcome, warns }));\n"
-    "} catch (error) {\n"
-    "process.stderr.write('PROBE-FAILURE: ' + (error && error.stack ? error.stack : String(error)));\n"
-    "process.exitCode = 3;\n"
-    "}\n"
-)
-
-
 def _copy_lib_tree(pkg: Path) -> None:
     """Copy the row's WHOLE `lib/` tree into a fixture package.
 
@@ -223,213 +191,15 @@ def _copy_lib_tree(pkg: Path) -> None:
     shutil.copytree(_REPO_ROOT / "lib", pkg / "lib")
 
 
-def _catching_package_copy(root: Path) -> Path:
-    """Package copy whose payload metadata is a directory (readable listing,
-    unreadable file) — puts the row's catch block on the reachable path."""
-    pkg = root / "pkg"
-    _copy_lib_tree(pkg)
-    (pkg / "adapters" / "dsh").mkdir(parents=True)
-    shutil.copyfile(
-        _REPO_ROOT / "adapters" / "dsh" / "host-contract.json",
-        pkg / "adapters" / "dsh" / "host-contract.json",
-    )
-    shutil.copytree(_PACKAGE_PRESET, pkg / "agent-presets" / "governance")
-    (pkg / "agent-presets" / "governance" / "preset.yml").unlink()
-    (pkg / "agent-presets" / "governance" / "preset.yml").mkdir()
-    (pkg / "package.json").write_text(
-        '{"name":"fake","version":"9.9.9","type":"module","main":"lib/index.js"}\n',
-        encoding="utf-8",
-    )
-    return pkg
-
-
-def _run_catch_probe(lib_path: Path, cwd: Path, dsh_home: Path, home: Path):
-    """Run the row in a throwaway process; all home vars redirected."""
-    node = shutil.which("node")
-    if not node:
-        return None
-    script = cwd / "probe.mjs"
-    script.write_text(_LIB_CATCH_PROBE, encoding="utf-8")
-    env = os.environ.copy()
-    env["DSH_HOME"] = str(dsh_home)
-    env["HOME"] = str(home)
-    env["USERPROFILE"] = str(home)
-    return subprocess.run(
-        [node, str(script), str(lib_path.resolve())],
-        cwd=str(cwd), capture_output=True, text=True,
-        encoding="utf-8", errors="replace", env=env,
-    )
-
-
-# FIX-325 (REVIEW-FIX-313-CODE-R0 F1/F2/F3): the collision side of the V10
-# staging loop. `Date.now` and `Math.random` are PINNED for the row under test,
-# so the staging name is a fixed, predictable string — which lets the fixture
-# pre-create a directory at exactly that name and put the EEXIST rename-retry,
-# the 8-attempt circuit breaker and its warning path on the reachable path.
-# This is the machine guard for V10 acceptance ①/G-04 the review found missing
-# (mutation M5 passed the whole suite while the CWD misdeletion survived).
-_COLLISION_PROBE = (
-    "import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';\n"
-    "import { join } from 'node:path';\n"
-    "import { pathToFileURL } from 'node:url';\n"
-    "// argv: 2 = lib/index.js copy, 3 = pinned Math.random sequence (JSON),\n"
-    "//      4 = DSH_HOME (forwarded to the row through the environment).\n"
-    "const FIXED_TS = 1700000000000;\n"
-    "const pinned = JSON.parse(process.argv[3]);\n"
-    "let randCalls = 0;\n"
-    "Date.now = () => FIXED_TS;\n"
-    "Math.random = () => pinned[Math.min(randCalls++, pinned.length - 1)];\n"
-    "const dshHome = process.argv[4];\n"
-    "const presetRoot = join(dshHome, '.agent-presets');\n"
-    "const colliding = join(presetRoot,\n"
-    "  `governance.staging-${FIXED_TS}-${pinned[0].toString(36).slice(2, 8)}`);\n"
-    "mkdirSync(presetRoot, { recursive: true });\n"
-    "mkdirSync(colliding);\n"
-    "writeFileSync(join(colliding, 'NOTES.md'), 'my own scratch dir\\n', 'utf8');\n"
-    "const before = readdirSync(presetRoot).sort();\n"
-    "const warns = [];\n"
-    "const { ensurePreset } = await import(pathToFileURL(process.argv[2]).href);\n"
-    "const outcome = ensurePreset({ logger: { warn: (m) => warns.push(String(m)),"
-    " info: () => {} } });\n"
-    "const after = readdirSync(presetRoot).sort();\n"
-    "process.stdout.write(JSON.stringify({ outcome, warns, before, after,\n"
-    "  collidingSurvived: existsSync(join(colliding, 'NOTES.md')) }));\n"
-)
-
-
-# FIX-325 / F1 — the CWD-degradation inverse. When `resolveDshHome()` THROWS,
-# `outcome.dir` stays '' and the pre-V10 catch enumerated `dirname('.')` — the
-# PROCESS CWD — deleting every `governance.staging-*` entry there (review
-# scenario S2). On Windows the throw cannot be produced by clearing environment
-# variables (`os.homedir()` still resolves), so the fixture faults the row's
-# own `homedir` import binding via the SYNCHRONOUS ESM `registerHooks` — which
-# needs Node >= 22.15. The repo declares engines >= 20: on older runtimes this
-# guard is NOT_RUN (skip), never a failure — the FIX-325 skip/NOT_RUN policy.
-_CWD_FAULT_PROBE = (
-    "import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';\n"
-    "import { join } from 'node:path';\n"
-    "import { registerHooks } from 'node:module';\n"
-    "import { pathToFileURL } from 'node:url';\n"
-    "// argv: 2 = lib/index.js copy, 3 = decoy directory name for the CWD.\n"
-    "const target = pathToFileURL(process.argv[2]).href;\n"
-    "registerHooks({\n"
-    "  load(url, context, nextLoad) {\n"
-    "    if (url === target) {\n"
-    "      const source = readFileSync(new URL(url), 'utf8').replace(\n"
-    "        \"import { homedir } from 'node:os'\",\n"
-    "        \"const homedir = () => { throw new Error('injected: homedir unavailable') }\");\n"
-    "      return { format: 'module', source, shortCircuit: true };\n"
-    "    }\n"
-    "    return nextLoad(url, context);\n"
-    "  },\n"
-    "});\n"
-    "const decoy = process.argv[3];\n"
-    "mkdirSync(decoy);\n"
-    "writeFileSync(join(decoy, 'NOTES.md'), 'my own scratch dir\\n', 'utf8');\n"
-    "const warns = [];\n"
-    "let outcome = null;\n"
-    "let threw = null;\n"
-    "try {\n"
-    "  const { ensurePreset } = await import(target);\n"
-    "  outcome = ensurePreset({ logger: { warn: (m) => warns.push(String(m)),"
-    " info: () => {} } });\n"
-    "} catch (error) {\n"
-    "  threw = String(error);\n"
-    "}\n"
-    "process.stdout.write(JSON.stringify({ outcome, warns, threw,\n"
-    "  decoySurvived: existsSync(join(decoy, 'NOTES.md')) }));\n"
-)
-
-
-def _complete_package_copy(root: Path) -> Path:
-    """Package copy with a COMPLETE payload — the row's happy path is reachable,
-    so the collision fixture can reach the EEXIST retry loop and the successful
-    rename after it (unlike `_catching_package_copy`, which breaks `preset.yml`
-    on purpose)."""
-    pkg = root / "pkg"
-    _copy_lib_tree(pkg)
-    (pkg / "adapters" / "dsh").mkdir(parents=True)
-    shutil.copyfile(
-        _REPO_ROOT / "adapters" / "dsh" / "host-contract.json",
-        pkg / "adapters" / "dsh" / "host-contract.json",
-    )
-    shutil.copytree(_PACKAGE_PRESET, pkg / "agent-presets" / "governance")
-    (pkg / "package.json").write_text(
-        '{"name":"fake","version":"9.9.9","type":"module","main":"lib/index.js"}\n',
-        encoding="utf-8",
-    )
-    return pkg
-
-
-def _run_collision_probe(pkg: Path, dsh_home: Path, home: Path, cwd: Path,
-                         pinned_random):
-    """Run the row with `Date.now`/`Math.random` pinned; all home vars
-    redirected. The probe seeds a directory at the exact colliding staging name
-    before `ensurePreset()` runs and reports the preset-root listing before and
-    after, so the assertions cover creation as well as deletion."""
-    node = shutil.which("node")
-    if not node:
-        return None
-    script = cwd / "collision-probe.mjs"
-    script.write_text(_COLLISION_PROBE, encoding="utf-8")
-    env = os.environ.copy()
-    env["DSH_HOME"] = str(dsh_home)
-    env["HOME"] = str(home)
-    env["USERPROFILE"] = str(home)
-    return subprocess.run(
-        [node, str(script), str((pkg / "lib" / "index.js").resolve()),
-         json.dumps(pinned_random), str(dsh_home.resolve())],
-        cwd=str(cwd), capture_output=True, text=True,
-        encoding="utf-8", errors="replace", env=env,
-    )
-
-
-def _node_version_tuple():
-    """The runtime's `(major, minor, patch)`, or None when node is unusable."""
-    node = shutil.which("node")
-    if not node:
-        return None
-    try:
-        out = subprocess.run([node, "--version"], capture_output=True,
-                             text=True, encoding="utf-8", timeout=30)
-    except OSError:
-        return None
-    match = re.match(r"^v(\d+)\.(\d+)\.(\d+)", (out.stdout or "").strip())
-    return tuple(int(part) for part in match.groups()) if match else None
-
-
-def _node_register_hooks_available():
-    """FIX-325 skip/NOT_RUN policy: the CWD fault injection needs the
-    synchronous `module.registerHooks` (Node >= 22.15); the repo declares
-    engines >= 20, so older runtimes skip the guard instead of failing."""
-    version = _node_version_tuple()
-    return version is not None and version >= (22, 15, 0)
-
-
-def _run_cwd_fault_probe(lib_path: Path, cwd: Path, home: Path,
-                         decoy_name: str):
-    """Run the row with `homedir` faulted to throw; DSH_HOME is deliberately
-    UNSET so `resolveDshHome()` actually reaches its `homedir()` fallback (with
-    DSH_HOME set, `homedir()` is never consulted and the fault never fires).
-    `DSH_HOME`/`HOME`/`USERPROFILE` are removed or redirected — the real home
-    is never read through the row under test."""
-    node = shutil.which("node")
-    if not node:
-        return None
-    script = cwd / "cwd-fault-probe.mjs"
-    script.write_text(_CWD_FAULT_PROBE, encoding="utf-8")
-    env = os.environ.copy()
-    env.pop("DSH_HOME", None)
-    env["HOME"] = str(home)
-    env["USERPROFILE"] = str(home)
-    return subprocess.run(
-        [node, str(script), str(lib_path.resolve()), decoy_name],
-        cwd=str(cwd), capture_output=True, text=True,
-        encoding="utf-8", errors="replace", env=env,
-    )
-
-
 class DshAdapterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if str(_HERE) not in sys.path:
+            sys.path.insert(0, str(_HERE))
+        from dsh_render_fixture import bind_render_host
+        bind_render_host(cls)
+
     def test_launch_fstrings_keep_pre_pep701_expression_boundaries(self):
         """Catch the multiline insertion that actually broke Python 3.11 CI.
 
@@ -462,55 +232,98 @@ class DshAdapterTests(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_template_required_rows(self):
-        text = self._template_text()
-        for marker in (
-            "- id: persona",
-            "name: '@deepseek-ai/dsh-persona'",
-            "software-project-governance",
-            "governance-bootstrap --format json",
-            "ask_user_question",
-            # FIX-253/REQ-112: the persona must carry the compressed
-            # behavior contract (关键行为契约) unconditionally.
-            "关键行为契约",
-            "复审必达",
-            "完成必推荐",
-            "task-priority-analysis",
-            "- id: skill-filesystem",
-            "customSkillDirs:",
-            "- id: tool-skill",
-            "- id: tool-subagent",
-            "provider: spawn",
-            "- id: tool-subagent-fork",
-            "provider: fork",
-            "- id: tool-ask-user",
-            "- id: tool-goal",
-        ):
-            self.assertIn(marker, text)
-
-    def test_launch_render_is_pure_substitution(self):
         launch = _load_launch_module()
-        with _sandbox_td() as td, patch.dict(
-            os.environ, {"DSH_HOME": td}, clear=False
-        ):
-            exit_code = launch.install_preset()
-            self.assertEqual(exit_code, 0)
-            preset_dir = Path(td) / ".agent-presets" / "governance"
-            generated = (preset_dir / "agent.cordis.yml").read_text(encoding="utf-8")
-        skills = str((_REPO_ROOT / "skills").resolve()).replace("\\", "/")
-        shims = str((_ADAPTER_DIR / "skill-shims").resolve()).replace("\\", "/")
-        repo = str(_REPO_ROOT.resolve()).replace("\\", "/")
-        expected = (
-            _TEMPLATE_PATH.read_text(encoding="utf-8")
-            .replace("__GOVERNANCE_SKILLS_ROOT__", skills)
-            .replace("__GOVERNANCE_SHIMS_ROOT__", shims)
-            .replace("__GOVERNANCE_REPO_ROOT__", repo)
-        )
-        self.assertEqual(generated, expected)
-        # No residue of the retired self-locating form, and no token may
-        # survive into a mounted composition.
-        self.assertNotIn("baseUrl", generated)
-        for token in _TOKENS:
-            self.assertNotIn(token, generated, token)
+        self.assertEqual(self._template_text().count("- id: "), 2)
+        rendered = launch.render_composition()
+        self.assertIn("host-fixture-tool", rendered)
+        self.assertIn("governance-bootstrap --format json", rendered)
+        self.assertNotIn("tool-subagent-list-agents", rendered)
+
+    def test_install_derives_from_the_selected_plane(self):
+        launch = _load_launch_module()
+        with _sandbox_td() as td, patch.dict(os.environ, {"DSH_HOME": td}):
+            self.assertEqual(launch.install_preset(), 0)
+            dest = launch.preset_dir()
+            expected = launch._derive_preset()
+            self.assertEqual((dest / "agent.cordis.yml").read_bytes(), expected["composition"].encode())
+            data = json.loads((dest / "render-provenance.json").read_bytes())
+            self.assertEqual(data["row_ids"], expected["provenance"]["row_ids"])
+            self.assertEqual(data["plane"]["dsh_version"], "1.2.3")
+            self.assertEqual(data["row_ids"], ["persona", "host-fixture-tool", "skill-filesystem"])
+
+    def test_render_matches_native_overlay_fields_and_inherited_rows(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node unavailable")
+        launch = _load_launch_module()
+        product = launch._derive_preset()
+        body = (_PACKAGE_PRESET / "persona.md.template").read_text(encoding="utf-8").replace(
+            "__GOVERNANCE_REPO_ROOT__", _REPO_ROOT.as_posix()).strip()
+        plugin_rows = [
+            {"id": "persona", "name": "@deepseek-ai/dsh-persona", "config": {"prefix": "Host identity."}},
+            {"id": "host-fixture-tool", "name": "host-fixture-tool"},
+            {"id": "skill-filesystem", "name": "@deepseek-ai/dsh-skill-filesystem"},
+        ]
+        options = {"personaRowName": plugin_rows[0]["name"], "skillRowName": plugin_rows[2]["name"],
+                   "personaBody": body, "skillRoots": [(_REPO_ROOT / r).as_posix()
+                   for r in ["skills", "adapters/dsh/skill-shims"]], "presetId": "governance", "name": "governance"}
+        uri = (_REPO_ROOT / "lib/dsh-native/overlay.js").as_uri()
+        js = (f"import {{ deriveDefinition }} from {json.dumps(uri)};"
+              "import fs from 'node:fs';const i=JSON.parse(fs.readFileSync(0));"
+              "console.log(JSON.stringify(deriveDefinition({plugins:i.rows},i.options)))")
+        run = subprocess.run([node, "--input-type=module", "-e", js], check=True,
+                             input=json.dumps({"rows": plugin_rows, "options": options}).encode(), capture_output=True)
+        native_rows = json.loads(run.stdout)["definition"]["plugins"]
+        self.assertEqual(product["provenance"]["row_ids"], [r["id"] for r in native_rows])
+        text = product["composition"]
+        lines = text.split("    prefix: |\n", 1)[1].split("\n- id:", 1)[0].split("\n")
+        prefix = "\n".join(line[6:] for line in lines) + "\n"
+        self.assertEqual(prefix, native_rows[0]["config"]["prefix"])
+        roots = [json.loads(entry) for entry in launch._custom_skill_dir_entries(text)]
+        self.assertEqual(roots, native_rows[2]["config"]["customSkillDirs"])
+
+    def test_unusable_plane_refuses_install_and_preview_without_writing(self):
+        launch = _load_launch_module()
+        with _sandbox_td() as td, patch.dict(os.environ, {"DSH_HOME": td, "DSH_INSTALL_DIR": str(Path(td)/"missing")}):
+            self.assertEqual(launch.install_preset(), 2)
+            self.assertEqual(launch.install_preset(dry_run=True), 2)
+            self.assertEqual(list(Path(td).iterdir()), [])
+
+    def test_upgrade_rejects_legacy_or_edited_payload_and_keeps_user_files(self):
+        launch = _load_launch_module()
+        with _sandbox_td() as td, patch.dict(os.environ, {"DSH_HOME": td}):
+            self.assertEqual(launch.install_preset(), 0)
+            self.assertEqual(launch.install_preset(), 0)
+            dest = launch.preset_dir()
+            composition = dest / "agent.cordis.yml"
+            composition.write_bytes(composition.read_bytes() + b"# user's edit\n")
+            before = _fingerprint_tree(dest)
+            self.assertEqual(launch.install_preset(), 2)
+            self.assertEqual(before, _fingerprint_tree(dest))
+            (dest / "render-provenance.json").unlink()
+            (dest / "custom-backup").write_bytes(b"personal")
+            before = _fingerprint_tree(dest)
+            self.assertEqual(launch.install_preset(), 2)
+            self.assertEqual(before, _fingerprint_tree(dest))
+
+    def test_unknown_relocation_and_ambiguous_base_are_rejected(self):
+        launch = _load_launch_module()
+        launch._derive_preset()
+        from composition_merge import merge, RenderRefused
+        original = self.host_patch.read_text(encoding="utf-8")
+        own = launch._CONTRACT["own"] if launch._CONTRACT else json.loads(
+            (_ADAPTER_DIR / "host-contract.json").read_bytes())["own"]
+        overlay = self._template_text()
+        persona = (_PACKAGE_PRESET / "persona.md.template").read_text(encoding="utf-8")
+        for bad, code in [
+                (original.replace("name: host-fixture-tool", "name: host-fixture-tool\n"
+                                  "            disabled: !!js fn(baseUrl)"), "BASE_URL_UNSUPPORTED"),
+                (original + original, "BASE_ROW_DUPLICATE"),
+                (original.replace("name: '@deepseek-ai/dsh-skill-filesystem'",
+                                  "name: host-other"), "SKILL_ROW_MISSING")]:
+            with self.subTest(code=code), self.assertRaises(RenderRefused) as error:
+                merge(bad, overlay, persona, _REPO_ROOT, own, source_path=self.host_patch)
+            self.assertEqual(error.exception.code, code)
 
     def test_install_writes_only_the_rendered_preset(self):
         # FIX-310: the package's shared core (skills/, commands/, agents/) is
@@ -526,7 +339,7 @@ class DshAdapterTests(unittest.TestCase):
             self.assertEqual(
                 entries,
                 [".dsh-bundle-version", "agent.cordis.yml", "preset.yml",
-                 "skill-root.txt"],
+                 "render-provenance.json", "skill-root.txt"],
                 entries,
             )
             composition = (preset_dir / "agent.cordis.yml").read_text(encoding="utf-8")
@@ -581,7 +394,7 @@ class DshAdapterTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("[DRY-RUN]", result.stdout)
             self.assertIn("dsh home", result.stdout)
-            self.assertIn("composition tpl", result.stdout)
+            self.assertIn("provenance", result.stdout)
             self.assertFalse((Path(td) / ".agent-presets").exists())
 
     def test_bootstrap_dry_run_writes_nothing(self):
@@ -700,7 +513,7 @@ class DshAdapterTests(unittest.TestCase):
             for item in pkg.get("files", [])
             if not str(item).startswith("!")
         ]
-        for resolved in resolved_roots + ["agent-presets/governance/agent.cordis.yml.template",
+        for resolved in resolved_roots + ["agent-presets/governance/overlay.cordis.yml",
                                           "agent-presets/governance/preset.yml",
                                           "lib/index.js"]:
             covered = any(
@@ -992,8 +805,6 @@ class DshAdapterTests(unittest.TestCase):
             version, plan = build_projection_plan(fixture)
             planned = {write.relative_path: write.content for write in plan}
         for relative, marker in (
-            ("agent-presets/governance/agent.cordis.yml.template",
-             f"治理工作流（v{version}）"),
             # DEC-366 ④ (D-R6-5): the native persona body is a rendered surface
             # too — the row reads it directly, so its version string must track
             # the SKILL frontmatter instead of drifting by hand.
@@ -1032,7 +843,7 @@ class DshAdapterTests(unittest.TestCase):
             self.assertEqual(baseline["issues"], [])
             self.assertEqual(baseline["files_checked"], len(vw.INJECTION_CONTRACT_ANCHORS))
 
-            persona = root / "agent-presets/governance/agent.cordis.yml.template"
+            persona = root / "agent-presets/governance/persona.md.template"
             persona.write_text(
                 persona.read_text(encoding="utf-8").replace("复审必达", "复审必须达成"),
                 encoding="utf-8",
@@ -1054,7 +865,7 @@ class DshAdapterTests(unittest.TestCase):
             sys.path.insert(0, str(_INFRA_DIR))
         import verify_workflow as vw
 
-        persona_rel = "agent-presets/governance/agent.cordis.yml.template"
+        persona_rel = "agent-presets/governance/persona.md.template"
         skill_rel = "skills/software-project-governance/SKILL.md"
         protocol_rel = (
             "skills/software-project-governance/references/behavior-protocol.md")
@@ -1141,7 +952,7 @@ class DshAdapterTests(unittest.TestCase):
         for name, template in templates.items():
             with self.subTest(entry=name):
                 self.assertIn(skill.relative_to(_REPO_ROOT).as_posix(), template)
-        for face in ("agent-presets/governance/agent.cordis.yml.template", "adapters/dsh/AGENTS.md.template"):
+        for face in ("agent-presets/governance/persona.md.template", "adapters/dsh/AGENTS.md.template"):
             with self.subTest(entry=face):
                 self.assertIn(skill.name, (_REPO_ROOT / face).read_text(encoding="utf-8"))
     def test_preset_metadata_contract(self):
@@ -1202,7 +1013,7 @@ class DshAdapterTests(unittest.TestCase):
             # This test covers rendered loading/isolation, not a user's
             # installed DSH plugin set. An explicit absent install prevents
             # fallback to that mutable set; the oracle honestly says NOT_RUN.
-            env["DSH_INSTALL_DIR"] = str(Path(td) / "absent-install")
+            env.update(self.plane_env)
             result = _run_smoke_cli(env)
             preset = Path(td) / ".agent-presets" / "governance"
             self.assertTrue((preset / "agent.cordis.yml").is_file())
@@ -1703,7 +1514,7 @@ class DshAdapterTests(unittest.TestCase):
             buffer = io.StringIO()
             with patch.dict(
                     os.environ, {"DSH_HOME": str(isolated),
-                                 "DSH_INSTALL_DIR": str(Path(td) / "absent-install")}, clear=False), \
+                                 **self.plane_env}, clear=False), \
                     patch.object(launch, "real_dsh_home",
                                  return_value=fake_real), \
                     patch.object(launch, "verify_preset_loading",
@@ -1763,7 +1574,7 @@ class DshAdapterTests(unittest.TestCase):
         launch = _load_launch_module()
         with _sandbox_td() as td, patch.dict(
             os.environ, {"DSH_HOME": td,
-                         "DSH_INSTALL_DIR": str(Path(td) / "absent-install")}, clear=False
+                         **self.plane_env}, clear=False
         ), patch.object(launch.shutil, "which", return_value=None):
             buffer = io.StringIO()
             with redirect_stdout(buffer):
@@ -1780,7 +1591,7 @@ class DshAdapterTests(unittest.TestCase):
         import verify_workflow as vw
 
         with _sandbox_td() as td, patch.dict(
-            os.environ, {"DSH_INSTALL_DIR": str(Path(td) / "absent-install")}, clear=False
+            os.environ, {**self.plane_env}, clear=False
         ):
             result = vw.check_dsh_preset_smoke()
         self.assertEqual(result["verdict"], "PASS", result)
@@ -1829,7 +1640,7 @@ class DshAdapterTests(unittest.TestCase):
         entries = sorted(item.name for item in _PACKAGE_PRESET.iterdir())
         self.assertEqual(
             entries,
-            ["agent.cordis.yml.template", "persona.md.template", "preset.yml"],
+            ["overlay.cordis.yml", "persona.md.template", "preset.yml"],
             f"preset payload must carry exactly the composition template, the "
             f"persona body and their metadata, found {entries}",
         )
@@ -1863,7 +1674,7 @@ class DshAdapterTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["leftovers"], [], payload)
         self.assertEqual(
-            payload["text"], launch.render_composition(),
+            payload["text"], launch.render_overlay(),
             "the JS and Python renderers produced different compositions",
         )
 
@@ -1874,7 +1685,7 @@ class DshAdapterTests(unittest.TestCase):
         # which contains no isolated CR, so the lone-CR half of the contract
         # is invisible to it (inventory D-67: the parity test "不注入 `\r` ⇒
         # 抓不到 D-66"). This fixture injects exactly one isolated CR and
-        # requires the two delivery paths — `launch.render_composition()`
+        # requires the two delivery paths — `launch.render_overlay()`
         # (the `--install` path) and `renderComposition()` (the JS directory
         # renderer), both against the same package root — to produce the
         # identical byte string, with the CR SURVIVING on both sides (the
@@ -1902,7 +1713,7 @@ class DshAdapterTests(unittest.TestCase):
             try:
                 with redirect_stdout(io.StringIO()), \
                         redirect_stderr(io.StringIO()):
-                    rendered = launch.render_composition()
+                    rendered = launch.render_overlay()
             finally:
                 launch._composition_template = original_template
             self.assertTrue(rendered, "the lone-CR fixture must still render")
@@ -2050,258 +1861,34 @@ class DshAdapterTests(unittest.TestCase):
             )
             self.assertFalse(explicit["threw"], explicit["warns"])
             self.assertTrue(
-                any("payload incomplete" in warning
+                any("launch.py --install" in warning
                     for warning in explicit["warns"]), explicit["warns"])
             self.assertFalse(
                 (dsh_home / ".agent-presets" / "governance").exists(),
                 "a failed explicit render must leave no preset behind",
             )
 
-    def test_lib_ensure_preset_is_idempotent_per_package_version(self):
-        # CODE R1 P2-1: the explicit renderer's idempotence was probe-verified
-        # but had no permanent net. A second call at the same package version
-        # must report synced=false and leave the directory untouched.
+    def test_legacy_js_shim_preserves_foreign_directories_and_files(self):
         node = shutil.which("node")
         if not node:
-            self.skipTest("node unavailable (explicit renderer cannot be exercised)")
-        lib_uri = (_REPO_ROOT / "lib" / "index.js").resolve().as_uri()
-        script = (
-            f"import {{ ensurePreset }} from {json.dumps(lib_uri)};"
-            "const outcome = ensurePreset({ logger: { warn: () => {}, info: () => {} } });"
-            "process.stdout.write(JSON.stringify(outcome));"
-        )
-        with _sandbox_td() as td:
-            env = os.environ.copy()
-            env["DSH_HOME"] = td
-
-            def run():
-                result = subprocess.run(
-                    [node, "--input-type=module", "-e", script],
-                    capture_output=True, text=True, encoding="utf-8",
-                    errors="replace", env=env,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                return json.loads(result.stdout)
-
-            first = run()
-            preset = Path(td) / ".agent-presets" / "governance"
-            self.assertTrue(first["synced"], first)
-            for name in ("agent.cordis.yml", "preset.yml",
-                         ".dsh-bundle-version", "skill-root.txt"):
-                self.assertTrue((preset / name).is_file(), name)
-            before = preset.stat().st_mtime_ns
-
-            second = run()
-            self.assertFalse(second["synced"], second)
-            self.assertEqual(
-                preset.stat().st_mtime_ns, before,
-                "a version-matching explicit sync must not rewrite the preset")
-
-    def test_lib_cleanup_never_deletes_a_directory_it_did_not_create(self):
-        # FIX-313 (design §6.1 V10 / AUDIT-153). RED before the fix: the catch
-        # block enumerated the preset root and deleted every entry whose name
-        # started with `governance.staging-`, so this user directory (which the
-        # row never created) was removed together with the real staging tree.
-        # GREEN after: the cleanup addresses only the staging directory THIS
-        # attempt proved it created, and the undecidable name is left alone.
-        if not shutil.which("node"):
-            self.skipTest("node unavailable (host row cannot be exercised)")
+            self.skipTest("node unavailable")
         with _sandbox_td() as td:
             root = Path(td)
-            pkg = _catching_package_copy(root)
-            cwd = root / "cwd"
-            home = root / "home"
-            dsh_home = root / "dshhome"
-            for path in (cwd, home, dsh_home):
-                path.mkdir(parents=True)
-            preset_root = dsh_home / ".agent-presets"
-            preset_root.mkdir(parents=True)
-            rogue = preset_root / _ROGUE_STAGING_NAME
-            rogue.mkdir()
-            (rogue / "NOTES.md").write_text("my own scratch dir\n", encoding="utf-8")
-
-            result = _run_catch_probe(pkg / "lib" / "index.js", cwd, dsh_home, home)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            payload = json.loads(result.stdout)
-            self.assertFalse(payload["outcome"]["synced"], payload)
-            self.assertTrue(
-                any("preset sync failed" in warning for warning in payload["warns"]),
-                payload,
-            )
-            # The fix's core claim: an unprovable target is never removed.
-            self.assertTrue(
-                rogue.is_dir(),
-                "cleanup deleted a directory the row never created "
-                "(name prefix is not proof of ownership)",
-            )
-            self.assertTrue(
-                (rogue / "NOTES.md").is_file(),
-                "cleanup emptied a directory it never created",
-            )
-
-    def test_lib_cleanup_still_removes_its_own_staging_directory(self):
-        # Positive control for the V10 predicate: proving ownership must not be
-        # bought by refusing to clean up at all. The same failure that leaves a
-        # foreign directory alone must still remove the staging directory the
-        # attempt created — otherwise every failed sync would leak a full
-        # rendered preset next to the user's preset root forever.
-        if not shutil.which("node"):
-            self.skipTest("node unavailable (host row cannot be exercised)")
-        with _sandbox_td() as td:
-            root = Path(td)
-            pkg = _catching_package_copy(root)
-            cwd = root / "cwd"
-            home = root / "home"
-            dsh_home = root / "dshhome"
-            for path in (cwd, home, dsh_home):
-                path.mkdir(parents=True)
-            preset_root = dsh_home / ".agent-presets"
-            preset_root.mkdir(parents=True)
-            rogue = preset_root / _ROGUE_STAGING_NAME
-            rogue.mkdir()
-
-            result = _run_catch_probe(pkg / "lib" / "index.js", cwd, dsh_home, home)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(json.loads(result.stdout)["outcome"]["dir"], result.stdout)
-            survivors = sorted(path.name for path in preset_root.iterdir())
-            self.assertEqual(
-                survivors,
-                [_ROGUE_STAGING_NAME],
-                "the staging directory this attempt created must be cleaned up, "
-                "and nothing else may be touched",
-            )
-            self.assertFalse(
-                (dsh_home / ".agent-presets" / "governance").exists(),
-                "a failed sync must not leave a preset directory behind",
-            )
-
-    def test_lib_eexist_collision_breaker_keeps_every_directory_and_warns(self):
-        # FIX-325 / F3 (REVIEW-FIX-313-CODE-R0): the EEXIST rename-retry loop,
-        # its 8-attempt circuit breaker and its warning path had zero coverage
-        # (mutation M4 passed all three V10 tests). `Date.now` and
-        # `Math.random` are pinned so EVERY attempt derives the SAME staging
-        # name, and that name pre-exists as a directory the row never created.
-        # RED under the pre-V10 shape (`rmSync` + recursive `mkdirSync`: the
-        # foreign directory is adopted and destroyed); GREEN requires the
-        # breaker: eight losing attempts, zero deletions, one actionable
-        # warning naming the parent — and it replaces the self-justifying
-        # replay the review graded as zero-capture (F2), so this one test
-        # closes F1's fixture gap, F2's rewrite and F3's coverage at once.
-        if not shutil.which("node"):
-            self.skipTest("node unavailable (host row cannot be exercised)")
-        with _sandbox_td() as td:
-            root = Path(td)
-            pkg = _complete_package_copy(root)
-            cwd = root / "cwd"
-            home = root / "home"
-            dsh_home = root / "dshhome"
-            for path in (cwd, home, dsh_home):
-                path.mkdir(parents=True)
-
-            result = _run_collision_probe(pkg, dsh_home, home, cwd, [0.5])
-            self.assertEqual(result.returncode, 0, result.stderr)
-            payload = json.loads(result.stdout)
-            self.assertFalse(payload["outcome"]["synced"], payload)
-            breaker = [warning for warning in payload["warns"]
-                       if "could not create a fresh staging" in warning]
-            self.assertTrue(breaker, payload["warns"])
-            self.assertIn("no existing directory was removed", breaker[0])
-            # The pre-existing directory carrying the colliding name — with
-            # its user file — is untouched after eight collisions.
-            self.assertTrue(
-                payload["collidingSurvived"],
-                "the breaker deleted or emptied a directory the row never "
-                f"created (name collision is not ownership): {payload}",
-            )
-            # Zero residue: the losing attempts created nothing and removed
-            # nothing — the preset root holds exactly the seeded directory.
-            self.assertEqual(payload["after"], payload["before"], payload)
-
-    def test_lib_eexist_collision_retry_syncs_and_keeps_the_foreign_dir(self):
-        # The OTHER half of F3: the first pinned draw collides, the second is
-        # fresh. The loop must retry — and the retry must complete the whole
-        # sync WITHOUT touching the directory the first attempt lost to (the
-        # pre-V10 shape deleted it right before adopting its name).
-        if not shutil.which("node"):
-            self.skipTest("node unavailable (host row cannot be exercised)")
-        with _sandbox_td() as td:
-            root = Path(td)
-            pkg = _complete_package_copy(root)
-            cwd = root / "cwd"
-            home = root / "home"
-            dsh_home = root / "dshhome"
-            for path in (cwd, home, dsh_home):
-                path.mkdir(parents=True)
-
-            result = _run_collision_probe(pkg, dsh_home, home, cwd, [0.1, 0.9])
-            self.assertEqual(result.returncode, 0, result.stderr)
-            payload = json.loads(result.stdout)
-            self.assertTrue(payload["outcome"]["synced"], payload)
-            self.assertTrue(
-                payload["collidingSurvived"],
-                "the winning retry destroyed the directory the losing first "
-                f"attempt collided with: {payload}",
-            )
-            # The sync really landed: the user preset holds the four payload
-            # files, and no staging residue survives the rename.
-            user_dir = dsh_home / ".agent-presets" / "governance"
-            names = sorted(entry.name for entry in user_dir.iterdir())
-            self.assertEqual(len(names), 4, names)
-            self.assertIn("agent.cordis.yml", names, names)
-            self.assertIn("preset.yml", names, names)
-            preset_root = dsh_home / ".agent-presets"
-            # The ONLY new entry in the preset root is the synced preset
-            # itself: no staging residue survives the rename.
-            self.assertEqual(
-                sorted(entry.name for entry in preset_root.iterdir()),
-                sorted(payload["before"] + ["governance"]),
-                payload,
-            )
-
-    def test_lib_cwd_degradation_never_deletes_a_cwd_staging_directory(self):
-        # FIX-325 / F1 — V10 acceptance ① (G-04 CWD degradation inverse), the
-        # machine guard the review found MISSING (mutation M5 restored the old
-        # CWD sweep and the whole suite stayed green while the CWD misdeletion
-        # survived). When `resolveDshHome()` THROWS, `outcome.dir` stays '' and
-        # the pre-V10 catch enumerated `dirname('.')` — the PROCESS CWD —
-        # deleting every `governance.staging-*` entry there. The fixture seeds
-        # such a directory in the CWD and faults the row's `homedir` import via
-        # the synchronous ESM `registerHooks` (Node >= 22.15; repo engines
-        # >= 20 — older runtimes NOT_RUN this guard, per the FIX-325 policy).
-        if not shutil.which("node"):
-            self.skipTest("node unavailable (host row cannot be exercised)")
-        if not _node_register_hooks_available():
-            self.skipTest(
-                "Node >= 22.15 required for the ESM registerHooks fault "
-                "injection (repo declares engines >= 20) — NOT_RUN per the "
-                "FIX-325 skip/NOT_RUN policy")
-        with _sandbox_td() as td:
-            root = Path(td)
-            pkg = _complete_package_copy(root)
-            cwd = root / "cwd"
-            home = root / "home"
-            for path in (cwd, home):
-                path.mkdir(parents=True)
-
-            result = _run_cwd_fault_probe(pkg / "lib" / "index.js", cwd, home,
-                                          _ROGUE_STAGING_NAME)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            payload = json.loads(result.stdout)
-            # The row failed BEFORE a staging directory existed, said so, and
-            # — the core claim — the CWD decoy survived.
-            self.assertIsNone(payload["threw"], payload)
-            self.assertFalse(payload["outcome"]["synced"], payload)
-            self.assertFalse(payload["outcome"]["dir"], payload)
-            self.assertTrue(
-                any("nothing was removed" in warning
-                    for warning in payload["warns"]),
-                payload,
-            )
-            self.assertTrue(
-                payload["decoySurvived"],
-                "cleanup swept the process CWD for staging-prefixed names and "
-                f"deleted a directory the row never created: {payload}",
-            )
+            preset = root / ".agent-presets/governance"
+            preset.mkdir(parents=True)
+            (preset / "custom.txt").write_bytes(b"preserve user content")
+            before = _fingerprint_tree(root)
+            uri = (_REPO_ROOT / "lib/index.js").as_uri()
+            script = (f"import {{ ensurePreset }} from {json.dumps(uri)};"
+                      "const w=[]; const ctx={logger:{warn:m=>w.push(m)}};"
+                      "console.log(JSON.stringify({a:ensurePreset(ctx),b:ensurePreset(ctx),w}));")
+            run = subprocess.run([node, "--input-type=module", "-e", script],
+                                 env={**os.environ, "DSH_HOME": td}, capture_output=True, check=True)
+            result = json.loads(run.stdout)
+            self.assertFalse(result["a"]["synced"])
+            self.assertFalse(result["b"]["synced"])
+            self.assertTrue(all("launch.py --install" in msg for msg in result["w"]))
+            self.assertEqual(before, _fingerprint_tree(root))
 
     @unittest.skipUnless(
         importlib.util.find_spec("yaml") is not None,
@@ -2326,8 +1913,7 @@ class DshAdapterTests(unittest.TestCase):
         ids = [row.get("id") for row in doc if isinstance(row, dict)]
         self.assertIn("persona", ids)
         self.assertIn("skill-filesystem", ids)
-        self.assertIn("tool-skill", ids)
-        self.assertIn("delegation", ids)
+        self.assertEqual(ids, ["persona", "skill-filesystem"])
 
 
 # ── FIX-439: DSH bootstrap splice defect family (incident-20261006) ─────────

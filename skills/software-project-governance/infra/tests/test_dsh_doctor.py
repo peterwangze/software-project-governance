@@ -69,6 +69,23 @@ class DoctorCase(unittest.TestCase):
 
     maxDiff = None
 
+    def install_record(self, preset):
+        import hashlib
+        composition = b"- id: persona\n  name: persona\n- id: skills\n  name: fs\n"
+        (preset / "agent.cordis.yml").write_bytes(composition)
+        (preset / "preset.yml").write_text("name: governance\n", encoding="utf-8")
+        provenance = {
+            "schema": "dsh-preset-provenance/1", "package_version": doctor._package_version(_PACKAGE_ROOT),
+            "rendered_at": "2026-11-01T00:00:00Z", "plane": {"kind": "profile", "dsh_version": "test"},
+            "base": {}, "overlay": {}, "persona": {}, "overlay_rows": [], "policy": {},
+            "rows": [{"id": key, "origin": "base"} for key in ("persona", "skills")],
+            "composition_sha256": hashlib.sha256(composition).hexdigest(),
+            "payload_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                               for p in preset.iterdir() if p.name != "render-provenance.json"},
+        }
+        (preset / "render-provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
+        return provenance
+
     def rendered_home(self):
         """A temporary dsh home carrying a preset this package's version claims."""
         cached = getattr(self, "_rendered_home", None)
@@ -84,6 +101,7 @@ class DoctorCase(unittest.TestCase):
         (preset / "skill-root.txt").write_text(
             str(_PACKAGE_ROOT / "skills" / "software-project-governance"),
             encoding="utf-8")
+        self.install_record(preset)
         self._rendered_home = home
         return home
 
@@ -364,6 +382,17 @@ class S2ProjectionTests(DoctorCase):
         "unverified_reasons": {"NO_SCHEMA": 5},
     }
 
+    def test_normal_runner_validates_the_installed_composition_in_its_context(self):
+        import dsh_compat
+        home = self.rendered_home()
+        env = {"DSH_HOME": str(home), "DSH_DESKTOP_APP_DIR": "requested-plane"}
+        with unittest.mock.patch.object(dsh_compat, "check_dsh_preset_compat", return_value={
+                "verdict": "NOT_RUN", "coverage": {}, "install": {"source": "requested-plane"}}) as check:
+            report = self.run_doctor(stages=["S2"], offline=False, env=env)
+        check.assert_called_once_with(_PACKAGE_ROOT, env=env, compositions=[
+            home / ".agent-presets/governance/agent.cordis.yml"])
+        self.assertEqual(self.stages_of(report)["S2"]["credible_face"]["install"]["source"], "requested-plane")
+
     def test_the_projection_carries_unreadable_compositions(self):
         projected = doctor._projected_coverage({"coverage": self.COVERAGE})
         self.assertEqual(projected["unreadable_compositions"], 2)
@@ -570,7 +599,70 @@ class DeliveryStageTests(DoctorCase):
             (preset / ".dsh-bundle-version").write_text(version, encoding="utf-8")
         if skill_root:
             (preset / "skill-root.txt").write_text("x", encoding="utf-8")
+        self.install_record(preset)
         return home
+
+    def test_provenance_distinguishes_residual_missing_reordered_and_edited_rows(self):
+        home = self.rendered_home()
+        path = home / ".agent-presets/governance/agent.cordis.yml"
+        original = path.read_bytes()
+        samples = {
+            "RESIDUAL_ROWS": original + b"- id: retired\n  name: old\n",
+            "MISSING_ROWS": original.split(b"- id: skills")[0],
+            "ROW_ORDER_CHANGED": original[original.index(b"- id: skills"):] + original.split(b"- id: skills")[0],
+            "CONTENT_EDITED": original.replace(b"name: fs", b"name: amended"),
+        }
+        for code, sample in samples.items():
+            with self.subTest(code=code):
+                path.write_bytes(sample)
+                s1 = self.stages_of(self.run_doctor(stages=["S1"]))["S1"]
+                self.assertEqual(s1["verdict"], "FAIL")
+                self.assertIn(code, s1["credible_face"]["codes"])
+                self.assertEqual(path.read_bytes(), sample)
+
+    def test_missing_provenance_discloses_unverified_with_recovery(self):
+        home = self.rendered_home()
+        (home / ".agent-presets/governance/render-provenance.json").unlink()
+        s1 = self.stages_of(self.run_doctor(stages=["S1"]))["S1"]
+        self.assertEqual(s1["verdict"], "NOT_RUN")
+        self.assertIn("PROVENANCE_ABSENT", s1["credible_face"]["codes"])
+        self.assertIn("--install", s1["remediation"][0]["command"])
+
+    def test_matching_marker_and_recorded_bytes_cannot_hide_a_new_render(self):
+        home = self.rendered_home()
+        preset = home / ".agent-presets/governance"
+        document = self.install_record(preset)
+        current = dict(document, row_ids=["persona", "skills"], composition_sha256="f" * 64,
+                       plane={"kind": "asar-desktop", "dsh_version": "next"})
+        import dsh_compat
+        renderer = dsh_compat._load_preset_renderer()
+        with unittest.mock.patch.object(dsh_compat, "_load_preset_renderer", return_value=renderer), \
+             unittest.mock.patch.object(renderer, "derive_preset", return_value={"provenance": current, "composition": (preset / "agent.cordis.yml").read_text()}):
+            s1 = self.stages_of(self.run_doctor(offline=False, stages=["S1"]))["S1"]
+        self.assertEqual(s1["verdict"], "FAIL")
+        self.assertIn("RENDER_DRIFT", s1["credible_face"]["codes"])
+        self.assertIn("PLANE_VERSION_DRIFT", s1["credible_face"]["codes"])
+        self.assertEqual(s1["credible_face"]["current_plane"], current["plane"])
+
+    def test_metadata_and_skill_root_edits_are_named_without_overwriting_them(self):
+        home = self.rendered_home()
+        preset = home / ".agent-presets/governance"
+        for name in ("preset.yml", "skill-root.txt"):
+            (preset / name).write_text("user change", encoding="utf-8")
+        s1 = self.stages_of(self.run_doctor(stages=["S1"]))["S1"]
+        self.assertEqual(s1["verdict"], "FAIL")
+        self.assertIn("PAYLOAD_DRIFT", s1["credible_face"]["codes"])
+        for name in ("preset.yml", "skill-root.txt"):
+            self.assertIn(name, s1["reason"])
+            self.assertEqual((preset / name).read_text(), "user change")
+
+    def test_online_check_with_unavailable_explicit_plane_stays_unverified(self):
+        home = self.rendered_home()
+        s1 = self.stages_of(self.run_doctor(offline=False, stages=["S1"], env={
+            "DSH_HOME": str(home), "DSH_DESKTOP_APP_DIR": str(home / "missing")
+        }))["S1"]
+        self.assertEqual(s1["verdict"], "NOT_RUN")
+        self.assertIn("PLANE_UNAVAILABLE", s1["credible_face"]["codes"])
 
     def test_a_missing_preset_directory_is_a_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -672,7 +764,7 @@ class RenderStageTests(DoctorCase):
             "module = importlib.util.module_from_spec(spec);"
             "spec.loader.exec_module(module);"
             "sys.stdout.write(hashlib.sha256("
-            "module.render_composition().encode('utf-8')).hexdigest())"
+            "module.render_overlay().encode('utf-8')).hexdigest())"
         )
         proc = subprocess.run(
             [sys.executable, "-c", script, str(launcher)],
@@ -707,7 +799,7 @@ class RenderStageTests(DoctorCase):
             original_read = doctor._read
 
             def read(path):
-                return "" if str(path).endswith(".template") else original_read(path)
+                return "" if path.name == "overlay.cordis.yml" else original_read(path)
 
             doctor._read = read
             try:
@@ -901,6 +993,19 @@ class RecordEvidenceTests(DoctorCase):
             self.assertIn("plane", document)
             self.assertIn("rows", document)
 
+    def test_recording_uses_observed_rows_and_preserves_unverified_results(self):
+        import dsh_compat
+        report = {"verdict": "PASS", "coverage": {}, "compositions": [{"rows": [
+            {"row": "new-host-tool", "name": "tool", "kind": "PASS"},
+            {"row": "schema-absent", "name": "opaque", "kind": "NO_SCHEMA"},
+            {"row": "bad-config", "name": "bad", "kind": "CONFIG_INVALID"},
+        ]}]}
+        with unittest.mock.patch.object(dsh_compat, "check_dsh_preset_compat", return_value=report):
+            rows, observation = doctor._record_rows(_PACKAGE_ROOT, {})
+        self.assertEqual([row["row_id"] for row in rows], ["new-host-tool", "schema-absent", "bad-config"])
+        self.assertEqual([row["probe_result"] for row in rows], ["accept", None, "reject"])
+        self.assertEqual(observation["verdict"], "PASS")
+
     def test_record_evidence_records_unknown_facts_as_null_not_guesses(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
@@ -918,13 +1023,13 @@ class RecordEvidenceTests(DoctorCase):
             # either the measured string or null — never a default.
             self.assertTrue(document["dsh_version"] is None
                             or isinstance(document["dsh_version"], str))
-            self.assertEqual(len(document["rows"]), 29)
+            self.assertIsInstance(document["rows"], list)
             for row in document["rows"]:
                 self.assertEqual(row["source"], "recorded")
                 self.assertIn(row["resolved"], (True, False, None))
                 if row["resolved"] is None:
                     self.assertIsNone(row["probe_result"])
-                    self.assertIsNone(row["module"])
+                    self.assertIsNone(row["config_export"])
                 for key in ("accepted_keys", "required_keys"):
                     self.assertEqual(row[key], [],
                                      f"{row['row_id']}.{key} must not be invented")

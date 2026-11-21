@@ -111,13 +111,12 @@ INJECTION_SURFACE_SCOPE_FULL_FILE = "full-file"
 INJECTION_BUDGET_SURFACES = (
     {
         "name": "persona",
-        "path": "agent-presets/governance/agent.cordis.yml.template",
+        "path": "agent-presets/governance/persona.md.template",
         "layer": "dsh-persona",
         "tier": "resident",
         "scope": INJECTION_SURFACE_SCOPE_PERSONA_PREFIX,
         "profile": None,
-        "note": "persona prompt block (session-injected text; YAML host "
-                "config and comments are not injected)",
+        "note": "Governance persona body appended to the host persona prefix",
     },
     {
         "name": "entry-template",
@@ -476,7 +475,9 @@ def load_injection_surface(surface, root=None):
     if scope == INJECTION_SURFACE_SCOPE_FULL_FILE:
         return text
     if scope == INJECTION_SURFACE_SCOPE_PERSONA_PREFIX:
-        return extract_persona_prefix_from_template(text, display=display)
+        if text.startswith("你是 software-project-governance 治理工作流") and "__GOVERNANCE_REPO_ROOT__" in text:
+            return text
+        return ""
     if scope == INJECTION_SURFACE_SCOPE_TEMPLATE_BLOCK:
         profile = surface.get("profile")
         marker = ENTRY_TEMPLATE_MARKERS.get(profile or "")

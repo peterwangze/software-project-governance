@@ -179,7 +179,7 @@ PROTOCOL_SURFACES = (
     "commands/governance/bootstrap.md",
     "skills/software-project-governance/SKILL.md",
     "adapters/dsh/AGENTS.md.template",
-    "agent-presets/governance/agent.cordis.yml.template",
+    "agent-presets/governance/persona.md.template",
 )
 
 _CONFIG_LINE_RE = re.compile(r"^- \*\*(?P<key>.+?)\*\*:\s*(?P<value>.+?)\s*$")

@@ -1,0 +1,11 @@
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    prefix: |
+      __GOVERNANCE_PERSONA_BODY__
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - __GOVERNANCE_SKILLS_ROOT__
+      - __GOVERNANCE_SHIMS_ROOT__

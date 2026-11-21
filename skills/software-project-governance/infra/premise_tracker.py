@@ -16,7 +16,8 @@ This module owns the premise lifecycle end to end:
     reads the declaration back out of the row text.
   * COUNTING — ``premise count`` appends replayable events to
     ``.governance/premise-events.jsonl``.  ``--source auto`` recomputes the
-    observable from its machine source (bypass_count: evidence-log row scan;
+    observable from its machine source (bypass_count: current and archived
+    EVD rows, keyed by evidence ID;
     recurrence_count: pin-ledger provenance rows in checks/version.py);
     ``--source ref`` records a referenced observation (red_ci_hours: manual
     ``gh:run=…,hours=…`` refs — CI has no gh; fail-closed honesty beats a
@@ -143,8 +144,8 @@ def count_hook_bypasses(evidence_log_text: str):
 
     Known ambiguity, disclosed: a row that re-references an ALREADY
     disclosed bypass (EVD-2146 re-anchors e254584) still counts +1 — the
-    auto source is an UPPER bound with a documented ±1 cross-reference
-    error.  Live tree: EVD-2145 (1) + EVD-2146 (1, cross-ref) +
+    auto source counts disclosures. In the 2026-10-24 calibration it
+    overcounted distinct events by one: EVD-2145 (1) + EVD-2146 (1, cross-ref) +
     EVD-2148③ (2) = 4 ≥ the three documented events (e254584, M-7, M-5b).
     The error direction is toward EARLIER collapse — a re-review surfacing
     is a bounded, honest cost; a silently rotting premise is the
@@ -173,6 +174,51 @@ def count_hook_bypasses(evidence_log_text: str):
                 contribution = parsed
         rows.append((lineno, contribution))
     return {"count": sum(c for _l, c in rows), "rows": rows}
+
+
+def _bypass_archive_volumes(hot):
+    """Discover volumes after the hot read: migration writes cold before pruning hot."""
+    from archive_indexing import evidence_archive_files, parse_index_section
+
+    archive = hot.parent / "archive"
+    volumes = evidence_archive_files(archive / "evidence")
+    index = archive / "index.md"
+    if index.exists() or index.is_symlink():
+        indexed = parse_index_section(index.read_text(encoding="utf-8").splitlines(),
+                                      "Evidence 索引")
+        missing = indexed - {f"archive/evidence/{path.name}" for path in volumes}
+        if missing:
+            raise ValueError("missing indexed evidence volume(s): " + ", ".join(sorted(missing)))
+    if not hot.is_file() and not volumes:
+        raise FileNotFoundError("no evidence-log.md or archived evidence volumes")
+    yield from volumes
+
+
+def evidence_bypass_counts(governance_dir):
+    """Snapshot weighted disclosures by EVD id across the working and archived ledgers.
+
+    The first copy wins (working ledger, then archive filename order), even if
+    that copy describes a non-event. Separate disclosure IDs retain the original
+    calibration's cross-reference ambiguity. Index rows are pointers, not events.
+    """
+    from archive_indexing import iter_evidence_family_rows
+    from archive_parsing import _EVD_ID_SHAPE_RE
+
+    hot = Path(governance_dir) / EVIDENCE_LOG_NAME
+    if not hot.is_file() and (hot.exists() or hot.is_symlink()):
+        raise ValueError(f"expected a readable evidence ledger at {hot}")
+
+    seen = set()
+    counts = {}
+    for row in iter_evidence_family_rows(hot, _bypass_archive_volumes(hot), "| EVD-"):
+        evd = row["row_id"]
+        if evd in seen or not _EVD_ID_SHAPE_RE.fullmatch(evd):
+            continue
+        seen.add(evd)
+        weight = count_hook_bypasses(row["line"])["count"]
+        if weight:
+            counts[evd] = weight
+    return counts
 
 
 def count_pin_recurrences(version_py_text: str):
@@ -352,12 +398,13 @@ def _auto_total(governance_dir, observable):
     """Recompute an auto observable; returns (total, refs) or (None, error)."""
     root = _repo_root_from(governance_dir)
     if observable == "bypass_count":
-        evidence = root / ".governance" / EVIDENCE_LOG_NAME
-        if not evidence.is_file():
-            return None, "evidence-log.md not found under the governance dir"
-        result = count_hook_bypasses(evidence.read_text(encoding="utf-8"))
-        rows = "; ".join("L{0}(+{1})".format(l, c) for l, c in result["rows"])
-        return result["count"], rows or "no rows"
+        try:
+            counts = evidence_bypass_counts(governance_dir)
+        except (OSError, ValueError) as exc:
+            return None, str(exc)
+        # Stable refs keep the same snapshot idempotent across archive moves.
+        refs = "; ".join(f"{evd}(+{counts[evd]})" for evd in sorted(counts))
+        return sum(counts.values()), refs or "no rows"
     if observable == "recurrence_count":
         version_py = root / VERSION_PY_REL
         if not version_py.is_file():

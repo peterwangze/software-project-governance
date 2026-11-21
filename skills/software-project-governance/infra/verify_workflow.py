@@ -7920,10 +7920,8 @@ class GovernanceDataSource:
         return rows
 
     def _cold_evidence_files(self):
-        if not self.archive_evidence_dir.is_dir():
-            return []
-        return [f for f in sorted(self.archive_evidence_dir.glob("*.md"))
-                if f.name != ".gitkeep"]
+        from archive_indexing import evidence_archive_files
+        yield from evidence_archive_files(self.archive_evidence_dir)
 
     def get_all_family_rows(self, family):
         """FEAT-076: ALL rows of one family across BOTH layers.
@@ -7936,23 +7934,9 @@ class GovernanceDataSource:
         """
         if family not in self.FAMILY_ROW_PREFIXES:
             raise ValueError(f"unknown row family {family!r}")
-        rows = []
-        for line in self._hot_family_lines(family):
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 3:
-                rows.append({
-                    "row_id": parts[1], "task_ids": parts[2], "line": line,
-                    "source": "hot", "file": ".governance/evidence-log.md",
-                })
-        for cold in self._cold_family_lines(family):
-            parts = [p.strip() for p in cold["line"].split("|")]
-            if len(parts) >= 3:
-                rows.append({
-                    "row_id": parts[1], "task_ids": parts[2],
-                    "line": cold["line"], "source": "cold",
-                    "file": cold["file"],
-                })
-        return rows
+        from archive_indexing import iter_evidence_family_rows
+        return list(iter_evidence_family_rows(
+            self.evidence_path, self._cold_evidence_files(), self.FAMILY_ROW_PREFIXES[family]))
 
     def get_all_family_row_ids(self, family):
         """FEAT-076: set of row ids for one family across both layers."""

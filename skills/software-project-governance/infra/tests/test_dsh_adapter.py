@@ -2229,5 +2229,27 @@ class BootstrapCrlfEolFIX440Tests(unittest.TestCase):
             self.assertEqual((workspace / "AGENTS.md").read_bytes(), data)
 
 
+class SmokeResultReportingTests(unittest.TestCase):
+    def test_health_and_strict_cli_report_each_verdict(self):
+        with patch.object(sys, "path", [str(_INFRA_DIR), *sys.path]):
+            from checks.dsh_smoke import emit_cli_result, emit_health_result
+
+        for verdict, label, issues, status in (
+            ("PASS", "PASSED", 0, 0),
+            ("NOT_RUN", "NOT_RUN", 0, 2),
+            ("FAIL", "FAILED", 1, 1),
+        ):
+            with self.subTest(verdict=verdict):
+                result = {"verdict": verdict, "reason": "probe", "exit_code": status,
+                          "details": ["detail"], "isolation": {
+                              "real_home_writes": 0, "temp_home": "isolated"}}
+                with redirect_stdout(io.StringIO()) as stream:
+                    self.assertEqual(emit_health_result(result), issues)
+                    self.assertEqual(emit_cli_result(result), status)
+                self.assertIn(f"[{verdict}] probe", stream.getvalue())
+                self.assertIn(f"Result: {label} — probe", stream.getvalue())
+                self.assertEqual("detail" in stream.getvalue(), verdict == "FAIL")
+
+
 if __name__ == "__main__":
     unittest.main()

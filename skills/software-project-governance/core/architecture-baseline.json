@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "36f0b633e3f446e721d3e35b7ba04bd30d936f54",
+    "git_head": "0d72153d079918c8db60e6dfd2a1d876a6564e87",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 24377,
+    "anchor_loc": 24349,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -239,8 +239,8 @@
         "count": 2,
         "kind": "import_vw",
         "lines": [
-          1054,
-          1207
+          1052,
+          1205
         ],
         "owner_task": "REFACTOR-remaining",
         "path": "dsh_doctor.py"
@@ -404,7 +404,7 @@
       "_print_check_summary": 9,
       "_print_product_gate_skipped": 3,
       "_print_sequential_id_check": 13,
-      "_run_full_engine_checks": 603,
+      "_run_full_engine_checks": 597,
       "check_agent_adapter_contract": 3,
       "check_architecture_fact_source": 2,
       "check_files": 4,
@@ -423,7 +423,6 @@
       "cmd_check_cross_references": 24,
       "cmd_check_deterministic_scaffolds": 8,
       "cmd_check_dsh_boundary": 1,
-      "cmd_check_dsh_preset_smoke": 7,
       "cmd_check_duplicate_code": 7,
       "cmd_check_exploration_channels": 10,
       "cmd_check_first_session_measurement": 6,
@@ -480,7 +479,7 @@
       "cmd_write_guard_bootstrap": 2,
       "main": 1
     },
-    "total": 1213
+    "total": 1200
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",

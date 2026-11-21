@@ -8587,14 +8587,14 @@ def check_commit_task_references(limit=20):
         task_match = task_id_pattern.match(message)
         if task_match is None:
             # FIX-420: fall back to the quoted original subject of a revert.
-            # Fail-closed: only `Revert "` + a legal task ID at the quoted
-            # subject's start counts as tracked; everything else stays
-            # reported as untracked.
             revert_match = revert_subject_pattern.match(message)
             if revert_match is not None:
-                inner_match = task_id_pattern.match(revert_match.group(1))
-                if inner_match is not None:
-                    task_match = inner_match
+                task_match = task_id_pattern.match(revert_match.group(1))
+            else:
+                # A GitHub-generated merge may have no ticket in its title.
+                # Its incoming ticket applies only when Git proves that the
+                # wrapper contributes no additional content or divergence.
+                task_match = commit_checks.github_merge_task_match(ROOT, parts[0], message, task_id_pattern)
         has_task_id = task_match is not None
         task_id = task_match.group(1) if has_task_id else None
 
@@ -15192,27 +15192,9 @@ def _run_full_engine_checks(args):
     # isolation); fact source = the plugin package's own launch.py +
     # agent-presets/ → PLUGIN_PRODUCT (FIX-270 / F-2).
     if _product_gate_active(args):
-        print("\n┌─ Check 28u: DSH Preset Session Smoke (FEAT-015) ────┐")
-        dsmk28u = check_dsh_preset_smoke()
-        iso28u = dsmk28u["isolation"]
-        header28u = (f"│  exit code: {dsmk28u['exit_code']}; "
-                     f"real-home writes: {iso28u['real_home_writes']}")
-        if iso28u.get("attributed_concurrent_writes"):
-            header28u += (f"; attributed concurrent writes: "
-                          f"{iso28u['attributed_concurrent_writes']} "
-                          "(FIX-442 dual-factor, excluded)")
-        print(header28u)
-        if dsmk28u["verdict"] == "PASS":
-            print(f"│  [PASS] {dsmk28u['reason']}")
-        elif dsmk28u["verdict"] == "NOT_RUN":
-            print(f"│  [NOT_RUN] {dsmk28u['reason']}")
-        else:
-            all_issues += 1
-            print(f"│  [FAIL] {dsmk28u['reason']}")
-            for detail in dsmk28u["details"][:12]:
-                print(f"│    - {detail}")
-            if len(dsmk28u["details"]) > 12:
-                print(f"│    ... and {len(dsmk28u['details']) - 12} more")
+        from checks.dsh_smoke import emit_health_result
+
+        all_issues += emit_health_result(check_dsh_preset_smoke())
     else:
         _print_product_gate_skipped("Check 28u")
     print("└──────────────────────────────────────────────────────┘")
@@ -19736,33 +19718,11 @@ def cmd_check_dsh_preset_smoke(args):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    result = check_dsh_preset_smoke()
-    print("\n=== DSH Preset Session Smoke Check (FEAT-015 / RISK-049 ②) ===")
-    summary_line = (
-        f"  Exit code: {result['exit_code']}; "
-        f"real-home writes: {result['isolation']['real_home_writes']}; "
-        f"temp DSH_HOME: {result['isolation']['temp_home']} (removed)")
-    if result["isolation"].get("attributed_concurrent_writes"):
-        summary_line += (
-            f"; attributed concurrent writes: "
-            f"{result['isolation']['attributed_concurrent_writes']} "
-            "(FIX-442 dual-factor, excluded)")
-    print(summary_line)
-    if result["verdict"] == "PASS":
-        print(f"\n  Result: PASSED — {result['reason']}")
-    elif result["verdict"] == "NOT_RUN":
-        print(f"\n  Result: NOT_RUN — {result['reason']}")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(2)
-    else:
-        print(f"\n  Result: FAILED — {result['reason']}")
-        for detail in result["details"][:20]:
-            print(f"    - {detail}")
-        if len(result["details"]) > 20:
-            print(f"    ... and {len(result['details']) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    print()
+    from checks.dsh_smoke import emit_cli_result
+
+    status = emit_cli_result(check_dsh_preset_smoke())
+    if status and getattr(args, "fail_on_issues", False):
+        sys.exit(status)
 
 
 def cmd_check_dsh_preset_compat(args):

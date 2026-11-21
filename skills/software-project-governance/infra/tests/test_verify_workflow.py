@@ -25096,5 +25096,62 @@ class TemplateReferenceTests(unittest.TestCase):
             self.assertEqual(["agent-presets/missing.md.template"], [issue["target"] for issue in issues])
 
 
+@unittest.skipUnless(shutil.which("git"), "Git is required to verify merge topology")
+class PullRequestMergeTraceabilityTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.git("init", "-q")
+        self.git("config", "user.name", "Traceability Test")
+        self.git("config", "user.email", "traceability@example.invalid")
+        self.git("config", "commit.gpgSign", "false")
+        self.git("config", "core.hooksPath", str(self.root / "no-hooks"))
+        self.title = "Merge pull request #2 from example/codex/workflow"
+        self.base_tree = self.git("write-tree")
+        self.base = self.commit_tree(self.base_tree, "FIX-001: baseline")
+        (self.root / "delivery.txt").write_text("verified", encoding="utf-8")
+        self.git("add", "delivery.txt")
+        self.feature_tree = self.git("write-tree")
+        self.feature = self.commit_tree(self.feature_tree, "FEAT-131: delivery", self.base)
+
+    def git(self, *args):
+        return subprocess.run(
+            ["git", *args], cwd=self.root, check=True, capture_output=True,
+            text=True, encoding="utf-8", timeout=15,
+        ).stdout.strip()
+
+    def commit_tree(self, tree, subject, *parents):
+        args = ["commit-tree", tree, "-m", subject]
+        for parent in parents:
+            args.extend(["-p", parent])
+        return self.git(*args)
+
+    def assert_merge_task(self, expected, tree, title, *parents):
+        oid = self.commit_tree(tree, title, *parents)
+        self.git("update-ref", "HEAD", oid)
+        with patch.object(vw, "ROOT", self.root):
+            result = vw.check_commit_task_references(limit=1)
+        self.assertEqual(expected, result["commits"][0]["task_id"])
+        self.assertEqual(int(expected is None), result["without_task_id"])
+
+    def test_fast_forward_equivalent_pull_request_inherits_incoming_task(self):
+        self.assert_merge_task("FEAT-131", self.feature_tree, self.title, self.base, self.feature)
+
+    def test_subject_alone_or_changed_merge_tree_cannot_claim_task(self):
+        self.assert_merge_task(None, self.feature_tree, self.title, self.feature)
+        self.assert_merge_task(None, self.base_tree, self.title, self.base, self.feature)
+        self.assert_merge_task(None, self.feature_tree, "Merge feature into master", self.base, self.feature)
+        self.assert_merge_task(None, self.feature_tree, self.title + " extra", self.base, self.feature)
+        self.assert_merge_task(None, self.feature_tree, self.title + "..bad", self.base, self.feature)
+
+    def test_divergent_octopus_and_untracked_incoming_are_refused(self):
+        diverged = self.commit_tree(self.base_tree, "FIX-002: separate work", self.base)
+        self.assert_merge_task(None, self.feature_tree, self.title, diverged, self.feature)
+        self.assert_merge_task(None, self.feature_tree, self.title, self.base, self.feature, diverged)
+        untracked = self.commit_tree(self.feature_tree, "unticketed input", self.base)
+        self.assert_merge_task(None, self.feature_tree, self.title, self.base, untracked)
+
+
 if __name__ == "__main__":
     unittest.main()

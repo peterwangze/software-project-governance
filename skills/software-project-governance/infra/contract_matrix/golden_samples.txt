@@ -91,7 +91,7 @@ exit_code: 0
 [OK] file exists: dsh/host-contract.json -> adapters\dsh\host-contract.json
 [OK] file exists: fixtures/host-facts-0.1.5-rc.1.json -> adapters\dsh\fixtures\host-facts-0.1.5-rc.1.json
 [OK] file exists: Index -> lib\index.js
-[OK] file exists: governance/Agent.Cordis.Yml -> agent-presets\governance\agent.cordis.yml.template
+[OK] file exists: governance/Overlay.Cordis -> agent-presets\governance\overlay.cordis.yml
 [OK] file exists: governance/Preset -> agent-presets\governance\preset.yml
 [OK] file exists: Plugin -> .zcode-plugin\plugin.json
 [OK] file exists: governance/Scenario A -> commands\governance\scenario-a.md

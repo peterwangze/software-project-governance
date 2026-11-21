@@ -1,5 +1,6 @@
 """Phase 6 commit and release-lineage checks."""
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -54,3 +55,30 @@ def check_release_lineage(
     tagged = tag_facts(context, f"v{version}", expected.facts["commit"], safe_remote)
     base.update(tagged.facts)
     return CheckResult(tagged.state, tagged.issues, base).as_dict()
+
+
+def github_merge_task_match(root, oid, subject, task_pattern):
+    """Inherit the incoming task only for a content-preserving GitHub PR merge."""
+    title = re.fullmatch(r"Merge pull request #[1-9][0-9]* from [A-Za-z0-9][A-Za-z0-9-]*/(\S+)", subject)
+    if not title:
+        return None
+
+    def git(*args):
+        return run_git(["--no-replace-objects", *args], root, timeout=15)
+
+    branch = title.group(1)
+    rc, validated_branch, _ = git("check-ref-format", "--branch", branch)
+    if rc or validated_branch != branch:
+        return None
+    rc, metadata, _ = git("show", "-s", "--no-show-signature", "--format=%T %P", oid)
+    fields = metadata.split()
+    if rc or len(fields) != 3:
+        return None
+    tree, base, incoming = fields
+    if git("merge-base", "--is-ancestor", base, incoming)[0] != 0:
+        return None
+    rc, tip, _ = git("show", "-s", "--no-show-signature", "--format=%T%x00%s", incoming)
+    incoming_tree, separator, incoming_subject = tip.partition("\x00")
+    if rc or not separator or tree != incoming_tree:
+        return None
+    return task_pattern.match(incoming_subject)

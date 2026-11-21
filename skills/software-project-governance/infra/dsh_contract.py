@@ -31,40 +31,14 @@ the offending field/path, so a remediation is actionable.
 
 Two structural rules the design fixes explicitly:
 
-  * **R0 F-5** — the recorded sub-block of every ``host.rows[]`` entry
-    (``schema_export`` / ``required_keys`` / ``accepted_keys`` /
-    ``probe_result``) may be empty in V1, but it must be *present* and flagged
-    ``source: recorded`` / ``recorded: false``. Hand-transcribing schema shapes
-    would turn the contract into a second source of truth, so the accessor
-    accepts empty and rejects nothing else — filling it is the job of V8.
   * **R0 F-15** — this module MUST NOT import ``registry``: the boundary check
     resolves guard references inside itself, otherwise
     ``registry → checks.dsh_boundary → dsh_contract → registry`` is a cycle
     (ADR-018 §8). Only the standard library is imported.
 
-Contract v2 (FEAT-113 S0, design §8.2.1) is **additive only**: the new keys
-(``own.overlay``, ``own.native.base_preset``, ``own.preset.render_provenance``,
-``own.render.persona_prefix``, ``host.planes``, ``host.home.discovery``,
-``host.apis.loader_ctx``) join ``REQUIRED_PATHS`` — a missing one is
-``ContractMalformed`` — and ``SUPPORTED_SCHEMA_VERSIONS`` becomes ``(2,)``: the
-in-package contract ships with its code, so a v1 document is
-``ContractSchemaUnknown`` (there is no legal v1 scenario; never parse it with
-v2 assumptions).
-
-**Deprecation representation (v2).** ``host.rows`` and ``own.preset.template``
-stay in ``REQUIRED_PATHS`` *and* are recorded as deprecated by a sidecar block
-in the contract itself — the single source, this module holds no second copy:
-
-    "deprecations": {
-      "_note": "...",
-      "entries": {"host.rows": {"deprecated_in": 2}, ...}
-    }
-
-"Required-but-deprecated" is a distinct state from "optional": a *missing*
-deprecated key is still ``ContractMalformed`` (otherwise a reader could not
-tell "the new contract" from "a broken contract" — §8.2.1 timing block); only
-the deprecation is recorded, and :func:`is_deprecated` reads it back. The
-physical removal of both keys is the S7 atomic retirement slice, not S0.
+The packaged v2 contract describes the governance-owned overlay and the
+host plane detection rules. The installed base supplies the host capability
+rows. Frozen host rows or a legacy composition template declaration are rejected.
 """
 
 from __future__ import annotations
@@ -97,21 +71,7 @@ CONTRACT_REL = "adapters/dsh/host-contract.json"
 #: `ContractSchemaUnknown` instead of being honored as "older but fine".
 SUPPORTED_SCHEMA_VERSIONS: Tuple[int, ...] = (2,)
 
-#: The eight fields §2.4 requires on every `host.rows[]` entry.
-_ROW_FIELDS = ("row_id", "package", "disabled_expr", "platform_conditional",
-               "enabled_on", "config_keys", "config_declared", "group")
-
-#: The recorded sub-block (§2.4, R0 F-5): present, flagged, empty in V1.
-_RECORDED_FIELDS = ("schema_export", "required_keys", "accepted_keys",
-                    "probe_result")
-
-#: Field table of §2.4, flattened to dotted paths. Presence is required; a
-#: `null` value is a legitimate "declared but not yet recorded/adjudicated".
-#: v2 (FEAT-113 §8.2.1) appends the new additive keys, and keeps two entries
-#: in a deliberately distinct state — "required-but-deprecated": `host.rows`
-#: and `own.preset.template` remain listed here (a missing one is malformed)
-#: while the `deprecations` sidecar records that each was deprecated in
-#: schema 2 (removal is the S7 slice; see `is_deprecated`).
+#: Required fields of the packaged host and governance overlay contract.
 REQUIRED_PATHS: Tuple[str, ...] = (
     "schema_version",
     "evidence.audit.id",
@@ -176,7 +136,6 @@ REQUIRED_PATHS: Tuple[str, ...] = (
     "host.row_contract.group_self_disabled_shortcircuit",
     "host.row_contract.ancestor_disabled_inherited",
     "host.row_contract.ctx_logger",
-    "host.rows",
     "host.skill_frontmatter.name_equals_filename",
     "host.skill_frontmatter.description_required",
     "host.skill_frontmatter.fence",
@@ -214,7 +173,6 @@ REQUIRED_PATHS: Tuple[str, ...] = (
     "own.overlay.allow_js",
     "own.preset.id",
     "own.preset.payload_dir",
-    "own.preset.template",
     "own.preset.metadata",
     "own.preset.version_marker",
     "own.preset.skill_root_marker",
@@ -398,41 +356,9 @@ def _validate(document: Any, path: Path) -> None:
     for dotted in REQUIRED_PATHS:
         if _resolve(document, dotted) is _MISSING:
             raise _fail_malformed(path, f"missing required field `{dotted}`")
-    rows = document["host"]["rows"]
-    if not isinstance(rows, list) or not rows:
-        raise _fail_malformed(path, "`host.rows` must be a non-empty list")
-    seen = set()
-    for row in rows:
-        if not isinstance(row, dict):
-            raise _fail_malformed(path, "every `host.rows[]` entry must be an object")
-        row_id = row.get("row_id")
-        if not isinstance(row_id, str) or not row_id:
-            raise _fail_malformed(path, "`host.rows[]` entries need a `row_id`")
-        for field in _ROW_FIELDS:
-            if field not in row:
-                raise _fail_malformed(
-                    path, f"missing required field `host.rows[{row_id}].{field}`")
-        recorded = row.get("recorded")
-        if not isinstance(recorded, dict):
-            raise _fail_malformed(
-                path, f"`host.rows[{row_id}].recorded` must be an object")
-        for field in _RECORDED_FIELDS:
-            if field not in recorded:
-                raise _fail_malformed(
-                    path,
-                    f"missing required field `host.rows[{row_id}].recorded.{field}`")
-        if recorded.get("source") != "recorded":
-            raise _fail_malformed(
-                path,
-                f"`host.rows[{row_id}].recorded.source` must be \"recorded\"")
-        if recorded.get("recorded") is not False:
-            raise _fail_malformed(
-                path,
-                f"`host.rows[{row_id}].recorded.recorded` must be false — "
-                f"present and exactly `false` in V1 (R0 F-5)")
-        if row_id in seen:
-            raise _fail_malformed(path, f"duplicate `host.rows[]` row_id `{row_id}`")
-        seen.add(row_id)
+    for retired in ("host.rows", "own.preset.template"):
+        if _resolve(document, retired) is not _MISSING:
+            raise _fail_malformed(path, f"retired frozen composition field `{retired}`")
     entries = document["coverage"]["entries"]
     if not isinstance(entries, list) or not entries:
         raise _fail_malformed(path, "`coverage.entries` must be a non-empty list")
@@ -450,9 +376,9 @@ def _validate(document: Any, path: Path) -> None:
     # the new keys is presence-only (REQUIRED_PATHS above), deliberately not
     # over-fitted: the values are normative data, not this module's business.
     overlay_rows = document["own"]["overlay"]["rows"]
-    if not _is_name_list(overlay_rows):
+    if overlay_rows != ["persona", "skill-filesystem"]:
         raise _fail_malformed(
-            path, "`own.overlay.rows` must be a non-empty list of row ids")
+            path, "`own.overlay.rows` must be exactly persona and skill-filesystem")
     precedence = document["host"]["planes"]["precedence"]
     if not _is_name_list(precedence):
         raise _fail_malformed(
@@ -476,9 +402,9 @@ def _validate(document: Any, path: Path) -> None:
     # `{deprecated_in: <int>}`. Shape only — which keys may be deprecated is
     # a contract-maintenance fact, not a validation rule.
     deprecations = document["deprecations"]["entries"]
-    if not isinstance(deprecations, dict) or not deprecations:
+    if not isinstance(deprecations, dict):
         raise _fail_malformed(
-            path, "`deprecations.entries` must be a non-empty object")
+            path, "`deprecations.entries` must be an object")
     for dotted, entry in deprecations.items():
         field = f"deprecations.entries[{dotted}]"
         if not isinstance(dotted, str) or not dotted:

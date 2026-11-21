@@ -168,572 +168,6 @@
       "ancestor_disabled_inherited": true,
       "ctx_logger": "optional"
     },
-    "rows": [
-      {
-        "row_id": "persona",
-        "package": "@deepseek-ai/dsh-persona",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "prefix"
-        ],
-        "config_declared": true,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "agent-instructions",
-        "package": "@deepseek-ai/dsh-agent-instructions",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "maxBytes"
-        ],
-        "config_declared": true,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-bash",
-        "package": "@deepseek-ai/dsh-tool-bash",
-        "disabled_expr": "!!js process.platform === 'win32'",
-        "platform_conditional": true,
-        "enabled_on": "posix",
-        "config_keys": [],
-        "config_declared": false,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-pwsh",
-        "package": "@deepseek-ai/dsh-tool-pwsh",
-        "disabled_expr": "!!js process.platform !== 'win32'",
-        "platform_conditional": true,
-        "enabled_on": "win32",
-        "config_keys": [],
-        "config_declared": false,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-fs",
-        "package": "@deepseek-ai/dsh-tool-fs",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-fs-search",
-        "package": "@deepseek-ai/dsh-tool-fs-search",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "sampleOverCapGlobResults"
-        ],
-        "config_declared": true,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-jobs",
-        "package": "@deepseek-ai/dsh-tool-jobs",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "skill-filesystem",
-        "package": "@deepseek-ai/dsh-skill-filesystem",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "customSkillDirs"
-        ],
-        "config_declared": true,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-skill",
-        "package": "@deepseek-ai/dsh-tool-skill",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-goal",
-        "package": "@deepseek-ai/dsh-tool-goal",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "planning",
-        "package": "cordis:group",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": null,
-        "config_keys": [],
-        "config_declared": true,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "plan-mode",
-        "package": "@deepseek-ai/dsh-plan-mode",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "section"
-        ],
-        "config_declared": true,
-        "group": "planning",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "compaction",
-        "package": "cordis:group",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": null,
-        "config_keys": [],
-        "config_declared": true,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "compaction-basic",
-        "package": "@deepseek-ai/dsh-compaction-basic",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": "compaction",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "command-compact",
-        "package": "@deepseek-ai/dsh-command-compact",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": "compaction",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-result-pruner",
-        "package": "@deepseek-ai/dsh-compaction-tool-result-pruner",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "thresholdChars",
-          "headChars",
-          "tailChars"
-        ],
-        "config_declared": true,
-        "group": "compaction",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "delegation",
-        "package": "cordis:group",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": null,
-        "config_keys": [],
-        "config_declared": true,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-subagent-control",
-        "package": "@deepseek-ai/dsh-tool-subagent-control",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": "delegation",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-subagent-list-agents",
-        "package": "@deepseek-ai/dsh-tool-subagent-control/list-agents",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": "delegation",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-subagent",
-        "package": "@deepseek-ai/dsh-tool-subagent",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "provider",
-          "toolName",
-          "backgroundMode"
-        ],
-        "config_declared": true,
-        "group": "delegation",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-subagent-fork",
-        "package": "@deepseek-ai/dsh-tool-subagent",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "provider",
-          "toolName",
-          "backgroundMode"
-        ],
-        "config_declared": true,
-        "group": "delegation",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-subagent-codex",
-        "package": "@deepseek-ai/dsh-tool-subagent",
-        "disabled_expr": "true",
-        "platform_conditional": false,
-        "enabled_on": "never",
-        "config_keys": [
-          "provider",
-          "toolName",
-          "enableRunInBackground",
-          "maxDepth"
-        ],
-        "config_declared": true,
-        "group": "delegation",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-subagent-claude-code",
-        "package": "@deepseek-ai/dsh-tool-subagent",
-        "disabled_expr": "true",
-        "platform_conditional": false,
-        "enabled_on": "never",
-        "config_keys": [
-          "provider",
-          "toolName",
-          "enableRunInBackground",
-          "maxDepth"
-        ],
-        "config_declared": true,
-        "group": "delegation",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "workflow-ptc",
-        "package": "@deepseek-ai/dsh-workflow-ptc",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "provider"
-        ],
-        "config_declared": true,
-        "group": "delegation",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-workflow",
-        "package": "@deepseek-ai/dsh-tool-workflow",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": "delegation",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-ralph",
-        "package": "@deepseek-ai/dsh-tool-ralph",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "subagentProvider",
-          "maxRounds"
-        ],
-        "config_declared": true,
-        "group": "delegation",
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-ask-user",
-        "package": "@deepseek-ai/dsh-tool-ask-user",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [],
-        "config_declared": false,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-todo",
-        "package": "@deepseek-ai/dsh-tool-todo",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "allowParallelInProgress"
-        ],
-        "config_declared": true,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      },
-      {
-        "row_id": "tool-web",
-        "package": "@deepseek-ai/dsh-tool-web",
-        "disabled_expr": null,
-        "platform_conditional": false,
-        "enabled_on": "any",
-        "config_keys": [
-          "fetch",
-          "searchTimeoutMs"
-        ],
-        "config_declared": true,
-        "group": null,
-        "recorded": {
-          "schema_export": null,
-          "required_keys": [],
-          "accepted_keys": [],
-          "probe_result": null,
-          "source": "recorded",
-          "recorded": false
-        }
-      }
-    ],
     "skill_frontmatter": {
       "name_equals_filename": true,
       "description_required": true,
@@ -795,14 +229,10 @@
         "web"
       ],
       "verification": "unverified (R-09)",
-      "evidence": "agent-presets/governance/agent.cordis.yml.template:96,194,266 （宿主组合注释）+ AUDIT-153 D-45；S5 默认 NOT_RUN（设计 §5.3 T-7）"
+      "evidence": "AUDIT-153 D-45 记录宿主 registry 分工；宿主压缩包、CLI 及注册面的现实状态由逐行探测和授权采集记录。"
     },
     "notes": {
-      "profile_declaration": "host-install-mechanism-not-ours",
-      "rows_field_semantics": "row_id = 组合行的 `- id:`；package = `name:`；group = 父 group id（顶层行 null）；group 容器行由 package == host.row_contract.builtin_group_name 标识；enabled_on ∈ {any, win32, posix, never, null}（null = group 容器行，非叶子）；config_declared = 存在 `config:` 键（group 行的值 = 子行序列）；config_keys = 非 group 行 config 映射的顶层键（group 行 []）；disabled_expr = `disabled:` 键的原始标量文本（无该键 = null）。",
-      "rows_recorded_subblock": "`recorded.{schema_export,required_keys,accepted_keys,probe_result}` 只由 `dsh-doctor --record-evidence` 在真实平面写入（设计 §2.4 R0 F-5）。V1 全空并标 `source: recorded` + `recorded: false`；人工誊抄 = 契约缺陷，不是数据。",
-      "rows_enabled_arithmetic": "29（平台无关全集 = 顶层 16 + 嵌套 13）− 3 group − 2 `disabled: true` − 1 平台短路 = 任一平台上 enabled 的 23 行（AUDIT-153 §1.1 rows_enabled，设计 §0.2 E-10②）。",
-      "platform_conditional_rows": "平台条件行的唯一载体 = `host.rows[].{platform_conditional, enabled_on, disabled_expr}`（设计 §2.4；R1 N-1 已闭合：不设任何派生字段、禁止第二来源）。"
+      "profile_declaration": "host-install-mechanism-not-ours"
     }
   },
   "own": {
@@ -822,6 +252,8 @@
         "commands/",
         "agents/",
         "adapters/dsh/",
+        "adapters/*/adapter-manifest.json",
+        "docs/reviews/review-FEAT-086-DESIGN-R0.md",
         "!**/__pycache__/",
         "!**/*.pyc",
         "cordis.patch.yml",
@@ -847,7 +279,10 @@
       "enforcement_guard": {
         "module": "lib/dsh-native/guard.js",
         "primitive": "ctx.tools.guard (monotonic, synchronous, capability-detected)",
-        "tool_face": ["subagent", "subagent_fork"],
+        "tool_face": [
+          "subagent",
+          "subagent_fork"
+        ],
         "rule": "revision-mismatch — mirror of infra/enforcement.py decide(); deny reason/remedy templates come from the single-source strategy projection lib/dsh-native/strategy-projection.json (byte-guarded against enforcement-check --print-strategy)",
         "switch": "GOVERNANCE_ENFORCEMENT — off registers nothing (zero-drift); an illegal value fails CLOSED, never guessed",
         "governance_root": "GOVERNANCE_REPO_ROOT only — the guard never guesses a default governance root",
@@ -865,7 +300,8 @@
         "exactly-one-insert-row",
         "no-id-update",
         "no-trust",
-        "no-!!js"
+        "no-!!js",
+        "insert-row-requires-id"
       ]
     },
     "overlay": {
@@ -881,7 +317,6 @@
     "preset": {
       "id": "governance",
       "payload_dir": "agent-presets/governance",
-      "template": "agent-presets/governance/agent.cordis.yml.template",
       "metadata": "agent-presets/governance/preset.yml",
       "version_marker": ".dsh-bundle-version",
       "skill_root_marker": "skill-root.txt",
@@ -1010,7 +445,7 @@
     "notes": {
       "core_to_adapter_edge": "core `infra/` 读 `adapters/dsh/host-contract.json` 是一条已登记的 core→adapter 数据边，被收窄为「一个访问器 + 一个数据文件」（ADR-018 D-2 / 设计 §2.3 BT-6）；若后续 DEC 要求迁移，成本 ≤3 处引用。",
       "single_source_of_truth": "消费方 MUST 从此处读取这些事实。契约已声明的字面量出现在消费代码里，即「契约外硬编码」（K-2，V2 落地）；唯一豁免通道是受棘轮预算约束的 allowlist（K-11，V8；本文件在 V2/V8 追加该块，V1 不含）。",
-      "recorded_slice": "记录式字段（evidence.* 的实测值与 host.rows[].recorded 子块）：实测经 V8 的 `--record-evidence` 单点采集到 factsheet（设计 §5.4），契约内的值由维护者在落地 factsheet 的同一受审提交中回填——探针不直改契约（DEC-193 / FIX-326③）。",
+      "recorded_slice": "evidence.* 由实测采集到 factsheet，契约中的实测值随受审变更更新。宿主预设行在运行时读取；维护者通过 dsh-doctor --record-evidence 获取可重放证据。",
       "paths_pending": "`own.paths_pending` 列出「已按设计声明、但所属切片尚未落地」的路径键（当前 = doctor，设计 §6.1 V8）。存在性判据 MUST 跳过这些键，其余 `own.paths.*` 全部必须存在且与实际一致（设计 §2.4）。"
     }
   },
@@ -1122,7 +557,7 @@
         "necessity": "necessary"
       },
       {
-        "subject": "host.rows",
+        "subject": "own.overlay.rows",
         "audit_ids": [
           "D-24",
           "D-25",
@@ -1160,7 +595,7 @@
         "necessity": "necessary"
       },
       {
-        "subject": "host.rows[plan-mode].config_keys",
+        "subject": "host.row_contract.config_field",
         "audit_ids": [
           "D-40",
           "D-76"
@@ -1472,7 +907,7 @@
         ],
         "target": "strong",
         "guard": [
-          "test_dsh_adapter.py::test_launch_render_is_pure_substitution",
+          "test_dsh_compat.py::test_misspelt_tokens_are_refused_by_both_shipped_forms",
           "test_dsh_adapter.py::test_js_and_python_renderers_agree"
         ],
         "negative_fixtures": [
@@ -2624,14 +2059,7 @@
     }
   },
   "deprecations": {
-    "_note": "FEAT-113 S0（契约 v2，设计 §8.2.1 时序块）：弃用 sidecar——`entries` 的键是契约内 dotted path，值为 `{deprecated_in: <int>}`。被列出的键仍留在 dsh_contract.REQUIRED_PATHS（「必填但已弃用」≠「可选」：缺失仍 ContractMalformed，读者无法区分「新契约」与「契约破损」）；本块只记录弃用事实，读取经 dsh_contract.is_deprecated()。物理删除 host.rows 与 own.preset.template 集中在 S7 退场原子切片（§10），S0–S6 期间全部读者保持原样。",
-    "entries": {
-      "host.rows": {
-        "deprecated_in": 2
-      },
-      "own.preset.template": {
-        "deprecated_in": 2
-      }
-    }
+    "_note": "Currently deprecated fields that remain readable in the shipped contract.",
+    "entries": {}
   }
 }

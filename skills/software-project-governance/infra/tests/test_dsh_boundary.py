@@ -345,132 +345,45 @@ class K2OutsideContractTests(RepoCase):
 # ══════════════════════════════════════════════════════════════════════════
 
 
-class K3TemplateRowTests(RepoCase):
+class K3OverlayTests(RepoCase):
+    def test_shipped_overlay_has_only_governance_rows(self):
+        subject = self.real_subject()
+        self.assertPasses(boundary.k3_overlay_shape(subject, self.contract_facts(subject)))
 
-    def setUp(self):
-        self.subject = self.real_subject()
-        self.facts = self.contract_facts(self.subject)
-        self.declared = self.facts.get("host.rows")
-        self.rows = boundary.parse_template_rows(
-            boundary._read(self.subject.template))
+    def test_foreign_row_and_changed_owned_content_fail(self):
+        good = (_PACKAGE_ROOT / "agent-presets/governance/overlay.cordis.yml").read_text(encoding="utf-8")
+        for bad in (good + "- id: tool-fs\n  name: foreign\n", good.replace("id: persona", "id: unexpected"),
+                    good.replace("customSkillDirs:", "unknown:"), good.replace("prefix: |", "prefix: !!js"),
+                    good.replace("__GOVERNANCE_PERSONA_BODY__", "new prompt"),
+                    good.replace("__GOVERNANCE_SHIMS_ROOT__", "__GOVERNANCE_SKILLS_ROOT__")):
+            with self.subTest(content=bad), tempfile.TemporaryDirectory() as tmp:
+                mutated = Path(tmp) / "overlay.yml"
+                mutated.write_text(bad, encoding="utf-8")
+                subject = boundary.Subject(_PACKAGE_ROOT, overlay=mutated)
+                self.assertEqual(boundary.k3_overlay_shape(subject, self.contract_facts(subject)).verdict, "FAIL")
 
-    def test_positive_the_two_sides_agree_on_the_full_set(self):
-        self.assertPasses(boundary.k3_template_rows_match_contract(
-            self.subject, self.facts))
-
-    def test_positive_the_row_set_is_the_documented_29(self):
-        ids = [row["row_id"] for row in self.rows]
-        self.assertEqual(len(ids), boundary.EXPECTED_ROW_TOTAL)
-        self.assertEqual(len(ids), len(set(ids)))
-        self.assertEqual(len(self.declared), boundary.EXPECTED_ROW_TOTAL)
-        self.assertEqual(sorted(ids), sorted(row["row_id"] for row in self.declared))
-
-    def test_positive_platform_and_disabled_rows_are_visible_on_both_sides(self):
-        template_platform = {row["row_id"] for row in self.rows
-                             if boundary.platform_conditional_of(row)}
-        declared_platform = {row["row_id"] for row in self.declared
-                             if row["platform_conditional"]}
-        self.assertEqual(template_platform, declared_platform)
-        self.assertEqual(template_platform, {"tool-bash", "tool-pwsh"})
-        declared_disabled = {row["row_id"] for row in self.declared
-                             if row["disabled_expr"] == "true"}
-        self.assertEqual(declared_disabled,
-                         {"tool-subagent-codex", "tool-subagent-claude-code"})
-
-    def test_negative_a_row_only_the_template_has_is_named(self):
-        text = boundary._read(self.subject.template)
-        text = text.replace(
-            "- id: tool-skill\n",
-            "- id: tool-skill\n"
-            "  name: '@deepseek-ai/dsh-tool-skill'\n"
-            "- id: tool-ghost\n"
-            "  name: '@deepseek-ai/dsh-tool-ghost'\n", 1)
-        rows = boundary.parse_template_rows(text)
-        self.assertEqual(len(rows), boundary.EXPECTED_ROW_TOTAL + 1)
-        mismatches = boundary.template_row_mismatches(rows, self.declared)
-        self.assertIn("template row not in contract: tool-ghost", mismatches)
-
-    def test_negative_a_row_only_the_contract_has_is_named(self):
-        # Drop `tool-skill` from the template text: the contract still declares
-        # it, so the one-sided addition is named from the template's side.
-        text = boundary._read(self.subject.template).replace(
-            "- id: tool-skill\n"
-            "  name: '@deepseek-ai/dsh-tool-skill'\n", "", 1)
-        rows = boundary.parse_template_rows(text)
-        self.assertEqual(len(rows), boundary.EXPECTED_ROW_TOTAL - 1)
-        mismatches = boundary.template_row_mismatches(rows, self.declared)
-        self.assertIn("contract row absent from template: tool-skill", mismatches)
-
-    def test_negative_a_changed_config_key_set_is_a_field_level_finding(self):
-        declared = json.loads(json.dumps(self.declared))
-        for row in declared:
-            if row["row_id"] == "persona":
-                row["config_keys"] = ["prefix", "ghostKey"]
-        mismatches = boundary.template_row_mismatches(self.rows, declared)
-        self.assertTrue(any(item.startswith("persona.config_keys:")
-                            for item in mismatches), mismatches)
-
-    def test_negative_a_renamed_package_is_a_field_level_finding(self):
-        declared = json.loads(json.dumps(self.declared))
-        for row in declared:
-            if row["row_id"] == "persona":
-                row["package"] = "@deepseek-ai/dsh-persona-renamed"
-        mismatches = boundary.template_row_mismatches(self.rows, declared)
-        self.assertTrue(any(item.startswith("persona.package:")
-                            for item in mismatches), mismatches)
-
-    def test_negative_a_removed_disabled_form_is_visible_in_both_directions(self):
-        declared = json.loads(json.dumps(self.declared))
-        for row in declared:
-            if row["row_id"] == "tool-subagent-codex":
-                row["disabled_expr"] = None
-                row["enabled_on"] = "any"
-        mismatches = boundary.template_row_mismatches(self.rows, declared)
-        self.assertTrue(any("tool-subagent-codex.disabled_expr" in item
-                            for item in mismatches), mismatches)
-        self.assertTrue(any("tool-subagent-codex.enabled_on" in item
-                            for item in mismatches), mismatches)
-
-    def test_a_row_at_an_undeclared_indent_is_rejected_not_absorbed(self):
-        text = boundary._read(self.subject.template) + \
-            "\n  - id: stray-at-indent-2\n"
-        with self.assertRaises(ValueError) as caught:
-            boundary.parse_template_rows(text, origin="mutant")
-        self.assertIn("unexpected indent 2", str(caught.exception))
-
-    def test_a_nested_row_without_a_group_is_rejected(self):
-        with self.assertRaises(ValueError) as caught:
-            boundary.link_template_rows(
-                [{"row_id": "orphan", "indent": 4, "is_group": False,
-                  "children": []}])
-        self.assertIn("nested but no top-level group", str(caught.exception))
-
-    def test_negative_a_broken_template_fails_the_criterion_end_to_end(self):
+    def test_plane_binding_cannot_be_satisfied_by_a_comment(self):
+        facts = self.contract_facts(self.real_subject())
         with tempfile.TemporaryDirectory() as tmp:
-            mutated = Path(tmp) / "agent.cordis.yml.template"
-            text = boundary._read(self.subject.template).replace(
-                "  name: '@deepseek-ai/dsh-persona'\n",
-                "  name: '@deepseek-ai/dsh-persona-mutated'\n", 1)
-            self.assertNotEqual(text, boundary._read(self.subject.template))
-            mutated.write_text(text, encoding="utf-8")
-            subject = boundary.Subject(_PACKAGE_ROOT, template=mutated)
-            criterion = boundary.k3_template_rows_match_contract(
-                subject, self.contract_facts(subject))
-            self.assertFails(criterion, "persona.package")
+            root = Path(tmp)
+            sources = Path("skills/software-project-governance/infra")
+            (root / sources).mkdir(parents=True)
+            for module in ("dsh_plane.py", "dsh_asar.py"):
+                text = (_PACKAGE_ROOT / sources / module).read_text(encoding="utf-8")
+                if module == "dsh_plane.py":
+                    text = text.replace('"host.planes.precedence",', '"different", # host.planes.precedence')
+                (root / sources / module).write_text(text, encoding="utf-8")
+            criterion = boundary.k14_plane_reader_bindings(boundary.Subject(root), facts)
+            self.assertFails(criterion, "host.planes.precedence")
 
-    def test_negative_a_broken_contract_fails_the_criterion_end_to_end(self):
+    def test_retired_frozen_composition_is_rejected(self):
+        facts = self.contract_facts(self.real_subject())
         with tempfile.TemporaryDirectory() as tmp:
-            document = json.loads(
-                (_PACKAGE_ROOT / dsh_contract.CONTRACT_REL).read_text(encoding="utf-8"))
-            for row in document["host"]["rows"]:
-                if row["row_id"] == "persona":
-                    row["config_keys"] = ["prefix", "ghostKey"]
-            contract = Path(tmp) / "host-contract.json"
-            contract.write_text(json.dumps(document), encoding="utf-8")
-            subject = boundary.Subject(_PACKAGE_ROOT, contract=contract)
-            criterion = boundary.k3_template_rows_match_contract(
-                subject, self.contract_facts(subject))
-            self.assertFails(criterion, "persona.config_keys")
+            root = Path(tmp)
+            legacy = root / facts.get("own.preset.payload_dir") / "agent.cordis.yml.template"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("[]", encoding="utf-8")
+            self.assertFails(boundary.k3_overlay_shape(boundary.Subject(root), facts), "frozen host")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -491,25 +404,25 @@ class K4TokenTests(RepoCase):
 
     def test_negative_a_misspelt_token_in_the_template_names_the_token(self):
         with tempfile.TemporaryDirectory() as tmp:
-            text = boundary._read(boundary.Subject(_PACKAGE_ROOT).template)
+            text = boundary._read(_PACKAGE_ROOT / "agent-presets/governance/overlay.cordis.yml")
             mutated = Path(tmp) / "template.yml"
             mutated.write_text(
                 text.replace("__GOVERNANCE_SKILLS_ROOT__",
                              "__GOVERNANCE_SKILLS_ROOTS__"),
                 encoding="utf-8")
-            subject = boundary.Subject(_PACKAGE_ROOT, template=mutated)
+            subject = boundary.Subject(_PACKAGE_ROOT, overlay=mutated)
             criterion = boundary.k4_tokens_match(subject, self.contract_facts(subject))
             self.assertFails(criterion,
                              "unknown token in template: __GOVERNANCE_SKILLS_ROOTS__")
 
     def test_negative_a_declared_token_missing_from_the_template_is_named(self):
         with tempfile.TemporaryDirectory() as tmp:
-            text = boundary._read(boundary.Subject(_PACKAGE_ROOT).template)
+            text = boundary._read(_PACKAGE_ROOT / "agent-presets/governance/overlay.cordis.yml")
             mutated = Path(tmp) / "template.yml"
             mutated.write_text(
                 text.replace("__GOVERNANCE_SHIMS_ROOT__", "adapters/dsh/skill-shims"),
                 encoding="utf-8")
-            subject = boundary.Subject(_PACKAGE_ROOT, template=mutated)
+            subject = boundary.Subject(_PACKAGE_ROOT, overlay=mutated)
             criterion = boundary.k4_tokens_match(subject, self.contract_facts(subject))
             self.assertFails(criterion,
                              "contract token absent from template: "
@@ -598,6 +511,12 @@ class K6PatchShapeTests(RepoCase):
     def test_positive_the_shipped_patch_holds_all_four_invariants(self):
         subject = self.real_subject()
         self.assertPasses(boundary.k6_patch_shape(subject, self.contract_facts(subject)))
+
+    def test_insert_requires_its_own_id_not_a_nested_id(self):
+        row = "- insert:\n    - name: plugin\n      config:\n        id: impostor\n"
+        self.assertTrue(boundary.patch_shape_findings(row, ["insert-row-requires-id"]))
+        self.assertEqual(boundary.patch_shape_findings(row.replace("- name:", "- id: own\n      name:"),
+                                                      ["insert-row-requires-id"]), [])
 
     def test_positive_the_patch_carries_exactly_one_top_level_insert_row(self):
         text = boundary._read(boundary.Subject(_PACKAGE_ROOT).patch)

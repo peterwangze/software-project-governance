@@ -42,7 +42,7 @@ _INFRA_DIR = _HERE.parent
 _REPO_ROOT = _INFRA_DIR.parents[2]
 
 TEMPLATE = (_REPO_ROOT / "agent-presets" / "governance"
-            / "agent.cordis.yml.template")
+            / "overlay.cordis.yml")
 PATCH_FILE = _REPO_ROOT / "cordis.patch.yml"
 
 # Modules measured by AUDIT-153 (see its §2.4 / §2.8 evidence column):
@@ -73,7 +73,9 @@ THROWING_GROUP_EXPR = '!!js "(() => { throw new Error(\'group-boom\') })()"'
 
 def _template_text():
     """The shipped composition template, CRLF-normalized (LF only)."""
-    return (TEMPLATE.read_bytes().decode("utf-8").replace("\r\n", "\n"))
+    overlay = TEMPLATE.read_text(encoding="utf-8")
+    body = TEMPLATE.with_name("persona.md.template").read_text(encoding="utf-8")
+    return overlay.replace("__GOVERNANCE_PERSONA_BODY__", body.strip().replace("\n", "\n      "))
 
 
 def _patch_text():
@@ -173,8 +175,8 @@ def _fixture_same_indent_custom_skill_dirs():
     return _replace_once(
         template,
         "    customSkillDirs:\n"
-        "      - '__GOVERNANCE_SKILLS_ROOT__'\n"
-        "      - '__GOVERNANCE_SHIMS_ROOT__'\n",
+        "      - __GOVERNANCE_SKILLS_ROOT__\n"
+        "      - __GOVERNANCE_SHIMS_ROOT__\n",
         block)
 
 
@@ -183,7 +185,7 @@ def _fixture_relative_skill_dir():
     the dsh process CWD, it silently empties the catalog (§2.3 / G-05 area)."""
     template = _template_text()
     return _replace_once(
-        template, "      - '__GOVERNANCE_SHIMS_ROOT__'\n",
+        template, "      - __GOVERNANCE_SHIMS_ROOT__\n",
         "      - 'adapters/dsh/skill-shims'\n")
 
 

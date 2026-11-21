@@ -144,6 +144,14 @@ _ANCHOR = "@deepseek-ai/dsh/package.json"
 class PrecedenceTests(unittest.TestCase):
     """§3.2: the order is exactly the contract's `host.planes.precedence`."""
 
+    def test_explicit_archive_paths_preserve_posix_and_unc_roots(self):
+        for archive in ("/opt/dsh/resources/app.asar", "//server/share/resources/app.asar"):
+            with self.subTest(archive=archive):
+                anchor = dsh_plane._join(archive, "dsh", "node_modules")
+                self.assertEqual(anchor, archive + "/dsh/node_modules")
+                self.assertEqual(dsh_plane._split_asar_component(anchor),
+                                 (archive, ("dsh", "node_modules")))
+
     def test_every_source_contributing_produces_planes_in_contract_order(self):
         fs = _FakeFs()
         app, asar = _desktop_app(fs, root="D:/app/dsh")

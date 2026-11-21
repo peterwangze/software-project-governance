@@ -427,71 +427,62 @@ def stage_s1_delivery(ctx: Context) -> StageOutcome:
         "version_marker": marker,
     }
     if preset_dir is None:
-        outcome.verdict = VERDICT_NOT_RUN
         outcome.reason = "no resolved DSH_HOME — the delivery plane is unknown"
-        outcome.remediation.append(_remediation(
-            "restart dsh so the bundle host row renders the preset, then "
-            "re-run the doctor with DSH_HOME resolvable",
-            "restart dsh (ensurePreset re-renders by package version)",
-            "the preset directory exists and carries the version marker"))
         return outcome
-    outcome.evidence.append(_evidence(
-        "file", str(preset_dir), "preset directory (redirected DSH_HOME)"))
-    if not preset_dir.is_dir():
-        outcome.verdict = VERDICT_FAIL
-        outcome.reason = (f"the preset directory {preset_dir} does not exist — "
-                          f"the host row has not rendered the preset")
-        outcome.findings.append(outcome.reason)
-        outcome.remediation.append(_remediation(
-            "restart dsh so the bundle host row renders the preset",
-            "restart dsh (ensurePreset re-renders by package version)",
-            f"{preset_dir} exists and carries {marker}"))
-        return outcome
-    marker_path = preset_dir / marker
+
+    def finding(code, detail):
+        outcome.credible_face.setdefault("codes", []).append(code)
+        outcome.findings.append(f"{code}: {detail}")
+
+    outcome.evidence.append(_evidence("file", str(preset_dir), "directory delivery target"))
     declared = _package_version(ctx.root)
-    installed = _read(marker_path).strip()
-    outcome.credible_face["marker_version"] = installed or None
-    outcome.credible_face["package_version"] = declared
-    if not installed:
-        outcome.verdict = VERDICT_FAIL
-        outcome.reason = (f"the version marker {marker} is missing from "
-                          f"{preset_dir}")
-        outcome.findings.append(outcome.reason)
-        outcome.remediation.append(_remediation(
-            "re-render the preset by restarting dsh",
-            "restart dsh (ensurePreset rewrites the version marker)",
-            f"{marker_path} names version {declared}"))
-        return outcome
-    if declared and installed != declared:
-        outcome.verdict = VERDICT_FAIL
-        outcome.reason = (f"installed preset version {installed!r} != package "
-                          f"version {declared!r} — the preset is stale")
-        outcome.findings.append(outcome.reason)
-        outcome.remediation.append(_remediation(
-            "refresh the preset to this package version by restarting dsh",
-            "restart dsh (ensurePreset re-renders when the version differs)",
-            f"{marker_path} names version {declared}"))
-        return outcome
+    marker_path = preset_dir / marker
+    version = _read(marker_path).strip()
     skill_root = preset_dir / skill_marker
-    outcome.credible_face["skill_root_marker"] = (
-        skill_root.as_posix() if skill_root.is_file() else None)
-    if not skill_root.is_file():
+    composition = preset_dir / _get(facts, "host.home.composition_file", "agent.cordis.yml")
+    provenance_spec = facts["own"]["preset"]["render_provenance"]
+    sidecar = preset_dir / provenance_spec["filename"]
+    outcome.credible_face.update(marker_version=version or None, package_version=declared,
+                                 skill_root_marker=str(skill_root) if skill_root.is_file() else None)
+    if not preset_dir.is_dir():
+        finding("DIRECTORY_ABSENT", f"preset directory {preset_dir} does not exist")
+    elif not version:
+        finding("VERSION_MISSING", f"version marker {marker} is missing")
+    elif declared != version:
+        finding("VERSION_MISMATCH", f"installed preset version {version!r} is stale; package {declared!r}")
+    if preset_dir.is_dir() and not skill_root.is_file():
+        finding("SKILL_ROOT_MISSING", f"skill-root marker {skill_marker} is missing")
+    if preset_dir.is_dir() and not composition.is_file():
+        finding("COMPOSITION_MISSING", f"composition file {composition.name} is missing")
+    if composition.is_file():
+        from dsh_doctor_delivery import inspect_composition
+        inspected, findings = inspect_composition(
+            ctx, composition, sidecar, provenance_spec, declared,
+            {composition.name, "preset.yml", marker, skill_marker})
+        outcome.credible_face.update(inspected)
+        for code, detail in findings:
+            finding(code, detail)
+
+    codes = outcome.credible_face.get("codes", [])
+    informational = {"PROVENANCE_ABSENT", "PLANE_UNAVAILABLE", "PLANE_VERSION_DRIFT"}
+    if any(code not in informational for code in codes):
         outcome.verdict = VERDICT_FAIL
-        outcome.reason = (f"the skill-root marker {skill_marker} is missing — "
-                          f"installed hooks cannot find the workflow home")
-        outcome.findings.append(outcome.reason)
+    elif "PROVENANCE_ABSENT" in codes or "PLANE_UNAVAILABLE" in codes:
+        outcome.verdict = VERDICT_NOT_RUN
+    else:
+        outcome.verdict = VERDICT_PASS
+    if codes:
+        outcome.reason = "; ".join(outcome.findings)
         outcome.remediation.append(_remediation(
-            "re-render the preset by restarting dsh so the marker is written",
-            "restart dsh (ensurePreset rewrites the skill-root marker)",
-            f"{skill_root} exists and names the workflow home"))
-        return outcome
-    outcome.verdict = VERDICT_PASS
-    outcome.reason = (f"preset {preset_id!r} installed at {preset_dir} with "
-                      f"version {installed} and the skill-root marker — "
-                      f"{RESOLUTION_ONLY}")
-    outcome.evidence.append(_evidence(
-        "file", str(marker_path), f"version {installed}"))
+            "Preserve this directory and local edits. Point DSH_HOME to a separate test "
+            "directory and render against the intended DSH installation. Compare the "
+            "composition and provenance before adopting it. Native presets register at activation.",
+            "python adapters/dsh/launch.py --install",
+            "the isolated preset matches the selected host and carries render provenance"))
+    else:
+        outcome.reason = f"preset {preset_id!r} matches its recorded content and version — {RESOLUTION_ONLY}"
     return outcome
+
 
 
 # ── S2 ──────────────────────────────────────────────────────────────────────
@@ -521,10 +512,8 @@ def stage_s2_rows(ctx: Context, compat_runner: Optional[Callable[[], Dict[str, A
                   ) -> StageOutcome:
     """S2 — the row/config schema plane, projected from Check 28v (never recomputed).
 
-    Under ``--offline`` the 28v run still happens (it is a file-level
-    judgment over *our own* compositions; only the schema resolution needs node)
-    and degrades to its own ``NOT_RUN`` when node or the plane is missing —
-    which is a disclosure, not a doctor FAIL.
+    Offline suppresses 28v subprocesses. Online, an installed preset is
+    the first target; otherwise 28v examines the requested project.
     """
     outcome = StageOutcome("S2", "row/config schema", VERDICT_NOT_RUN, "")
     if compat_runner is None:
@@ -540,7 +529,11 @@ def stage_s2_rows(ctx: Context, compat_runner: Optional[Callable[[], Dict[str, A
         return outcome
     report = compat_runner()
     coverage = _projected_coverage(report)
-    outcome.credible_face = coverage
+    outcome.credible_face = dict(coverage)
+    if report.get("install"):
+        outcome.credible_face["install"] = report["install"]
+    if report.get("compositions"):
+        outcome.credible_face["compositions"] = [item.get("path") for item in report["compositions"]]
     rows_unverified = coverage.get("rows_unverified")
     unreadable = coverage.get("unreadable_compositions")
     outcome.evidence.append(_evidence(
@@ -591,16 +584,19 @@ def _default_compat_runner(ctx: Context) -> Optional[Callable[[], Dict[str, Any]
     """
     if ctx.offline or not ctx.subprocess_allowed:
         return None
-    if _which("node") is None:
-        return None
-
     def runner() -> Dict[str, Any]:
         infra = Path(__file__).resolve().parent
         if str(infra) not in sys.path:
             sys.path.insert(0, str(infra))
         import dsh_compat  # noqa: PLC0415 — deliberate, lazy
 
-        return dsh_compat.check_dsh_preset_compat()
+        facts = _contract_facts()
+        home = facts["host"]["home"]
+        installed = (ctx.dsh_home / home["user_preset_dir"] / facts["own"]["preset"]["id"]
+                     / home["composition_file"]) if ctx.dsh_home else None
+        target = [installed] if installed and installed.is_file() else None
+        root = None if target is None and ctx.root.resolve() == _repo_root() else ctx.root
+        return dsh_compat.check_dsh_preset_compat(root, env=ctx.env, compositions=target)
 
     return runner
 
@@ -637,6 +633,9 @@ def stage_s3_plane(ctx: Context) -> StageOutcome:
         "plane_source": _get(facts, "evidence.plane.source"),
         "dsh_home": str(ctx.dsh_home) if ctx.dsh_home else None,
     })
+    if not ctx.offline:
+        import dsh_plane
+        outcome.credible_face["plane_identities"] = [plane.identity() for plane in dsh_plane.resolve(ctx.env)]
     if failed:
         k7 = (boundary["entries"][0] or {})
         outcome.verdict = VERDICT_FAIL
@@ -808,7 +807,7 @@ def _compare_versions(left: Tuple[int, ...], right: Tuple[int, ...]) -> int:
 def stage_s4_render(ctx: Context) -> StageOutcome:
     """S4 — the render/parity face: two renderers, one byte sequence.
 
-    The Python half is the launcher's **own** ``render_composition()``, loaded
+    The Python half is the launcher's **own** ``render_overlay()``, loaded
     from the file rather than re-substituted here: a second token loop would be
     a second implementation, and "two implementations agree with each other" is
     not the fact this stage exists to establish (it is "the two *delivery paths*
@@ -823,8 +822,7 @@ def stage_s4_render(ctx: Context) -> StageOutcome:
     facts = _contract_facts()
     tokens = _get(facts, "own.render.tokens", {})
     leftover_pattern = _get(facts, "own.render.leftover_scan", "__[A-Za-z0-9_]+__")
-    template = ctx.root / _get(facts, "own.preset.template",
-                               "agent-presets/governance/agent.cordis.yml.template")
+    template = ctx.root / facts["own"]["overlay"]["path"]
     text = _read(template)
     outcome.credible_face = {
         "template": template.as_posix(),
@@ -906,7 +904,7 @@ def stage_s4_render(ctx: Context) -> StageOutcome:
             "identical sha256 from both renderers"))
         return outcome
     outcome.verdict = VERDICT_PASS
-    outcome.reason = (f"both renderers produce byte-identical output "
+    outcome.reason = (f"both renderers produce byte-identical governance overlay output "
                       f"(sha256 {python_hash[:16]}…); no token residue")
     outcome.evidence.append(_evidence("test", "renderer parity",
                                       f"sha256 {python_hash}"))
@@ -918,7 +916,7 @@ def stage_s4_render(ctx: Context) -> StageOutcome:
 
 
 def _python_render(root: Path) -> str:
-    """The launcher's own ``render_composition()``, loaded from its file.
+    """The launcher's own ``render_overlay()``, loaded from its file.
 
     Imported by path (not via ``sys.path``) so this module never shadows or is
     shadowed by the launcher, and never triggers the harness's host-row module.
@@ -932,7 +930,7 @@ def _python_render(root: Path) -> str:
     spec = importlib.util.spec_from_file_location("_spg_launch_render", launcher)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.render_composition()
+    return module.render_overlay()
 
 
 def _sha256_text(text: str) -> str:
@@ -1541,13 +1539,19 @@ def rehearse(candidate_path: Path, baseline_path: Path,
 
     base_rows = _factsheet_rows(baseline)
     cand_rows = _factsheet_rows(candidate)
-    for row_id in sorted(set(base_rows) - set(cand_rows)):
-        record("contract", f"row:{row_id}",
-               "row disappeared from the candidate plane",
-               _synthetic(candidate, row_id))
+    comparable = True
+    for label, sheet in (("baseline", baseline), ("candidate", candidate)):
+        observation = sheet.get("row_observation") or {}
+        if observation.get("verdict") == VERDICT_NOT_RUN:
+            findings.append(f"{label} row observation was NOT_RUN: {observation.get('reason')}")
+            comparable = False
+    if comparable:
+        for row_id in sorted(set(base_rows) - set(cand_rows)):
+            record("contract", f"row:{row_id}",
+                   "row disappeared from the candidate plane", _synthetic(candidate, row_id))
     for row_id in sorted(set(base_rows) & set(cand_rows)):
         base_row, cand_row = base_rows[row_id], cand_rows[row_id]
-        if base_row.get("resolved") and not cand_row.get("resolved"):
+        if base_row.get("resolved") is True and cand_row.get("resolved") is False:
             record("contract", f"row:{row_id}",
                    "module no longer resolves", _synthetic(candidate, row_id))
         if base_row.get("probe_result") != "reject" and cand_row.get("probe_result") == "reject":
@@ -1683,13 +1687,8 @@ def record_evidence(root: Optional[Path] = None,
     cli_version = install.get("dsh_version")
     if not cli_version:
         cli_version = _read_cli_version(install)
-    facts = _contract_facts()
-    composition = (root / _get(facts, "own.preset.template",
-                              "agent-presets/governance/agent.cordis.yml.template"))
-    compositions = []
-    if composition.is_file():
-        compositions = [composition.relative_to(root).as_posix()]
     captured_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows, row_observation = _record_rows(root, env)
     document = {
         "schema_version": 1,
         "dsh_version": cli_version,
@@ -1701,10 +1700,12 @@ def record_evidence(root: Optional[Path] = None,
         "plane": {
             "source": install.get("source"),
             "node_modules": str(node_modules) if node_modules else None,
+            "identity": install.get("selected_plane"),
         },
         "oracle_packages": packages,
         "api_symbols": sorted(dsh_compat.oracle_api_symbols()),
-        "rows": _record_rows(root, env),
+        "rows": rows,
+        "row_observation": row_observation,
         # True of this command in every invocation, isolated or not: it reads
         # the plane it resolved (named in `provenance`/`plane`) and writes only
         # the file named by `--out`. The *requirement* to redirect `DSH_HOME`
@@ -1802,52 +1803,39 @@ def _read_cli_version(install: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _record_rows(root: Path, env: Dict[str, str]) -> List[Dict[str, Any]]:
+def _record_rows(root: Path, env: Dict[str, str]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Per-row recorded facts for the compositions this package ships.
 
-    Uses the guard's compatibility report when it can run (it is the component
-    that knows a row's module and schema); otherwise records the declared row
-    set with ``resolved: null`` — never a hand-written claim about a module.
+    Preserve only observations from the guard; an unavailable composition
+    contributes no rows. Unchecked schema results remain unknown.
     """
-    facts = _contract_facts()
-    declared = [row.get("row_id") for row in _get(facts, "host.rows", []) or []]
     records: List[Dict[str, Any]] = []
     report: Dict[str, Any] = {}
     try:
-        if _which("node"):
-            infra = Path(__file__).resolve().parent
-            if str(infra) not in sys.path:
-                sys.path.insert(0, str(infra))
-            import dsh_compat  # noqa: PLC0415 — deliberate, lazy
-
-            report = dsh_compat.check_dsh_preset_compat(root, env=env)
-    except Exception:
-        report = {}
+        import dsh_compat
+        project = None if root.resolve() == _repo_root() else root
+        report = dsh_compat.check_dsh_preset_compat(project, env=env)
+    except Exception as error:
+        return [], {"verdict": VERDICT_NOT_RUN, "reason": str(error)}
     seen: Dict[str, Dict[str, Any]] = {}
     for composition in report.get("compositions") or ():
         for row in composition.get("rows") or ():
             row_id = row.get("row")
             if row_id and row_id not in seen:
                 seen[row_id] = row
-    for row_id in declared:
-        if row_id is None:
-            continue
-        measured = seen.get(row_id) or {}
+    for row_id, measured in seen.items():
         kind = measured.get("kind")
+        resolved = {"PASS": True, "NO_SCHEMA": True, "CONFIG_INVALID": True,
+                    "MODULE_UNRESOLVED": False}.get(kind)
         records.append({
-            "row_id": row_id,
-            "module": measured.get("name"),
-            "resolved": None if not measured else kind not in
-                        ("MODULE_UNRESOLVED", "IMPORT_ERROR"),
-            "config_export": None if not measured else kind != "NO_SCHEMA",
-            "accepted_keys": [],
-            "required_keys": [],
-            "probe_result": (None if not measured else
-                             ("reject" if kind not in ("PASS", "NO_SCHEMA", "BUILTIN")
-                              else "accept")),
-            "source": "recorded",
+            "row_id": row_id, "module": measured.get("name"), "kind": kind,
+            "resolved": resolved,
+            "config_export": {"PASS": True, "NO_SCHEMA": False, "CONFIG_INVALID": True}.get(kind),
+            "probe_result": {"PASS": "accept", "CONFIG_INVALID": "reject"}.get(kind),
+            "accepted_keys": [], "required_keys": [], "source": "recorded",
         })
-    return records
+    return records, {"verdict": report.get("verdict", VERDICT_NOT_RUN),
+                     "reason": report.get("reason"), "coverage": _projected_coverage(report)}
 
 
 # ── rendering + CLI ─────────────────────────────────────────────────────────

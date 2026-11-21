@@ -1,0 +1,325 @@
+#!/bin/bash
+# pre-commit governance hook — installed by software-project-governance
+# Runs BEFORE every git commit. BLOCKS commits that don't meet governance criteria.
+# Handles FILE-DEPENDENT checks only. Message-dependent checks are in commit-msg (FIX-047).
+# Design assumption: agent WILL NOT follow rules voluntarily. System MUST enforce.
+# @version: 0.37.0
+
+set -e
+
+# --- Product code detection (shared by Step 7 and Step 9) ---
+# Detects whether staged files include product code (as opposed to governance records).
+# Usage: if is_product_code "$file_list"; then ... fi
+# Returns 0 (true) if product code detected, 1 (false) otherwise.
+# Definition: aligned with SKILL.md "产品代码 vs 治理记录边界" and M1.2.
+is_product_code() {
+    local files="$1"
+    local file
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        case "$file" in
+            skills/*|agents/*|commands/*|core/*|infra/*|references/*|adapters/*|.claude-plugin/*|.codex-plugin/*|.agents/*)
+                return 0 ;;
+        esac
+    done <<< "$files"
+    return 1
+}
+
+is_claude_bootstrap_self_upgrade() {
+    local files="$1"
+
+    # Workflow developers changing the canonical template and dogfood
+    # CLAUDE.md together are already on the intended path.
+    if echo "$files" | grep -q "^commands/governance-init.md$"; then
+        return 0
+    fi
+
+    # User/plugin upgrade path: bootstrap self-upgrade updates CLAUDE.md plus
+    # plan-tracker workflow version. Allow it when the staged plan-tracker
+    # version matches the installed SKILL version and the staged CLAUDE.md
+    # still contains the governance bootstrap marker.
+    if ! echo "$files" | grep -q "^\.governance/plan-tracker.md$"; then
+        return 1
+    fi
+
+    local source_ver
+    source_ver=$(grep -E '^version:' "$REPO_ROOT/skills/software-project-governance/SKILL.md" 2>/dev/null | head -1 | sed 's/version:[[:space:]]*//')
+    [ -z "$source_ver" ] && return 1
+
+    if ! git show ":CLAUDE.md" 2>/dev/null | grep -q "## Governance Bootstrap"; then
+        return 1
+    fi
+
+    local staged_plan_ver
+    staged_plan_ver=$(git show ":.governance/plan-tracker.md" 2>/dev/null | grep -E "工作流版本" | head -1 | sed -E "s/.*工作流版本[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/")
+    if [ "$staged_plan_ver" != "$source_ver" ]; then
+        return 1
+    fi
+
+    local head_plan_ver
+    head_plan_ver=$(git show "HEAD:.governance/plan-tracker.md" 2>/dev/null | grep -E "工作流版本" | head -1 | sed -E "s/.*工作流版本[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/" || true)
+    if [ -z "$head_plan_ver" ] || [ "$head_plan_ver" = "$source_ver" ]; then
+        return 1
+    fi
+
+    local head_non_bootstrap
+    local staged_non_bootstrap
+    head_non_bootstrap=$(git show "HEAD:CLAUDE.md" 2>/dev/null | awk '
+        /^## Governance Bootstrap/ { in_bootstrap=1; next }
+        /^## 当前项目治理状态快速入口/ { in_bootstrap=0 }
+        !in_bootstrap { print }
+    ' || true)
+    staged_non_bootstrap=$(git show ":CLAUDE.md" 2>/dev/null | awk '
+        /^## Governance Bootstrap/ { in_bootstrap=1; next }
+        /^## 当前项目治理状态快速入口/ { in_bootstrap=0 }
+        !in_bootstrap { print }
+    ' || true)
+    if [ "$head_non_bootstrap" != "$staged_non_bootstrap" ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+
+# --- Step 0: Hook self-upgrade check (FIX-046) ---
+# When workflow version bumps, hooks in .git/hooks/ may be outdated.
+# Compare installed hook vs source hook; auto-copy if different, then restart.
+# Bash has already loaded this script into memory, so overwriting $0 is safe.
+HOOK_NAME=$(basename "$0")
+SOURCE_HOOK="$REPO_ROOT/skills/software-project-governance/infra/hooks/$HOOK_NAME"
+if [ -f "$SOURCE_HOOK" ] && [ "$0" != "$SOURCE_HOOK" ]; then
+    if ! cmp -s "$0" "$SOURCE_HOOK" 2>/dev/null; then
+        SOURCE_VER=$(grep '@version:' "$SOURCE_HOOK" 2>/dev/null | head -1 | sed 's/.*@version: *//')
+        cp "$SOURCE_HOOK" "$0" 2>/dev/null && \
+            echo "🔄 GOVERNANCE: Hook '$HOOK_NAME' self-upgraded to v${SOURCE_VER:-?}. Restarting with latest version..." && \
+            exec "$0" "$@"
+    fi
+fi
+
+# --- Check if governance is initialized ---
+if [ ! -f "$REPO_ROOT/.governance/plan-tracker.md" ]; then
+    # Not initialized — allow commit without governance checks
+    exit 0
+fi
+
+# --- Best-effort commit message read (for Steps 7 and 9 task ID extraction) ---
+# FIX-047: pre-commit runs BEFORE prepare-commit-msg, so message reading is
+# unreliable. commit-msg hook handles all message-dependent checks reliably.
+# Here we try best-effort — if message is unavailable, Steps 7/9 skip gracefully.
+COMMIT_MSG=""
+# Source 1: explicit file argument (works for 'git commit' with editor)
+if [ -n "$1" ] && [ -f "$1" ]; then
+    COMMIT_MSG=$(cat "$1" 2>/dev/null || true)
+fi
+# Source 2: git's commit message file (best-effort, may be stale)
+if [ -z "$COMMIT_MSG" ] && [ -f "$REPO_ROOT/.git/COMMIT_EDITMSG" ]; then
+    COMMIT_MSG=$(cat "$REPO_ROOT/.git/COMMIT_EDITMSG" 2>/dev/null || true)
+fi
+FIRST_LINE=$(echo "$COMMIT_MSG" | head -1)
+
+# --- Compute staged files (used by Steps 6-9) ---
+CHANGED_FILES=$(git diff --cached --name-only 2>/dev/null || true)
+
+# --- Step 6: Bootstrap change discipline (CLAUDE.md direct modification guard) ---
+# Rule: MUST NOT directly modify CLAUDE.md to add new behaviors.
+# MUST first modify commands/governance-init.md Step 7 (canonical source), bump version,
+# then user /plugin update → bootstrap self-upgrade → CLAUDE.md synced.
+if git diff --cached --name-only 2>/dev/null | grep -q "^CLAUDE.md$"; then
+    if is_claude_bootstrap_self_upgrade "$CHANGED_FILES"; then
+        echo "✅ GOVERNANCE: CLAUDE.md bootstrap self-upgrade detected; Step 6 allowed."
+    else
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║  BOOTSTRAP DISCIPLINE: CLAUDE.md modified directly.         ║"
+        echo "║                                                            ║"
+        echo "║  CLAUDE.md is a dogfood instance — NOT the canonical       ║"
+        echo "║  source. New governance behaviors MUST be added to:        ║"
+        echo "║    commands/governance-init.md Step 7 (canonical template)  ║"
+        echo "║                                                            ║"
+        echo "║  The correct flow:                                         ║"
+        echo "║  1. Modify governance-init.md template (canonical source)   ║"
+        echo "║  2. Bump version                                           ║"
+        echo "║  3. User /plugin update → bootstrap self-upgrade           ║"
+        echo "║  4. CLAUDE.md auto-synced via bootstrap                    ║"
+        echo "║                                                            ║"
+        echo "║  If governance-init.md IS also in this commit, both files  ║"
+        echo "║  must be modified in the correct order: template FIRST,    ║"
+        echo "║  then dogfood CLAUDE.md synced.                            ║"
+        echo "║                                                            ║"
+        echo "║  This violation has occurred 4+ times. The discipline      ║"
+        echo "║  exists because direct CLAUDE.md edits leave users behind. ║"
+        echo "║  Emergency bypass: git commit --no-verify                  ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+        # BLOCKING — this discipline has been violated 5+ times.
+        # The warning was not sufficient to change behavior.
+        # Legitimate non-governance CLAUDE.md changes should still include
+        # governance-init.md if they touch the bootstrap section.
+        # Emergency bypass: git commit --no-verify
+        exit 1
+    fi
+fi
+
+# ── Step 7: Product Code Review Evidence BLOCK (FIX-036) ──
+# When product code files are changed, review evidence is MANDATORY.
+# This enforces the Producer-Reviewer separation at the system level (M7.4 + M1.1).
+# Task prefix determines whether review is required (routing table mapping).
+# Tasks whose type IS review (REVIEW, EVD, DEC, RISK, GOV) are exempt.
+# NOTE: FIX-047 — uses best-effort COMMIT_MSG. If unavailable, skips gracefully.
+# commit-msg hook handles message-dependent checks reliably.
+STEP7_TASK_ID=$(echo "$COMMIT_MSG" | grep -oE '(AUDIT|FIX|REQ|MAINT|INIT|PLAN|DESIGN|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|SYSGAP|CLEANUP)-[0-9]+' | head -1)
+
+if [ -n "$STEP7_TASK_ID" ]; then
+    # Check if staged files include product code
+    CHANGED_FILES_STEP7="$CHANGED_FILES"
+    if [ -n "$CHANGED_FILES_STEP7" ] && is_product_code "$CHANGED_FILES_STEP7"; then
+        # Task prefix → review requirement mapping
+        TASK_PREFIX=$(echo "$STEP7_TASK_ID" | grep -oE '^[A-Z]+')
+        case "$TASK_PREFIX" in
+            SYSGAP|AUDIT|FIX|MAINT|CLEANUP|DESIGN|INIT|REL|VAL|CI|ACCEPT|RESEARCH|DOC|OPS|CONSTRAINT|PLAN)
+                NEEDS_REVIEW=1 ;;
+            REVIEW|EVD|DEC|RISK|GOV)
+                NEEDS_REVIEW=0 ;;
+            *)
+                NEEDS_REVIEW=0 ;;
+        esac
+
+        if [ "$NEEDS_REVIEW" -eq 1 ]; then
+            HAS_REVIEW_EVD=0
+            if [ -f "$REPO_ROOT/.governance/evidence-log.md" ]; then
+                HAS_REVIEW_EVD=$(grep -cE "REVIEW-.*$STEP7_TASK_ID" "$REPO_ROOT/.governance/evidence-log.md" 2>/dev/null || echo "0")
+                HAS_REVIEW_EVD=$(echo "$HAS_REVIEW_EVD" | tr -d '\r' | head -1)
+                [ -z "$HAS_REVIEW_EVD" ] && HAS_REVIEW_EVD=0
+            fi
+            if [ "$HAS_REVIEW_EVD" -eq 0 ]; then
+                # Format changed files list (first 5, with ellipsis if more)
+                PC_FILES=$(echo "$CHANGED_FILES_STEP7" | head -5 | tr '\n' ' ')
+                PC_FILE_COUNT=$(echo "$CHANGED_FILES_STEP7" | grep -c . 2>/dev/null || echo "0")
+                if [ "$PC_FILE_COUNT" -gt 5 ]; then
+                    PC_FILES="$PC_FILES... (+$((PC_FILE_COUNT - 5)) more)"
+                fi
+
+                echo ""
+                echo "╔══════════════════════════════════════════════════════════════╗"
+                echo "║  M7.4 BLOCKED: Product code changes without review evidence ║"
+                echo "║                                                            ║"
+                echo "║  Changed files: $PC_FILES"
+                echo "║  These are product code paths. Review evidence is          ║"
+                echo "║  MANDATORY before commit (M7.4 + M1.1).                    ║"
+                echo "║                                                            ║"
+                echo "║  Action: spawn Code Reviewer → get APPROVED → add evidence ║"
+                echo "║  Emergency bypass: git commit --no-verify                  ║"
+                echo "╚══════════════════════════════════════════════════════════════╝"
+                echo ""
+                exit 1
+            fi
+        fi
+    fi
+fi
+
+# --- Step 8: Commit Scope WARN (SYSGAP-006) ---
+# Group staged files by top-level directory. Warn if commit spans
+# too many unrelated directories. This enforces single-concern commits.
+# WARN at 3+ directories, [SCOPE-CRITICAL] at 5+ directories.
+# Never blocks — cross-directory changes have legitimate use cases
+# (migrations, refactors) but should be explained in commit message.
+if [ -n "$CHANGED_FILES" ]; then
+    SCOPE_DIRS=$(echo "$CHANGED_FILES" | awk -F/ '{if (NF>1) print $1; else print "(root)"}' | sort -u)
+    SCOPE_COUNT=$(echo "$SCOPE_DIRS" | grep -c . 2>/dev/null || echo "0")
+    if [ "$SCOPE_COUNT" -ge 5 ]; then
+        SCOPE_LIST=$(echo "$SCOPE_DIRS" | tr '\n' ' ')
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║  [SCOPE-CRITICAL] GOVERNANCE: Scope Warning                ║"
+        echo "║                                                            ║"
+        echo "║  This commit touches $SCOPE_COUNT unrelated directories:"
+        echo "║    $SCOPE_LIST"
+        echo "║                                                            ║"
+        echo "║  Consider splitting into separate commits                   ║"
+        echo "║  (one per logical change).                                 ║"
+        echo "║                                                            ║"
+        echo "║  Commit allowed, but scope discipline is expected.         ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+    elif [ "$SCOPE_COUNT" -ge 3 ]; then
+        SCOPE_LIST=$(echo "$SCOPE_DIRS" | tr '\n' ' ')
+        echo ""
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║  GOVERNANCE: Scope Warning                                 ║"
+        echo "║                                                            ║"
+        echo "║  This commit touches $SCOPE_COUNT unrelated directories:"
+        echo "║    $SCOPE_LIST"
+        echo "║                                                            ║"
+        echo "║  Consider splitting into separate commits                   ║"
+        echo "║  (one per logical change).                                 ║"
+        echo "║                                                            ║"
+        echo "║  Commit allowed, but scope discipline is expected.         ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        echo ""
+    fi
+fi
+
+# --- Step 9: Agent Team Bypass WARN (SYSGAP-007) ---
+# Check if this commit modifies "product code" files. If so, verify
+# that the commit message shows evidence of Agent Team execution.
+# Product code = files matching is_product_code() patterns:
+# skills/*|agents/*|commands/*|core/*|infra/*|references/*|adapters/*|
+# .claude-plugin/*|.codex-plugin/*|.agents/*
+# WARN only — emergency hotfixes may need direct commits.
+# See SKILL.md "产品代码 vs 治理记录边界" for the full boundary definition.
+# NOTE: FIX-047 — uses best-effort COMMIT_MSG/FIRST_LINE. If unavailable, skips.
+if [ -n "$CHANGED_FILES" ] && [ -n "$FIRST_LINE" ]; then
+    IS_PRODUCT_CODE=0
+    if is_product_code "$CHANGED_FILES"; then
+        IS_PRODUCT_CODE=1
+    fi
+
+    if [ "$IS_PRODUCT_CODE" -eq 1 ]; then
+        # Check for Agent Team trace: commit message must start with task ID
+        AGENT_TRACE=$(echo "$FIRST_LINE" | grep -oE '^[A-Z]+-[0-9]+:' || true)
+        if [ -z "$AGENT_TRACE" ]; then
+            echo ""
+            echo "╔══════════════════════════════════════════════════════════════╗"
+            echo "║  GOVERNANCE: Agent Team bypass detected                    ║"
+            echo "║                                                            ║"
+            echo "║  This commit modifies product code without evidence of     ║"
+            echo "║  Agent Team execution. Coordinator should NOT directly     ║"
+            echo "║  modify product code (see SKILL.md product code vs         ║"
+            echo "║  governance record boundary).                              ║"
+            echo "║                                                            ║"
+            echo "║  Commit allowed, but this is a process violation.          ║"
+            echo "╚══════════════════════════════════════════════════════════════╝"
+            echo ""
+        fi
+    fi
+fi
+
+# --- Step 10: Untracked Files WARN (FIX-057 Phase 2) ---
+# Detect untracked files in the working tree.  Only counts them (fast),
+# detailed classification is left to check-governance.
+# WARN only -- untracked files are not errors, just signals that need attention.
+UNTRACKED_COUNT=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')
+if [ "$UNTRACKED_COUNT" -gt 0 ] 2>/dev/null; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║  GOVERNANCE: Untracked files detected                      ║"
+    echo "║                                                            ║"
+    echo "║  ${UNTRACKED_COUNT} untracked file(s) found in working tree.               ║"
+    echo "║                                                            ║"
+    echo "║  Action: run 'check-governance' for classification         ║"
+    echo "║  suggestions, or manually git add / .gitignore.           ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+fi
+
+# ── FIX-047: All message-dependent checks migrated to commit-msg hook ──
+# Steps 1-5 (task ID extraction/presence/plan-tracker/evidence/WIP):
+#   → Now in commit-msg, which runs after prepare-commit-msg and
+#     can reliably read the current commit message via $1.
+# Steps 10-12 (goal alignment/user impact/breaking change):
+#   → Also in commit-msg, enabled by reliable message access.
+
+# All checks passed
+exit 0

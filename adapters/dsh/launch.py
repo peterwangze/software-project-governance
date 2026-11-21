@@ -3,14 +3,14 @@
 
 DSH registers the governance preset through the host registry when available;
 this launcher is the explicit / offline renderer for directory-model hosts. It
-substitutes absolute package paths in the packaged composition template and
+derives the directory composition from the host base and package overlay and
 can write a thin project bootstrap to AGENTS.md. See adapters/dsh/README.md for
 host capability detection, setup and upgrades.
 
 Modes:
   --check              Print the adapter manifest summary (default action).
   --install / --sync   (Re)write the preset into ${DSH_HOME}/.agent-presets/governance
-                       by rendering ``agent-presets/governance/agent.cordis.yml.template``
+                       from the host base and ``agent-presets/governance/overlay.cordis.yml``
                        (staging directory + rename, so a crash mid-render never
                        leaves a half-written preset). Isolated environments
                        only: the write side refuses the real home (exit 2).
@@ -65,10 +65,12 @@ any user preset root.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shutil
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -116,11 +118,14 @@ PRESET_MARKER = ".dsh-bundle-version"
 SKILL_ROOT_MARKER = "skill-root.txt"
 
 CONTRACT_BINDING = {
+    "OVERLAY": "own.overlay",
+    "NATIVE": "own.native",
+    "RENDER_PROVENANCE": "own.preset.render_provenance",
     "PRESET_ID": "own.preset.id",
     "PRESET_MARKER": "own.preset.version_marker",
     "SKILL_ROOT_MARKER": "own.preset.skill_root_marker",
     "PACKAGE_PRESET": "own.preset.payload_dir",
-    "COMPOSITION_TEMPLATE": "own.preset.template",
+    "COMPOSITION_TEMPLATE": "own.overlay.path",
     "PRESET_METADATA": "own.preset.metadata",
     "COMPOSITION_FILENAME": "host.home.composition_file",
     "PRESET_DIR_NAME": "host.home.user_preset_dir",
@@ -434,7 +439,23 @@ def marker_version() -> str:
     return package_version()
 
 
+def _derive_preset():
+    if str(ADAPTER_DIR) not in sys.path:
+        sys.path.insert(0, str(ADAPTER_DIR))
+    from composition_merge import derive_preset
+    return derive_preset(ROOT)
+
+
 def render_composition() -> str:
+    """Return the host-derived directory composition, or disclose refusal."""
+    try:
+        return _derive_preset()["composition"]
+    except (ValueError, OSError, ImportError, KeyError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return ""
+
+
+def render_overlay() -> str:
     """Render the composition template with absolute paths.
 
     Returns ``""`` when the template is missing, cannot be decoded as UTF-8, or
@@ -464,6 +485,17 @@ def render_composition() -> str:
     for token, path in tokens.items():
         value = str(path.resolve()).replace("\\", "/")
         composition = composition.replace(token, value)
+    body_token = _fact("OVERLAY")["persona_body_token"]
+    if body_token in composition:
+        src = _fact("NATIVE")["persona_source"]
+        repo_token = _fact("NATIVE")["persona_repo_token"]
+        try:
+            body = _read_text_with_newline_mode(ROOT / src).replace("\r\n", "\n")
+        except (CompositionUnreadable, OSError):
+            return ""
+        if repo_token in body:
+            composition = composition.replace(body_token, body.replace(
+                repo_token, ROOT.resolve().as_posix()).strip().replace("\n", "\n      "))
     if leftovers(composition):
         return ""
     return composition
@@ -538,7 +570,7 @@ def print_manifest(manifest: dict) -> None:
     print(f" - command: {manifest['validation']['command']}")
 
 
-def write_rendered_preset(destination: Path, version: Optional[str] = None) -> bool:
+def write_rendered_preset(destination: Path, version: Optional[str] = None, *, derived=None) -> bool:
     """Render the payload into ``destination`` (no atomicity — the caller owns it).
 
     Returns ``False`` (leaving no partial directory behind) when the template
@@ -564,7 +596,12 @@ def write_rendered_preset(destination: Path, version: Optional[str] = None) -> b
     **Callers MUST gate on** :func:`write_side_refusal` first: this function
     writes wherever it is pointed, including a real DSH home.
     """
-    composition = render_composition()
+    try:
+        derived = derived if derived is not None else _derive_preset()
+    except (ValueError, OSError, KeyError, ImportError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return False
+    composition = derived["composition"]
     if not composition or not _preset_metadata().is_file():
         return False
     try:
@@ -579,7 +616,11 @@ def write_rendered_preset(destination: Path, version: Optional[str] = None) -> b
             print(f"ERROR: {exc}", file=sys.stderr)
             return False
     try:
-        destination.mkdir(parents=True, exist_ok=True)
+        destination.mkdir(parents=True, exist_ok=False)
+    except OSError as exc:
+        print(f"ERROR: cannot create fresh render directory {destination}: {exc}", file=sys.stderr)
+        return False
+    try:
         # Every file is written as explicit BYTES with LF terminators. The
         # declared `own.render.newline_policy` is "lf", and text mode does not
         # honour it on every platform: `write_text("\n", newline="\n")` still
@@ -604,11 +645,23 @@ def write_rendered_preset(destination: Path, version: Optional[str] = None) -> b
         # explicitly redirected isolated DSH_HOME, after `--sync`).
         (destination / _fact("SKILL_ROOT_MARKER")).write_bytes(
             (str(ROOT.resolve()).replace("\\", "/") + "\n").encode("utf-8"))
+        report = dict(derived["provenance"])
+        report["payload_sha256"] = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                                    for path in destination.iterdir()}
+        (destination / _fact("RENDER_PROVENANCE")["filename"]).write_bytes(
+            (json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     except OSError as exc:
         print(f"ERROR: writing the preset failed: {exc}", file=sys.stderr)
         shutil.rmtree(destination, ignore_errors=True)
         return False
     return True
+
+
+def _check_existing_preset(target):
+    """Verify directory ownership and current bytes before replacing a preset."""
+    from composition_merge import verify_payload
+    verify_payload(target, _fact("RENDER_PROVENANCE"),
+                   {_composition_filename(), "preset.yml", _fact("PRESET_MARKER"), _fact("SKILL_ROOT_MARKER")})
 
 
 def install_preset(dry_run: bool = False) -> int:
@@ -629,38 +682,33 @@ def install_preset(dry_run: bool = False) -> int:
     paths rendered into the composition.
     """
     target = preset_dir()
+    if not dry_run:
+        refusal = write_side_refusal(target, operation="install into the real preset root")
+        if refusal is not None:
+            return _refuse_write(refusal)
+    try:
+        version = package_version()
+    except PackageIdentityUnreadable as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        derived = _derive_preset()
+    except (ValueError, OSError, KeyError, ImportError) as exc:
+        print(f"ERROR: cannot derive the composition: {exc}", file=sys.stderr)
+        return 2 if getattr(exc, "code", None) else 1
     if dry_run:
+        if target.exists() or target.is_symlink():
+            try:
+                _check_existing_preset(target)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return _refuse_write(f"EXISTING_PRESET_UNVERIFIED: {target} ({exc}); "
+                                     "preserve the directory before installing")
         print(f"[DRY-RUN] dsh home       : {dsh_home()}")
         print(f"[DRY-RUN] preset dir     : {target}")
-        print(f"[DRY-RUN] composition tpl: {_composition_template()}")
-        print(f"[DRY-RUN] render map     : "
-              + ", ".join(f"{token} -> {str(path.resolve()).replace(chr(92), '/')}"
-                          for token, path in _token_paths().items()))
-        print(
-            f"[DRY-RUN] planned write  : {_composition_filename()} (rendered), "
-            f"preset.yml, {_fact('PRESET_MARKER')}, {_fact('SKILL_ROOT_MARKER')} "
-            "(staging + rename replace)"
-        )
-        print("[DRY-RUN] nothing written — re-run without --dry-run to install")
+        print("[DRY-RUN] provenance     : " + json.dumps(derived["provenance"], ensure_ascii=False))
+        print("[DRY-RUN] nothing written")
         return 0
-
-    # The symmetric half of `smoke_preset()`'s guard: a real install must be
-    # redirected just as a smoke run must be. Without this, a mis-set (or
-    # forgotten) DSH_HOME silently rewrites the user's real preset — which is
-    # what happened once during this very task, hence the guard is stated here
-    # and reused by both paths rather than left to the caller's discipline.
-    refusal = write_side_refusal(target, operation="install into the real preset root")
-    if refusal is not None:
-        return _refuse_write(refusal)
-
-    composition = render_composition()
-    if not composition:
-        print(
-            f"ERROR: cannot render the composition — missing template or an "
-            f"unsubstituted token: {_composition_template()}",
-            file=sys.stderr,
-        )
-        return 1
     if not _preset_metadata().is_file():
         print(f"ERROR: preset metadata missing: {_preset_metadata()}", file=sys.stderr)
         return 1
@@ -681,34 +729,64 @@ def install_preset(dry_run: bool = False) -> int:
     except Exception as exc:  # noqa: BLE001 — boundary: actionable, no stack
         print(f"ERROR: cannot write a preset: {exc}", file=sys.stderr)
         return 1
-    try:
-        version = package_version()
-    except PackageIdentityUnreadable as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
-
     target.parent.mkdir(parents=True, exist_ok=True)
-    staging = target.with_name(
-        f"{target.name}.staging-{os.getpid()}-{int(time.time() * 1000)}"
-    )
-    shutil.rmtree(staging, ignore_errors=True)
+    from preset_transaction import InstallationBusy, installation_lock, recover_installation
     try:
-        written = write_rendered_preset(staging, version)
-    except Exception as exc:  # noqa: BLE001 — boundary: clean up, then report
-        written = False
-        print(f"ERROR: writing the preset failed: {type(exc).__name__}: {exc}",
-              file=sys.stderr)
-    if not written:
-        # Belt and braces (F-4): whatever failed, the staging tree this call
-        # created is removed before returning, so a failed install can never
-        # leave `governance.staging-<pid>-…` in the user's DSH home.
-        shutil.rmtree(staging, ignore_errors=True)
-        print(f"ERROR: rendering the preset failed: {_composition_template()}",
-              file=sys.stderr)
+        with installation_lock(target):
+            recover_installation(target, _check_existing_preset, shutil.rmtree)
+            return _replace_preset(target, derived, version)
+    except InstallationBusy as exc:
+        return _refuse_write(f"PRESET_BUSY: {exc}")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return _refuse_write(f"PRESET_RECOVERY_REQUIRED: {exc}")
+
+
+
+def _replace_preset(target, derived, version):
+    # A sibling created exclusively for this attempt owns staging and backup.
+    # Retain the backup if restoring it fails, including a concurrent install.
+    container = Path(tempfile.mkdtemp(prefix=f"{target.name}.stage-", dir=target.parent))
+    staging = container / "new"
+    backup = container / "old"
+    from preset_transaction import journal_path, record_staging
+    try:
+        record_staging(target, container)
+        try:
+            written = write_rendered_preset(staging, version, derived=derived)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(f"ERROR: writing the preset failed: {exc}", file=sys.stderr)
+            return 1
+        if not written:
+            return 1
+        if target.exists() or target.is_symlink():
+            try:
+                _check_existing_preset(target)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                return _refuse_write(f"EXISTING_PRESET_UNVERIFIED: {target} ({exc}); "
+                                     "preserve the directory before installing")
+            target.rename(backup)
+        try:
+            if backup.exists() or backup.is_symlink():
+                try:
+                    _check_existing_preset(backup)
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    backup.rename(target)
+                    return _refuse_write(f"EXISTING_PRESET_UNVERIFIED: {target} ({exc}); "
+                                         "preserve the directory before installing")
+            staging.rename(target)
+        except OSError:
+            if (backup.exists() or backup.is_symlink()) and not target.exists() and not target.is_symlink():
+                backup.rename(target)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup)
+    except OSError as exc:
+        print(f"ERROR: installing preset failed: {exc}; recovery directory: {container}", file=sys.stderr)
         return 1
-    if target.exists():
-        shutil.rmtree(target)
-    staging.rename(target)
+    finally:
+        if not backup.exists() and not backup.is_symlink():
+            shutil.rmtree(container, ignore_errors=True)
+            journal_path(target).unlink(missing_ok=True)
     print(f"preset written: {target}")
     print(f"  template    : {_composition_template()}")
     print(f"  composition : {target / _composition_filename()}")
@@ -776,11 +854,24 @@ def uninstall_preset(dry_run: bool = False) -> int:
     refusal = write_side_refusal(target, operation="remove the real preset")
     if refusal is not None:
         return _refuse_write(refusal)
-    if not target.exists():
+    if not target.parent.is_dir():
         print(f"not installed: {target} (nothing to do)")
         return 0
-    entries = sorted(p.name for p in target.iterdir())
-    shutil.rmtree(target)
+    if str(ADAPTER_DIR) not in sys.path:
+        sys.path.insert(0, str(ADAPTER_DIR))
+    from preset_transaction import InstallationBusy, installation_lock, recover_installation
+    try:
+        with installation_lock(target):
+            recover_installation(target, _check_existing_preset, shutil.rmtree)
+            if not target.exists():
+                print(f"not installed: {target} (nothing to do)")
+                return 0
+            entries = sorted(p.name for p in target.iterdir())
+            shutil.rmtree(target)
+    except InstallationBusy as exc:
+        return _refuse_write(f"PRESET_BUSY: {exc}")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return _refuse_write(f"PRESET_RECOVERY_REQUIRED: {exc}")
     print(f"preset removed: {target}")
     print(f"  deleted entries: {', '.join(entries)}")
     print("  sibling presets and all other DSH_HOME content untouched")
@@ -1119,7 +1210,9 @@ def _shape_violations(composition: str, stage: str = "rendered") -> list:
         violations.append("customSkillDirs key is absent")
         return violations
     expected_count = shape["entry_count"]
-    if len(item_indents) != expected_count:
+    count_matches = (len(item_indents) == expected_count if stage == "template"
+                     else len(item_indents) >= expected_count)
+    if not count_matches:
         violations.append(
             f"customSkillDirs declares {len(item_indents)} "
             f"{'entry' if len(item_indents) == 1 else 'entries'}, "
@@ -1334,6 +1427,10 @@ def verify_preset_loading(preset_dir: Path, repo_root=None) -> dict:
     resolved_roots = []
     for entry in entries:
         form, path, issue = _resolve_skill_entry(entry, preset_dir)
+        if issue and entry.lstrip().startswith("!!js ") and path is None:
+            # The host evaluates its own skill roots at activation. The two
+            # governance roots below must still resolve as literal paths.
+            form, issue = "host-expression", None
         if issue:
             result["issues"].append(issue)
         exists = bool(path is not None and path.is_dir())
@@ -1488,6 +1585,14 @@ def smoke_preset() -> int:
     env_home = (os.environ.get(home_var) or "").strip()
     isolated = Path(env_home).expanduser()
 
+    try:
+        _derive_preset()
+    except (ValueError, OSError, KeyError, ImportError) as exc:
+        if getattr(exc, "code", "") == "HOST_PLANE_ABSENT":
+            print(f"[SMOKE] Result: NOT_RUN (exit 2) {exc}")
+            return 2
+        print(f"[SMOKE] Result: FAIL (exit 1) {exc}")
+        return 1
     print(f"[SMOKE] isolated {home_var}: {isolated}")
     print(f"[SMOKE] real DSH home    : {home}")
     # FIX-442: the attribution window brackets the two witness samples. A
@@ -1519,7 +1624,8 @@ def smoke_preset() -> int:
     # surface — it proves the tokens substitute to absolute paths that really
     # resolve, not just that an installed copy happens to work.
     preset_id = _fact("PRESET_ID")
-    payload_surface = isolated / ".preset-payload-check" / preset_id
+    payload_scratch = tempfile.TemporaryDirectory(prefix=".preset-payload-check-", dir=isolated)
+    payload_surface = Path(payload_scratch.name) / preset_id
     if not write_rendered_preset(payload_surface):
         issues.append(
             f"shipped payload failed to render: {_composition_template()}")
@@ -1541,7 +1647,7 @@ def smoke_preset() -> int:
         (f"installed preset (rendered into the isolated {home_var})",
          isolated / _preset_dir_name() / preset_id),
         (f"shipped in-package payload (rendered from {_fact('PACKAGE_PRESET')}/"
-         f"{_composition_filename()}.template)",
+         f"{_composition_template().name})",
          payload_surface),
     )
     for label, directory in surfaces:
@@ -1556,6 +1662,7 @@ def smoke_preset() -> int:
     # adapter's own write face and a difference there is always a real write —
     # except the FIX-442 dual-factor concurrent-session attribution, which is
     # judged per entry against the window bracketing the two samples.
+    payload_scratch.cleanup()
     after = _real_home_witness(home)
     window_end_ns = time.time_ns()
     comparison = witness_verdict(

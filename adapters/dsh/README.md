@@ -49,7 +49,7 @@ $env:DSH_HOME = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().T
 python adapters/dsh/launch.py --install
 ```
 
-启动器把包内组合模板渲染到该隔离根的 `.agent-presets/governance/`。更新或回退时选好包版本，再执行 `--install` 或 `--sync`。移除时用同一个隔离根执行 `--uninstall`。这些写操作指向真实用户根时退出码为 2；移除 bundle 只撤回 profile 登记，显式渲染的目录由启动器管理。`--smoke` 可在隔离根验证加载，`--check` 只打印适配器清单。
+启动器从选中的 DSH 安装读取基础预设，继承宿主当前行集，将治理正文和技能目录合入隔离根的 `.agent-presets/governance/`。桌面安装与命令行安装并存时，先将 `DSH_DESKTOP_APP_DIR` 指向桌面安装目录，检查预览中的宿主版本和路径。更新或回退时选好包版本，再执行 `--install` 或 `--sync`。`render-provenance.json` 记录宿主、输入与文件摘要。已有目录缺少回执、有用户修改或有额外文件时，启动器返回 `EXISTING_PRESET_UNVERIFIED` 并保留目录。可先在新的隔离根生成和复验，再人工迁移自定义内容。移除时用同一个隔离根执行 `--uninstall`。这些写操作指向真实用户根时退出码为 2；移除 bundle 只撤回 profile 登记，显式渲染的目录由启动器管理。`--smoke` 可在隔离根验证加载，`--check` 只打印适配器清单。
 
 ## 验证
 
@@ -61,6 +61,21 @@ python skills/software-project-governance/infra/verify_workflow.py check-runtime
 2026-11-19 在临时项目和隔离的 `DSH_HOME` 实测，桌面附带的 CLI（`dsh --version` 为 `0.2.2-rc.5`）支持用 `dsh --profile headless --json -` 从标准输入接收任务。出厂 headless 配置忽略 GUI 已保存的登录，API key 依次取自进程环境、当前目录的 `.env` 和 `$DSH_HOME/.env`。本次缺少可用 key，退出码为 1，未取得模型答复，成品验收仍需独立运行证据。
 
 本机 2026-07-08 验证结果：本适配器在一个真实 dsh 会话（`dsh --version` 返回 `0.1.0-rc.6`）中完成编写与验证——原生 `skill` 工具加载 skill、原生 `subagent` 工具并行派发 3 个子代理、`ask_user_question`/`pwsh`/fs/web 工具全部可用，生成的 `governance` 预设通过 `agentPresets.standingKeyFor` 挂载校验。该结果证明 dsh 可以原生承载治理工作流；它不代表 browser 自动化或 MCP 服务器已闭环（两者仍是 host-dependent）。
+
+### 从旧目录的 29 行预设迁移
+
+v0.100.0 从所选宿主的 `standard` 预设继承工具列表。对比 DSH 0.2.2 的桌面基础预设，旧目录自己携带了 13 行。已依赖这些能力的 profile 可以在宿主管理的自有预设中显式启用兼容版本，再用同一 profile 验证所需操作。
+
+| 旧目录中的行 | 升级后需要核对的行为 |
+| --- | --- |
+| `plan-mode` | 旧目录追加的计划模式指令段。 |
+| `compaction-basic`、`command-compact`、`tool-result-pruner` | 基础压缩、精简命令及工具输出裁剪配置。 |
+| `tool-subagent-control`、`tool-subagent`、`tool-subagent-fork` | 子代理控制、spawn 和 fork 的工具登记。 |
+| `workflow-ptc`、`tool-workflow`、`tool-ralph` | 旧目录启用的工作流引擎与工具。 |
+| `tool-subagent-codex`、`tool-subagent-claude-code` | 两行在旧模板中已禁用。 |
+| `tool-subagent-list-agents` | DSH 0.2.2 已移除该子路径的导出。使用当前宿主公布的代理枚举入口。 |
+
+保留需要的定制时，先另存旧 `.agent-presets/governance/`，在隔离的 `DSH_HOME` 生成一份新目录，按行比较、手动移植自有设置并运行 `--smoke`。原生注册保留用户现有目录。历史 JS 调用方应将 `ensurePreset()` 迁往原生 registry 或显式的 `launch.py --install`。保留的 `ensurePreset()` 会发出告警并返回 `synced: false`。
 
 ## 能力边界（no-overclaim）
 
@@ -149,7 +164,7 @@ Windows rc.3 的 `workspace-write` 沙箱允许直接启动项目的 esbuild，N
 
 - `adapters/dsh/adapter-manifest.json`：机器可读的适配器元数据（能力声明 + E2E 证据）。
 - `adapters/dsh/launch.py`：预设渲染器（渲染 + 原子换入）与项目 bootstrap 写入器。
-- `agent-presets/governance/agent.cordis.yml.template`：预设组合模板（唯一组合事实源；token 由 `lib/index.js` / `launch.py` 渲染为绝对路径；**不直接挂载**，`.template` 后缀即防误挂载标记）。
+- `agent-presets/governance/overlay.cordis.yml` 声明 persona 和技能目录两项更改，`persona.md.template` 提供追加的治理正文。启动器从当前宿主基础预设派生完整组合。
 - `agent-presets/governance/preset.yml`：预设元数据（roster 显示名与描述）。
 - `lib/index.js`：bundle 插入的宿主行。启动时通过预设注册服务登记，若服务不可用则记录告警。
 - `cordis.patch.yml`：bundle 补丁层——**只有一条 `- insert:`**（本包自己的行），不改任何宿主行（DEC-187）。

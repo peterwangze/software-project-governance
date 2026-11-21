@@ -321,7 +321,10 @@ class BackwardCompat087ViewTests(unittest.TestCase):
         if rc.returncode != 0:
             raise unittest.SkipTest(
                 "v0.87.0 tag unavailable: {0}".format(rc.stderr.strip()))
-        cls._tmp087 = Path(tempfile.mkdtemp(prefix="rel089-v087-"))
+        checkout = tempfile.TemporaryDirectory(prefix="rel089-v087-")
+        cls.addClassCleanup(checkout.cleanup)
+        # The tagged verifier derives the repository root from its infra path.
+        cls._tmp087 = Path(checkout.name) / _INFRA_PREFIX
         ls = _git("ls-tree", "-r", "--name-only", "v0.87.0", "--",
                   _INFRA_PREFIX)
         extracted = []

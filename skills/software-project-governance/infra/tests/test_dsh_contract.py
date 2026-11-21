@@ -1096,9 +1096,11 @@ class TestContractFields(unittest.TestCase):
                       guard_text)
         self.assertEqual(dsh_compat.CHECK_SECTION_TITLE,
                          checks["compat_section_title"])
-        self.assertIn(checks["smoke_section_title"],
-                      _read(_REPO_ROOT / "skills" / "software-project-governance"
-                            / "infra" / "verify_workflow.py"))
+        from checks.dsh_smoke import emit_health_result
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            emit_health_result({"verdict": "PASS", "reason": "fixture", "exit_code": 0,
+                                "isolation": {"real_home_writes": 0}})
+        self.assertIn(checks["smoke_section_title"], output.getvalue().splitlines()[1])
         self.assertEqual(checks["upgrade_regression_label"],
                          "dsh preset-session smoke (isolated upgrade regression)")
         exit_codes = checks["exit_codes"]

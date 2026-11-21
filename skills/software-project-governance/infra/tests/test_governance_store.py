@@ -2014,6 +2014,13 @@ class PremiseDeclarationTests(StoreTestCase):
         self.assertRefused(payload, "operation_id_conflict")
 
 
+def _historical_calibration_ledgers():
+    yield _HERE / "fixtures" / "dec368"
+    live = _INFRA_DIR.parents[2] / ".governance"
+    if any((live / path).exists() for path in ("evidence-log.md", "archive", "plan-tracker.md")):
+        yield live
+
+
 class PremiseTrackerEventTests(StoreTestCase):
     """FIX-463: premise-events.jsonl writer + aggregation semantics."""
 
@@ -2088,35 +2095,147 @@ class PremiseTrackerEventTests(StoreTestCase):
         self.assertEqual(status["collapsed"], ["DEC-368"])
 
     def test_dec368_retro_calibration_readonly_demo(self):
-        """The acceptance case: DEC-368② premise {bypass_count, 2} must be
-        judged collapsed from the LIVE tree's documented bypass events —
-        read-only (synthetic declaration; the real decision-log stays
-        untouched; the re-review right stays with the user). CI note: the
-        live evidence-log is LOCAL runtime data (gitignored) — the CI
-        checkout does not carry it, so the live floor assert runs only
-        where the tree exists (the row-shape semantics stay machine-judged
-        everywhere via PremiseAutoSourceTests)."""
+        """Replay the historical DEC-368② premise (formalized in DEC-369)."""
         import premise_tracker as pt
-        repo_root = _INFRA_DIR.parents[2]
-        evidence_path = repo_root / ".governance" / "evidence-log.md"
-        if not evidence_path.is_file():
-            self.skipTest("live governance data absent (CI checkout)")
-        evidence_text = evidence_path.read_text(encoding="utf-8")
-        result = pt.count_hook_bypasses(evidence_text)
-        # Documented EVENT FLOOR: e254584 + M-7 + M-5b = 3 (EVD-2145 /
-        # EVD-2148③; the +1 cross-reference row is the disclosed ambiguity).
-        self.assertGreaterEqual(result["count"], 3, result["rows"])
         synthetic_row = ("| DEC-900 | 2026-10-24 | 用户（验收演示） | "
                          "合成声明行 | 依据；（机器写入：…；schema v1；"
                          "premise={observable:bypass_count,threshold:2}） |")
         declarations = pt.collect_premise_declarations(synthetic_row)
         self.assertEqual(declarations["DEC-900"]["threshold"], 2)
-        events = [{"type": "count", "decision_id": "DEC-900",
-                   "observable": "bypass_count", "source": "auto",
-                   "refs": "live-tree scan", "total": result["count"],
-                   "sequence": 1}]
-        status = pt.premise_status(declarations, events)
-        self.assertEqual(status["collapsed"], ["DEC-900"])
+        for ledger in _historical_calibration_ledgers():
+            with self.subTest(ledger=ledger):
+                counts = pt.evidence_bypass_counts(ledger)
+                ids = ("EVD-2145", "EVD-2146", "EVD-2148")
+                weights = [counts[evd] for evd in ids]
+                self.assertEqual(weights, [1, 1, 2])
+                event = {"type": "count", "decision_id": "DEC-900",
+                         "observable": "bypass_count", "source": "auto",
+                         "refs": ", ".join(ids), "total": sum(weights), "sequence": 1}
+                status = pt.premise_status(declarations, [event])
+                self.assertEqual(status["collapsed"], ["DEC-900"])
+
+
+class PremiseArchiveCountTests(StoreTestCase):
+    def _count_cli(self, expected_code=0):
+        proc = subprocess.run(
+            [sys.executable, "-X", "utf8", str(_INFRA_DIR / "verify_workflow.py"),
+             "--project-root", str(self.tmp), "premise", "count",
+             "--decision", "DEC-369", "--observable", "bypass_count"],
+            cwd=self.gov, capture_output=True, encoding="utf-8", timeout=30)
+        self.assertEqual(proc.returncode, expected_code, proc.stdout + proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_moving_and_repeating_disclosures_preserves_the_persisted_snapshot(self):
+        import premise_tracker as pt
+        sample = _HERE / "fixtures/dec368/archive/evidence/calibration.md"
+        hot = self.gov / "evidence-log.md"
+        cold = self.gov / "archive/evidence"
+        events = self.gov / pt.EVENTS_FILE_NAME
+        hot.write_bytes(sample.read_bytes())
+        expected = {"EVD-2145": 1, "EVD-2146": 1, "EVD-2148": 2}
+        self.assertEqual(pt.evidence_bypass_counts(self.gov), expected)
+        self.assertEqual(self._count_cli()["effect"], "written")
+        original = events.read_bytes()
+        event, = pt.load_events(self.gov)
+        self.assertEqual(event["total"], 4)
+        self.assertEqual(event["refs"], "EVD-2145(+1); EVD-2146(+1); EVD-2148(+2)")
+
+        cold.mkdir(parents=True)
+        (cold / "first.md").write_bytes(sample.read_bytes())
+        for stage in ("both layers", "archive only", "overlapping volumes"):
+            with self.subTest(stage=stage):
+                if stage == "archive only":
+                    hot.unlink()
+                elif stage == "overlapping volumes":
+                    (cold / "second.md").write_bytes(sample.read_bytes())
+                self.assertEqual(pt.evidence_bypass_counts(self.gov), expected)
+                self.assertEqual(self._count_cli()["effect"], "idempotent_noop")
+                self.assertEqual(events.read_bytes(), original)
+
+    def test_hot_correction_wins_and_unrelated_sources_contribute_nothing(self):
+        import premise_tracker as pt
+        cold = self.gov / "archive/evidence"
+        cold.mkdir(parents=True)
+        _write_bytes(cold / "volume.md", "| EVD-11 | REL-1 | hook --no-verify |\n"
+                     "| EVD-12 | REL-1 | hook --no-verify |\n")
+        _write_bytes(self.gov / "evidence-log.md",
+                     "| EVD-11 | REL-1 | hook 未 --no-verify |\n"
+                     "| EVD-13 | REL-1 | --no-verify |\n"
+                     "| REVIEW-14 | REL-1 | hook --no-verify |\n")
+        _write_bytes(self.gov / "archive/index.md", "## Evidence 索引\n"
+                     "| Evidence ID | Task | Archive |\n|---|---|---|\n"
+                     "| EVD-15 | hook --no-verify | archive/evidence/volume.md |\n")
+        migration = self.gov / "archive/.migration"
+        migration.mkdir()
+        _write_bytes(migration / "receipt.md", "| EVD-16 | REL-1 | hook --no-verify |\n")
+        self.assertEqual(pt.evidence_bypass_counts(self.gov), {"EVD-12": 1})
+        self.assertEqual(self._count_cli()["effect"], "written")
+        events = self.gov / pt.EVENTS_FILE_NAME
+        original = events.read_bytes()
+        event, = pt.load_events(self.gov)
+        self.assertEqual((event["refs"], event["total"]), ("EVD-12(+1)", 1))
+        self.assertEqual(self._count_cli()["effect"], "idempotent_noop")
+        self.assertEqual(events.read_bytes(), original)
+
+    def test_archive_created_just_before_hot_read_is_included(self):
+        import premise_tracker as pt
+        hot = self.gov / "evidence-log.md"
+        cold = self.gov / "archive/evidence"
+        cold.mkdir(parents=True)
+        hot.write_text("| EVD-17 | REL-1 | hook --no-verify |", encoding="utf-8")
+        read_text = Path.read_text
+
+        def finish_migration_then_read(path, **kwargs):
+            if path == hot:
+                (cold / "moved.md").write_bytes(hot.read_bytes())
+                hot.write_bytes(b"")
+            return read_text(path, **kwargs)
+
+        with mock.patch.object(Path, "read_text", finish_migration_then_read):
+            self.assertEqual(pt.evidence_bypass_counts(self.gov), {"EVD-17": 1})
+
+    def test_empty_ledger_and_absent_sources_have_different_outcomes(self):
+        import premise_tracker as pt
+        hot = self.gov / "evidence-log.md"
+        hot.unlink()
+        receipt = self._count_cli(expected_code=2)
+        self.assertEqual(receipt["code"], "refused")
+        self.assertFalse((self.gov / pt.EVENTS_FILE_NAME).exists())
+        hot.write_bytes(b"")
+        self.assertEqual(pt.evidence_bypass_counts(self.gov), {})
+        self.assertEqual(self._count_cli()["effect"], "written")
+        event, = pt.load_events(self.gov)
+        self.assertEqual((event["refs"], event["total"]), ("no rows", 0))
+
+    def test_unreadable_or_missing_indexed_evidence_preserves_prior_events(self):
+        import premise_tracker as pt
+        self.assertEqual(self._count_cli()["effect"], "written")
+        events = self.gov / pt.EVENTS_FILE_NAME
+        original = events.read_bytes()
+        cold = self.gov / "archive/evidence"
+        cold.mkdir(parents=True)
+        index = self.gov / "archive/index.md"
+        missing = ("## Evidence 索引\n| Evidence ID | Task | Archive |\n|---|---|---|\n"
+                   "| EVD-1 | REL-1 | archive/evidence/missing.md |\n").encode("utf-8")
+        for label, index_data, volume_data, diagnostic in (
+                ("missing volume", missing, b"", "missing.md"),
+                ("invalid index", b"\xff", b"", "utf-8"),
+                ("invalid volume", b"", b"\xff", "utf-8")):
+            with self.subTest(label=label):
+                index.write_bytes(index_data)
+                (cold / "present.md").write_bytes(volume_data)
+                receipt = self._count_cli(expected_code=2)
+                self.assertEqual(receipt["code"], "refused")
+                self.assertTrue(receipt["error"])
+                self.assertIn(diagnostic, receipt["detail"])
+                self.assertEqual(events.read_bytes(), original)
+        index.unlink()
+        (cold / "present.md").write_bytes(b"")
+        hot = self.gov / "evidence-log.md"
+        hot.unlink()
+        hot.mkdir()
+        self.assertIn("evidence-log.md", self._count_cli(expected_code=2)["detail"])
+        self.assertEqual(events.read_bytes(), original)
 
 
 class PremiseAutoSourceTests(unittest.TestCase):
@@ -2148,18 +2267,12 @@ class PremiseAutoSourceTests(unittest.TestCase):
         self.assertEqual(pt.count_pin_recurrences("no rows here")["count"], 0)
 
     def test_live_tree_bypass_floor(self):
-        # Live governance data is LOCAL runtime data (gitignored): the CI
-        # checkout does not carry it — the floor assert runs only where
-        # the tree exists; the row-shape semantics stay machine-judged
-        # everywhere via test_bypass_row_shapes_and_exclusions.
         import premise_tracker as pt
-        repo_root = _INFRA_DIR.parents[2]
-        evidence_path = repo_root / ".governance" / "evidence-log.md"
-        if not evidence_path.is_file():
-            self.skipTest("live governance data absent (CI checkout)")
-        self.assertGreaterEqual(
-            pt.count_hook_bypasses(
-                evidence_path.read_text(encoding="utf-8"))["count"], 3)
+        for ledger in _historical_calibration_ledgers():
+            with self.subTest(ledger=ledger):
+                counts = pt.evidence_bypass_counts(ledger)
+                # e254584, M-7 and M-5b. EVD-2146 re-reports e254584.
+                self.assertGreaterEqual(counts["EVD-2145"] + counts["EVD-2148"], 3)
 
 
 class HostRootRebindCanaryTests(unittest.TestCase):

@@ -42,6 +42,31 @@ from archive_parsing import (
     _parse_version_from_title,
 )
 
+
+def evidence_archive_files(directory):
+    """Canonical evidence volumes, including legacy names, in replay order."""
+    try:
+        return sorted(path for path in directory.iterdir() if path.match("*.md"))
+    except FileNotFoundError:
+        return []
+
+
+def iter_evidence_family_rows(evidence_path, archive_files, prefix):
+    """Yield the working ledger first, then the supplied archive volumes."""
+    def records(path, source, label):
+        for line in path.read_text(encoding="utf-8").split("\n"):
+            if line.strip().startswith(prefix):
+                parts = line.split("|", 3)
+                if len(parts) >= 3:
+                    yield {"row_id": parts[1].strip(), "task_ids": parts[2].strip(),
+                           "line": line, "source": source, "file": label}
+
+    if evidence_path.is_file():
+        yield from records(evidence_path, "hot", ".governance/evidence-log.md")
+    for path in archive_files:
+        yield from records(path, "cold", f"archive/evidence/{path.name}")
+
+
 def _make_archive_filename(version_start, version_end, category="tasks"):
     """Generate archive file name: v{start}~v{end}.md"""
     return f"v{version_start}~v{version_end}.md"

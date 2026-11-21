@@ -7,8 +7,6 @@ from pathlib import Path
 
 # These tests read the current host project's private governance records.
 PRIVATE_DATA_TESTS = {
-    "test_governance_store.PremiseAutoSourceTests.test_live_tree_bypass_floor",
-    "test_governance_store.PremiseTrackerEventTests.test_dec368_retro_calibration_readonly_demo",
     "test_hooks.RealEvdStep12ReplayTests.test_current_real_rows_all_clean_under_real_step12",
     "test_triage_write_guard.GovernanceWriteGuardPlanTrackerTests.test_live_plan_tracker_flags_only_known_m1_rows",
 }

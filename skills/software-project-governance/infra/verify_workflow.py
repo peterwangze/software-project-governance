@@ -1012,22 +1012,22 @@ REQUIRED_SNIPPETS = {
         "## [0.5.0]",
     ],
     ROOT / ".claude-plugin/plugin.json": [
-        "0.100.0",
+        "0.101.0",
     ],
     ROOT / ".claude-plugin/marketplace.json": [
-        "0.100.0",
+        "0.101.0",
     ],
     ROOT / ".codex-plugin/plugin.json": [
-        "0.100.0",
+        "0.101.0",
     ],
     ROOT / ".zcode-plugin/plugin.json": [
-        "0.100.0",
+        "0.101.0",
     ],
     ROOT / "package.json": [
-        "0.100.0",
+        "0.101.0",
     ],
     ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.100.0",
+        "0.101.0",
     ],
 }
 
@@ -5741,26 +5741,15 @@ def check_release_readiness(
             details.setdefault("release_warnings", []).append(
                 f"provenance release gate: {warning}")
 
-    # FIX-405 / RISK-061: SD readability over the write-affected faces
-    # (release-projection targets + the .git/hooks face). Unreadable →
-    # FAIL with the takeown/icacls remediation inline (M-1 后置步——
-    # the release gate is where accumulated SD damage must block).
-    from checks.sd_integrity import (
-        hooks_face_paths as _sd_hooks_face,
-        projection_face_paths as _sd_projection_face,
-        scan_sd_readability as _sd_scan,
-    )
-    # FIX-406 F-1: a plan that cannot be built is an EXPLICIT issue — the
-    # face error is lifted into the details/issues faces instead of being
-    # silently dropped behind .get("paths", []) (vacuous-PASS fix).
-    _sd_face = _sd_projection_face(PLUGIN_ROOT) if plugin_release else {"paths": []}
+    # A Git lookup failure is distinct from denied access to a resolved hook.
+    from checks.sd_integrity import release_face_paths, scan_sd_readability
+    _sd_face = release_face_paths(HOST_PROJECT_ROOT, PLUGIN_ROOT if plugin_release else None)
     _sd_face_error = _sd_face.get("error")
     if _sd_face_error:
         issues.append(f"sd integrity: {_sd_face_error}")
-    _sd_face_paths = list(_sd_face.get("paths", []))
-    hook_paths = _sd_hooks_face(HOST_PROJECT_ROOT)
-    _sd_face_paths.extend(hook_paths if plugin_release else (path for path in hook_paths if os.path.lexists(path)))
-    sd_scan = _sd_scan(_sd_face_paths)
+    sd_scan = scan_sd_readability(_sd_face["paths"])
+    if _sd_face_error:
+        sd_scan["pass"] = False
     sd_issues = [f"{path} unreadable — remediate: {cmd}"
                  for path, cmd in zip(sd_scan["unreadable"], sd_scan["remediation"])]
     details["sd_integrity"] = {**sd_scan, "face_error": _sd_face_error, "issues": sd_issues}

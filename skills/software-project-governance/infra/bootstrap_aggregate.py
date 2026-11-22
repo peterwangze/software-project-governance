@@ -840,10 +840,13 @@ def _next_actions(payload, envelope):
                        % (reason.get("kind"),
                           reason.get("nearest_action") or reason.get(
                               "message", "")))
-    hooks = (payload.get("resolve") or {}).get("hooks_installed") or {}
+    resolution = payload.get("resolve") or {}
+    hooks = resolution.get("hooks_installed") or {}
     if hooks and not all(hooks.values()):
-        actions.append("安装治理 git hooks：cp <plugin_home>/infra/hooks/* "
-                       ".git/hooks/")
+        if resolution.get("diagnostic"):
+            actions.append("按 resolve.diagnostic 核实宿主的 Git hooks 目录。")
+        else:
+            actions.append("安装缺失的治理 git hooks。使用 git rev-parse --git-path hooks 核实该项目的目标目录。")
     # The rollout switch outranks every other hint when it is engaged: an
     # operator who forgot that a rollback is active must learn it FIRST (the
     # cap below could otherwise drop the line entirely).

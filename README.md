@@ -17,7 +17,7 @@ Use this workflow when your AI coding setup needs:
 
 For the source layout, runtime entry points and project data locations, see the [repository navigation](https://github.com/peterwangze/software-project-governance/blob/master/project/references/architecture.md#当前目录导航). The [version history](https://github.com/peterwangze/software-project-governance/blob/master/project/CHANGELOG.md) records release changes.
 
-For [v0.100.0](https://github.com/peterwangze/software-project-governance/releases/tag/v0.100.0), see the [release checklist](docs/release/release-checklist-0.100.0.md) and [rollback plan](docs/release/rollback-plan-0.100.0.md). Earlier reviews, experiment results and release checklists remain available in the [project history](https://github.com/peterwangze/software-project-governance/tree/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs).
+The v0.101.0 release plan compares the workflow with v0.100.0 on a game and a command-line application. It follows each original goal through design changes, independent acceptance and recovery. See the [release scope](https://github.com/peterwangze/software-project-governance/blob/v0.101.0/docs/release/version-plan-0.101.0.md), [release checklist](https://github.com/peterwangze/software-project-governance/blob/v0.101.0/docs/release/release-checklist-0.101.0.md) and [rollback instructions](https://github.com/peterwangze/software-project-governance/blob/v0.101.0/docs/release/rollback-plan-0.101.0.md). Published packages are available from [GitHub Releases](https://github.com/peterwangze/software-project-governance/releases).
 
 ## Mainstream Agent Loading
 

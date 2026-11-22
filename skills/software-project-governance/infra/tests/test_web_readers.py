@@ -2,6 +2,8 @@
 
 import io
 import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -69,6 +71,33 @@ def request_payload(server, root):
         handler.do_GET()
     headers, body = handler.wfile.getvalue().split(b"\r\n\r\n", 1)
     return headers, json.loads(body)
+
+
+class WebPackageTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("npm"), "npm is required to inspect the distributed package")
+    def test_tarball_contains_console_inputs_and_excludes_local_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary)
+            shutil.copyfile(ROOT / "package.json", package / "package.json")
+            inputs = {"index.html", "package.json", "package-lock.json", "server.py", "vite.config.js",
+                      "src/main.jsx", "src/styles.css", "public/favicon.svg"}
+            for name in inputs:
+                destination = package / "web" / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(ROOT / "web" / name, destination)
+            local_files = {"local-notes.txt", ".api-server.pid", "web-dev.log", "dist/index.html",
+                           "node_modules/local-package/index.js"}
+            for name in local_files:
+                destination = package / "web" / name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text("local runtime file", encoding="utf-8")
+            output = subprocess.check_output(
+                [shutil.which("npm"), "pack", "--dry-run", "--offline", "--ignore-scripts", "--json"],
+                cwd=package, encoding="utf-8", timeout=60,
+            )
+            shipped = {entry["path"] for entry in json.loads(output)[0]["files"]}
+            self.assertEqual({path for path in shipped if path.startswith("web/")},
+                             {"web/" + name for name in inputs})
 
 
 class WebReaderContractTests(unittest.TestCase):

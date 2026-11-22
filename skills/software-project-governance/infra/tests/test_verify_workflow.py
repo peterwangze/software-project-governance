@@ -127,6 +127,17 @@ def _governance_temp_dir(prefix="spg-test-"):
         shutil.rmtree(path, ignore_errors=True)
 
 
+@contextlib.contextmanager
+def _historical_release_host():
+    """Run plugin-release wiring against its own project facts and opt-in state."""
+    with _governance_temp_dir("spg-release-host-") as directory:
+        root = Path(directory)
+        governance = root / ".governance"
+        with patch.multiple(vw, HOST_PROJECT_ROOT=root, PLUGIN_ROOT=root,
+                            GOVERNANCE_DIR=governance, SAMPLE_PATH=governance / "plan-tracker.md"):
+            yield
+
+
 class FIX404ExternalValidationCleanupContractTests(unittest.TestCase):
     """FIX-404: the FIX-403 cleanup-crash defect family in the external
     project validation workspace (``spg-external-validation-``).
@@ -4542,6 +4553,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             }),
             patch.object(vw, "check_release_docs_coverage", return_value=[]),
             *_clean_sd_face_patches(),
+            _historical_release_host(),
             patch("loop_workflow.release_issues", return_value=[]),
         ]
 
@@ -4780,6 +4792,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                     changelog_path=changelog,
                 )
             self.assertTrue(result["pass"])
+            self.assertEqual("NOT_CONFIGURED", result["details"]["delivery_acceptance"]["state"])
             adapter_mock = mocks[5]
             adapter_mock.assert_called_once_with(run_runtime=True)
             self.assertIn("governance_pack_status", result["details"])
@@ -5566,6 +5579,7 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
             }),
             patch.object(vw, "check_release_docs_coverage", return_value=[]),
             *_clean_sd_face_patches(),
+            _historical_release_host(),
             patch("loop_workflow.release_issues", return_value=[]),
         ]
 
@@ -6021,6 +6035,7 @@ class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
                          return_value=[]),
 
             *_clean_sd_face_patches(),
+            _historical_release_host(),
             patch("loop_workflow.release_issues", return_value=[]),
         ]
 

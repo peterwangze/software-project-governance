@@ -272,6 +272,32 @@ def detect_scenario(
     return "F"
 
 
+def git_hooks_dir(host_root):
+    """Resolve Git's active hooks for this host only, including linked worktrees."""
+    import subprocess
+
+    root = Path(host_root).absolute()
+    marker = root / ".git"
+    if not marker.is_file() and not os.path.lexists(marker / "HEAD"):
+        # An uninitialized host may stage hook files before git init. Never
+        # ask Git to discover a containing repository on behalf of this root.
+        return marker / "hooks"
+    try:
+        result = subprocess.run(
+            ["git", "--git-dir", str(marker), "--work-tree", str(root), "rev-parse",
+             "--path-format=absolute", "--git-path", "hooks"],
+            cwd=root, env=os.environ.copy(), stdin=subprocess.DEVNULL,
+            capture_output=True, timeout=2, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"could not resolve Git hooks for {root}: {exc}") from exc
+    directory = Path(os.fsdecode(result.stdout).rstrip("\r\n"))
+    if result.returncode or not directory.is_absolute():
+        reason = os.fsdecode(result.stderr).strip() or "Git returned no absolute hook directory"
+        raise ValueError(f"could not resolve Git hooks for {root}: {reason}")
+    return directory
+
+
 def resolve(host_root=None):
     """Build the resolution envelope dict for the given host root.
 
@@ -306,7 +332,6 @@ def resolve(host_root=None):
     gov_dir = host_root / ".governance"
     plan_tracker_path = gov_dir / "plan-tracker.md"
     snapshot_path = gov_dir / "session-snapshot.md"
-    hooks_dir = host_root / ".git" / "hooks"
 
     governance_initialized = plan_tracker_path.is_file()
     snapshot_dt = _parse_snapshot_date(snapshot_path)
@@ -318,9 +343,13 @@ def resolve(host_root=None):
             hours=SNAPSHOT_FRESH_HOURS
         )
 
-    hooks_installed = {
-        h: (hooks_dir / h).is_file() for h in HOOK_NAMES
-    }
+    diagnostic = None
+    try:
+        hooks_dir = git_hooks_dir(host_root)
+        hooks_installed = {h: (hooks_dir / h).is_file() for h in HOOK_NAMES}
+    except (OSError, ValueError) as exc:
+        diagnostic = str(exc)
+        hooks_installed = dict.fromkeys(HOOK_NAMES, False)
 
     scenario_hint = detect_scenario(
         host_root, gov_dir, plan_tracker_path, snapshot_path,
@@ -339,7 +368,7 @@ def resolve(host_root=None):
         "hooks_installed": hooks_installed,
         "scenario_hint": scenario_hint,
         "resolved_root_ok": True,
-        "diagnostic": None,
+        "diagnostic": diagnostic,
     }
 
 

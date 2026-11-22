@@ -127,6 +127,17 @@ def _governance_temp_dir(prefix="spg-test-"):
         shutil.rmtree(path, ignore_errors=True)
 
 
+@contextlib.contextmanager
+def _historical_release_host():
+    """Run plugin-release wiring against its own project facts and opt-in state."""
+    with _governance_temp_dir("spg-release-host-") as directory:
+        root = Path(directory)
+        governance = root / ".governance"
+        with patch.multiple(vw, HOST_PROJECT_ROOT=root, PLUGIN_ROOT=root,
+                            GOVERNANCE_DIR=governance, SAMPLE_PATH=governance / "plan-tracker.md"):
+            yield
+
+
 class FIX404ExternalValidationCleanupContractTests(unittest.TestCase):
     """FIX-404: the FIX-403 cleanup-crash defect family in the external
     project validation workspace (``spg-external-validation-``).
@@ -4542,6 +4553,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
             }),
             patch.object(vw, "check_release_docs_coverage", return_value=[]),
             *_clean_sd_face_patches(),
+            _historical_release_host(),
             patch("loop_workflow.release_issues", return_value=[]),
         ]
 
@@ -4780,6 +4792,7 @@ class ReleaseReadinessCommandTests(unittest.TestCase):
                     changelog_path=changelog,
                 )
             self.assertTrue(result["pass"])
+            self.assertEqual("NOT_CONFIGURED", result["details"]["delivery_acceptance"]["state"])
             adapter_mock = mocks[5]
             adapter_mock.assert_called_once_with(run_runtime=True)
             self.assertIn("governance_pack_status", result["details"])
@@ -5566,6 +5579,7 @@ class Feat016DshUpgradeRegressionReleaseGateTests(unittest.TestCase):
             }),
             patch.object(vw, "check_release_docs_coverage", return_value=[]),
             *_clean_sd_face_patches(),
+            _historical_release_host(),
             patch("loop_workflow.release_issues", return_value=[]),
         ]
 
@@ -6021,6 +6035,7 @@ class Fix299CheckReleaseExitCodeTests(unittest.TestCase):
                          return_value=[]),
 
             *_clean_sd_face_patches(),
+            _historical_release_host(),
             patch("loop_workflow.release_issues", return_value=[]),
         ]
 
@@ -18540,7 +18555,7 @@ class SdIntegrityGateTests(unittest.TestCase):
         for hook in ("pre-commit", "prepare-commit-msg", "commit-msg",
                      "post-commit"):
             self.assertIn(hook, names)
-        self.assertIn(".git", str(faces[0]))
+        self.assertTrue(all(Path(path).parent == faces[0] for path in faces[1:]))
 
     def test_projection_face_resolves_from_the_live_plan(self):
         from checks import sd_integrity as sdi
@@ -25151,6 +25166,62 @@ class PullRequestMergeTraceabilityTests(unittest.TestCase):
         self.assert_merge_task(None, self.feature_tree, self.title, self.base, self.feature, diverged)
         untracked = self.commit_tree(self.feature_tree, "unticketed input", self.base)
         self.assert_merge_task(None, self.feature_tree, self.title, self.base, untracked)
+
+
+class ReleaseHookLocationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="release-hook-location-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve() / "ordinary"
+        self.root.mkdir()
+        git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                   "GIT_CONFIG_COUNT": "0"}
+        env = patch.object(os, "environ", git_env)
+        env.start()
+        self.addCleanup(env.stop)
+        self.git("init", "--quiet")
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.root), *args], env=os.environ,
+                       check=True, capture_output=True)
+
+    def test_ordinary_and_linked_worktree_use_gits_active_hook_path(self):
+        from checks.sd_integrity import HOOK_FACE, hooks_face_paths, scan_sd_readability
+        from resolve_entry import resolve
+        hooks = self.root / ".git" / "hooks"
+        hooks.mkdir(exist_ok=True)
+        expected = [hooks, *(hooks / name for name in HOOK_FACE)]
+        for hook in expected[1:]:
+            hook.write_text("# fixture\n", encoding="utf-8")
+        self.assertEqual(hooks_face_paths(self.root), expected)
+        isolated_hooks = ["-c", "core.hooksPath=" + str(self.root / "no-hooks")]
+        self.git(*isolated_hooks, "-c", "user.name=test", "-c", "user.email=test@example.com",
+                 "commit", "--allow-empty", "-m", "baseline")
+        linked = self.root.parent / "linked worktree"
+        self.git(*isolated_hooks, "worktree", "add", "--detach", str(linked))
+        self.assertTrue((linked / ".git").is_file())
+        self.assertEqual(hooks_face_paths(linked), expected)
+        self.assertTrue(all(resolve(linked)["hooks_installed"].values()))
+        self.assertTrue(scan_sd_readability(hooks_face_paths(linked))["pass"])
+        denied = expected[1]
+        blocked = scan_sd_readability(hooks_face_paths(linked), access=lambda path, mode: path != denied)
+        self.assertEqual(blocked["unreadable"], [str(denied)])
+        self.git("config", "core.hooksPath", "team hooks")
+        self.assertEqual(hooks_face_paths(self.root)[0], self.root / "team hooks")
+        self.assertEqual(hooks_face_paths(linked)[0], linked / "team hooks")
+
+    def test_nested_consumer_and_invalid_gitfile_never_select_parent_hooks(self):
+        from checks.sd_integrity import hooks_face_paths, release_face_paths
+        from resolve_entry import resolve
+        nested = self.root / "consumer"
+        nested.mkdir()
+        self.assertEqual(hooks_face_paths(nested)[0], nested / ".git" / "hooks")
+        self.assertEqual(release_face_paths(nested), {"paths": []})
+        (nested / ".git").write_text("gitdir: missing-repository\n", encoding="utf-8")
+        result = release_face_paths(nested)
+        self.assertEqual(result["paths"], [])
+        self.assertIn("could not resolve Git hooks", result["error"])
+        self.assertIn("could not resolve Git hooks", resolve(nested)["diagnostic"])
 
 
 if __name__ == "__main__":

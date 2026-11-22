@@ -415,12 +415,8 @@ def verify_review_trust(review_file, repo_root=None, *, current_worktree=True):
     if commit_match is not None and commit_match.group(1) != "git:unavailable":
         resolved = _git_output(root, "rev-parse", "--verify", "--quiet",
                                commit_match.group(1) + "^{commit}")
-        git_alive = _git_output(root, "rev-parse", "--verify", "--quiet",
-                                "HEAD") is not None
-        current = None
-        if resolved is not None:
-            current = resolved
-        elif git_alive:
+        current = resolved
+        if resolved is None and _git_output(root, "rev-parse", "--verify", "--quiet", "HEAD") is not None:
             current = ""
         state = _pin_check(
             face["checks"], "snapshot_commit", commit_match.group(1),

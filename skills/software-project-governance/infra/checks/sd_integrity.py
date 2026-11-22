@@ -28,6 +28,7 @@ __all__ = [
     "REMEDIATION_TEMPLATE_DIR",
     "hooks_face_paths",
     "projection_face_paths",
+    "release_face_paths",
     "remediation_for",
     "scan_sd_readability",
 ]
@@ -64,11 +65,22 @@ def remediation_for(path):
 
 
 def hooks_face_paths(root):
-    """The .git/hooks face: the directory itself + the four hook files."""
-    hooks_dir = Path(root) / ".git" / "hooks"
-    faces = [hooks_dir]
-    faces.extend(hooks_dir / name for name in HOOK_FACE)
-    return faces
+    """Probe the hook directory Git uses for this worktree and its four hooks."""
+    from resolve_entry import git_hooks_dir
+
+    hooks_dir = git_hooks_dir(root)
+    return [hooks_dir, *(hooks_dir / name for name in HOOK_FACE)]
+
+
+def release_face_paths(host_root, plugin_root=None):
+    face = projection_face_paths(plugin_root) if plugin_root else {"paths": []}
+    try:
+        hooks = hooks_face_paths(host_root)
+    except (OSError, ValueError) as exc:
+        errors = [message for message in (face.get("error"), str(exc)) if message]
+        return {"paths": face["paths"], "error": "; ".join(errors)}
+    paths = hooks if plugin_root else [path for path in hooks if os.path.lexists(path)]
+    return {**face, "paths": [*face["paths"], *paths]}
 
 
 def projection_face_paths(root, config_path=None):

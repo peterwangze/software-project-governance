@@ -1,7 +1,7 @@
 ---
 name: software-project-governance
 metadata:
-  version: "0.100.0"
+  version: "0.101.0"
 description: 软件项目治理工作流——加载后主 agent 即 Coordinator。用户入口：/governance（一条命令覆盖全部场景）
 ---
 
@@ -99,7 +99,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 **1. 读取运行状态。** 从宿主注入位置运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。同次启动复用已验证的结果。退出失败、JSON 无效、`resolve.resolved_root_ok` 不为 true 时停止并展示诊断。按 `loops` 恢复目标、单元、层级、当前轮次、最新判定与待办。数据缺失时按[多层循环](core/lifecycle.md)登记第一项实际工作，内容损坏时保留原件。`loop status --unit <id> --json` 可独立复读同一状态。
 
-从 `intent` 读取用户原意与来源，以 `acceptance` 核对当前工作是否仍交付其预期结果。新观察改变方案时，在该单元用 `loop learn --kind decision` 记录试用证据、选择和复验方法，并回到原验收。交付时汇报独立验收或实测的用户结果。将有依据的后续方向和成功条件记为 `opportunity`；选定后在授权范围内开后继单元。工作流自身的改动也用真实失败任务和正常对照重放。[参数及实测示例](core/lifecycle.md)
+从 `root_contract` 核对用户原话、来源及原验收，子项的 `acceptance` 只描述本地操作。旧单元读取既有 `intent` 和来源。成品任务用 `--criteria` 登记用户能复验的结果，待契约就绪后用 `loop bind-product` 绑定。已有可复现失败时先从用户入口重现，直接验证能解决问题的最小修改；同一制品的既有证据在输入、判据和证据仍有效时可复用。只有新观察会改变取舍时，才用 `loop learn --kind decision` 登记候选、受影响判据与复验方法，一般观察可用 `--kind note`。交付时汇报成品通过和未通过的操作、证据及代价。把有依据的后续方向与成功条件记为 `opportunity`，选定后在授权范围内开后继单元。工作流自身的改动也用真实失败任务和正常对照重放。[参数及实测示例](core/lifecycle.md)
 
 首次交互只显示对本次工作的实质影响。已明确的目标直接沿获授权范围执行；需用户决定的输入和发布边界沿 M5 办理。深检按 §B2 执行。
 

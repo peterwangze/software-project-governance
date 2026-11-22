@@ -93,8 +93,12 @@ class ReviewRecordPersistenceTests(unittest.TestCase):
         self.assertIn("| FIX-236 |", ev)
         self.assertIn("APPROVED", ev)
         self.assertEqual(summary["trust"]["commit"], self.reviewed_commit)
-        self.assertEqual(review_record.verify_review_trust(
-            review_file, repo_root=self.root)["verdict"], "CLEAN")
+        with mock.patch.object(review_record, "_git_output", wraps=review_record._git_output) as git:
+            self.assertEqual(review_record.verify_review_trust(
+                review_file, repo_root=self.root)["verdict"], "CLEAN")
+        pinned = mock.call(self.root, "rev-parse", "--verify", "--quiet", self.reviewed_commit + "^{commit}")
+        self.assertIn(pinned, git.call_args_list)
+        self.assertNotIn(mock.call(self.root, "rev-parse", "--verify", "--quiet", "HEAD"), git.call_args_list)
 
     def test_approved_with_notes_writes_blocker_token(self):
         # Legacy source reports with no field can still be recorded.

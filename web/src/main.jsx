@@ -394,11 +394,83 @@ function StatusPage({ data }) {
   );
 }
 
+// Intent was an object in older records; root contracts may carry the original string.
+function recordText(value) {
+  if (value == null) return 'Not recorded';
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+function RequestBasis({ intent, source }) {
+  const structured = intent && typeof intent === 'object' && !Array.isArray(intent);
+  const references = structured && Array.isArray(intent.prior_art) ? intent.prior_art : [];
+  const origin = source ?? (structured ? intent.source : null);
+  return <>
+    {recordText(structured ? intent.basis ?? intent : intent)}
+    {origin && <><br />Source · {recordText(origin)}</>}
+    {references.length > 0 && <><br />References · {references.map(recordText).join(', ')}</>}
+  </>;
+}
+
+function Criteria({ criteria }) {
+  if (!criteria || typeof criteria !== 'object') return recordText(criteria);
+  return Object.entries(criteria).map(([id, condition]) => (
+    <div key={id}><code>{id}</code> · {recordText(condition)}</div>
+  ));
+}
+
+function RootContract({ contract }) {
+  if (!contract) return <>
+    <dt>Root task</dt><dd>Root contract not recorded. Earlier records retain their local acceptance; verify the original request before claiming delivery.</dd>
+  </>;
+  return <>
+    <dt>Root task</dt><dd>{recordText(contract.unit)} · revision {contract.revision ?? 0}</dd>
+    <dt>Original request</dt><dd><RequestBasis intent={contract.intent} source={contract.source} /></dd>
+    <dt>Root acceptance</dt><dd>{recordText(contract.acceptance)}</dd>
+    {contract.original_criteria && <><dt>Original criteria</dt><dd><Criteria criteria={contract.original_criteria} /></dd></>}
+    <dt>Current root criteria</dt><dd><Criteria criteria={contract.criteria} /></dd>
+    {contract.revisions?.length > 0 && <><dt>Root revisions</dt><dd>
+      {contract.revisions.map((revision, index) => <details key={revision.id ?? index}>
+        <summary>{recordText(revision.id)} · {recordText(revision.kind)}</summary>
+        <dl className="unit-facts">
+          <dt>Reason</dt><dd>{recordText(revision.reason)}</dd>
+          <dt>Source actor</dt><dd>{recordText(revision.actor)}</dd>
+          <dt>Base revision</dt><dd>{recordText(revision.base_revision)}</dd>
+          <dt>Affected criteria</dt><dd><Criteria criteria={revision.criteria} /></dd>
+          <dt>Evidence</dt><dd>{recordText(revision.evidence)}</dd>
+          {revision.decision && <><dt>Authorization</dt><dd>{recordText(revision.decision)}</dd></>}
+        </dl>
+      </details>)}
+    </dd></>}
+  </>;
+}
+
+function Revalidation({ result }) {
+  if (!result) return <>
+    <dt>Candidate revalidation</dt><dd>Not recorded. Observation evidence alone does not establish acceptance of the current candidate.</dd>
+  </>;
+  const nextSteps = {
+    pending: 'Run scoped acceptance on this candidate and retain the receipt.',
+    passed: 'Confirm remaining root criteria before claiming root delivery.',
+    failed: 'Use the failed sample to revise or replace the approach, then rerun acceptance.',
+    stale: 'Recheck the current candidate and affected criteria with fresh evidence.'
+  };
+  return <>
+    <dt>Candidate</dt><dd>{recordText(result.candidate)}</dd>
+    <dt>Rechecked criteria</dt><dd>{(result.criteria ?? []).map(recordText).join(', ') || 'Not recorded'}</dd>
+    <dt>Candidate revalidation</dt><dd>
+      <span className={`value-chip ${result.status === 'passed' ? 'success' : 'warning'}`}>{recordText(result.status)}</span>
+      {result.reason && <><br />{recordText(result.reason)}</>}
+    </dd>
+    <dt>Acceptance proof</dt><dd>{result.evidence_ref ? recordText(result.evidence_ref) : 'No acceptance receipt recorded'}</dd>
+    <dt>Next step</dt><dd>{nextSteps[result.status] ?? 'Read the current runtime status before proceeding.'}</dd>
+  </>;
+}
+
 function WorkUnit({ unit }) {
   const blockers = unit.blockers ?? [];
   const review = unit.last_review;
   const returnTo = unit.return_to;
-  const evidence = unit.evidence_refs.filter((ref) => ref !== review?.evidence_ref);
+  const evidence = (unit.evidence_refs ?? []).filter((ref) => ref !== review?.evidence_ref);
   const learningIssues = unit.learning?.filter((entry) => entry.evidence_issue).length ?? 0;
   const gateTone = ['failed', 'blocked', 'escalated', 'unverified'].includes(unit.gate_status) ? 'warning' : 'neutral';
   return (
@@ -411,12 +483,16 @@ function WorkUnit({ unit }) {
         </div>
       </header>
       <dl className="unit-facts">
+        <RootContract contract={unit.root_contract} />
+        <dt>Local scope</dt><dd>{unit.root_contract?.unit === unit.flow_unit_id
+          ? 'Root task · all current root criteria'
+          : unit.parent_unit_id ? `Child of ${unit.parent_unit_id} · local success requires separate root acceptance`
+            : 'This work unit · root scope not recorded'}
+          {unit.criterion_scope?.length > 0 && <><br />Root criteria served · {unit.criterion_scope.join(', ')}</>}
+        </dd>
         {unit.goal && unit.goal !== unit.title && <><dt>Goal</dt><dd>{unit.goal}</dd></>}
-        {unit.intent && <><dt>Request basis</dt><dd>{unit.intent.basis}<br />
-          Source · {unit.intent.source}
-          {unit.intent.prior_art.length > 0 && <><br />References · {unit.intent.prior_art.join(', ')}</>}
-        </dd></>}
-        {unit.acceptance && <><dt>Acceptance</dt><dd>{unit.acceptance}</dd></>}
+        {unit.intent && <><dt>Local request basis</dt><dd><RequestBasis intent={unit.intent} /></dd></>}
+        {unit.acceptance && <><dt>Local acceptance</dt><dd>{unit.acceptance}</dd></>}
         <dt>Next action</dt><dd>{unit.next_action}</dd>
         <dt>Local gate</dt><dd><span className={`value-chip ${gateTone}`}>{unit.gate_id} · {unit.gate_status}</span></dd>
         {returnTo && <><dt>Return after rework</dt><dd>{returnTo.tier} loop · {returnTo.gate} · round {returnTo.loop_count}</dd></>}
@@ -427,25 +503,27 @@ function WorkUnit({ unit }) {
         {review ? <><dt>{unit.state === 'invalid' ? 'Recorded decision (unverified)' : 'Last review'}</dt><dd>{review.gate} · round {review.iteration} · {review.result}<br />{review.evidence_ref}</dd></>
           : unit.last_gate_result && <><dt>Last decision</dt><dd>{unit.last_gate_result}</dd></>}
         {blockers.length > 0 && <><dt>Blocked by</dt><dd>{blockers.join(', ')}</dd></>}
-        {unit.waiting_on.length > 0 && <><dt>Waiting on</dt><dd>{unit.waiting_on.join(', ')}</dd></>}
-        {unit.open_children.length > 0 && <><dt>Open child units</dt><dd>{unit.open_children.join(', ')}</dd></>}
+        {unit.waiting_on?.length > 0 && <><dt>Waiting on</dt><dd>{unit.waiting_on.join(', ')}</dd></>}
+        {unit.open_children?.length > 0 && <><dt>Open child units</dt><dd>{unit.open_children.join(', ')}</dd></>}
         {evidence.length > 0 && <><dt>Evidence</dt><dd>{evidence.join(', ')}</dd></>}
       </dl>
       {unit.learning?.length > 0 && (
-        <details>
-          <summary>Decisions and opportunities ({unit.learning.length})
+        <details open>
+          <summary>Observations, evaluated approaches and opportunities ({unit.learning.length})
             {learningIssues > 0 && ` · ${learningIssues} with unverified evidence`}
           </summary>
           {unit.learning.map((entry) => (
             <section key={entry.id}>
-              <h3>{entry.kind === 'decision' ? 'Approach decision' : 'Optional next step'} · {entry.id}</h3>
               <dl className="unit-facts">
-                <dt>Observed</dt><dd>{entry.observation}</dd>
-                <dt>Action</dt><dd>{entry.action}</dd>
-                <dt>Validation</dt><dd>{entry.validation}</dd>
-                <dt>Evidence</dt><dd>{entry.evidence}
+                <dt>{entry.kind === 'note' ? 'Observation note' : entry.kind === 'decision' ? 'Approach decision' : 'Optional opportunity'}</dt><dd>{entry.id}</dd>
+                <dt>Trial / observation</dt><dd>{entry.observation}</dd>
+                <dt>{entry.kind === 'note' ? 'Recorded action' : entry.kind === 'decision' ? 'Chosen approach' : 'Proposed next step'}</dt><dd>{entry.action}</dd>
+                <dt>{entry.kind === 'note' ? 'Recorded check' : entry.kind === 'decision' ? 'Revalidation method' : 'Success condition'}</dt><dd>{entry.validation}</dd>
+                <dt>Observation evidence</dt><dd>{entry.evidence}
                   {entry.evidence_issue && <><br />Evidence unverified · {entry.evidence_issue}</>}
                 </dd>
+                {entry.kind === 'decision' ? <Revalidation result={entry.revalidation} />
+                  : entry.kind !== 'note' && <><dt>Next step</dt><dd>Select this opportunity explicitly and confirm its authorization before starting a successor unit.</dd></>}
               </dl>
             </section>
           ))}

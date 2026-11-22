@@ -1,0 +1,1291 @@
+{
+  "workflow_baseline": "37ac96d322e4c874f0ba83ff6fe80b392fe2cb51",
+  "baseline_tree": "c60184310838008932bd11f5ccdd7aa1eac101c5",
+  "workflow_candidate": "a8ba10f0f07c87e9b876b8d64f1f60c745727512",
+  "candidate_tree": "8e33d381af3cc253037e4a9daf41794f9ca083fe",
+  "protocol_sha256": "1aefc79bebd6e396205d39f7eb0d54e3eddf7ec388b3684a8af4db7ec2fe8603",
+  "anonymous_result_seal_sha256": "b5959a30084382f56106542d4735c58b8ae6266f3d61f8a8637db043c63faf52",
+  "evaluator_source_hashes": {
+    "click_stdout.py": "f3717a18af326b3cf4e0e761b7c594f26cb92992e63fe0924d784ca319f5ab62",
+    "rpg_save.py": "a0a1c9ebddf96127f4439c289b4238f26e75f0e276e21ec02dee84b724d657c2"
+  },
+  "engine": {
+    "model": "gpt-6.1-sol",
+    "reasoning": "medium",
+    "host": "Codex CLI 0.165.0, Windows, Python 3.14.3, workspace-write",
+    "wall_limit_seconds": 1200,
+    "seed": 102
+  },
+  "controls": {
+    "bad-click": {
+      "result_sha256": "9e442e0b2e0b2e926cf35a801aac86c1dfcc8c87901463f4d846c67f338d4b48",
+      "passed": false,
+      "scenarios": {
+        "cli-runner": {
+          "passed": false,
+          "exit": 1,
+          "stdout": ""
+        },
+        "redirected-process": {
+          "passed": true,
+          "exit": 0,
+          "stdout": "invoice 17\nprinted 17\n"
+        }
+      },
+      "failure": "one or more downstream commands failed"
+    },
+    "good-click": {
+      "result_sha256": "57f3b3046424db771c6ba30fa772bf790173797754a00067332a0285a88deda1",
+      "passed": true,
+      "scenarios": {
+        "cli-runner": {
+          "passed": true,
+          "exit": 0,
+          "stdout": "invoice 17\nprinted 17\n"
+        },
+        "redirected-process": {
+          "passed": true,
+          "exit": 0,
+          "stdout": "invoice 17\nprinted 17\n"
+        }
+      }
+    },
+    "bad-game": {
+      "result_sha256": "6b3318761e17cf10fe4d603d639e50f0fa2afa8d025ffd152917823c1bcd04d5",
+      "passed": false,
+      "cases": {
+        "ordinary-title": true,
+        "handbook-returns-control": false
+      },
+      "browser": "157.0.4341.60",
+      "seed": 102,
+      "page_errors": [],
+      "original_player": null,
+      "later_auto_player": null,
+      "restored_player": null,
+      "handbook_pixels_sha256": "3360262c4ef3b034acbbe756d0e109e6137546386ad9faac7f568dcad99e5ae5",
+      "screen_sha256": {
+        "title": "26c484d86b629fb834e279339499fae4e8fd275a830d8b818197cd3ab626dfc0",
+        "handbook": "8a9f8cb8e457b5cd9b154ffe83f68ef9078f86f107f1cd331f00628c103b2379"
+      },
+      "failure": "AssertionError(\"K did not create a fresh manual save, last record {'ts': 1795351564818, 'player': {'mapId': 'demo01', 'x': 5, 'y': 5, 'flags': {'has-save': True}}, 'ver': 2}\")"
+    },
+    "good-game": {
+      "result_sha256": "c060dc43f1a689b1853bccc8b1ede6b45d8b6d28194789888bdc1def017e4915",
+      "passed": true,
+      "cases": {
+        "ordinary-title": true,
+        "handbook-returns-control": true,
+        "interact-and-save": true,
+        "return-title-and-restore": true
+      },
+      "browser": "157.0.4341.60",
+      "seed": 102,
+      "page_errors": [],
+      "original_player": {
+        "mapId": "demo01",
+        "x": 10,
+        "y": 7,
+        "flags": {
+          "has-save": true,
+          "elder_told": true
+        }
+      },
+      "later_auto_player": {
+        "mapId": "demo01",
+        "x": 8,
+        "y": 8,
+        "flags": {
+          "has-save": true,
+          "elder_told": true,
+          "muted": true
+        }
+      },
+      "restored_player": {
+        "mapId": "demo01",
+        "x": 10,
+        "y": 7,
+        "flags": {
+          "has-save": true,
+          "elder_told": true
+        }
+      },
+      "handbook_pixels_sha256": "3360262c4ef3b034acbbe756d0e109e6137546386ad9faac7f568dcad99e5ae5",
+      "screen_sha256": {
+        "title": "26c484d86b629fb834e279339499fae4e8fd275a830d8b818197cd3ab626dfc0",
+        "handbook": "8a9f8cb8e457b5cd9b154ffe83f68ef9078f86f107f1cd331f00628c103b2379",
+        "elder-choice": "b70fc5da3d1656bf45ac7b64ad70afb0b31dacabd6e57d6fc93839dc2fbaf86b",
+        "second-title": "a2cf2bb434bf2d0b123babfacf28ff1d425bb79f4d436bed432180e8be98f71d",
+        "loaded": "e3c0544f3db8b9e4abed92f94d614a8676de462d406e74360e253756bcfcb019"
+      }
+    }
+  },
+  "trials": [
+    {
+      "workflow": "baseline",
+      "task": "game",
+      "label": "7f8aa3292",
+      "started": "2026-11-22T12:21:45.499523+00:00",
+      "producer_seconds": 537.26,
+      "first_nonempty_output_seconds": 208.71,
+      "producer_exit": 0,
+      "producer_usage": {
+        "input_tokens": 3236435,
+        "cached_input_tokens": 3144320,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 15566,
+        "reasoning_output_tokens": 3910
+      },
+      "producer_events_sha256": "5d91ff6886e637534770e5e7ccf34931099db8d90145d2a8520da18b3bd8c44b",
+      "artifact_file_count": 64,
+      "artifact_manifest_sha256": "bbaa1891527a3778588af3c7ea8a66c6c2d470de6d20e977dfce2e414b742f45",
+      "workflow_observation": {
+        "observed_successful_command_names": [
+          "change-triage",
+          "governance-bootstrap",
+          "loop learn",
+          "loop status",
+          "loop step",
+          "read-skill"
+        ],
+        "units": [
+          {
+            "unit": "FIX-001",
+            "status": "active",
+            "gate_status": "pending",
+            "root_outcomes": 0,
+            "source": null,
+            "learning_kinds": {
+              "decision": 1
+            },
+            "bound_candidate_decisions": 0,
+            "verified_product_goal": false
+          }
+        ],
+        "distributed_runtime_file_count": 222,
+        "distributed_runtime_digest": "77f351051617844d8d6f9a5fb8b476e7ae5d61ff9ad8ea8127c23393c319e070"
+      },
+      "acceptance": {
+        "passed": true,
+        "cases": {
+          "ordinary-title": true,
+          "handbook-returns-control": true,
+          "interact-and-save": true,
+          "return-title-and-restore": true
+        },
+        "browser": "157.0.4341.60",
+        "seed": 102,
+        "page_errors": [],
+        "original_player": {
+          "mapId": "demo01",
+          "x": 10,
+          "y": 7,
+          "flags": {
+            "has-save": true,
+            "elder_told": true
+          }
+        },
+        "later_auto_player": {
+          "mapId": "demo01",
+          "x": 8,
+          "y": 8,
+          "flags": {
+            "has-save": true,
+            "elder_told": true,
+            "muted": true
+          }
+        },
+        "restored_player": {
+          "mapId": "demo01",
+          "x": 10,
+          "y": 7,
+          "flags": {
+            "has-save": true,
+            "elder_told": true
+          }
+        },
+        "handbook_pixels_sha256": "3360262c4ef3b034acbbe756d0e109e6137546386ad9faac7f568dcad99e5ae5",
+        "screen_sha256": {
+          "title": "26c484d86b629fb834e279339499fae4e8fd275a830d8b818197cd3ab626dfc0",
+          "handbook": "9dfe0f70fa73c01a66501c860354631505c70271c7220143ee7bcd71a0f09ee3",
+          "elder-choice": "b70fc5da3d1656bf45ac7b64ad70afb0b31dacabd6e57d6fc93839dc2fbaf86b",
+          "second-title": "a2cf2bb434bf2d0b123babfacf28ff1d425bb79f4d436bed432180e8be98f71d",
+          "loaded": "e3c0544f3db8b9e4abed92f94d614a8676de462d406e74360e253756bcfcb019"
+        }
+      },
+      "acceptance_seconds": 25.77,
+      "verdict_sha256": "f5bbb4690a22e8e7afa9c9f259997ff80d4d549d3b664675a38e4a07224f2bb4",
+      "behavior_replay": {
+        "passed": true,
+        "cases": {
+          "ordinary-title": true,
+          "handbook-returns-control": true,
+          "interact-and-save": true,
+          "return-title-and-restore": true
+        },
+        "browser": "157.0.4341.60",
+        "seed": 102,
+        "page_errors": [],
+        "original_player": {
+          "mapId": "demo01",
+          "x": 10,
+          "y": 7,
+          "flags": {
+            "has-save": true,
+            "elder_told": true
+          }
+        },
+        "later_auto_player": {
+          "mapId": "demo01",
+          "x": 8,
+          "y": 7,
+          "flags": {
+            "has-save": true,
+            "elder_told": true,
+            "muted": true
+          }
+        },
+        "restored_player": {
+          "mapId": "demo01",
+          "x": 10,
+          "y": 7,
+          "flags": {
+            "has-save": true,
+            "elder_told": true
+          }
+        },
+        "handbook_pixels_sha256": "3360262c4ef3b034acbbe756d0e109e6137546386ad9faac7f568dcad99e5ae5",
+        "screen_sha256": {
+          "title": "26c484d86b629fb834e279339499fae4e8fd275a830d8b818197cd3ab626dfc0",
+          "handbook": "9dfe0f70fa73c01a66501c860354631505c70271c7220143ee7bcd71a0f09ee3",
+          "elder-choice": "7ff10e8187f7803c19dbdb80e40283e5ce6988eb7044df2ba3c46abdd588970d",
+          "second-title": "a2cf2bb434bf2d0b123babfacf28ff1d425bb79f4d436bed432180e8be98f71d",
+          "loaded": "e3c0544f3db8b9e4abed92f94d614a8676de462d406e74360e253756bcfcb019"
+        },
+        "review_result": "PASS",
+        "seconds": 25.87,
+        "verdict_sha256": "238870421b9990333362b4ed20123f2e13cdd7e73c32fcdb65c02b74b99447e0"
+      },
+      "acceptance_clock": {
+        "producer_messages": 8,
+        "cli_sessions_completed": 1,
+        "producer_stop": null,
+        "primary_assessment_finished_utc": "2026-11-22T12:52:18.397634+00:00",
+        "primary_passed": true,
+        "seconds_to_first_independent_acceptance_including_batch_hold": 1832.9,
+        "basis": "signed-by-independent-runner primary verdict"
+      }
+    },
+    {
+      "workflow": "baseline",
+      "task": "click",
+      "label": "7a389b725",
+      "started": "2026-11-22T12:21:40.187675+00:00",
+      "producer_seconds": 471.0,
+      "first_nonempty_output_seconds": 228.88,
+      "producer_exit": 0,
+      "producer_usage": {
+        "input_tokens": 2085866,
+        "cached_input_tokens": 2009600,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 14257,
+        "reasoning_output_tokens": 3729
+      },
+      "producer_events_sha256": "e070d0374a73ca672f2f062874c1b1d86c8a5877a061bee0cf36aa7a3b3e6237",
+      "artifact_file_count": 1,
+      "artifact_manifest_sha256": "3ccbc9f77597c9936716b3deee07864cbce051c771687d04b9df7c2b0e6e17c0",
+      "workflow_observation": {
+        "observed_successful_command_names": [
+          "change-triage",
+          "goal-bridge",
+          "governance-bootstrap",
+          "loop learn",
+          "loop start",
+          "loop status",
+          "loop step",
+          "loop verify",
+          "read-skill"
+        ],
+        "units": [
+          {
+            "unit": "FIX-001",
+            "status": "active",
+            "gate_status": "pending",
+            "root_outcomes": 0,
+            "source": null,
+            "learning_kinds": {
+              "decision": 1
+            },
+            "bound_candidate_decisions": 0,
+            "verified_product_goal": false
+          },
+          {
+            "unit": "pager-fallback-wheel",
+            "status": "active",
+            "gate_status": "pending",
+            "root_outcomes": 0,
+            "source": null,
+            "learning_kinds": {},
+            "bound_candidate_decisions": 0,
+            "verified_product_goal": true
+          },
+          {
+            "unit": "pager-acceptance",
+            "status": "completed",
+            "gate_status": "passed",
+            "root_outcomes": 0,
+            "source": null,
+            "learning_kinds": {},
+            "bound_candidate_decisions": 0,
+            "verified_product_goal": false
+          }
+        ],
+        "distributed_runtime_file_count": 222,
+        "distributed_runtime_digest": "77f351051617844d8d6f9a5fb8b476e7ae5d61ff9ad8ea8127c23393c319e070"
+      },
+      "acceptance": {
+        "passed": true,
+        "scenarios": {
+          "cli-runner": {
+            "passed": true,
+            "exit": 0,
+            "stdout": "invoice 17\nprinted 17\n"
+          },
+          "redirected-process": {
+            "passed": true,
+            "exit": 0,
+            "stdout": "invoice 17\nprinted 17\n"
+          }
+        }
+      },
+      "acceptance_seconds": 2.9,
+      "verdict_sha256": "4347471cda6bf3ae715a13502c827db74a6cf513f738d4effe092711b74e79ee",
+      "artifact_sha256": "dd7177ee359dc895257b64e7fa1bb8f3ba1cfc691742964ddcb7739f0895ea9a",
+      "behavior_replay": {
+        "passed": true,
+        "scenarios": {
+          "cli-runner": {
+            "passed": true,
+            "exit": 0,
+            "stdout": "invoice 17\nprinted 17\n"
+          },
+          "redirected-process": {
+            "passed": true,
+            "exit": 0,
+            "stdout": "invoice 17\nprinted 17\n"
+          }
+        },
+        "review_result": "PASS",
+        "seconds": 3.09,
+        "verdict_sha256": "4347471cda6bf3ae715a13502c827db74a6cf513f738d4effe092711b74e79ee"
+      },
+      "acceptance_clock": {
+        "producer_messages": 6,
+        "cli_sessions_completed": 1,
+        "producer_stop": null,
+        "primary_assessment_finished_utc": "2026-11-22T12:51:55.534368+00:00",
+        "primary_passed": true,
+        "seconds_to_first_independent_acceptance_including_batch_hold": 1815.35,
+        "basis": "signed-by-independent-runner primary verdict"
+      }
+    },
+    {
+      "workflow": "candidate",
+      "task": "game",
+      "label": "1bc2c3b46",
+      "started": "2026-11-22T12:38:54.698332+00:00",
+      "producer_seconds": 777.57,
+      "first_nonempty_output_seconds": 350.65,
+      "producer_exit": 0,
+      "producer_usage": {
+        "input_tokens": 6968969,
+        "cached_input_tokens": 6836096,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 19369,
+        "reasoning_output_tokens": 6257
+      },
+      "producer_events_sha256": "15ccaaaaaf72bb3765544f9bcaae4a3a5d7f4a24de4a41fe1432495e407bedcb",
+      "artifact_file_count": 64,
+      "artifact_manifest_sha256": "7a60e35523a38af86402680aef4cf9aff997f83127c4a07ec0029fd6cded91e0",
+      "workflow_observation": {
+        "observed_successful_command_names": [
+          "governance-bootstrap",
+          "loop learn",
+          "loop start",
+          "loop status",
+          "loop step",
+          "read-skill"
+        ],
+        "units": [
+          {
+            "unit": "codex-return",
+            "status": "active",
+            "gate_status": "pending",
+            "root_outcomes": 1,
+            "source": "user",
+            "learning_kinds": {
+              "note": 1
+            },
+            "bound_candidate_decisions": 0,
+            "verified_product_goal": false
+          },
+          {
+            "unit": "codex-product",
+            "status": "active",
+            "gate_status": "pending",
+            "root_outcomes": 1,
+            "source": "user",
+            "learning_kinds": {
+              "decision": 1,
+              "note": 1
+            },
+            "bound_candidate_decisions": 1,
+            "verified_product_goal": true
+          }
+        ],
+        "distributed_runtime_file_count": 225,
+        "distributed_runtime_digest": "3143b679350f8c83ba5853db6ea089a49dc074f7dbe1b1a502a9de0a55dcf233"
+      },
+      "acceptance": {
+        "passed": false,
+        "cases": {
+          "ordinary-title": true,
+          "handbook-returns-control": false
+        },
+        "browser": "157.0.4341.60",
+        "seed": 102,
+        "page_errors": [],
+        "original_player": null,
+        "later_auto_player": null,
+        "restored_player": null,
+        "handbook_pixels_sha256": "48fd4ca3779d20ef99fdee1b60099e98d1f17373eecc77dc4ec56d95f5066853",
+        "screen_sha256": {
+          "title": "26c484d86b629fb834e279339499fae4e8fd275a830d8b818197cd3ab626dfc0",
+          "handbook": "3e33ef5089b7758798e6202116c3d482f7435c4bcbecef50376599d80d94328b"
+        },
+        "failure": "AssertionError('dex heading/count differs from the reference rendering')"
+      },
+      "acceptance_seconds": 6.81,
+      "verdict_sha256": "de6600b54f8138c012fb00a62458f5132b6e09db4c8318dba93d1a23780c3989",
+      "behavior_replay": {
+        "passed": true,
+        "cases": {
+          "ordinary-title": true,
+          "handbook-returns-control": true,
+          "interact-and-save": true,
+          "return-title-and-restore": true
+        },
+        "browser": "157.0.4341.60",
+        "seed": 102,
+        "page_errors": [],
+        "original_player": {
+          "mapId": "demo01",
+          "x": 10,
+          "y": 8,
+          "flags": {
+            "has-save": true,
+            "elder_told": true
+          }
+        },
+        "later_auto_player": {
+          "mapId": "demo01",
+          "x": 8,
+          "y": 8,
+          "flags": {
+            "has-save": true,
+            "elder_told": true,
+            "muted": true
+          }
+        },
+        "restored_player": {
+          "mapId": "demo01",
+          "x": 10,
+          "y": 8,
+          "flags": {
+            "has-save": true,
+            "elder_told": true
+          }
+        },
+        "handbook_pixels_sha256": "48fd4ca3779d20ef99fdee1b60099e98d1f17373eecc77dc4ec56d95f5066853",
+        "screen_sha256": {
+          "title": "26c484d86b629fb834e279339499fae4e8fd275a830d8b818197cd3ab626dfc0",
+          "handbook": "3e33ef5089b7758798e6202116c3d482f7435c4bcbecef50376599d80d94328b",
+          "elder-choice": "d60a11517e352e9de5d21ee2a22174b56fce89adc5cbcddcb426b4dfc8ce60b4",
+          "second-title": "a2cf2bb434bf2d0b123babfacf28ff1d425bb79f4d436bed432180e8be98f71d",
+          "loaded": "34c10aec3bcf263e32e75ce1e2229c4468eb93daf89950a362e1e12757303038"
+        },
+        "review_result": "PASS",
+        "seconds": 25.93,
+        "verdict_sha256": "0b19d92799168573327f0be23c83ab2f9f8a4cb9735f346938136e5844b7ba1f"
+      },
+      "acceptance_clock": {
+        "producer_messages": 10,
+        "cli_sessions_completed": 1,
+        "producer_stop": null,
+        "primary_assessment_finished_utc": "2026-11-22T12:51:59.437655+00:00",
+        "primary_passed": false,
+        "seconds_to_first_independent_acceptance_including_batch_hold": 1052.97,
+        "basis": "timestamp of signed independent visual verdict"
+      }
+    },
+    {
+      "workflow": "candidate",
+      "task": "click",
+      "label": "d93e99172",
+      "started": "2026-11-22T12:38:46.905000+00:00",
+      "producer_seconds": 660.88,
+      "first_nonempty_output_seconds": 256.73,
+      "producer_exit": 0,
+      "producer_usage": {
+        "input_tokens": 4506599,
+        "cached_input_tokens": 4401792,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 18111,
+        "reasoning_output_tokens": 4741
+      },
+      "producer_events_sha256": "c0ddfe281b41d834c07184d779d25d6786c34efb198e4ab474de1422c3a00f68",
+      "artifact_file_count": 1,
+      "artifact_manifest_sha256": "82172a8471dc5e8cb2eac27581187c000ffdaffe6ad2185ad7eef8d4cdfcd511",
+      "workflow_observation": {
+        "observed_successful_command_names": [
+          "change-triage",
+          "governance-bootstrap",
+          "loop learn",
+          "loop status",
+          "loop step",
+          "read-skill"
+        ],
+        "units": [
+          {
+            "unit": "FIX-001",
+            "status": "completed",
+            "gate_status": "passed",
+            "root_outcomes": 1,
+            "source": "change-triage/FIX-001:user-named",
+            "learning_kinds": {
+              "decision": 1
+            },
+            "bound_candidate_decisions": 1,
+            "verified_product_goal": false
+          }
+        ],
+        "distributed_runtime_file_count": 225,
+        "distributed_runtime_digest": "3143b679350f8c83ba5853db6ea089a49dc074f7dbe1b1a502a9de0a55dcf233"
+      },
+      "acceptance": {
+        "passed": true,
+        "scenarios": {
+          "cli-runner": {
+            "passed": true,
+            "exit": 0,
+            "stdout": "invoice 17\nprinted 17\n"
+          },
+          "redirected-process": {
+            "passed": true,
+            "exit": 0,
+            "stdout": "invoice 17\nprinted 17\n"
+          }
+        }
+      },
+      "acceptance_seconds": 2.93,
+      "verdict_sha256": "84c436f20301153faac71774ea06c4955fb730ba6300eb4171ec49caa6287bee",
+      "artifact_sha256": "74410efb437871e8ad4d41a0fdaa48453ca904b0e82f3d1de5b959d043af2c4f",
+      "behavior_replay": {
+        "passed": true,
+        "scenarios": {
+          "cli-runner": {
+            "passed": true,
+            "exit": 0,
+            "stdout": "invoice 17\nprinted 17\n"
+          },
+          "redirected-process": {
+            "passed": true,
+            "exit": 0,
+            "stdout": "invoice 17\nprinted 17\n"
+          }
+        },
+        "review_result": "PASS",
+        "seconds": 3.1,
+        "verdict_sha256": "84c436f20301153faac71774ea06c4955fb730ba6300eb4171ec49caa6287bee"
+      },
+      "acceptance_clock": {
+        "producer_messages": 7,
+        "cli_sessions_completed": 1,
+        "producer_stop": null,
+        "primary_assessment_finished_utc": "2026-11-22T12:51:55.558762+00:00",
+        "primary_passed": true,
+        "seconds_to_first_independent_acceptance_including_batch_hold": 788.65,
+        "basis": "signed-by-independent-runner primary verdict"
+      }
+    }
+  ],
+  "infrastructure_attempts": [
+    {
+      "task": "game",
+      "label": "95ef6602f",
+      "status": "blocked",
+      "reason": "Codex Core package identity failed on the first shell call",
+      "receipt_sha256": "1e5bc9fe50c17dcc618e251e68a734b83e7d2787525d0fe4a1da31427eceac14",
+      "reported_tokens": null
+    },
+    {
+      "task": "click",
+      "label": "3c47d3cf3",
+      "status": "blocked",
+      "reason": "Codex Core package identity failed on the first shell call",
+      "receipt_sha256": "0a515b65039799974ff77aa9d8b4d501228717bf41430bf486e2573b39568242",
+      "reported_tokens": null
+    }
+  ],
+  "artifact_manifest_method": "SHA-256 of UTF-8 JSON mapping relative POSIX paths to file SHA-256; sorted keys and compact separators. Each static game path is prefixed with web/, and the wheel uses its submitted filename.",
+  "actor_core_scope": "Main governance skill runtime excluding tests, plus standalone commands/governance.md; subprocesses had distinct new identities and workspace-write.",
+  "inputs": {
+    "game.zip": {
+      "size": 12833014,
+      "sha256": "e56b4c6f5d18dd3a193edfddc2158b0eefbab086d22b5b950783b8c21c381297"
+    },
+    "workflow.zip": {
+      "size": 2916364,
+      "sha256": "08df69dff8adad08c8a0d87d9294ed4f07b0c2c40fc44a58605feb087171e689"
+    },
+    "cd9bdd96a9dcc8e4ecabd45b5c244dbc70034484.zip": {
+      "size": 534807,
+      "sha256": "67f1d31173cdd8997ecf5ce9966073b8a0213aa0cd814c6b6a6af1c75f29bbfa"
+    },
+    "4df304c658666f34a5ca4335ab0da15832f02f9e.zip": {
+      "size": 535862,
+      "sha256": "da5b1fd2f61d91d6b83674992c02ca5491afba5ea5f1bbd763269845a51fde2f"
+    },
+    "tux.zip": {
+      "size": 187875228,
+      "sha256": "4c662c6aea1223e282bd6413a274f60377521fe4509ab12309c5f416ddb73729"
+    },
+    "baseline": {
+      "game": {
+        "files": 222,
+        "sha256": "77f351051617844d8d6f9a5fb8b476e7ae5d61ff9ad8ea8127c23393c319e070"
+      },
+      "click": {
+        "files": 222,
+        "sha256": "77f351051617844d8d6f9a5fb8b476e7ae5d61ff9ad8ea8127c23393c319e070"
+      }
+    },
+    "candidate": {
+      "game": {
+        "files": 225,
+        "sha256": "3143b679350f8c83ba5853db6ea089a49dc074f7dbe1b1a502a9de0a55dcf233"
+      },
+      "click": {
+        "files": 225,
+        "sha256": "3143b679350f8c83ba5853db6ea089a49dc074f7dbe1b1a502a9de0a55dcf233"
+      }
+    }
+  },
+  "semantic_review": {
+    "protocol_reviewer_sha256": "30b368b958d6ac30321a5db6b159b038bc10ee41752001f5a87f980b5f236334",
+    "primary_reviewer_sha256": "00dcfa61bcc4111236eaeaf0ee1163b8dad487111d00eebc14e16ae338ea2f3e",
+    "semantic_reviewer_sha256": "350c668de41b7f51b5219f1bd9f94c14dffd6c20e3c2ef6124ca58b657d58169",
+    "behavior_seal_sha256": "25e05dc0a5efc62eb3d9e4224393e5daa99f24ccb2cf359b2836ea064d5fb52d",
+    "methods": "Per-subject exact capture supplied for uniform second-pass collection; a separate reviewer independently read the screenshots, count, grid, state and output without version labels."
+  },
+  "references": {
+    "rpg_positive_original": {
+      "tree": "eb819bbf628677deef759aac434cb0a0c831cae3c53b661107823afa250a7ce9",
+      "verified_sealed_replay": "be6c4d0bebc63aeca2c68e50475fa9048c4241718eca996e2f753867e5d666ed",
+      "verified_signed_summary": "e9d6797dd9034d0e4c6a65ca651e82884a7e0a4403fb7a88f660454f128eff61",
+      "binary_found": false
+    },
+    "tuxemon": {
+      "upstream_commit": "32218080f3cbed628d1c5f1648eb01fbfcbca9f4",
+      "slot_sha256": "5c639713524661e738f2733a3b4bf6f077d5eb4f828bd66b2f4805eb48c76fca",
+      "save_states_sha256": "22dd1eb5ed20a9168a90cf8356c99b4473c84920e1993f10ed9186d7ea7d40e8",
+      "reload_states_sha256": "81207217fc8df679ba5568709a1e487fd57dd6685ffc179a51c4525055ee97ad",
+      "save_position": [
+        4,
+        4
+      ],
+      "restored_position": [
+        4,
+        4
+      ],
+      "after_menu_and_move": [
+        6,
+        4
+      ],
+      "upstream_tests_passed": 43
+    }
+  },
+  "evaluator_hash_method": {
+    "executed": "evaluator_source_hashes stores SHA-256 of the frozen Windows execution bytes; frozen_evaluator_lf_sha256 gives the same initial scripts after CRLF to LF conversion",
+    "published": "published_evaluator_sha256 hashes the exact LF-normalized content distributed by Git. published_windows_worktree_evaluator_sha256 hashes the private Windows working-copy bytes used for the public replay checks. Both contain the fail-closed assertion guards and a single final newline. Actual trial scoring used the original frozen files."
+  },
+  "frozen_evaluator_lf_sha256": {
+    "click_stdout.py": "01da775914f1ce3a7bca5f2a5681b42ddbe6d7ad6255b4e7ed44f758a7196123",
+    "rpg_save.py": "ad64f1db8602e1c3561fde89fcc2b44dab3829a7a19c305c0e09797a99571014"
+  },
+  "evaluator_precondition": {
+    "python_optimize": 0,
+    "powershell_environment": "$env:PYTHONOPTIMIZE = '0'",
+    "forbidden_flag": "-O",
+    "negative_calibration": "incorrect handbook pixels must fail at the dex check; assertion optimization undermines the validators",
+    "audit_host_observed": {
+      "sys.flags.optimize": 0,
+      "inherited_PYTHONOPTIMIZE": null
+    }
+  },
+  "published_evaluator_sha256": {
+    "click_stdout.py": "df7544f4483687ee85d28137dff723c5c4cf1477036490958608cd3638f9ed57",
+    "rpg_save.py": "9ccfe4058ebb773994633c0c638fe500349ac4d0c53ab3001f4c89c0cbbd4078"
+  },
+  "published_script_regressions": [
+    {
+      "case": "click_stdout.py-env",
+      "exit": 1,
+      "produced_verdict": false,
+      "verdict_sha256": null,
+      "passed": null
+    },
+    {
+      "case": "click_stdout.py-flag",
+      "exit": 1,
+      "produced_verdict": false,
+      "verdict_sha256": null,
+      "passed": null
+    },
+    {
+      "case": "rpg_save.py-env",
+      "exit": 1,
+      "produced_verdict": false,
+      "verdict_sha256": null,
+      "passed": null
+    },
+    {
+      "case": "rpg_save.py-flag",
+      "exit": 1,
+      "produced_verdict": false,
+      "verdict_sha256": null,
+      "passed": null
+    },
+    {
+      "case": "fixed-click",
+      "exit": 0,
+      "produced_verdict": true,
+      "verdict_sha256": "57f3b3046424db771c6ba30fa772bf790173797754a00067332a0285a88deda1",
+      "passed": true
+    },
+    {
+      "case": "bad-click",
+      "exit": 1,
+      "produced_verdict": true,
+      "verdict_sha256": "bee55e01026e10a5bfe213c553dc55f59a73ac08701a0173bf616b18fc358022",
+      "passed": false
+    },
+    {
+      "case": "fixed-game",
+      "exit": 0,
+      "produced_verdict": true,
+      "verdict_sha256": "e2eb768c4d7da04f132bd6bad80822e44b1dee1eaa60f374b3c075e81a507077",
+      "passed": true
+    },
+    {
+      "case": "wrong-heading",
+      "exit": 1,
+      "produced_verdict": true,
+      "verdict_sha256": "4d0390bb5a8088683d2242d199c000d0a4ee59a7474ea131669690352d9987a9",
+      "passed": false
+    },
+    {
+      "case": "click-internal-child-optimized",
+      "exit": 1,
+      "produced_verdict": false
+    }
+  ],
+  "producer_execution": {
+    "cli_arguments": [
+      "codex",
+      "exec",
+      "-C",
+      "<isolated-project>",
+      "-s",
+      "workspace-write",
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--json",
+      "-m",
+      "gpt-6.1-sol",
+      "-c",
+      "model_reasoning_effort=\"medium\"",
+      "-c",
+      "approval_policy=\"never\"",
+      "-"
+    ],
+    "prompt_via": "UTF-8 stdin; the shared instruction prefix was also written into the isolated project AGENTS.md",
+    "driver_sha256": "afc636ad9c31a05a3e99efdf28e6456a2863d03bf070d46bb8fefa1c6832aa93",
+    "clean_child_env": [
+      "CODEX_WINDOWS_REGISTERED_CORE",
+      "CODEX_APP_RUNTIME_CLI_PATH",
+      "CODEX_SHELL"
+    ],
+    "submission_paths": {
+      "game": "game/dist/index.html plus all production assets",
+      "click": "dist/click-*.whl (one installable wheel)"
+    },
+    "sealing": "Separate checkout; submit product files only under randomized ids, freeze per-file byte digests, execute anonymous checker, freeze result, then consult mapping for report."
+  },
+  "cross_batch_input_parity": {
+    "game": {
+      "original": {
+        "files": 95,
+        "sha256": "01f18e12f5c90ab98c0b5c9898dc099ed87cf617958829025db01999d1836ce5"
+      },
+      "final": {
+        "files": 95,
+        "sha256": "01f18e12f5c90ab98c0b5c9898dc099ed87cf617958829025db01999d1836ce5"
+      },
+      "comparison": {
+        "equal": true,
+        "differing_count": 0,
+        "differing": []
+      }
+    },
+    "wheels": {
+      "original": {
+        "files": 3,
+        "sha256": "19745c8dec4e700e03d4c09d249fafc92319900ab837ebfc689d52b7bb52c8f1"
+      },
+      "final": {
+        "files": 3,
+        "sha256": "19745c8dec4e700e03d4c09d249fafc92319900ab837ebfc689d52b7bb52c8f1"
+      },
+      "comparison": {
+        "equal": true,
+        "differing_count": 0,
+        "differing": []
+      }
+    },
+    "click": {
+      "original": {
+        "files": 150,
+        "sha256": "00016d6dc5d6985ae3baebc1cef7c85e4476dcc59954d31271b3f8d17c775ed7"
+      },
+      "final": {
+        "files": 150,
+        "sha256": "00016d6dc5d6985ae3baebc1cef7c85e4476dcc59954d31271b3f8d17c775ed7"
+      },
+      "comparison": {
+        "equal": true,
+        "differing_count": 0,
+        "differing": []
+      }
+    },
+    "game_dependencies": {
+      "reference": {
+        "files": 4335,
+        "sha256": "c00a7b7f286d689848935cef4b510011e789eb9947958895a76ec653419833c7"
+      },
+      "paths": {
+        "7f8aa3292": {
+          "state_after_execution": {
+            "files": 4335,
+            "sha256": "2472f6b06d9967d295adbc95f1b6d4affe18181035dbf71cfc3a322d2733d9ae"
+          },
+          "comparison": {
+            "equal": false,
+            "differing_count": 1,
+            "differing": [
+              ".vite/vitest/results.json"
+            ]
+          }
+        },
+        "1bc2c3b46": {
+          "state_after_execution": {
+            "files": 4335,
+            "sha256": "97c8e43f7a2b197677faa62565790b87d9d7b6b5e4b794fbc5e64dbd3ace7f38"
+          },
+          "comparison": {
+            "equal": false,
+            "differing_count": 1,
+            "differing": [
+              ".vite/vitest/results.json"
+            ]
+          }
+        },
+        "506787877": {
+          "state_after_execution": {
+            "files": 4335,
+            "sha256": "f27497ed184261b98cc413ecf2f200ca9b9795c46040c002e643d662dafd4639"
+          },
+          "comparison": {
+            "equal": false,
+            "differing_count": 1,
+            "differing": [
+              ".vite/vitest/results.json"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "producer_instructions": {
+    "game": {
+      "exact_text": "Work only in this isolated product directory. Do not inspect parent directories, other sessions, upstream sources, historical answers, private credentials or use the internet. You have the complete product sources, local build dependencies and a delivered project management workflow under .workflow. It is part of this assignment: before doing product work, bootstrap the workflow using python -X utf8 .workflow/skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json and read .workflow/skills/software-project-governance/SKILL.md. Use its normal intake/loop commands to preserve the customer's original completion conditions, try reasonable options with the same artifact, and verify the result. Use --project-root with the product working directory as needed. Where the installed workflow supports explicit original outcomes and review, use them; report any unresolved gaps. Implement a real, usable deliverable in this workspace now. Do not wait for confirmation. No commit, publication, network, or changes outside this workspace. A separate customer will check your actual submitted product. Submit at the specified path and report observable evidence. Your wall budget is 20 minutes.\n请修复本项目玩家从正常网页首页开始新存档、打开图鉴再关闭后不能继续游玩的故障。目标是玩家从图鉴返回仍能移动、触发原有 NPC 交互、亲自存档，返回标题后读回原来的位置和已完成交互。保持原有玩法。项目在 game/，包含独立复制的 node_modules。用项目生产构建提交实际可用的 game/dist/index.html 和完整资源，不使用调试、直接改存档或跳关代替验收。",
+      "sha256": "c09fa66dab00423ba2ffc89227db757aca63c74a9f559acae817d1966d4d112a"
+    },
+    "click": {
+      "exact_text": "Work only in this isolated product directory. Do not inspect parent directories, other sessions, upstream sources, historical answers, private credentials or use the internet. You have the complete product sources, local build dependencies and a delivered project management workflow under .workflow. It is part of this assignment: before doing product work, bootstrap the workflow using python -X utf8 .workflow/skills/software-project-governance/infra/verify_workflow.py governance-bootstrap --format json and read .workflow/skills/software-project-governance/SKILL.md. Use its normal intake/loop commands to preserve the customer's original completion conditions, try reasonable options with the same artifact, and verify the result. Use --project-root with the product working directory as needed. Where the installed workflow supports explicit original outcomes and review, use them; report any unresolved gaps. Implement a real, usable deliverable in this workspace now. Do not wait for confirmation. No commit, publication, network, or changes outside this workspace. A separate customer will check your actual submitted product. Submit at the specified path and report observable evidence. Your wall budget is 20 minutes.\nFix this existing Click library for a downstream command that pages text, then writes a second line to its borrowed standard output. A user may run in a terminal whose configured PAGER program is missing; the command must fall back cleanly, output the full texts in order and keep stdout usable after paging/garbage collection. CliRunner and a standalone command with redirected standard output should both exit successfully. Keep current public interfaces and working pager behavior. Produce a real installable wheel into dist/. All build inputs available offline; e.g. python -m pip wheel --no-index --find-links .wheels . -w dist .",
+      "sha256": "c6fe4a073d0235b4c41c2d11bcb0b912b24d99bc9b07f3fa4a8850a0308f6189"
+    }
+  },
+  "interrupted_distribution": {
+    "workflow_commit": "719421067dfa3ef25d2504cda124a92ac8116fc5",
+    "workflow_tree": "8e31f43003fa7f8b608c1f892e398efcf3146f5c",
+    "status": "distribution error before artifact; not evaluable for product quality",
+    "root_cause": "Missing staged imported modules in coordinator snapshot",
+    "trials": {
+      "game": {
+        "id": "1452bcf7c",
+        "events_sha256": "e61dc4f48ff5bbf474a460e93c70a70bb3b1beb53b9aef3c30438400ad29f4c6",
+        "events": 25,
+        "first_message_received": true,
+        "actual_product_files": [],
+        "stop": "incomplete staged snapshot on coordinator side; not scored; measured token total unavailable (interrupted)"
+      },
+      "click": {
+        "id": "2593a52b8",
+        "events_sha256": "499a68d5322deb093fe6f2815d5e4a244f8c9fec8508d834489c01dd5a9390a9",
+        "events": 32,
+        "first_message_received": true,
+        "actual_product_files": [],
+        "stop": "incomplete staged snapshot on coordinator side; not scored; measured token total unavailable (interrupted)"
+      }
+    }
+  },
+  "first_candidate_use": {
+    "common": "Both normal producers recorded one aggregate root acceptance criterion and chose a fingerprinted candidate. No ordinary run demonstrated multiple root criteria or replacing a refused candidate. Parent replayed those separately.",
+    "game": "Bound codex-product to codex-return delivery contract and kept its gate G5 pending. Producer sandbox blocked browser. loop accept diagnosed missing goal even though the actual precondition was a completed independent design review at G5. External reviewers exercised the delivered product separately.",
+    "click": "Producer completed G6 intake unit. External reviewers installed the actual wheel and ran the downstream commands."
+  },
+  "evolution_trigger": {
+    "observed": "First-candidate game returned a wrong missing-goal diagnostic at G5. Both first-candidate producers spent more wall time and recorded more tokens than baseline for the same independently accepted outcomes.",
+    "response": "Correct distinction between missing binding and G5 awaiting independent design review. Shorten intake guidance, start from reproduction, reuse same-artifact evidence, record a new decision when observations change the choice.",
+    "evaluation": "New paired fresh producers have the same tasks, checkout inputs and wall budgets. Compare costs at equal user outcomes. Two domains, one production per version/domain; no general efficiency claim."
+  },
+  "measurement_limits": {
+    "producer_wall_limit_seconds": 1200,
+    "event_limit": 150,
+    "event_limit_semantics": "CLI turn.completed counts the completion of an exec session; internal model inference rounds are not measured",
+    "cached_tokens_in_input": true,
+    "billing_known": false,
+    "after_submission_rework_rounds_first_four": 0,
+    "producer_internal_rework_rounds": "not separately measured",
+    "first_nonempty_is_not_verified": true,
+    "initial_semantic_results": {
+      "baseline": "2/2",
+      "candidate": "2/2"
+    },
+    "initial_primary_results": {
+      "baseline": "2/2",
+      "candidate": "1/2"
+    }
+  },
+  "attempts_accounting": {
+    "product_prompts_delivered": 10,
+    "desktop_shell_infrastructure_stops_before_artifact": 2,
+    "initial_effective_submissions": 4,
+    "incomplete_distribution_no_artifact": 2,
+    "final_effective_submissions": 2,
+    "unsupported_model_readiness_preflight_received_product_prompt": false,
+    "after_submission_external_product_rework_rounds": 0
+  },
+  "release_candidate": {
+    "workflow_commit": "7b8f25742243376590920780e2a5173a16c2c804",
+    "workflow_tree": "4fd5243cee8213d655150cf7431a82829b4660ef",
+    "independent_seal_sha256": "a6c4e97917e0ae2e99c5fa858b821d20c0d94289507cb3a6b581faeabe4c4799",
+    "scoring_scripts": {
+      "click_stdout.py": "f3717a18af326b3cf4e0e761b7c594f26cb92992e63fe0924d784ca319f5ab62",
+      "rpg_save.py": "a0a1c9ebddf96127f4439c289b4238f26e75f0e276e21ec02dee84b724d657c2"
+    },
+    "trials": [
+      {
+        "task": "game",
+        "label": "506787877",
+        "started": "2026-11-22T13:15:43.686060+00:00",
+        "producer_seconds": 930.04,
+        "first_nonempty_output_seconds": 248.11,
+        "producer_exit": 0,
+        "producer_usage": {
+          "input_tokens": 6368340,
+          "cached_input_tokens": 6250624,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 27343,
+          "reasoning_output_tokens": 8075
+        },
+        "producer_events_sha256": "f0446ea3c096e3233c8e490c1920b72f94b1fe5afaff1105ac88a55a1d8f5d0e",
+        "artifact_file_count": 64,
+        "artifact_manifest_sha256": "ef042cb161076c0cba4a3d0088dfc58ea2899bea2689f4ba7b73413e5363f262",
+        "workflow_observation": {
+          "observed_successful_command_names": [
+            "change-triage",
+            "governance-bootstrap",
+            "loop learn",
+            "loop start",
+            "loop status",
+            "loop step",
+            "read-skill"
+          ],
+          "units": [
+            {
+              "unit": "FIX-001",
+              "status": "active",
+              "gate_status": "pending",
+              "root_outcomes": 1,
+              "source": "change-triage/FIX-001:user-named",
+              "learning_kinds": {
+                "decision": 3
+              },
+              "bound_candidate_decisions": 3,
+              "verified_product_goal": false
+            }
+          ],
+          "distributed_runtime_file_count": 225,
+          "distributed_runtime_digest": "e62018e7bbd89ef75fd68a6be419005b10d96246a6f2c7c9c4bca3aae080d808"
+        },
+        "acceptance": {
+          "passed": true,
+          "cases": {
+            "ordinary-title": true,
+            "handbook-returns-control": true,
+            "interact-and-save": true,
+            "return-title-and-restore": true
+          },
+          "browser": "157.0.4341.60",
+          "seed": 102,
+          "page_errors": [],
+          "original_player": {
+            "mapId": "demo01",
+            "x": 10,
+            "y": 8,
+            "flags": {
+              "has-save": true,
+              "elder_told": true
+            }
+          },
+          "later_auto_player": {
+            "mapId": "demo01",
+            "x": 8,
+            "y": 8,
+            "flags": {
+              "has-save": true,
+              "elder_told": true,
+              "muted": true
+            }
+          },
+          "restored_player": {
+            "mapId": "demo01",
+            "x": 10,
+            "y": 8,
+            "flags": {
+              "has-save": true,
+              "elder_told": true
+            }
+          },
+          "handbook_pixels_sha256": "3360262c4ef3b034acbbe756d0e109e6137546386ad9faac7f568dcad99e5ae5",
+          "screen_sha256": {
+            "title": "26c484d86b629fb834e279339499fae4e8fd275a830d8b818197cd3ab626dfc0",
+            "handbook": "ba6609a315cd66f8a89586f3372be5096705c7c7deb44406618ad2a9bf694732",
+            "elder-choice": "b70fc5da3d1656bf45ac7b64ad70afb0b31dacabd6e57d6fc93839dc2fbaf86b",
+            "second-title": "a2cf2bb434bf2d0b123babfacf28ff1d425bb79f4d436bed432180e8be98f71d",
+            "loaded": "34c10aec3bcf263e32e75ce1e2229c4468eb93daf89950a362e1e12757303038"
+          }
+        },
+        "acceptance_seconds": 27.06,
+        "verdict_sha256": "45a331f2fceb7ad3c6ab54fae7e179c4808dfafe1c3eba2f47948e6429db679a",
+        "behavior_replay": {
+          "passed": true,
+          "cases": {
+            "ordinary-title": true,
+            "handbook-returns-control": true,
+            "interact-and-save": true,
+            "return-title-and-restore": true
+          },
+          "browser": "157.0.4341.60",
+          "seed": 102,
+          "page_errors": [],
+          "original_player": {
+            "mapId": "demo01",
+            "x": 10,
+            "y": 8,
+            "flags": {
+              "has-save": true,
+              "elder_told": true
+            }
+          },
+          "later_auto_player": {
+            "mapId": "demo01",
+            "x": 8,
+            "y": 8,
+            "flags": {
+              "has-save": true,
+              "elder_told": true,
+              "muted": true
+            }
+          },
+          "restored_player": {
+            "mapId": "demo01",
+            "x": 10,
+            "y": 8,
+            "flags": {
+              "has-save": true,
+              "elder_told": true
+            }
+          },
+          "handbook_pixels_sha256": "3360262c4ef3b034acbbe756d0e109e6137546386ad9faac7f568dcad99e5ae5",
+          "screen_sha256": {
+            "title": "26c484d86b629fb834e279339499fae4e8fd275a830d8b818197cd3ab626dfc0",
+            "handbook": "ba6609a315cd66f8a89586f3372be5096705c7c7deb44406618ad2a9bf694732",
+            "elder-choice": "b70fc5da3d1656bf45ac7b64ad70afb0b31dacabd6e57d6fc93839dc2fbaf86b",
+            "second-title": "a2cf2bb434bf2d0b123babfacf28ff1d425bb79f4d436bed432180e8be98f71d",
+            "loaded": "34c10aec3bcf263e32e75ce1e2229c4468eb93daf89950a362e1e12757303038"
+          },
+          "seconds": 25.83,
+          "verdict_sha256": "d0bf263a945c58ae0485c68aea9cb830761169f239f623ad548e85f029b44af1",
+          "review_result": "PASS"
+        },
+        "acceptance_clock": {
+          "producer_messages": 10,
+          "cli_sessions_completed": 1,
+          "producer_stop": null,
+          "primary_assessment_finished_utc": "2026-11-22T13:31:43.078678+00:00",
+          "primary_passed": true,
+          "seconds_to_first_independent_acceptance_including_batch_hold": 959.39,
+          "basis": "signed-by-independent-runner primary verdict"
+        }
+      },
+      {
+        "task": "click",
+        "label": "60017eb98",
+        "started": "2026-11-22T13:15:35.545892+00:00",
+        "producer_seconds": 423.57,
+        "first_nonempty_output_seconds": 215.96,
+        "producer_exit": 0,
+        "producer_usage": {
+          "input_tokens": 1803455,
+          "cached_input_tokens": 1739136,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 12679,
+          "reasoning_output_tokens": 2373
+        },
+        "producer_events_sha256": "17a5cfb9f1cac2d6790d31640f03532364f4acebba58a23e7cd5485e563b384d",
+        "artifact_file_count": 1,
+        "artifact_manifest_sha256": "37fceae601bd208abc6b11400313228d7aaa185a985ee94b572b3fe10795ad7f",
+        "workflow_observation": {
+          "observed_successful_command_names": [
+            "change-triage",
+            "governance-bootstrap",
+            "loop learn",
+            "loop status",
+            "loop step",
+            "read-skill"
+          ],
+          "units": [
+            {
+              "unit": "FIX-001",
+              "status": "active",
+              "gate_status": "pending",
+              "root_outcomes": 1,
+              "source": "change-triage/FIX-001:user-named",
+              "learning_kinds": {
+                "decision": 1
+              },
+              "bound_candidate_decisions": 1,
+              "verified_product_goal": false
+            },
+            {
+              "unit": "pager-installed-check",
+              "status": "active",
+              "gate_status": "pending",
+              "root_outcomes": 0,
+              "source": null,
+              "learning_kinds": {},
+              "bound_candidate_decisions": 0,
+              "verified_product_goal": false
+            },
+            {
+              "unit": "pager-wheel-bound-check",
+              "status": "completed",
+              "gate_status": "passed",
+              "root_outcomes": 0,
+              "source": null,
+              "learning_kinds": {},
+              "bound_candidate_decisions": 0,
+              "verified_product_goal": false
+            }
+          ],
+          "distributed_runtime_file_count": 225,
+          "distributed_runtime_digest": "e62018e7bbd89ef75fd68a6be419005b10d96246a6f2c7c9c4bca3aae080d808"
+        },
+        "acceptance": {
+          "passed": true,
+          "scenarios": {
+            "cli-runner": {
+              "passed": true,
+              "exit": 0,
+              "stdout": "invoice 17\nprinted 17\n"
+            },
+            "redirected-process": {
+              "passed": true,
+              "exit": 0,
+              "stdout": "invoice 17\nprinted 17\n"
+            }
+          }
+        },
+        "acceptance_seconds": 2.6,
+        "verdict_sha256": "43a26288b47b2f60809109d5f9b3afbcfdee465b6192be38df58432775a43b1a",
+        "artifact_sha256": "10e90dd24d04c23239a3e928e285a6107e309fff204a4277ef64665fa077d9b2",
+        "behavior_replay": {
+          "passed": true,
+          "scenarios": {
+            "cli-runner": {
+              "passed": true,
+              "exit": 0,
+              "stdout": "invoice 17\nprinted 17\n"
+            },
+            "redirected-process": {
+              "passed": true,
+              "exit": 0,
+              "stdout": "invoice 17\nprinted 17\n"
+            }
+          },
+          "seconds": 2.62,
+          "verdict_sha256": "43a26288b47b2f60809109d5f9b3afbcfdee465b6192be38df58432775a43b1a",
+          "review_result": "PASS"
+        },
+        "acceptance_clock": {
+          "producer_messages": 6,
+          "cli_sessions_completed": 1,
+          "producer_stop": null,
+          "primary_assessment_finished_utc": "2026-11-22T13:31:18.628387+00:00",
+          "primary_passed": true,
+          "seconds_to_first_independent_acceptance_including_batch_hold": 943.08,
+          "basis": "signed-by-independent-runner primary verdict"
+        }
+      }
+    ],
+    "native_usage": {
+      "game": "Root FIX-001 G6 pending. Three decisions lifecycle-resume, lifecycle-reviewed, lifecycle-final linked by two supersedes edges to the same unchanged candidate SHA-256. Producer exposed sandbox browser block. External browser independently replayed delivered bytes.",
+      "click": "Root FIX-001 G6 pending, one wheel-bound decision. pager-wheel-bound-check completed G6; pager-installed-check remained pending."
+    },
+    "copied_distribution_preflight": {
+      "distributed_runtime_file_count": 225,
+      "distributed_runtime_digest": "e62018e7bbd89ef75fd68a6be419005b10d96246a6f2c7c9c4bca3aae080d808",
+      "core_identical_to_preflight": true,
+      "schema": "Sorted relative .workflow file SHA-256 mapping; exact consumers add the public governance command."
+    },
+    "behavior_seal_sha256": "658f585d69ebd25b668ab73461d8c91b3b2639f40845c88759a981a5b5e9d066",
+    "blind-semantic_sha256": "2cafd404d577bf7967920a6ad2d418f379677088185b459af691ac9ba9bacf96"
+  },
+  "published_windows_worktree_evaluator_sha256": {
+    "click_stdout.py": "df7544f4483687ee85d28137dff723c5c4cf1477036490958608cd3638f9ed57",
+    "rpg_save.py": "9f1900b5e9b9408cc54bcaf20fd72bfcd8baec26cb539c89fa6ada629d77ce7c"
+  }
+}

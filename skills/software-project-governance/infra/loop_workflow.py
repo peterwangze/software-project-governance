@@ -10,6 +10,7 @@ import loop_admission
 import loop_engine
 import loop_event_log
 import loop_paro_engine
+import loop_revalidation
 from checks.flow_unit_runtime_v2 import missing_runtime_issue, validate_native_loop_payload
 from loop_gate_processor import process_gate_result
 
@@ -64,6 +65,9 @@ def _admit(path, unit):
     decision = loop_admission.check_admission(unit_id, runtime_file=path, log_path=path.with_name("loop-event-log.jsonl"))
     if not decision.admitted:
         raise ValueError(decision.reason)
+    if unit.get("recheck") and unit["loop_state"].get("cas_version") is not None:
+        from loop_alignment import activate_recheck
+        return activate_recheck(path, unit)
     outcome = loop_paro_engine.activate_unit(unit_id, runtime_file=path, tier=unit["entry_tier"],
                                             fuse_max_rounds=unit["loop_state"]["fuse"]["max_rounds"],
                                             event_log=True, actor="admission")
@@ -89,7 +93,9 @@ def _validate_gate(gate, tier):
 def _unfinished(root, state, unit, children=False):
     """Check the exit receipts being consumed, including their prerequisites."""
     from checks.loop_receipts import verify_attempt
+    from loop_alignment import acceptance_successors
     units = {u["flow_unit_id"]: u for u in state["flow_units"]}
+    successors = acceptance_successors(state["flow_units"])
     child_ids = {}
     for u in units.values():
         child_ids.setdefault(u.get("parent_unit_id"), []).append(u["flow_unit_id"])
@@ -110,6 +116,14 @@ def _unfinished(root, state, unit, children=False):
         history = required["gate_history"]
         try:
             verify_attempt(Path(root), required, history[-1], len(history) - 1)
+            historical = uid == unit.get("continues_contract") and unit.get("previous_evidence_ref") == history[-1]["evidence_ref"]
+            if uid == unit.get("continues_scope") or uid in successors:
+                historical = True
+                if uid not in (unit.get("continues_scope"), unit.get("continues_contract")):
+                    pending.extend(successors.get(uid, []))
+            if not historical and (issue := loop_revalidation.exit_issue(
+                    root, required, loop_revalidation.owner_for(state, required), prerequisites=False)):
+                raise ValueError(issue)
         except (ValueError, KeyError, TypeError, AttributeError, OSError) as exc:
             raise ValueError(f"{uid}: completion evidence unavailable: {exc}") from exc
         pending.extend(required["dependencies"])
@@ -152,6 +166,11 @@ def _intake_intent(task, intake, explicit, delivery_goal, goal, enclosing, previ
             raise ValueError("intent must contain the original request")
         if delivery_goal and explicit != goal:
             raise ValueError("intent differs from the bound delivery goal")
+        if not enclosing and intake.get("demand_basis"):
+            if explicit != intake["demand_basis"]:
+                raise ValueError("explicit intent differs from the registered root request")
+            source = intake.get("demand_source") or "unspecified"
+            return {"basis": explicit, "source": f"change-triage/{task}:{source}", "prior_art": prior_art}
         return {"basis": explicit, "source": "user", "prior_art": prior_art}
     if delivery_goal:
         # bind_delivery_unit supplies the original text from the goal bridge.
@@ -170,10 +189,12 @@ def _intake_intent(task, intake, explicit, delivery_goal, goal, enclosing, previ
 def start(root, *, unit_id, goal, tier, gate=None, acceptance=None, parent=None, task=None,
           dependencies=(), release_version=None, release_reviewer=None, after=None, check_command=None,
           expect_output=None, delivery_goal=None, delivery_contract_sha256=None, dry_run=False,
-          intent=None, from_learning=None):
+          intent=None, from_learning=None, criteria=None, scope=(), product_goal=None, authority=None, scope_artifact=None,
+          adopt_legacy=None, intent_source=None):
     """Declare exactly one unit. Replaying the same declaration preserves its progress."""
     if not UNIT_ID.fullmatch(unit_id) or (task and not UNIT_ID.fullmatch(task)) or tier not in TIERS:
         raise ValueError("invalid unit id or loop tier")
+    requested_gate = gate
     gate = _validate_gate(gate, tier)
     task = task or unit_id
     if from_learning is not None and not after:
@@ -182,8 +203,14 @@ def start(root, *, unit_id, goal, tier, gate=None, acceptance=None, parent=None,
     with loop_event_log._cross_process_lock(path), loop_paro_engine._commit_lock(path):
         state = _payload(path)
         intake = _triage_intake(root, task)
-        enclosing = _unit(state, parent) if parent else {}
         previous = _unit(state, after) if after else {}
+        continuing_child = previous.get("parent_unit_id") and not from_learning
+        if continuing_child:
+            from loop_alignment import continue_child
+            parent, scope, scope_artifact, gate, acceptance, check_command, expect_output = continue_child(
+                previous, parent=parent, scope=scope, candidate=scope_artifact, tier=tier, gate=requested_gate,
+                acceptance=acceptance or intake.get("acceptance"), command=check_command, expected=expect_output)
+        enclosing = _unit(state, parent) if parent else {}
         if after:
             if previous["runtime_status"] != "completed":
                 raise ValueError("the previous iteration must have completed with evidence")
@@ -231,9 +258,40 @@ def start(root, *, unit_id, goal, tier, gate=None, acceptance=None, parent=None,
         }
         if after:
             definition["previous_evidence_ref"] = previous["gate_history"][-1]["evidence_ref"]
+        if continuing_child:
+            definition["continues_scope"] = after
         if from_learning is not None:
             definition["source_learning"] = from_learning
         context = _intake_intent(task, intake, intent, delivery_goal, goal, enclosing, previous)
+        from loop_alignment import declaration
+        if product_goal and (tier != "middle" or (delivery_goal and product_goal != delivery_goal)):
+            raise ValueError("a product contract requires its own middle delivery or release")
+        if criteria and not (product_goal or delivery_goal):
+            product_goal = unit_id
+            if tier != "middle":
+                raise ValueError("a multi-criterion product requires a middle delivery")
+        existing_unit = next((u for u in state["flow_units"] if u["flow_unit_id"] == unit_id), {})
+        if previous and not parent and not from_learning and previous.get("product_goal"):
+            following = next((u["flow_unit_id"] for u in state["flow_units"]
+                              if u.get("continues_contract") == after and u["flow_unit_id"] != unit_id), None)
+            if following:
+                raise ValueError(f"{after} already continues in {following}; resume that product unit")
+            owner = loop_revalidation.owner_for(state, previous)
+            frozen = owner["root_contract"]
+            if (tier != "middle" or product_goal not in (None, previous["product_goal"])
+                    or criteria not in (None, loop_revalidation.current_criteria(owner))
+                    or acceptance != previous["acceptance"] or intent not in (None, frozen["intent"])
+                    or authority not in (None, frozen.get("authority")) or scope or scope_artifact):
+                raise ValueError("continue the frozen product contract or explicitly start a separately authorized goal")
+            definition.update(continues_contract=after, product_goal=previous["product_goal"],
+                              product_contract_sha256=previous["product_contract_sha256"])
+        elif (not existing_unit or any(k in existing_unit for k in ("root_contract", "criterion_scope"))
+                or criteria is not None or scope or product_goal or authority or scope_artifact or adopt_legacy or intent_source):
+            definition.update(declaration(root, definition, context, intake, criteria, scope, enclosing,
+                              {u["flow_unit_id"]: u for u in state["flow_units"]}, product_goal or delivery_goal, authority, scope_artifact))
+        if adopt_legacy or intent_source:
+            from loop_alignment import adopt
+            adopt(root, definition, _unit(state, adopt_legacy), intent, intent_source)
         for existing in state["flow_units"]:
             if existing["flow_unit_id"].casefold() == unit_id.casefold():
                 if (any(existing.get(k) != v for k, v in definition.items())
@@ -299,6 +357,8 @@ def release_issues(root, unit_id, version):
             return [f"{unit['flow_unit_id']}: release review for {version} is pending"]
         if waiting := _unfinished(root, state, unit, children=True):
             return [f"unresolved release work: {', '.join(waiting)}"]
+        if issue := loop_revalidation.exit_issue(root, unit, loop_revalidation.owner_for(state, unit)):
+            return [issue]
         ref = unit["gate_state"]["evidence_refs"][-1]
         rid = "REVIEW-" + ref.removeprefix("review-").removesuffix(".md")
         slug = re.search(r"(-R[0-9]+)-(.+)$", rid)
@@ -321,7 +381,14 @@ def add_arguments(parser):
     new.add_argument("--unit", required=True)
     new.add_argument("--goal", help="Defaults to the previous unit goal with --after")
     new.add_argument("--intent", help="Exact original user request that this unit serves")
+    new.add_argument("--authority", help="Project-designated person authorized to revise the root intent")
+    new.add_argument("--adopt-legacy", help="Reference an older unit while opening a separate newly confirmed root")
+    new.add_argument("--intent-source", help="Project-relative original response confirming the newly adopted intent")
     new.add_argument("--acceptance", help="Defaults to registered task acceptance")
+    new.add_argument("--product-goal", help="Verify this ordinary delivery or release against the named project product contract")
+    new.add_argument("--criteria", type=json.loads, help="Frozen product criteria as a JSON map, matching the named product contract")
+    new.add_argument("--criterion", dest="scope", action="append", default=[], help="Root criterion served by a child")
+    new.add_argument("--candidate", dest="scope_artifact", help="Specific component checked by a scoped child")
     new.add_argument("--tier", required=True, choices=TIERS)
     new.add_argument("--gate", help="Defaults to the entry condition of the selected loop tier")
     new.add_argument("--after", help="Continue from a completed unit and its acceptance")
@@ -336,17 +403,30 @@ def add_arguments(parser):
     learn = actions.add_parser("learn", help="Record an observed decision or a proposed follow-up")
     learn.add_argument("--unit", required=True)
     learn.add_argument("--id", dest="learning_id", required=True)
-    learn.add_argument("--kind", choices=("decision", "opportunity"), required=True)
+    learn.add_argument("--kind", choices=("decision", "opportunity", "note"), required=True)
     learn.add_argument("--observation", required=True, help="What the evidence showed")
     learn.add_argument("--action", dest="action_text", required=True, help="The chosen approach or proposed next goal")
     learn.add_argument("--validation", required=True, help="How to check the result")
     learn.add_argument("--evidence", required=True, help="Project-relative file supporting this observation")
+    learn.add_argument("--criterion", action="append", default=[], help="Criterion to recheck against the chosen candidate")
+    learn.add_argument("--candidate", help="Project-relative artifact evaluated by the next acceptance receipt")
+    learn.add_argument("--supersedes", help="ID of the previous selected candidate for the same criteria")
+    revision = actions.add_parser("revise", help="Import scoped counterevidence or a recorded authorization")
+    revision.add_argument("--unit", required=True)
+    revision.add_argument("--evidence", required=True)
+    revision.add_argument("--decision", help="Registered decision approving the exact revision evidence digest")
+    recheck = actions.add_parser("recheck", help="Reopen a previously certified unit whose current acceptance is stale")
+    recheck.add_argument("--unit", required=True)
+    bind = actions.add_parser("bind-product", help="Bind a product whose root criteria were registered before the artifact existed")
+    bind.add_argument("--unit", required=True)
     reopen = actions.add_parser("resume", help="Resume rework after a documented blocker resolution")
     reopen.add_argument("--unit", required=True)
     reopen.add_argument("--evidence", required=True, help="Project-relative resolution evidence file")
     reopen.add_argument("--actor", required=True, help="Person or executor recording the resolution")
     verify = actions.add_parser("verify", help="Run the predeclared acceptance check from the project root")
     verify.add_argument("--unit", required=True)
+    accept = actions.add_parser("accept", help="Apply the independent product receipt to an ordinary delivery")
+    accept.add_argument("--unit", required=True)
     read = actions.add_parser("status", help="Resume from current results and evidence")
     read.add_argument("--unit")
     read.add_argument("--json", action="store_true")
@@ -365,15 +445,29 @@ def run(root, args):
                      acceptance=args.acceptance, parent=args.parent, task=args.task,
                      dependencies=args.depends_on, release_version=args.release_version, after=args.after,
                      intent=args.intent, from_learning=args.from_learning,
+                     criteria=args.criteria, scope=args.scope, product_goal=args.product_goal, authority=args.authority,
+                     scope_artifact=args.scope_artifact, adopt_legacy=args.adopt_legacy, intent_source=args.intent_source,
                      check_command=args.check_command, expect_output=args.expect_output, release_reviewer=args.release_reviewer)
     if args.action == "learn":
         from loop_learning import record
         return record(root, args.unit, args.learning_id, args.kind, args.observation,
-                      args.action_text, args.validation, args.evidence)
+                      args.action_text, args.validation, args.evidence,
+                      criteria=args.criterion, candidate=args.candidate, supersedes=args.supersedes)
+    if args.action == "revise":
+        from loop_alignment import revise
+        return revise(root, args.unit, args.evidence, args.decision)
+    if args.action == "recheck":
+        from loop_alignment import recheck
+        return recheck(root, args.unit)
+    if args.action == "bind-product":
+        from loop_alignment import bind_product
+        return bind_product(root, args.unit)
     if args.action == "resume":
         return resume(root, args.unit, args.evidence, args.actor)
     if args.action == "verify":
         return verify_command(root, args.unit)
+    if args.action == "accept":
+        return accept_delivery(root, args.unit, ordinary_only=True)
     if args.action == "step":
         return step(root, args.unit, args.phase)
     if args.action == "gate":
@@ -425,6 +519,12 @@ def review_binding(root, task, unit_id=None, gate=None, *, allowed_gates=None):
             "iteration": unit["loop_state"]["loop_count"], "attempt": len(unit.get("gate_history", []))}
     if binding["gate"] == "G9" and unit.get("release_version"):
         binding.update(release_version=unit["release_version"], release_reviewer=unit["release_reviewer"])
+    if binding["gate"] in ("G6", "G7", "G9", "G11") and (not unit.get("product_goal") or binding["gate"] == "G9"):
+        product = (loop_revalidation.product_result(root, unit)
+                   if unit.get("product_goal") and binding["gate"] == "G9" else None)
+        proof = loop_revalidation.snapshot(root, unit, loop_revalidation.owner_for(state, unit), product=product)
+        if proof:
+            binding["outcome_check"] = proof
     return binding
 
 
@@ -496,6 +596,20 @@ def gate_review(root, unit_id, gate, review_id):
         if result in ("APPROVED", "APPROVED_WITH_NOTES"):
             if waiting := _unfinished(root, state, unit, children=loop_engine.gate_requires_children(gate)):
                 raise ValueError(f"unresolved child work or dependency: {', '.join(waiting)}")
+            if gate in ("G6", "G7", "G9", "G11") and (not unit.get("product_goal") or gate == "G9"):
+                product = loop_revalidation.product_result(root, unit) if gate == "G9" and unit.get("product_goal") else None
+                if product and not product["pass"]:
+                    raise ValueError("product acceptance requires repair: " + ", ".join(product["issues"]))
+                proof = loop_revalidation.snapshot(root, unit, loop_revalidation.owner_for(state, unit), product=product)
+                if proof != binding.get("outcome_check"):
+                    raise ValueError("the reviewed scope, candidate or current receipt changed; obtain a new review")
+                if proof and not product:
+                    pins = {pin["path"] for pin in receipt.get("bindings", []) if pin.get("hash") != "unavailable"}
+                    required_pins = set(proof["candidates"])
+                    if pin := proof.get("scoped_artifact"):
+                        required_pins.add(pin["path"])
+                    if not required_pins <= pins:
+                        raise ValueError("bind the reviewed candidate using review-record --bind-file")
         elif result not in ("NEEDS_CHANGE", "BLOCKED"):
             raise ValueError(f"{result} does not certify a gate decision")
         return _apply_receipt(path, unit, result, name, receipt["reviewer"])
@@ -576,6 +690,7 @@ def verify_command(root, unit_id):
         if waiting := _unfinished(root, state, unit, children=True):
             raise ValueError(f"unresolved work: {', '.join(waiting)}")
         attempt = len(unit.get("gate_history", []))
+        proof = loop_revalidation.snapshot(root, unit, loop_revalidation.owner_for(state, unit))
     # Execute outside the project transaction lock; independent units remain usable.
     try:
         run = subprocess.run(command, cwd=root, shell=False, capture_output=True, timeout=120)
@@ -593,12 +708,16 @@ def verify_command(root, unit_id):
         _assert_open(unit)
         if attempt != len(unit.get("gate_history", [])) or _unfinished(root, state, unit, children=True):
             raise ValueError("work changed during acceptance; repeat the check on the current attempt")
+        if proof != loop_revalidation.snapshot(root, unit, loop_revalidation.owner_for(state, unit)):
+            raise ValueError("candidate or scope changed during acceptance; rerun the declared check")
+        if proof:
+            observation["outcome_check"] = proof
         receipt = _observation(path, unit, observation)
         result = "APPROVED" if command_observation_passes(observation) else "NEEDS_CHANGE"
         return _apply_receipt(path, unit, result, receipt, "acceptance-command")
 
 
-def accept_delivery(root, unit_id):
+def accept_delivery(root, unit_id, *, ordinary_only=False):
     """Apply witnessed product acceptance and route failures back to the responsible loop."""
     from checks.loop_receipts import verify_attempt
     from delivery_acceptance import evaluate_delivery_acceptance
@@ -606,14 +725,25 @@ def accept_delivery(root, unit_id):
     with loop_event_log._cross_process_lock(path):
         while True:
             state = _payload(path)
-            unit = _unit(state, unit_id)
+            unit = _admit(path, _unit(state, unit_id))
             gate = unit["gate_state"]["gate_id"]
-            if not unit.get("delivery_goal") or unit.get("release_version") or gate not in ("G6", "G7", "G9"):
+            if ordinary_only and unit.get("delivery_goal"):
+                raise ValueError("bound goals must use their authorized host acceptance action")
+            if not (unit.get("product_goal") or unit.get("delivery_goal")):
                 raise ValueError("unit is not bound to a delivery goal")
-            result = evaluate_delivery_acceptance(Path(root), goal_id=unit["delivery_goal"], required=True)
+            if gate not in ("G6", "G7", "G9"):
+                raise ValueError(f"{unit_id}: product is registered; complete the current {gate} review first. "
+                                 f"Use loop status --unit {unit_id} --json to see the next action.")
+            result = (loop_revalidation.product_result(root, unit) if unit.get("product_goal") else
+                      evaluate_delivery_acceptance(Path(root), goal_id=unit["delivery_goal"], required=True))
             verdict = result.get("receipt_verdict")
-            if verdict not in ("PASS", "FAIL") or result.get("contract_sha256") != unit["delivery_contract_sha256"]:
+            if unit.get("release_version") and gate == "G9" and verdict == "PASS":
+                raise ValueError("a release requires its independent designated review")
+            if verdict not in ("PASS", "FAIL") or result.get("contract_sha256") != (
+                    unit.get("product_contract_sha256") or unit.get("delivery_contract_sha256")):
                 raise ValueError("delivery acceptance: " + ", ".join(result["issues"] or ["goal contract changed"]))
+            if proof := loop_revalidation.snapshot(root, unit, loop_revalidation.owner_for(state, unit), product=result):
+                result["outcome_check"] = proof
             history = unit.get("gate_history", [])
             for attempt, prior in reversed(list(enumerate(history))):
                 if prior["actor"] != "delivery-acceptance":

@@ -33,7 +33,7 @@ def _observation_result(root, unit, history, attempt):
     ):
         raise ValueError("observation belongs to another unit, gate or attempt")
     if history["actor"] == "delivery-acceptance":
-        if (data.get("contract_sha256") != unit.get("delivery_contract_sha256")
+        if (data.get("contract_sha256") != (unit.get("product_contract_sha256") or unit.get("delivery_contract_sha256"))
                 or data.get("receipt_verdict") not in {"PASS", "FAIL"}
                 or not re.fullmatch("[0-9a-f]{64}", data.get("receipt_sha256", ""))):
             raise ValueError("product acceptance disagrees with the frozen contract")
@@ -101,5 +101,8 @@ def require_task_exit(root, task):
         if unit["runtime_status"] != "completed" or not history or history[-1]["decision"] != "exit":
             raise ValueError(f"{task}: work unit {unit['flow_unit_id']} has no certified exit")
         verify_attempt(root, unit, history[-1], len(history) - 1)
+        from loop_revalidation import exit_issue, owner_for
+        if issue := exit_issue(root, unit, owner_for(state, unit)):
+            raise ValueError(f"{task}: {issue}")
         if waiting := _unfinished(root, state, unit, children=True):
             raise ValueError(f"{task}: unresolved work units {', '.join(waiting)}")

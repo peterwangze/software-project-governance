@@ -110,7 +110,7 @@ def _json_object(items: list[tuple]) -> dict:
     return result
 
 
-def _read_record(path: Path, fields: set[str], *, max_bytes: int | None = None) -> tuple[dict, str]:
+def _read_record(path: Path, fields: set[str], *, max_bytes: int | None = None, optional=()) -> tuple[dict, str]:
     if _regular_stat(path).st_nlink != 1:
         raise ValueError(f"record must not be hard-linked: {path}")
     with path.open("rb") as stream:
@@ -118,7 +118,7 @@ def _read_record(path: Path, fields: set[str], *, max_bytes: int | None = None) 
     if max_bytes is not None and len(raw) > max_bytes:
         raise ValueError("record is too large")
     record = json.loads(raw.decode("utf-8"), object_pairs_hook=_json_object)
-    if not isinstance(record, dict) or record.keys() != fields | {"schema_version"}:
+    if not isinstance(record, dict) or record.keys() - set(optional) != fields | {"schema_version"}:
         raise ValueError("unexpected or missing fields")
     if type(record["schema_version"]) is not int or record["schema_version"] != 1:
         raise ValueError("schema_version must be 1")
@@ -137,6 +137,8 @@ def _validate_contract(record: dict) -> None:
         raise ValueError("invalid goal_id")
     if record["producer"].casefold() == record["verifier"].casefold():
         raise ValueError("producer and verifier must be independent")
+    if "authority" in record and not _valid_text(record["authority"]):
+        raise ValueError("the product contract's designated revision authority must be named")
     criteria = record["criteria"]
     if not isinstance(criteria, dict) or not criteria or not all(
         _ID.fullmatch(key) and _valid_text(label) for key, label in criteria.items()
@@ -145,7 +147,7 @@ def _validate_contract(record: dict) -> None:
 
 
 def _contract(path: Path, *, max_bytes: int | None = None) -> tuple[dict, str]:
-    record, digest = _read_record(path, CONTRACT_FIELDS, max_bytes=max_bytes)
+    record, digest = _read_record(path, CONTRACT_FIELDS, max_bytes=max_bytes, optional=("authority",))
     _validate_contract(record)
     return record, digest
 
@@ -207,7 +209,7 @@ def _criterion_result(root: Path, criterion: dict, artifact: Path) -> dict:
 
 def evaluate_delivery_acceptance(
     project_root: Path, *, release_version: str | None = None, goal_id: str | None = None,
-    required: bool = False, released_history: bool = False,
+    required: bool = False, released_history: bool = False, acceptance_context=None, _prerequisites=True,
 ) -> dict:
     """Check an explicitly selected release or goal against the same receipt."""
     if released_history and not required:
@@ -233,11 +235,29 @@ def evaluate_delivery_acceptance(
     except (OSError, ValueError, RecursionError) as exc:
         return _result("FAIL", [f"delivery contract: {exc}"])
 
+    if acceptance_context and (acceptance_context.get("product_goal") != contract["goal_id"]
+            or acceptance_context.get("product_contract_sha256") != contract_hash):
+        return _result("FAIL", ["delivery scope: product goal or contract digest does not match the frozen root"])
+    from loop_alignment import product_context
+    try:
+        acceptance_context = product_context(root, contract["goal_id"], contract_hash, contract["artifact"],
+                                             release=release_version is not None, prerequisites=_prerequisites) or acceptance_context
+    except (OSError, ValueError, RecursionError) as exc:
+        return _result("FAIL", [f"delivery scope: {exc}"], **_contract_facts(contract, contract_hash))
+    if acceptance_context and acceptance_context.get("contract_revisions"):
+        from loop_alignment import current_criteria, evidence_issue
+        if issue := evidence_issue(root, acceptance_context):
+            return _result("FAIL", [issue])
+        contract = dict(contract, criteria=current_criteria(acceptance_context))
     contract_facts = _contract_facts(contract, contract_hash)
     try:
         receipt, receipt_hash = _read_record(_project_path(root, RECEIPT), {
             "contract_sha256", "artifact_sha256", "entrypoint", "verifier", "results",
-        })
+        }, optional=("revisions",))
+        revisions = (acceptance_context or {}).get("contract_revisions", [])
+        expected_revisions = [event["sha256"] for event in revisions]
+        if receipt.get("revisions", []) != expected_revisions:
+            raise ValueError("receipt must acknowledge the applicable root revisions and retest their affected criteria")
         for field, expected in (
             ("contract_sha256", contract_hash), ("entrypoint", contract["entrypoint"]),
             ("verifier", contract["verifier"]),
@@ -265,6 +285,11 @@ def evaluate_delivery_acceptance(
             continue
         try:
             criterion = _criterion_result(root, results[key], artifact)
+            if criterion.get("status") == "PASS" and any(
+                criterion["evidence_sha256"] in change.get("prior_evidence", {}).get(key, ())
+                for change in revisions if key in change["criteria"]
+            ):
+                raise ValueError("revision requires fresh observation from the original sample")
         except (OSError, ValueError) as exc:
             issues.append(f"{key}: {exc}")
             continue
@@ -281,5 +306,5 @@ def evaluate_delivery_acceptance(
         terminal = {"receipt_sha256": receipt_hash, "receipt_verdict": "FAIL" if issues else "PASS"}
     return _result(
         "FAIL" if issues else "PASS", issues, **contract_facts, **terminal,
-        artifact_sha256=fingerprint, entrypoint=contract["entrypoint"], criteria_results=verified,
+        artifact=contract["artifact"], artifact_sha256=fingerprint, entrypoint=contract["entrypoint"], criteria_results=verified,
     )

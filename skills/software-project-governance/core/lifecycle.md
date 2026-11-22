@@ -2,6 +2,10 @@
 
 目标由用户想得到的成品及其验收条件确定。协调者把可独立验收的工作登记为有稳定 ID 的工作单元，按目标、父单元和依赖安排工作。同一时间，一个单元可以在返工，另一个单元可以准备交付。
 
+用户可直接说「帮我做一个能重新打开导出文件核对总额的工具」，无需提供治理字段。受理时保留用户原话和来源，再单独记录协调者对成品、范围与验收操作的解释；解释不得冒充用户原话。已有明确授权就继续执行可逆工作，仅当歧义会实质改变成品、范围、成本、风险或外部权限时请用户裁决。常规实现细节可依据事实试用，并保留选择依据。
+
+根任务冻结原意与原验收，子单元登记服务哪些根判据及自己的局部验收。例如「两行都写出」是导出修复的局部条件，「用户重新打开导出文件后能核对账单总额」才是该根任务的交付条件。局部回执只证明其覆盖范围；收口时仍须回到原始委托核对实际用户结果。
+
 | 作用域 | 本轮工作 | Gate 看护什么 | 未收敛时 |
 | --- | --- | --- | --- |
 | 立项 | 说明受益者、范围、预期成品和判据 | G1 确认第一次投入有依据 | 把未决方向交用户裁决 |
@@ -18,24 +22,37 @@
 
 1. `governance-bootstrap --format json` 定位项目，读取 `loops`。新事务先确认目标、验收操作和责任人。
 2. `loop start --unit <id> --intent "<用户原话或来源>" --goal "<成品目标>" --acceptance "<可复验条件>" --tier <层级>` 创建工作单元。原意说明谁在什么情境下需要什么结果，验收说明对方通过什么操作看见该结果。通过 `change-triage` 受理时，沿用 `--demand-basis` 和 `--prior-art`。默认使用本层入口门。首次立项显式指定 `--tier setup --gate G1`。有所属交付时提供 `--parent <父单元>`，依赖其他单元时提供 `--depends-on <单元>`，已有任务提供 `--task <任务编号>`。发布单元提供 `--release-version <版本号>`。
-   可直接重放的局部修复可在同一命令指定 `--check-command '["python","tests/check_export.py"]' --expect-output "totals match"`。修复后 `loop verify --unit <id>` 保存退出码与实际输出。退出码为零且完整 UTF-8 标准输出与预期相符时收口，LF、CRLF 等价，末尾可有一个换行。其余情形返回内层处理。独立成品或发布验收沿对应契约执行。
+   轻量修复不传 `--criteria` 或 `--product-goal`，根契约自动以 `acceptance` 为判据 ID。已有实际导出检查脚本时，可用 `loop start --unit export-fix --intent "修复导出总额" --goal "导出全部行" --acceptance "重新打开导出文件并核对总额" --tier inner --check-command '["python","tests/check_export.py"]' --expect-output "totals match"`，修复后运行 `loop verify --unit export-fix` 保存退出码与实际输出。退出码为零且完整 UTF-8 标准输出与预期相符时收口，LF、CRLF 等价，末尾可有一个换行。
+   具名多判据走成品路径：根单元用 `--criteria '{"reopen-total":"重新打开导出文件，逐行加总与账单 19.99 一致"}'`，默认成品目标 ID 为单元 ID。当前运行时允许契约尚未创建时先登记判据，但后续须准备匹配的 `.governance/delivery-contract.json`，运行 `loop bind-product --unit <id>`，再凭独立成品实测回执运行 `loop accept --unit <id>`。已有契约时用 `--product-goal <目标ID>`，显式 `--criteria` 须与契约一致。单独添加 `--criteria` 不能省略成品绑定和验收。选择支持授权修订的路径时，从创建根单元起提供 `--authority <项目指定的自然人>`，不能由执行者在修订时补指定裁决者。子单元用 `--parent invoice --criterion reopen-total` 指明覆盖范围。根验收不能被更容易的局部检查替换；需要局部检查时创建子单元。
 3. 保留实际输入和产出。用 `loop step --unit <id> --phase act` 开始尝试，观察后记录 `observe`，形成判断后记录 `reflect`。
 4. 独立审查者用 `review-record --task <任务或单元ID> --reviewer <角色> --round <轮次> --result <裁决> --report <报告文件> --bind-file <本轮工件>` 记录裁决。读取返回的回执 ID 与本单元状态。需要显式应用或复核时用 `loop gate --unit <id> --gate <Gx> --review <REVIEW-TASK-Rn>` 消费本次回执。以 `loop status` 给出的局部动作继续。内层 G7 退回 G6 修改后重审，中层 G5、外层 G10 等过程门允许该单元继续取证。需返工时把原失败样本交还执行者；达到轮次上限或触及风险接受、范围或发布边界时交用户裁决。
-5. `loop status --unit <id> --json` 读取该单元的真实状态。新会话重新读取运行记录，沿最近证据、依赖及阻塞继续。缺数据时显示尚未开始或数据错误。
+5. `loop status --unit <id> --json` 读取该单元的真实状态。新会话重新读取运行记录，沿最近证据、依赖及阻塞继续。`root_contract` 显示根单元、原意、来源、验收、当前判据和修订历史；`unit.acceptance` 是本单元验收。根原意可能为字符串或带来源的对象。0.100.0 记录可能没有根契约或候选复验字段，保留原记录并核对原始委托，不能由缺字段推断已通过。缺数据时显示尚未开始或数据错误。Web 控制台按同一状态区分根与局部范围、观察证据和验收回执。
 
 ## 试用方案与交付后的反馈
 
-例如用户说「我要从导出的文件核对发票总额」，可以把验收定为重新打开导出文件后逐行加总，与账单上的 19.99 美元一致。如果屏幕显示正确，文件重开却只有第一行，保留失败输出，在这张发票上试用逐行导出的方案。用以下命令记录实际观察、取舍和复验方法，证据路径相对于项目根。
+例如用户说「我要从导出的文件核对发票总额」，可以把验收定为重新打开导出文件后逐行加总，与账单上的 19.99 美元一致。如果屏幕显示正确，文件重开却只有第一行，保留失败输出，在这张发票上试用逐行导出的方案。用相同输入比较候选，保留实际产物、版本、失败样本与代价；没有试用的替代方案标为待验证。用以下命令记录实际观察、取舍和复验方法，证据路径与候选产物路径相对于项目根，且观察证据须独立于候选。
 
 ```text
-loop learn --unit invoice --id export-rows --kind decision --observation "首版只写出首行，重开后总额为 15.00；逐行方案保留了两行" --action "采用逐行导出" --validation "在原发票上重新导出、打开并加总，对账单核对 19.99" --evidence checks/export-comparison.txt
+loop learn --unit invoice --id export-rows --kind decision --observation "首版只写出首行，重开后总额为 15.00；逐行方案保留了两行" --action "采用逐行导出" --validation "在原发票上重新导出、打开并加总，对账单核对 19.99" --evidence checks/export-comparison.txt --criterion reopen-total --candidate exports/invoice.csv
 ```
 
-再用原验收命令或独立成品验收核对交付。交接时说明用户能完成的操作、实际结果及仍待验证的边界。`loop status` 保留本单元的原意、历次取舍与反馈。证据内容变化后，读取者能看到哪条记录需要复核。
+记录选择后，再用原验收命令或独立成品验收核对当前候选。`learning[].revalidation` 给出 `pending`（待运行）、`passed`（所列判据已通过）、`failed`（验收失败）或 `stale`（产物、判据或证据变化需重验），以及 `criteria`、`candidate`、`evidence_ref` 与原因。观察记录和通过声明不能代替验收回执；以运行时状态为准。候选失败时带原样本修复、重试或更换方案，再按原判据复验。局部复验通过后还要核对根任务的其余判据。
+
+出现与原判断相反的事实时，保留原记录，指出受影响的判据并重新试验。`loop revise --unit <根ID> --evidence <项目相对JSON路径>` 导入修订证据。JSON 包含 `id`、`kind`、`unit`、`base_revision`、`actor`、`reason`、`criteria`，其中 `criteria` 为受影响判据的映射。`kind: "counterevidence"` 必须使用当前判据原文；任何报告者都可提出反证，无需先获许可，也不带 `--decision`，其作用是触发复验。
+
+确需改变目标或验收时，先取得根单元指定自然人的授权。`kind: "authorization"` 的 `actor` 须匹配原 `authority`，并增加 `response` 对象，字段为 `message_id`（原回复标识）、`source`（独立保存的原回复文件）、`sha256`（原回复文件摘要）、`quote`（逐字授权引文）。`criteria` 写明确切变更，`reason` 解释其授权范围与受影响复验；执行时加 `--decision DEC-n`，已登记决策的 `decider` 须匹配 `actor`，`content` 须包含该授权 JSON 文件的 SHA-256。信任边界在项目已核实并授权的回执：项目负责确认原回复确实来自有权裁决的自然人且覆盖所述变更；CLI 只检查记录、引文、摘要和对应关系，不认证自然人身份。不得用执行者自写的同意文字替代原回复。
+
+`loop status --json` 的 `root_contract.original_criteria` 保留原判据，`criteria` 是应用已授权修订后的当前判据，`revision`/`revisions` 保留顺序及证据。运行时拒绝过期的 `base_revision`，遇到此情形先重新读取根契约。修订重开根及覆盖受影响判据的已完成子单元；成品回执的 `revisions` 须按序列出全部修订 JSON 摘要，并为受影响判据提供新的实测证据，仅补摘要不能复用旧观察。固定验收命令需要变更时另建获授权单元，不能改写旧检查来制造通过。执行前以本机 `loop start/learn/revise --help` 及 `loop status --json` 核对实际支持的入口与状态。同目录的 `approval-counterevidence-example.md` 提供隔离目录中的完整重放，包含原回复、决策登记、旧回执拒绝和复验。
+
+方案选择时的 `--candidate` 由 `candidate_sha256` 冻结当时制品，验收须核对这份候选。未完成单元修改候选后，以新的 learning ID 和 `--supersedes <旧ID>` 登记同一判据范围的替代选择，再运行 `loop verify`（固定命令）或 `loop accept`（成品回执）。若候选在完成后改变，`loop status --json` 会报告 `unverified` / `stale`，并可能以非零退出；先 `loop recheck --unit <id>` 重开，再登记替代选择和复验。仍为 completed 时不能直接登记新候选。成品路径还须更新当前制品摘要及实测回执；不能用后来制品的通过回执证明原选择已通过。
+
+仅记录观察时使用 `loop learn --kind note`，保留观察、已做动作、核查说明和证据；它不选定候选，也不要求候选验收回执，不表示提出后续工作。旧记录缺少候选字段时仍可读取，但不能据此声称当前成品已通过。旧单元没有根契约时保留历史；取得用户重新确认的原意后，用新 ID 创建独立根单元，并提供 `--adopt-legacy <旧ID> --intent-source <项目相对原回复文件>` 和出现在该文件中的 `--intent`，而不是改写旧单元。
+
+主管（协调者）面向用户先简报原目标、当前成品能完成的操作、验收结果及未决边界；发生修订时说明谁授权改了哪些判据、哪些反证仍待复验。按需展开原话及来源、原判据与后来判据、授权回执和 DEC 编号、候选摘要、受影响根/子单元、逐项实测回执与后续动作。根任务的交付不能由某个子单元通过代替。`loop status` 保留原意、历次取舍与反馈；产物或证据改变时重新读取，过期回执不得继续作为当前通过依据。
 
 若用户要求达到同类优秀产品的水平，选出在相同任务上可比较的产品或上一版本，记录版本、来源和关键体验指标。先用同一输入、环境和预算测基线，冻结成功条件，再用同口径复测候选。采用现有成品契约时，在 `product_success_contract.competitive_baseline` 和 `success_metrics` 写入对照与用户可见结果，在 `quality_budget` 记录适用指标的阈值、测法和证据。保留双方实测原件，向用户报告收益、代价和缺测项，据此采纳、返工或回退。例如核对发票时可比较首次核对正确率、所需人工步骤和耗时。
 
-交付后，若试用者为核对退款还需手算，以 `--kind opportunity` 写入观察、建议试验、成功条件和反馈原件。用 `loop start --unit refund-export --tier inner --after invoice --from-learning <机会ID>` 选用这条建议，后继单元按其建议和验证条件开始。其余候选供日后选择。
+交付后，若试用者为核对退款还需手算，以 `--kind opportunity` 写入观察、建议试验、成功条件和反馈原件，交接时明确提出这项机会。机会记录本身不授权追加范围；用户选择或既有授权覆盖后，用 `loop start --unit refund-export --tier inner --after invoice --from-learning <机会ID>` 显式选用，后继单元按其建议和验证条件开始。其余候选保留待选；机会不得替代尚未完成的原验收。
 
 工作流自身沿同一入口演进。比如真实交付曾在导出界面通过、重开时失败，可以保留该失败任务和一次正常交付作为对照，固定用户输入、权限、预算和成品标准。下一单元用原任务验证新工作流能发现失败并引导修复，同时让合格成品通过。多次采用后再比较首次验收通过率、误放、返工次数及从受理至成品验收的耗时，保留失败和未完成的样本。
 

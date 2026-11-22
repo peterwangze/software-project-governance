@@ -242,7 +242,7 @@ def generate_packet_document(tasks, *, task_ids, existing, governance_dir, build
                     "flow_unit_id", "parent_unit_id", "task_id", "goal", "acceptance",
                     "active_loop_tier", "gate_id", "loop_count", "next_action",
                 )}
-                for field in ("intent", "previous_unit_id", "source_learning", "learning_count", "learning"):
+                for field in ("intent", "root_contract", "criterion_scope", "previous_unit_id", "source_learning", "learning_count", "learning"):
                     if unit.get(field) is not None:
                         summary[field] = unit[field]
                 if "learning_count" in summary:

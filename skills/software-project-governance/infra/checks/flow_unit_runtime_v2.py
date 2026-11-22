@@ -75,6 +75,9 @@ def _string_list(value):
 def _unit_learning_issues(unit, unit_by_id):
     """Optional native planning fields. Historical units need no migration."""
     uid = unit["flow_unit_id"]
+    from loop_alignment import shape_issue
+    if issue := shape_issue(unit, unit_by_id):
+        yield f"{uid}: {issue}"
     if "intent" in unit:
         intent = unit["intent"]
         if (not isinstance(intent, dict)
@@ -544,7 +547,9 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
                     failures.append(f"{display}: {unit_id} failed gate requires a rework decision")
                 if gate.get("status") in ("blocked", "escalated") and last["decision"] != "escalate":
                     failures.append(f"{display}: {unit_id} blocked gate requires an escalation decision")
-                if last["decision"] == "exit" and unit.get("runtime_status") != "completed":
+                checkpoint = unit.get("recheck")
+                reopened = isinstance(checkpoint, dict) and checkpoint.get("attempt") == len(history)
+                if last["decision"] == "exit" and unit.get("runtime_status") != "completed" and not reopened:
                     failures.append(f"{display}: {unit_id} recorded an exit without completing the unit")
             elif gate.get("last_result") is not None or gate.get("evidence_refs"):
                 failures.append(f"{display}: {unit_id} gate verdict or evidence requires a recorded attempt")
@@ -572,9 +577,11 @@ def validate_flow_unit_runtime_payload_v2(state, display=".governance/flow-unit-
                 source_history = source.get("gate_history") if source else None
                 dependencies = unit.get("dependencies")
                 if (not source or not isinstance(dependencies, list) or previous not in dependencies
-                    or source.get("runtime_status") != "completed" or not isinstance(source_history, list)
+                    or (source.get("runtime_status") != "completed" and not source.get("recheck"))
+                    or not isinstance(source_history, list)
                     or not source_history or not isinstance(source_history[-1], dict)
-                    or ("previous_evidence_ref" in unit and unit["previous_evidence_ref"] != source_history[-1].get("evidence_ref"))):
+                    or ("previous_evidence_ref" in unit and not any(isinstance(h, dict) and h.get("decision") == "exit"
+                            and h.get("evidence_ref") == unit["previous_evidence_ref"] for h in source_history))):
                     failures.append(f"{display}: {unit_id} previous iteration lacks its declared completion receipt")
     return failures
 

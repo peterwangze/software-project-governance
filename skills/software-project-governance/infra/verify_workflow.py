@@ -20127,7 +20127,7 @@ def cmd_loop(args):
         write_cli_json({"error": str(exc)})
         sys.exit(2)
     write_cli_json(result, indent=2)
-    if result.get("state") == "invalid" or (args.action == "verify" and result["decision"] in ("iterate", "escalate")):
+    if result.get("state") == "invalid" or (args.action in ("verify", "accept") and result["decision"] in ("iterate", "escalate")):
         sys.exit(2)
 
 
@@ -24282,7 +24282,7 @@ def _build_cli_parser(parser_argv=()):
     # 2 refusal (blocked/scope-ruling gate; judge's any_danger also 2).
     gbr_p = subparsers.add_parser(
         "goal-bridge",
-        help="FEAT-097 goal↔budget bridge (--action record/checkpoint/"
+        help="FEAT-097 goal and budget bridge (--action record/checkpoint/"
              "ruling/status/judge/thresholds/mapping): state mapping + "
              "danger-zone collection + checkpoint artifacts + resume "
              "authorization (blocked 后禁未授权续跑)",

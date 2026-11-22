@@ -937,6 +937,12 @@ def _unit_preview(unit):
             "basis": _clip(intent["basis"], 100), "source": _clip(intent["source"], 80),
             "prior_art": [_clip(ref, 60) for ref in intent["prior_art"][:2]],
         }
+    if contract := preview.get("root_contract"):
+        preview["root_contract"] = {k: _clip(contract[k], 90) for k in ("unit", "intent", "source", "acceptance")}
+        preview["root_contract"].update(revision=contract["revision"],
+            criteria={_clip(k, 40): _clip(v, 60) for k, v in list(contract["criteria"].items())[:3]},
+            revisions=[{k: _clip(str(event[k]), 60) for k in ("id", "kind", "reason", "evidence")}
+                       for event in contract["revisions"][-1:]])
     if entries := preview.get("learning"):
         preview["learning"] = []
         for entry in entries:
@@ -944,6 +950,10 @@ def _unit_preview(unit):
             for key in ("observation", "action", "validation", "evidence", "evidence_issue"):
                 if brief.get(key):
                     brief[key] = _clip(brief[key], 80)
+            if check := brief.get("revalidation"):
+                brief["revalidation"] = {k: _clip(str(check[k]), 60) for k in ("status", "candidate", "reason")}
+                brief["revalidation"]["evidence_ref"] = check["evidence_ref"]
+                brief["revalidation"]["criteria"] = [_clip(k, 40) for k in check["criteria"][:3]]
             preview["learning"].append(brief)
     return preview
 
@@ -1023,7 +1033,7 @@ def _enforce_projection_budget(payload, limit=MAX_JSON_BYTES):
                         preview[key] = _clamp_strings(preview[key], 32)
                 if preview.get("learning"):
                     preview["learning"] = [
-                        {key: item[key] for key in ("id", "kind", "action", "evidence_issue")}
+                        {key: item[key] for key in ("id", "kind", "action", "evidence_issue", "revalidation") if key in item}
                         for item in preview["learning"]
                     ]
             if over():
@@ -1053,6 +1063,18 @@ def format_loop_lines(loops, *, limit=None):
     lines = []
     units = loops.get("units", ())
     visible_units = units if limit is None else sorted(units, key=_unit_recovery_order)[:limit]
+    detailed = limit is None and len(visible_units) == 1
+
+    def brief(value, size=160):
+        return _clip(" ".join(str(value).split()), size)
+
+    def criteria_text(criteria):
+        items = list(criteria.items()) if isinstance(criteria, dict) else [(key, None) for key in criteria]
+        shown = items if detailed else items[:3]
+        text = ", ".join(brief(key, 60) + (": " + brief(value) if value is not None else "")
+                         for key, value in shown)
+        return text + (f" (+{len(items) - len(shown)} more)" if len(items) > len(shown) else "")
+
     for unit in visible_units:
         review = unit.get("last_review") or {}
         evidence = review.get("evidence_ref") or ", ".join(unit["evidence_refs"]) or "none recorded"
@@ -1074,8 +1096,24 @@ def format_loop_lines(loops, *, limit=None):
             details.append(f"previous unit {previous}: {verdict}")
         if chosen := unit.get("source_learning"):
             details.append(f"selected opportunity {chosen}")
+        contract = unit.get("root_contract") or {}
+        if contract:
+            details.append(f"root contract {brief(contract.get('unit', '?'), 80)} R{contract.get('revision', 0)} "
+                           f"({brief(contract.get('source', 'unspecified'), 80)}): "
+                           f"{brief(contract.get('intent', 'unspecified'))}")
+            if contract.get("acceptance") != unit.get("acceptance"):
+                details.append("root acceptance: " + brief(contract.get("acceptance", "unspecified")))
+            details.append("root criteria: " + criteria_text(contract.get("criteria") or {}))
+            if scope := unit.get("criterion_scope"):
+                details.append("local scope: " + criteria_text(scope) + "; local success does not certify root acceptance")
+            if revisions := contract.get("revisions"):
+                event = revisions[-1]
+                details.append(f"latest root revision {brief(event.get('id', '?'), 60)} "
+                               f"({brief(event.get('kind', '?'), 40)}): {brief(event.get('reason', ''))} "
+                               f"| revision evidence: {brief(event.get('evidence') or 'none recorded')}")
         if intent := unit.get("intent"):
-            details.append(f"request basis ({intent['source']}): {intent['basis']}")
+            if (intent.get("basis"), intent.get("source")) != (contract.get("intent"), contract.get("source")):
+                details.append(f"request basis ({intent['source']}): {intent['basis']}")
             if intent.get("prior_art"):
                 details.append("references: " + ", ".join(intent["prior_art"]))
         for entry in unit.get("learning", []):
@@ -1087,8 +1125,20 @@ def format_loop_lines(loops, *, limit=None):
                 item += f" | evidence: {entry['evidence']}"
             if entry.get("evidence_issue"):
                 item += f" | evidence unverified: {entry['evidence_issue']}"
+                item += f" | restore or verify {brief(entry.get('evidence') or 'the learning evidence')} before reuse"
+            if check := entry.get("revalidation"):
+                item += (f" | revalidation: {brief(check.get('status', 'unknown'), 40)}"
+                         f" | criteria: {criteria_text(check.get('criteria') or [])}"
+                         f" | candidate: {brief(check.get('candidate') or 'unspecified')}"
+                         f" | proof: {brief(check.get('evidence_ref') or 'none recorded')}"
+                         f" | reason: {brief(check.get('reason') or 'unspecified')}")
+                if detailed and check.get("selected_sha256"):
+                    item += f" | selected sha256: {brief(check['selected_sha256'], 64)}"
             details.append(item)
-        if unit.get("learning_count", 0) > len(unit.get("learning", [])):
+        if (contract or unit.get("state") == "invalid"
+                or any(entry.get("revalidation") or entry.get("evidence_issue") for entry in unit.get("learning", []))):
+            details.append(f"full status: loop status --unit {unit['flow_unit_id']} --json")
+        elif unit.get("learning_count", 0) > len(unit.get("learning", [])):
             details.append(f"earlier records: loop status --unit {unit['flow_unit_id']} --json")
         lines.append("%s [%s, round %s] %s — %s" % (
             unit["flow_unit_id"], unit["active_loop_tier"] or unit["runtime_status"], unit["loop_count"],
@@ -1098,6 +1148,10 @@ def format_loop_lines(loops, *, limit=None):
             evidence, " | " + " | ".join(details) if details else ""))
     if loops.get("message"):
         lines.append(loops["message"])
+    for issue in (loops.get("issues") or [])[:3]:
+        lines.append("  evidence issue: " + brief(issue, 240) + " | full status: loop status --json")
+    if len(loops.get("issues") or []) > 3:
+        lines.append("Further evidence issues: run loop status --json")
     omitted = loops.get("omitted_units", 0) + len(units) - len(visible_units)
     if omitted:
         lines.append("%s further unit(s): run loop status --json" % omitted)

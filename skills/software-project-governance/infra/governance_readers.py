@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 
 
-def _learning_view(root, unit, *, latest_only):
+def _learning_view(root, unit, *, latest_only, owner=None):
     fields = {key: unit[key] for key in ("intent", "source_learning") if unit.get(key)}
     entries = unit.get("learning") or []
     if entries:
@@ -20,7 +20,11 @@ def _learning_view(root, unit, *, latest_only):
         projected = []
         for entry in entries:
             issue = learning_evidence_issue(root, entry)
-            projected.append(dict(entry, evidence_issue=issue))
+            detail = dict(entry, evidence_issue=issue)
+            if entry.get("candidate"):
+                from loop_revalidation import decision_view
+                detail["revalidation"] = decision_view(root, unit, owner or unit, entry)
+            projected.append(detail)
         fields["learning"] = projected
     return fields
 
@@ -54,6 +58,11 @@ def loop_state(root, *, latest_learning_only=False):
         return dict(view, state="invalid", message=issues[0], issues=issues)
 
     units = state["flow_units"]
+    from loop_alignment import root_unit, scope_successors, acceptance_successors, view as contract_view
+    from loop_revalidation import exit_issue
+    by_id = {unit["flow_unit_id"]: unit for unit in units}
+    successors = scope_successors(units)
+    historical = acceptance_successors(units)
     issues_by_id = {}
     receipts = {}
     ledger = None
@@ -69,6 +78,9 @@ def loop_state(root, *, latest_learning_only=False):
                 from authority_ledger import LedgerWriter
                 ledger = LedgerWriter(path.parent)
             verify_attempt(root, unit, latest, len(history) - 1, ledger=ledger)
+            if unit["runtime_status"] == "completed" and key not in historical:
+                if issue := exit_issue(root, unit, root_unit(unit, by_id)):
+                    issues_by_id[key] = f"{key}: {issue}. Reopen the stale exit with loop recheck --unit {key}."
         except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
             issues_by_id[key] = f"{key}: restore or verify {latest['evidence_ref']} ({exc})"
     if issues_by_id:
@@ -82,7 +94,8 @@ def loop_state(root, *, latest_learning_only=False):
                 consumers[key].add(parent)
             if key in completed:
                 for dependency in unit["dependencies"]:
-                    consumers[dependency].add(key)
+                    if dependency != unit.get("continues_contract"):
+                        consumers[dependency].add(key)
         pending = [(key, key) for key in issues_by_id]
         while pending:
             key, original = pending.pop()
@@ -106,7 +119,8 @@ def loop_state(root, *, latest_learning_only=False):
         if active:
             summary["active_loops"] += 1
             summary["by_tier"][tier] += 1
-        waiting = [key for key in unit["dependencies"] if key in unfinished]
+        waiting = [key for key in unit["dependencies"] if key in unfinished and not (
+            key == unit.get("continues_contract") and by_id[key]["runtime_status"] == "completed")]
         open_children = children[unit["flow_unit_id"]]
         returns = loop.get("return_to") or []
         unit_id = unit["flow_unit_id"]
@@ -114,8 +128,23 @@ def loop_state(root, *, latest_learning_only=False):
         issue = issues_by_id.get(unit_id)
         receipt = receipts.get(unit_id)
         return_to = returns[-1] if returns else None
-        learning = _learning_view(root, unit, latest_only=latest_learning_only)
+        owner = root_unit(unit, by_id)
+        learning = _learning_view(root, unit, latest_only=latest_learning_only, owner=owner)
+        if contract := contract_view(owner):
+            learning["root_contract"] = contract
+            if unit.get("criterion_scope"):
+                learning["criterion_scope"] = unit["criterion_scope"]
+        else:
+            learning["root_provenance"] = "legacy: original root contract not recorded; historical goal and receipts retained"
         next_action = issue or _unit_action(unit, waiting, open_children, return_to)
+        if not issue and unit_id in successors:
+            learning["scope_successors"] = successors[unit_id]
+            next_action = "Historical scoped exit. Continue with " + ", ".join(successors[unit_id]) + "."
+        elif not issue and not waiting and not open_children:
+            from loop_revalidation import recovery
+            gaps, next_action = recovery(root, unit, owner, learning, next_action)
+            if gaps:
+                learning["criterion_gaps"] = gaps
         if not issue and unit["runtime_status"] == "completed":
             opportunity = next((entry for entry in reversed(learning.get("learning", []))
                                 if entry["kind"] == "opportunity"), None)
@@ -170,6 +199,8 @@ def _unit_action(unit, waiting, open_children, return_to):
         if gate_requires_children(gate["gate_id"]):
             return f"Wait for child work before {gate['gate_id']}: " + ", ".join(open_children) + "."
     if not loop["active_loop"]:
+        if unit.get("contract_revisions"):
+            return "Recheck the affected root criteria against the recorded revision and original sample."
         return "Activate the unit when its prerequisites are met."
     if unit.get("delivery_goal") and gate["gate_id"] == "G9":
         return "Verify the delivered product on the user’s path. Have the host check its independent acceptance receipt and open work."

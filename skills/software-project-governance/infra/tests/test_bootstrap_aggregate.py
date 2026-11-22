@@ -547,6 +547,76 @@ class ReadOnlyIdempotencyTests(unittest.TestCase):
 class TextFormatTests(unittest.TestCase):
     """--format text renders a ≤40-line summary."""
 
+    def test_contract_scope_and_revalidation_in_actual_text_clients(self):
+        import copy
+        import governance_readers
+        import loop_learning
+        import loop_workflow
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_fixture(tmp)
+            root = Path(tmp)
+            loop_workflow.start(root, unit_id="root", tier="middle", goal="Deliver the requested export",
+                                acceptance="Reopen every exported row.")
+            loop_workflow.start(root, unit_id="child", tier="inner", parent="root", goal="Check row export",
+                                acceptance="Rows reopen.", scope=["acceptance"])
+            (root / "candidate.txt").write_text("exported rows", encoding="utf-8")
+            (root / "choice.txt").write_text("Observed the export route", encoding="utf-8")
+            loop_learning.record(root, "child", "route", "decision", "Checked the candidate",
+                                 "Use this export", "Reopen rows", "choice.txt",
+                                 criteria=["acceptance"], candidate="candidate.txt")
+
+            def cli(*args, code=0):
+                proc = subprocess.run([sys.executable, "-X", "utf8", str(_ENGINE),
+                                       "--project-root", tmp, *args],
+                                      capture_output=True, encoding="utf-8")
+                self.assertEqual(proc.returncode, code, proc.stdout + proc.stderr)
+                return proc.stdout
+
+            for args in (("governance-bootstrap", "--format", "text"), ("loop-rollup",)):
+                text = cli(*args)
+                for expected in ("root contract root R0", "root criteria: acceptance: Reopen every exported row.",
+                                 "local scope: acceptance", "root acceptance: Reopen every exported row.",
+                                 "revalidation: pending", "criteria: acceptance", "candidate: candidate.txt",
+                                 "proof: none recorded", "Run the scoped acceptance",
+                                 "loop status --unit child --json"):
+                    self.assertIn(expected, text)
+            # Default status is historically JSON, including its single-unit detail.
+            default = json.loads(cli("loop", "status", "--unit", "child"))
+            explicit = json.loads(cli("loop", "status", "--unit", "child", "--json"))
+            self.assertEqual(default, explicit)
+            self.assertEqual(default["criterion_scope"], ["acceptance"])
+            self.assertEqual(default["learning"][0]["revalidation"]["status"], "pending")
+
+            view = governance_readers.loop_state(root)
+            child = copy.deepcopy(view["units"][1])
+            for status in ("passed", "failed", "stale"):
+                check = child["learning"][0]["revalidation"]
+                check.update(status=status, evidence_ref="review-child-R0.md", reason="Candidate rechecked")
+                text = "\n".join(ba.format_loop_lines({"units": [child]}))
+                self.assertIn(f"revalidation: {status}", text)
+                self.assertIn("proof: review-child-R0.md", text)
+                self.assertIn("selected sha256:", text)
+
+            root_view = view["units"][0]
+            root_view["intent"] = dict(basis=root_view["root_contract"]["intent"],
+                                       source=root_view["root_contract"]["source"], prior_art=[])
+            self.assertNotIn("request basis", "\n".join(ba.format_loop_lines({"units": [root_view]})))
+            historical = dict(root_view)
+            historical.pop("root_contract")
+            historical.pop("intent")
+            self.assertIn("acceptance: Reopen every exported row.",
+                          "\n".join(ba.format_loop_lines({"units": [historical]})))
+
+            (root / "candidate.txt").write_text("changed candidate", encoding="utf-8")
+            text = cli("loop-rollup")
+            self.assertIn("revalidation: stale", text)
+            self.assertIn("--supersedes", text)
+            (root / "choice.txt").unlink()
+            text = cli("governance-bootstrap", "--format", "text")
+            self.assertIn("evidence unverified:", text)
+            self.assertIn("restore or verify choice.txt before reuse", text)
+
     def test_text_summary_line_budget(self):
         with tempfile.TemporaryDirectory() as tmp:
             _make_fixture(tmp)

@@ -2,7 +2,7 @@
 
 Scope (DEC-083 Phase 5a / ADR-016 / FEAT-009): the evidence-completeness,
 evidence-quality, structured-evidence, and fact-grounding checks (Checks 1,
-1b, 6, 6b), plus their evidence-only parsing helpers.
+1b, 4, 6, 6b), plus their evidence-only parsing helpers.
 
 This module owns the evidence check domain. Shared helpers and constants that
 are still defined in verify_workflow.py (path resolution, evidence-log path
@@ -379,6 +379,62 @@ def check_evidence_quality():
                 pass  # Already caught by Check 2
 
     return issues
+
+
+def emit_evidence_completeness(result):
+    """Print Check 1 findings and count current gaps and parse warnings."""
+    issue_count = 0
+    print(f"│  Completed tasks: {result['completed_count']}")
+    # FIX-480 fail-closed: an unrecognized task-table shape makes the
+    # completed-count face NOT_RUN — WARN, never a silent 0-completed PASS.
+    for _shape_warn in result.get("parse_warnings", []):
+        issue_count += 1
+        print(f"│  [WARN] {_shape_warn}")
+    print(f"│  Tasks with evidence: {result['evidenced_count']}")
+    missing = result["missing_evidence"]
+    if missing:
+        issue_count += len(missing)
+        print(f"│  [WARN] {len(missing)} completed task(s) without evidence:")
+        for tid in missing:
+            print(f"│    - {tid}")
+    else:
+        print(f"│  [PASS] All completed tasks have evidence entries.")
+    historical_missing = result.get("historical_missing_evidence", [])
+    if historical_missing:
+        print(f"│  [INFO] {len(historical_missing)} archived completed task(s) without hot evidence "
+              f"(historical residue):")
+        for tid in historical_missing[:10]:
+            print(f"│    - {tid}")
+        if len(historical_missing) > 10:
+            print(f"│    ... and {len(historical_missing) - 10} more")
+    return issue_count
+
+
+def emit_evidence_quality(result):
+    """Print Check 4 reference findings and return their issue count."""
+    issue_count = 0
+    if result["session_context"]:
+        issue_count += len(result["session_context"])
+        print(f"│  [WARN] {len(result['session_context'])} evidence with '会话上下文' reference:")
+        for item in result["session_context"]:
+            print(f"│    - {item}")
+    else:
+        print(f"│  [PASS] No '会话上下文' references found.")
+    if result["circular_refs"]:
+        issue_count += len(result["circular_refs"])
+        print(f"│  [WARN] {len(result['circular_refs'])} circular reference(s):")
+        for item in result["circular_refs"]:
+            print(f"│    - {item}")
+    else:
+        print(f"│  [PASS] No circular references found.")
+    if result["empty_output"]:
+        issue_count += len(result["empty_output"])
+        print(f"│  [WARN] {len(result['empty_output'])} empty/incomplete evidence location(s):")
+        for item in result["empty_output"]:
+            print(f"│    - {item}")
+    else:
+        print(f"│  [PASS] No empty evidence locations found.")
+    return issue_count
 
 
 def check_fact_grounding():

@@ -19671,15 +19671,56 @@ class Fix294Check36ArchiveResolutionTests(unittest.TestCase):
                          ["FIX-9001"])
 
     def test_check36_panel_wiring_disclosure_visible(self):
-        """Source-shape: the Check 36 block calls the archive-aware
-        wrapper and prints the 'resolved via archive:' disclosure."""
+        """The engine runs the archive-aware judge and uses its domain issue count."""
+        from checks import risk_domain
+        self.assertIs(vw.emit_risk_mitigation_closure, risk_domain.emit_risk_mitigation_closure)
         src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
-        panel = "┌─ Check 36: Risk Mitigation Closure (FIX-265)"
-        self.assertIn(panel, src)
-        self.assertIn("check_risk_mitigation_closure_with_archive()", src)
-        self.assertIn("resolved via archive:", src)
-        call = "cr36 = check_risk_mitigation_closure_with_archive()"
-        self.assertGreater(src.index(call), src.index(panel))
+        panel = src.split("┌─ Check 36: Risk Mitigation Closure (FIX-265)", 1)[1]
+        self.assertIn(
+            "all_issues += emit_risk_mitigation_closure(check_risk_mitigation_closure_with_archive())",
+            panel.split("┌─ Check 37:", 1)[0])
+
+        content = self._content(self._risk_row(refs="PLAN-003"),
+                                self._risk_row(rid="RISK-002", refs="OTHER-999"))
+        plan = self._gov({"archive/tasks/legacy.md": self._LEGACY_FAMILY})
+        with patch.object(vw, "SAMPLE_PATH", plan), \
+             patch.object(vw, "_default_task_status_map", return_value={}) as active_map, \
+             patch.object(vw, "_archive_corpus_files", wraps=vw._archive_corpus_files) as corpus, \
+             patch.object(vw, "check_risk_mitigation_closure", wraps=vw.check_risk_mitigation_closure) as judge:
+            result = vw.check_risk_mitigation_closure_with_archive(content)
+        active_map.assert_called_once_with()
+        corpus.assert_called_once_with()
+        self.assertEqual(judge.call_count, 2)
+        with redirect_stdout(io.StringIO()) as stdout:
+            self.assertEqual(vw.emit_risk_mitigation_closure(result), 1)
+        self.assertIn("[WARN] 1 warning(s):", stdout.getvalue())
+        self.assertIn("[EXEMPT] 1 archived-ref exemption(s)", stdout.getvalue())
+        self.assertIn("PLAN-003 resolved via archive: .governance/archive/tasks/legacy.md "
+                      "(family range PLAN-001~004)", stdout.getvalue())
+
+
+class EvidencePanelTests(unittest.TestCase):
+    def test_completeness_counts_hot_findings_and_limits_historical_detail(self):
+        result = {"completed_count": 14, "evidenced_count": 1,
+                  "missing_evidence": ["HOT-1", "HOT-2"], "parse_warnings": ["bad table"],
+                  "historical_missing_evidence": [f"OLD-{i}" for i in range(11)]}
+        with redirect_stdout(io.StringIO()) as stdout:
+            self.assertEqual(vw.emit_evidence_completeness(result), 3)
+        panel = stdout.getvalue()
+        self.assertIn("[WARN] bad table", panel)
+        self.assertIn("[WARN] 2 completed task(s) without evidence:", panel)
+        self.assertIn("[INFO] 11 archived completed", panel)
+        self.assertIn("OLD-9", panel)
+        self.assertNotIn("OLD-10", panel)
+        self.assertIn("... and 1 more", panel)
+
+    def test_quality_counts_each_reference_category(self):
+        result = {"session_context": ["A", "B"], "circular_refs": [], "empty_output": ["C"]}
+        with redirect_stdout(io.StringIO()) as stdout:
+            self.assertEqual(vw.emit_evidence_quality(result), 3)
+        self.assertIn("[WARN] 2 evidence with '会话上下文' reference:", stdout.getvalue())
+        self.assertIn("[PASS] No circular references found.", stdout.getvalue())
+        self.assertIn("[WARN] 1 empty/incomplete evidence location(s):", stdout.getvalue())
 
 
 class ReviewRecordReviewerKeyTests(unittest.TestCase):

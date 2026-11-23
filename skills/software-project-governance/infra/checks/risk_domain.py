@@ -574,3 +574,171 @@ def check_risk_mitigation_closure(risk_content=None, task_status_map=None):
         "to judge")
 
 
+_ARCHIVE_FAMILY_RANGE_RE = re.compile(r"\b([A-Z]+-\d+)\s*~\s*(\d+)\b")
+_ARCHIVE_RANGE_SPAN_CAP = 500
+_ARCHIVE_RESOLVED_STATUS = "✅ 已归档 (archive-resolved — DEC-151 豁免, FIX-294)"
+
+
+def archive_corpus_files(gov_dir):
+    """Enumerate the read-only archive corpus in a fixed order (FIX-294).
+
+    index.md first, then archive/{tasks,decisions,evidence,risks}/*.md
+    name-sorted. Missing directories contribute no files.
+    """
+    paths = [gov_dir / "archive" / "index.md"]
+    for sub in ("tasks", "decisions", "evidence", "risks"):
+        try:
+            paths.extend(sorted(
+                p for p in (gov_dir / "archive" / sub).glob("*.md")
+                if p.is_file()))
+        except OSError:
+            continue
+    return paths
+
+
+def resolve_archive_task_refs(task_ids, corpus_files, display_path):
+    """Resolve task ids against the archive corpus → ``{id: hit}`` (FIX-294).
+
+    ``hit = {"source": host-relative posix path, "via": "literal"|"range",
+    "token": matched text (range hits only)}``. Literal word-boundary
+    occurrence is authoritative; the family-range fallback expands
+    "PREFIX-001~004" notations (same prefix + numeric family, span
+    capped). Missing/unreadable corpus → the id stays unresolved
+    (fail-safe: the caller keeps the R3 WARN). Never raises.
+    """
+    resolved = {}
+    pending = set(task_ids)
+    corpus = []
+    for path in corpus_files():
+        if not pending:
+            break
+        try:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+        except (IOError, OSError, UnicodeDecodeError, ValueError):
+            continue
+        corpus.append((path, text))
+        display = display_path(path)
+        for tid in sorted(pending):
+            if re.search(r"\b" + re.escape(tid) + r"\b", text):
+                resolved[tid] = {"source": display, "via": "literal",
+                                 "token": ""}
+                pending.discard(tid)
+    if pending:
+        for path, text in corpus:
+            if not pending:
+                break
+            for m in _ARCHIVE_FAMILY_RANGE_RE.finditer(text):
+                head, tail = m.group(1), m.group(2)
+                prefix, start = head.rsplit("-", 1)
+                try:
+                    lo, hi = int(start), int(tail)
+                except ValueError:
+                    continue
+                if hi < lo or hi - lo > _ARCHIVE_RANGE_SPAN_CAP:
+                    continue
+                family = {f"{prefix}-{str(n).zfill(len(start))}"
+                          for n in range(lo, hi + 1)}
+                for tid in sorted(pending & family):
+                    resolved[tid] = {
+                        "source": display_path(path),
+                        "via": "range",
+                        "token": m.group(0),
+                    }
+                    pending.discard(tid)
+            if not pending:
+                break
+    return resolved
+
+
+def check_risk_mitigation_closure_with_archive(
+        risk_content, active_map, *, check, resolve_refs):
+    """FIX-294 / AUDIT-149 N2: Check 36 with DEC-151 archive resolution.
+
+    Two passes over the UNCHANGED FIX-265 base judgement
+    (``checks.risk_domain.check_risk_mitigation_closure``):
+
+      pass 1 — current behaviour; collect the R3 warnings' absent refs.
+      pass 2 — only when ≥1 of those refs resolves against the archive
+      corpus: re-run the SAME base check with the resolved ids injected
+      into the task-status map as terminal (✅) entries.
+
+    Injection is purely additive — ids already present in the ACTIVE map
+    are never overridden, so R1/R2 (uncompleted / overdue-escalated)
+    semantics are delegated bit-for-bit unchanged. Exempted refs are
+    disclosed in ``archived_exemptions`` (``{"risk_id", "task_id",
+    "source", "via", "token"}``) and are NOT counted into
+    warnings/violations (DEC-151: exempt + disclose, never silent).
+
+    Fail-closed boundaries: unresolvable refs keep the R3 WARN verbatim;
+    a missing/unreadable archive corpus degrades to the pass-1 result;
+    task-priority unavailable (map None) returns the base fail-safe
+    result untouched (no corpus scan at all).
+
+    Returns the base result dict extended with ``archived_exemptions``
+    (list) and ``stats["archived_resolved"]`` (int). Never raises.
+    """
+    base = check(risk_content=risk_content, task_status_map=active_map)
+    r3_warnings = [w for w in base.get("warnings", [])
+                   if w.get("rule") == "R3"]
+    candidates = {tid for w in r3_warnings
+                  for tid in w.get("task_refs", [])}
+    if not candidates or active_map is None:
+        base["archived_exemptions"] = []
+        base["stats"]["archived_resolved"] = 0
+        return base
+    resolved = resolve_refs(sorted(candidates))
+    if not resolved:
+        base["archived_exemptions"] = []
+        base["stats"]["archived_resolved"] = 0
+        return base
+    exemptions = []
+    for w in r3_warnings:
+        for tid in sorted(w.get("task_refs", [])):
+            hit = resolved.get(tid)
+            if hit is not None:
+                exemptions.append({
+                    "rule": "R3-EXEMPT",
+                    "risk_id": w["risk_id"],
+                    "task_id": tid,
+                    "source": hit["source"],
+                    "via": hit["via"],
+                    "token": hit["token"],
+                })
+    augmented = dict(active_map)
+    for tid in resolved:
+        if tid not in augmented:
+            augmented[tid] = _ARCHIVE_RESOLVED_STATUS
+    final = check(risk_content=risk_content, task_status_map=augmented)
+    final["archived_exemptions"] = exemptions
+    final["stats"]["archived_resolved"] = len(exemptions)
+    return final
+
+
+def emit_risk_mitigation_closure(result):
+    """Print Check 36 findings and count violations and warnings."""
+    stats = result["stats"]
+    print(f"│  Risks scanned: {stats['risks_scanned']} "
+          f"(closed: {stats['closed_skipped']}, exempted: {stats['exempted_skipped']}, "
+          f"ragged: {stats['ragged_skipped']}, judged: {stats['judged']}, "
+          f"pass: {stats['pass']})")
+    print(f"│  Verdict: {result['verdict']}")
+    if result["violations"]:
+        print(f"│  [FAIL] {len(result['violations'])} violation(s):")
+        for v in result["violations"][:8]:
+            print(f"│    - [{v['rule']}] {v['risk_id']}: {v['reason']}")
+    if result["warnings"]:
+        print(f"│  [WARN] {len(result['warnings'])} warning(s):")
+        for w in result["warnings"][:8]:
+            print(f"│    - [{w['rule']}] {w['risk_id']}: {w['reason']}")
+    if not result["violations"] and not result["warnings"]:
+        print(f"│  [{result['verdict']}] {result['reason']}")
+    if result.get("archived_exemptions"):
+        print(f"│  [EXEMPT] {len(result['archived_exemptions'])} archived-ref "
+              f"exemption(s) — DEC-151 disclosure, not counted:")
+        for e in result["archived_exemptions"][:8]:
+            via = (f" (family range {e['token']})"
+                   if e.get("via") == "range" else "")
+            print(f"│    - {e['risk_id']}: {e['task_id']} resolved via archive: {e['source']}{via}")
+    return len(result["violations"]) + len(result["warnings"])

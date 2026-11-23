@@ -1,6 +1,7 @@
 """Recognize the shipped CLI dispatch forms without importing a target checkout."""
 
 import ast
+import sys
 from pathlib import Path
 
 
@@ -184,7 +185,9 @@ def _schema_declares_parser(path, wrapper, invocation, key):
 
 def inspect_cli_registration(path: Path, key: str, handler: str) -> dict:
     """Observe the target's parser and actual call to its selected handler."""
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    source = path.read_text(encoding="utf-8")
+    parse = getattr(sys.modules.get("engine_source"), "parse_engine_source", None)
+    tree = parse(path, source) if callable(parse) else ast.parse(source, filename=str(path))
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
     main = functions.get("main")
     statements = main.body if main else []

@@ -13022,13 +13022,9 @@ def cmd_check_governance(args):
     if getattr(args, "quick", False) or getattr(args, "shadow", False):
         # FEAT-026 Slice-2 wiring: the selector owns the four-state contract and
         # the S-A/S-B shadow channel; the engine only provides the run + capture.
-        from quickscan_selector import prepare_quick_args, render_quick_output
-        quick_notice = prepare_quick_args(args)
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            all_issues = _run_full_engine_checks(args)
-        print(quick_notice + render_quick_output(
-            buf.getvalue(), args, _run_full_engine_checks), end="")
+        from quickscan_selector import run_quick_checks
+        all_issues, output = run_quick_checks(args, _run_full_engine_checks)
+        print(output, end="")
     elif getattr(args, "summary_only", False):
         buf = io.StringIO()
         with redirect_stdout(buf):

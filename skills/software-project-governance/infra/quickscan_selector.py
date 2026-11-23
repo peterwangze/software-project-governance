@@ -48,7 +48,7 @@ from __future__ import annotations
 import hashlib
 import io
 import re
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stdout
 from dataclasses import dataclass
 
 import quickscan_registry as qr
@@ -77,6 +77,7 @@ __all__ = [
     "prepare_quick_args",
     "quick_report",
     "render_quick_output",
+    "run_quick_checks",
     "report_lines",
     "select",
     "selection_contract_violations",
@@ -648,6 +649,24 @@ def shadow_lines(shadow):
 
 
 # ── 巨石接线入口（wiring；选择/渲染逻辑均在本模块）──────────────────────────
+def run_quick_checks(args, engine_runner):
+    """Capture one real health run and render the selected quick or shadow report."""
+    # Only quick opens the cache. Observers can always parse freshly read text directly.
+    try:
+        from engine_source import engine_source_scope
+    except (ImportError, SyntaxError):
+        engine_source_scope = None
+
+    scope = engine_source_scope if callable(engine_source_scope) else nullcontext
+    with scope():
+        notice = prepare_quick_args(args)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            issues = engine_runner(args)
+        report = render_quick_output(output.getvalue(), args, engine_runner)
+        return issues, notice + report
+
+
 def prepare_quick_args(args):
     """Wiring pre-flight: mark the quick request, fail closed to full when untrusted.
 

@@ -564,6 +564,60 @@ class ScopeQuickWiringTests(unittest.TestCase):
     N 口径分叉由调用方声明，绝不静默。
     """
 
+    def test_each_quick_command_observes_the_engine_four_times_but_parses_it_once(self):
+        from cli_registration import inspect_cli_registration
+
+        reads, parses = [], []
+        read, parse = Path.read_text, ast.parse
+
+        def read_target(path, *args, **kwargs):
+            if path == ENGINE:
+                reads.append(path)
+            return read(path, *args, **kwargs)
+
+        def parse_target(source, filename="<unknown>", *args, **kwargs):
+            if filename == str(ENGINE):
+                parses.append(filename)
+            return parse(source, filename, *args, **kwargs)
+
+        def run_checks(args):
+            for key, handler in (("capability-context", "cmd_capability_context"),
+                                 ("change-triage", "cmd_change_triage")):
+                self.assertTrue(all(inspect_cli_registration(ENGINE, key, handler).values()))
+            print("│  Result: PASSED — 0 issues found")
+            return 0
+
+        with mock.patch.object(Path, "read_text", read_target), mock.patch.object(ast, "parse", parse_target), \
+             mock.patch.object(vw, "_run_full_engine_checks", side_effect=run_checks), redirect_stdout(io.StringIO()):
+            for count in (1, 2):
+                vw.cmd_check_governance(_args(quick=True))
+                self.assertEqual(len(reads), 4 * count)
+                self.assertEqual(len(parses), count)
+
+    def test_nested_and_concurrent_engine_observations_are_independent(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        from engine_source import engine_source_scope, parse_engine_source
+
+        source = "answer = 42"
+        barrier = Barrier(2)
+
+        def observe():
+            with engine_source_scope():
+                outer = parse_engine_source(ENGINE, source)
+                barrier.wait(timeout=10)
+                with self.assertRaises(ArithmeticError):
+                    with engine_source_scope():
+                        self.assertIsNot(parse_engine_source(ENGINE, source), outer)
+                        raise ArithmeticError("interrupted observation")
+                self.assertIs(parse_engine_source(ENGINE, source), outer)
+            self.assertIsNot(parse_engine_source(ENGINE, source), outer)
+            return outer
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first, second = pool.submit(observe), pool.submit(observe)
+            self.assertIsNot(first.result(), second.result())
+
     def test_scope_quick_dispatches_the_quick_face_with_reason_codes(self):
         """验收②：--summary-only --scope quick → 四态汇总行 + NOT_RUN 逐段
         原因码 + tail action（复用 FEAT-026 渲染，非第二实现）。"""

@@ -1,12 +1,14 @@
 """Read the full-check reports bound by the engine in a supplied installation."""
 import ast
 import re
+import sys
 
 
 def parse_module_source(path, source):
-    """Parse the supplied source with the inspected installation's filename."""
+    """Keep the census error contract when the inspected engine cannot be parsed."""
+    parse = getattr(sys.modules.get("engine_source"), "parse_engine_source", None)
     try:
-        return ast.parse(source, filename=str(path))
+        return parse(path, source) if callable(parse) else ast.parse(source, filename=str(path))
     except SyntaxError as exc:
         raise ValueError(f"cannot parse full-check source {path}: {exc}") from exc
 
@@ -48,7 +50,9 @@ def _body(function):
 def _module_source(path):
     try:
         source = path.read_text(encoding="utf-8")
-        return source, parse_module_source(path, source)
+        return source, ast.parse(source, filename=str(path))
+    except SyntaxError as exc:
+        raise ValueError(f"cannot parse full-check source {path}: {exc}") from exc
     except (OSError, UnicodeError) as exc:
         raise ValueError(f"cannot read full-check source {path}: {exc}") from exc
 

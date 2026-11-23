@@ -44,15 +44,22 @@ def _observation_result(root, unit, history, attempt):
     return "APPROVED" if command_observation_passes(data) else "NEEDS_CHANGE"
 
 
-def verify_attempt(root, unit, item, attempt, *, ledger=None):
+def review_id_from_ref(ref):
+    if not isinstance(ref, str):
+        return None
+    match = re.fullmatch(r"review-(.+-R\d+)(-[a-z0-9-]+)?\.md", ref)
+    return "REVIEW-" + match[1] + (match[2] or "").upper() if match else None
+
+
+def verify_attempt(root, unit, item, attempt, *, ledger=None, review_objects=None):
     """Verify the frozen receipt bound to this gate, unit and attempt."""
     ref = item["evidence_ref"]
     if ref.startswith("review-"):
-        match = re.fullmatch(r"review-(.+-R\d+)(-[a-z0-9-]+)?\.md", ref)
-        if not match:
+        review_id = review_id_from_ref(ref)
+        if not review_id:
             raise ValueError("invalid review receipt name")
-        review_id = "REVIEW-" + match[1] + (match[2] or "").upper()
-        name, binding, receipt = _review_receipt(root, unit, item["gate"], review_id, published=True, ledger=ledger)
+        name, binding, receipt = _review_receipt(root, unit, item["gate"], review_id,
+                                                published=True, ledger=ledger, review_objects=review_objects)
         if name != ref or (binding.get("iteration"), binding.get("attempt")) != (item["iteration"], attempt):
             raise ValueError("review belongs to another attempt")
         result = receipt["verdict"]

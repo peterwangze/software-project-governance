@@ -10,7 +10,9 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/test_review_record.py -v
 """
 
+import hashlib
 import io
+import os
 import json
 import subprocess
 import sys
@@ -58,6 +60,129 @@ def _prepare_review_repository(root):
     return subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
 
 
+
+
+class PublishedObjectVerificationTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.commit = _prepare_review_repository(self.root)
+        self.tree = self.git("rev-parse", "HEAD^{tree}")
+        self.report = self.root / "report.md"
+        self.pinned = hashlib.sha256(self.report.read_bytes()).hexdigest()
+        self.record = self.root / "review.md"
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.root), *args], text=True).strip()
+
+    def record_pins(self, commit, tree, report_hash):
+        lines = ["# Test review", "- report: report.md"]
+        for key, value in (("report_sha256", report_hash), ("snapshot_commit", commit),
+                           ("snapshot_tree", tree)):
+            if value is not None:
+                lines.append(f"- {key}: {value}")
+        self.record.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return [{"commit": commit, "tree": tree}]
+
+    def assert_face(self, objects, verdict):
+        individual = review_record.verify_review_trust(self.record, self.root, current_worktree=False)
+        self.assertEqual(individual["verdict"], verdict)
+        self.assertEqual(objects.verify(self.record, self.root), individual)
+
+    def test_seven_original_controls_keep_the_full_trust_result(self):
+        for name, commit, tree, report_hash, expected in [
+            ("valid", self.commit, self.tree, self.pinned, "CLEAN"),
+            ("missing commit", "f"*40, self.tree, self.pinned, "CONFLICT"),
+            ("Git unavailable", self.commit, self.tree, self.pinned, "UNKNOWN"),
+            ("report changed", self.commit, self.tree, "0"*64, "CONFLICT"),
+            ("commit used as tree", self.commit, self.commit, self.pinned, "CONFLICT"),
+            ("missing tree", self.commit, "f"*40, self.pinned, "UNKNOWN"),
+            ("legacy unpinned", None, None, None, "UNPINNED"),
+        ]:
+            with self.subTest(name=name):
+                original_path = os.environ["PATH"]
+                try:
+                    if name == "Git unavailable":
+                        os.environ["PATH"] = str(self.root)
+                    pins = self.record_pins(commit, tree, report_hash)
+                    self.assert_face(review_record.PublishedReviewObjects(self.root, pins), expected)
+                finally:
+                    os.environ["PATH"] = original_path
+
+    def test_native_loop_state_queries_objects_once_and_reopens_changed_evidence(self):
+        import governance_readers
+        import loop_workflow
+
+        reports = []
+        for task in ("FIX-701", "FIX-702"):
+            loop_workflow.start(self.root, unit_id=task, tier="inner", goal="Review " + task,
+                                acceptance="The stored report matches the reviewed revision.")
+            path = self.root / (task + ".md")
+            path.write_text(f"Inspected tree {self.tree}.\n**审查结论**: **APPROVED**\n", encoding="utf-8")
+            reports.append(path)
+            result = review_record.write_review_record(
+                task_id=task, round_n=0, result="APPROVED", report_path=path.name,
+                bind_tree=self.tree, reviewer="independent QA", root=self.root, require_loop=True)
+            self.assertNotIn("error", result)
+        with mock.patch.object(review_record, "_git_output", wraps=review_record._git_output) as git:
+            valid = governance_readers.loop_state(self.root)
+        self.assertEqual(valid["state"], "ready", valid.get("issues"))
+        self.assertEqual([call.args[1] for call in git.call_args_list], ["cat-file"])
+        self.assertEqual(set(git.call_args.kwargs["input_bytes"].decode().splitlines()),
+                         {self.tree, self.commit + "^{commit}"})
+        reports[0].write_bytes(b"changed after publication")
+        second = governance_readers.loop_state(self.root)
+        self.assertEqual(second["state"], "invalid")
+        self.assertEqual([row["gate_status"] for row in second["units"]], ["unverified", "passed"])
+
+    def test_missing_commit_probes_current_head_and_valid_reports_are_reread(self):
+        pins = self.record_pins("f"*40, self.tree, self.pinned)
+        objects = review_record.PublishedReviewObjects(self.root, pins)
+        self.assert_face(objects, "CONFLICT")
+        self.git("symbolic-ref", "HEAD", "refs/heads/new-unborn-branch")
+        self.assert_face(objects, "UNKNOWN")
+        pins = self.record_pins(self.commit, self.tree, self.pinned)
+        objects = review_record.PublishedReviewObjects(self.root, pins)
+        self.assert_face(objects, "CLEAN")
+        self.report.write_bytes(b"rewritten after the first read")
+        self.assert_face(objects, "CONFLICT")
+
+    def test_tag_peeling_and_incomplete_batch_use_individual_git_checks(self):
+        self.git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "-c", "tag.gpgSign=false", "tag", "-a", "review-tag", "-m", "annotated pin")
+        tag = self.git("rev-parse", "refs/tags/review-tag")
+        pins = self.record_pins(tag, self.tree, self.pinned)
+        self.assert_face(review_record.PublishedReviewObjects(self.root, pins), "CONFLICT")
+        pins = self.record_pins(self.commit, self.tree, self.pinned)
+        with mock.patch.object(review_record, "_git_output", return_value="truncated"):
+            objects = review_record.PublishedReviewObjects(self.root, pins)
+        self.assert_face(objects, "CLEAN")
+
+    def test_bulk_read_is_scoped_to_its_repo_and_untracked_bindings_remain_live(self):
+        pins = self.record_pins(self.commit, self.tree, self.pinned)
+        with mock.patch.object(review_record, "_git_output", wraps=review_record._git_output) as git:
+            objects = review_record.PublishedReviewObjects(self.root, pins * 3)
+            self.assertEqual(objects.verify(self.record, self.root)["verdict"], "CLEAN")
+            self.assertEqual(git.call_count, 1)
+            self.assertEqual(set(git.call_args.kwargs["input_bytes"].decode().splitlines()),
+                             {self.commit + "^{commit}", self.tree})
+        with tempfile.TemporaryDirectory() as other:
+            root = Path(other)
+            (root / "report.md").write_bytes(self.report.read_bytes())
+            subprocess.run(["git", "-C", str(root), "init", "--quiet"], check=True)
+            individual = review_record.verify_review_trust(self.record, root, current_worktree=False)
+            self.assertEqual(individual["verdict"], "UNKNOWN")
+            self.assertEqual(objects.verify(self.record, root), individual)
+        subject = self.root / "untracked-subject"
+        subject.write_bytes(b"observed")
+        blob = self.git("hash-object", "--", subject.name)
+        with self.record.open("a", encoding="utf-8") as out:
+            out.write(f"- snapshot_bind: {subject.name}={blob}\n")
+        self.assertEqual(review_record.verify_review_trust(self.record, self.root)["verdict"], "CLEAN")
+        subject.write_bytes(b"new revision")
+        self.assertEqual(review_record.verify_review_trust(self.record, self.root)["verdict"], "CONFLICT")
+        self.assert_face(objects, "CLEAN")
 
 
 class ReviewRecordPersistenceTests(unittest.TestCase):

@@ -353,6 +353,39 @@ def _pin_check(checks, kind, pinned, current, note=""):
     return state
 
 
+class PublishedReviewObjects:
+    """Git-confirmed object types for one repository during one receipt scan."""
+
+    def __init__(self, root, receipts):
+        self.root = Path(root).resolve()
+        self._types = {}
+        queries = {}
+        for receipt in receipts:
+            for key in ("commit", "tree"):
+                oid = receipt.get(key)
+                if isinstance(oid, str) and re.fullmatch(_GIT_OID, oid):
+                    # Preserve rev-parse's commit peeling and verification.
+                    query = oid + "^{commit}" if key == "commit" else oid
+                    queries[query] = (oid, key)
+        if not queries:
+            return
+        output = _git_output(self.root, "cat-file", "--batch-check=%(objectname) %(objecttype)",
+                             input_bytes=("\n".join(queries) + "\n").encode("ascii"))
+        lines = output.splitlines() if output else []
+        if len(lines) != len(queries):
+            return
+        for (oid, expected), line in zip(queries.values(), lines):
+            if line == f"{oid} {expected}":
+                self._types[oid] = expected
+
+    def verify(self, review_file, root):
+        # Only directly confirmed, matching OIDs take the fast path. Missing
+        # objects, tags, abbreviated names and failed/malformed Git responses
+        # retain the individual reader's HEAD and type-discrimination checks.
+        confirmed = self._types if Path(root).resolve() == self.root else {}
+        return _verify_review_trust(review_file, root, current_worktree=False, confirmed=confirmed)
+
+
 def verify_review_trust(review_file, repo_root=None, *, current_worktree=True):
     """FEAT-094 — re-verify a record's trust pins (tamper detection face).
 
@@ -371,6 +404,10 @@ def verify_review_trust(review_file, repo_root=None, *, current_worktree=True):
     * ``UNPINNED`` — a legacy pre-FEAT-094 record (no pins by design;
       deliberately NOT a conflict — assumption_record compatibility).
     """
+    return _verify_review_trust(review_file, repo_root, current_worktree=current_worktree, confirmed={})
+
+
+def _verify_review_trust(review_file, repo_root, *, current_worktree, confirmed):
     face = {
         "review_file": str(review_file),
         "verdict": "UNKNOWN",
@@ -413,8 +450,9 @@ def verify_review_trust(review_file, repo_root=None, *, current_worktree=True):
     # but the commit gone → CONFLICT, the history-rewrite family)
     commit_match = _COMMIT_FIELD_RE.search(text)
     if commit_match is not None and commit_match.group(1) != "git:unavailable":
-        resolved = _git_output(root, "rev-parse", "--verify", "--quiet",
-                               commit_match.group(1) + "^{commit}")
+        oid = commit_match[1]
+        resolved = oid if confirmed.get(oid) == "commit" else _git_output(
+            root, "rev-parse", "--verify", "--quiet", oid + "^{commit}")
         current = resolved
         if resolved is None and _git_output(root, "rev-parse", "--verify", "--quiet", "HEAD") is not None:
             current = ""
@@ -429,7 +467,7 @@ def verify_review_trust(review_file, repo_root=None, *, current_worktree=True):
     tree_match = _TREE_FIELD_RE.search(text)
     if tree_match:
         tree = tree_match[1]
-        obj_type = _git_output(root, "cat-file", "-t", tree)
+        obj_type = "tree" if confirmed.get(tree) == "tree" else _git_output(root, "cat-file", "-t", tree)
         state = _pin_check(face["checks"], "snapshot_tree", tree,
                            tree if obj_type == "tree" else obj_type)
         conflict |= state == "mismatch"

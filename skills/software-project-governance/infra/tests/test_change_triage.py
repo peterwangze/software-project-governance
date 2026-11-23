@@ -761,6 +761,21 @@ class ChangeTriageCheckTests(unittest.TestCase):
         (self.gov / "plan-tracker.md").write_text(
             _FIXTURE_TRACKER, encoding="utf-8")
 
+    def test_preloaded_registry_triage_reads_current_ledger_and_product_root(self):
+        import registry
+        import verify_workflow as workflow
+
+        change = registry.load_check("check-32")
+        completion = registry.load_check("check-39")
+        bad = self.gov / "change-triage"
+        bad.mkdir(exist_ok=True)
+        (bad / "FIX-535.json").write_text("{", encoding="utf-8")
+        with patch.object(workflow, "ROOT", self.root):
+            for ledger in (self.gov, self.root / "missing", self.gov):
+                with patch.object(workflow, "GOVERNANCE_DIR", ledger):
+                    self.assertEqual(change(), td.check_change_triage(self.root, ledger))
+                    self.assertEqual(completion(), td.check_r1_completion_gate(self.root, ledger))
+
     def _evidence(self, task_id, date_str, artifacts):
         return ("| EVD-{n} | {task} | 实现 | execution | 事实依据 | {art} | "
                 "Developer | {date} | G11 | ✅ |\n").format(

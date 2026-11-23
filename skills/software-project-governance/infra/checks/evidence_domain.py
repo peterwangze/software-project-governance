@@ -1,109 +1,138 @@
-"""Evidence-domain checks — extracted from verify_workflow.py in 0.70.0.
-
-Scope (DEC-083 Phase 5a / ADR-016 / FEAT-009): the evidence-completeness,
-evidence-quality, structured-evidence, and fact-grounding checks (Checks 1,
-1b, 4, 6, 6b), plus their evidence-only parsing helpers.
-
-This module owns the evidence check domain. Shared helpers and constants that
-are still defined in verify_workflow.py (path resolution, evidence-log path
-constants, header-marker constant sets, `expand_task_ids`,
-`GovernanceDataSource`, and the context-task
-parsers) are reached through a deferred module reference rather than a
-top-level import, so that verify_workflow.py can import this module at module
-load time without creating an import cycle. When the common-helpers domain
-(`checks/_shared.py`) is extracted in a later release, these references will
-be retargeted to that module.
-
-Functions with cross-domain callers (e.g. `_count_evidence_rows`,
-`_evidence_task_type_index`, `_iter_archive_aware_evidence_units`,
-`_check_evidence_mentions`, `_evidence_closes_fix_069_while_req_open`) STAY in
-verify_workflow.py and are reached via the deferred accessor — they are not
-duplicated here (ADR-016 §3.1 / §4.3 KEEP rule).
-
-See docs/architecture/ADR-016-verify-phase5-extraction-0.70.0.md for the
-design and the line-number baseline used during extraction.
-"""
+"""Evidence ledger checks, structured provenance, and goal-contract readiness."""
 
 import re
 import json
 from datetime import date, datetime
 from pathlib import Path
 
-# ── Shared-helper access (deferred to avoid import cycle) ──────────
-# Same deferred-_vw() pattern as checks.manifest (Phase 1) and
-# checks.capability_registry (Phase 2). The shared names are resolved lazily
-# on the first call into this module (after verify_workflow has finished
-# loading) and cached in this module's globals for subsequent calls, so the
-# moved function bodies can reference them by bare name unchanged.
+GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS = (
+    "进行中",
+    "未完成",
+    "carry-over",
+    "next action",
+    "resume",
+    "阻塞",
+    "blocked",
+    "待确认",
+    "待处理",
+    "待启动",
+    "pending",
+    "in progress",
+)
 
-_VW_CACHE = None
+GOVERNANCE_CONTEXT_EVIDENCE_CLOSED_MARKERS = (
+    "已完成",
+    "完成",
+    "闭环",
+    "已关闭",
+    "关闭",
+    "approved",
+    "closed",
+    "resolved",
+)
 
+GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS = (
+    "对应任务",
+    "任务id",
+    "任务 id",
+    "关联任务",
+    "task id",
+)
 
-def _vw():
-    """Return the verify_workflow module (imported lazily, cached).
-
-    Cached so repeated calls reuse the same module reference (REVIEW-FIX-153
-    P2, same pattern as checks.manifest / checks.capability_registry).
-    """
-    global _VW_CACHE
-    if _VW_CACHE is None:
-        import verify_workflow  # noqa: WPS433 (deferred import on purpose)
-        _VW_CACHE = verify_workflow
-    return _VW_CACHE
-
-
-# Shared names this domain reaches back into verify_workflow for. Refreshed
-# on every call into `_resolve_shared()` (NOT cached) so test-time monkey-
-# patching of verify_workflow attributes propagates, and so the moved
-# function bodies can reference them by bare name (byte-identical bodies,
-# per ADR-016 §5.3 "no behavioral change").
-_SHARED_NAMES = (
-    "EVIDENCE_PATH",
-    "GOVERNANCE_DIR",
-    "FACT_BASIS_RE",
-    "UNGROUNDED_CLAIM_RE",
-    "GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS",
-    "GOVERNANCE_CONTEXT_EVIDENCE_CLOSED_MARKERS",
-    "GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS",
-    "GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS",
-    "GovernanceDataSource",
-    "expand_task_ids",
-    "_context_file", "_context_task", "_extract_task_title_from_line",
-    "_governance_table_cells", "_normalize_priority",
-    "_current_release_impact_entries",
-    # FIX-390: DEC-168 machine row-family credential predicate (Check 18b
-    # machine-attestation face) — by identity, never re-stated (FIX-292).
-    "_row_has_governance_store_machine_credential",
-    # FEAT-069 (ADR-RB-2): the RB-2 faces extend the Check 18d
-    # product_success_contract pathway — identity reuse, never re-stated.
-    # (Block kept line-neutral: the R7 regen pins this file's vw-site lines.)
-    "_active_execution_packet_tasks", "_load_execution_packets",
-    "_validate_product_success_contract",
+GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS = (
+    "状态",
+    "备注",
+    "证据类型",
+    "status",
+    "note",
+    "remark",
+    "type",
 )
 
 
+def _governance_directory():
+    from resolve_entry import current_host_root
+    return Path(current_host_root()) / ".governance"
+
+
+def _task_reference_source():
+    from governance_archive_data import expand_task_ids
+    return _governance_directory() / "evidence-log.md", expand_task_ids
+
+
+def _evidence_archive_reader():
+    from governance_archive_data import GovernanceDataSource
+    return GovernanceDataSource(_governance_directory())
+
+
+def _context_projection():
+    from plan_task_selection import _governance_table_cells, _normalize_priority
+    from project_context import _context_task, _extract_task_title_from_line
+    from resolve_entry import package_context_file
+    return (package_context_file, _context_task, _extract_task_title_from_line,
+            _governance_table_cells, _normalize_priority, GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS)
+
+
+def _state_headers():
+    return GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS
+
+
+def _closed_markers():
+    return GOVERNANCE_CONTEXT_EVIDENCE_CLOSED_MARKERS
+
+
+def _unfinished_markers():
+    return GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS
+
+
+FACT_BASIS_RE = re.compile(
+    r'事实依据[:：]\s*(.+?)(?:\s*(?:目标对齐[:：]|用户影响[:：]|范围[:：]|依赖[:：]|架构影响[:：]|$))'
+)
+
+UNGROUNDED_CLAIM_RE = re.compile(
+    r"(?:我\s*)?(?:假设|猜测|推测|估计)|(?:大概|应该|可能)(?:已经|是|可以|完成|存在)|编造|幻觉"
+)
+
+
+def _grounding_inputs():
+    from plan_impact import release_impact_entries_for
+    return (lambda: release_impact_entries_for(_governance_directory(), requires_impact_evidence),
+            FACT_BASIS_RE, UNGROUNDED_CLAIM_RE)
+
+
+def _structured_inputs():
+    from plan_impact import release_impact_entries_for
+    from write_guard_records import _row_has_governance_store_machine_credential
+    return (lambda: release_impact_entries_for(_governance_directory(), requires_impact_evidence),
+            _row_has_governance_store_machine_credential)
+
+
+def _goal_inputs():
+    from delivery_contract_checks import validate_default_product_success_contract
+    from execution_packet_checks import _load_execution_packets
+    from plan_status import _status_is_completed_cell
+    from plan_task_selection import _active_execution_packet_tasks, parse_current_active_tasks
+
+    directory = _governance_directory()
+
+    def active_tasks():
+        return _active_execution_packet_tasks(status_is_completed_cell=_status_is_completed_cell,
+                                              parse_current_active_tasks=lambda: parse_current_active_tasks(
+                                                  plan_path=directory / "plan-tracker.md"))
+
+    def load_packets(path):
+        return _load_execution_packets(path, packet_path_now=lambda: directory / "execution-packets.json")
+
+    return directory, active_tasks, load_packets, validate_default_product_success_contract
+
+
 def _resolve_shared():
-    """Refresh this module's globals with shared names from verify_workflow.
+    """Expose the current shared contract validator for the historical explicit hook."""
+    global _validate_product_success_contract
+    _, _, _, _validate_product_success_contract = _goal_inputs()
 
-    Re-fetches on EVERY call (not cached) so test-time monkey-patching of
-    verify_workflow attributes (e.g. `patch.object(vw, "EVIDENCE_PATH", ...)`,
-    swapping in `GovernanceDataSource`, or editing header-marker constant
-    sets) propagates into this module's bare-name lookups. The cost is
-    negligible: these checks run once per CLI invocation, not in a hot loop,
-    and `getattr` on a cached module reference is cheap. This mirrors how
-    checks.manifest re-resolves `ROOT = _root()` inside each function body
-    (Phase 1 precedent).
-    """
-    vw = _vw()
-    g = globals()
-    for _name in _SHARED_NAMES:
-        g[_name] = getattr(vw, _name)
-
-
-# ── Domain constants and functions (moved verbatim from verify_workflow.py) ──
 
 def _evidence_header_index(header, header_markers):
-    _resolve_shared()
     for idx, cell in enumerate(header or []):
         normalized = re.sub(r"\s+", " ", cell.strip().lower())
         compact = normalized.replace(" ", "")
@@ -116,7 +145,6 @@ def _evidence_header_index(header, header_markers):
 
 
 def _extract_evidence_task_id(task_cell):
-    _resolve_shared()
     task_ids = re.findall(r"\b([A-Z]+-\d+)\b", task_cell or "")
     for task_id in task_ids:
         if not task_id.startswith("EVD-"):
@@ -125,7 +153,7 @@ def _extract_evidence_task_id(task_cell):
 
 
 def _evidence_state_cells(cells, header):
-    _resolve_shared()
+    state_headers = _state_headers()
     state_indices = []
     if header:
         for idx, cell in enumerate(header):
@@ -133,7 +161,7 @@ def _evidence_state_cells(cells, header):
             compact = normalized.replace(" ", "")
             if any(
                 marker.lower() in normalized or marker.lower().replace(" ", "") in compact
-                for marker in GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS
+                for marker in state_headers
             ):
                 state_indices.append(idx)
     else:
@@ -144,22 +172,22 @@ def _evidence_state_cells(cells, header):
 
 
 def _is_closed_evidence_state(text):
-    _resolve_shared()
+    closed_markers = _closed_markers()
     lowered = (text or "").lower()
     if "未完成" in lowered:
         return False
-    return any(marker in lowered for marker in GOVERNANCE_CONTEXT_EVIDENCE_CLOSED_MARKERS)
+    return any(marker in lowered for marker in closed_markers)
 
 
 def _is_active_evidence_state(text):
-    _resolve_shared()
+    unfinished_markers = _unfinished_markers()
     lowered = (text or "").lower()
-    return any(marker.lower() in lowered for marker in GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS)
+    return any(marker.lower() in lowered for marker in unfinished_markers)
 
 
 def _parse_evidence_context_tasks(root):
-    _resolve_shared()
-    evidence_path = _context_file(root, ".governance/evidence-log.md")
+    (context_file, context_task, task_title, table_cells, normalize_priority, task_headers) = _context_projection()
+    evidence_path = context_file(root, ".governance/evidence-log.md")
     if not evidence_path.is_file():
         return []
     tasks = []
@@ -170,13 +198,13 @@ def _parse_evidence_context_tasks(root):
             continue
         if not stripped.startswith("|"):
             continue
-        cells = _governance_table_cells(stripped)
+        cells = table_cells(stripped)
         if not cells:
             continue
         if cells[0] in {"编号", "Evidence ID"} or any("对应任务" in cell or "Task ID" in cell for cell in cells):
             header = cells
             continue
-        task_idx = _evidence_header_index(header, GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS)
+        task_idx = _evidence_header_index(header, task_headers)
         if task_idx is None and len(cells) > 1 and re.match(r"^EVD-\d+\b", cells[0]):
             task_idx = 1
         if task_idx is None or task_idx >= len(cells):
@@ -196,21 +224,21 @@ def _parse_evidence_context_tasks(root):
             status = "blocked evidence fact"
         elif any(marker in lowered for marker in ("carry-over", "resume", "next action")):
             status = "carry-over evidence fact"
-        tasks.append(_context_task(
+        tasks.append(context_task(
             task_id,
-            _extract_task_title_from_line(stripped, task_id),
+            task_title(stripped, task_id),
             status,
             ".governance/evidence-log.md",
             stripped,
-            priority=_normalize_priority(stripped),
+            priority=normalize_priority(stripped),
         ))
     return tasks
 
 
 def parse_evidence_task_ids():
     """Return set of task IDs that have evidence entries (range-expanded)."""
-    _resolve_shared()
-    content = EVIDENCE_PATH.read_text(encoding="utf-8")
+    evidence_path, expand_task_ids = _task_reference_source()
+    content = evidence_path.read_text(encoding="utf-8")
     task_ids = set()
     for line in content.split("\n"):
         line = line.strip()
@@ -226,8 +254,8 @@ def parse_evidence_task_ids():
 
 def parse_evidence_task_map():
     """Return dict mapping task_id -> list of evidence IDs (range-expanded)."""
-    _resolve_shared()
-    content = EVIDENCE_PATH.read_text(encoding="utf-8")
+    evidence_path, expand_task_ids = _task_reference_source()
+    content = evidence_path.read_text(encoding="utf-8")
     task_map = {}
     for line in content.split("\n"):
         line = line.strip()
@@ -309,8 +337,7 @@ def check_evidence_completeness():
     (the python_game 0.54-era host previously got a silent
     ``Completed tasks: 0`` PASS for 34 completed tasks).
     """
-    _resolve_shared()
-    ds = GovernanceDataSource()
+    ds = _evidence_archive_reader()
     completed_entries = ds.get_all_completed_task_entries()
     completed = {entry["id"] for entry in completed_entries}
     evidenced = ds.get_all_evidence_task_ids()
@@ -335,8 +362,8 @@ def check_evidence_completeness():
 
 def check_evidence_quality():
     """Check evidence quality: session context references, circular refs, empty output claims."""
-    _resolve_shared()
-    evidence_path = GOVERNANCE_DIR / "evidence-log.md"
+    governance_dir = _governance_directory()
+    evidence_path = governance_dir / "evidence-log.md"
     issues = {
         "session_context": [],      # 会话上下文 references
         "circular_refs": [],        # 循环引用
@@ -451,19 +478,19 @@ def check_fact_grounding():
     The ungrounded-claim scan covers BOTH surfaces: whatever text carries
     the fact basis is held to the same grounding standard (不误放行).
     """
-    _resolve_shared()
+    current_entries, fact_basis, ungrounded_claim = _grounding_inputs()
     result = {
         "entries": [],
         "pass": True,
     }
 
-    for entry in _current_release_impact_entries():
+    for entry in current_entries():
         desc = entry["description"]
         basis_text = entry.get("fact_basis", "")
-        fact_match = FACT_BASIS_RE.search(desc)
+        fact_match = fact_basis.search(desc)
         fact_source = "description"
         if fact_match is None and basis_text:
-            fact_match = FACT_BASIS_RE.search(basis_text)
+            fact_match = fact_basis.search(basis_text)
             fact_source = "basis-column"
         fact_text = fact_match.group(1).strip() if fact_match else ""
         fact_len = len(fact_text)
@@ -479,9 +506,9 @@ def check_fact_grounding():
             status = "FAIL"
             result["pass"] = False
 
-        speculative_match = UNGROUNDED_CLAIM_RE.search(desc)
+        speculative_match = ungrounded_claim.search(desc)
         if speculative_match is None and basis_text:
-            speculative_match = UNGROUNDED_CLAIM_RE.search(basis_text)
+            speculative_match = ungrounded_claim.search(basis_text)
         if speculative_match:
             issues.append(f"含未落地推断词: {speculative_match.group(0)}")
             status = "FAIL"
@@ -682,16 +709,16 @@ def check_structured_evidence():
     foreign writer's marker never attests, and hand-written rows without
     either keep the strict FAIL (向后兼容；未知不猜).
     """
-    _resolve_shared()
+    current_entries, has_machine_credential = _structured_inputs()
     result = {
         "entries": [],
         "pass": True,
     }
 
-    for entry in _current_release_impact_entries():
+    for entry in current_entries():
         desc = entry["description"]
         basis_text = entry.get("fact_basis", "")
-        credential = _row_has_governance_store_machine_credential(entry.get("raw_line", ""))
+        credential = has_machine_credential(entry.get("raw_line", ""))
         has_fact, payload, issues = structured_fact_result(desc, basis_text, machine_attested=credential)
         status = "PASS"
 
@@ -800,12 +827,12 @@ def check_goal_layer_contract_readiness(packet_path=None):
           "warn": [detail strings],
         }
     """
-    _resolve_shared()
-    tasks = _active_execution_packet_tasks()
-    packets, load_error = _load_execution_packets(packet_path)
+    governance_dir, active_tasks, load_packets, validate_contract = _goal_inputs()
+    tasks = active_tasks()
+    packets, load_error = load_packets(packet_path)
     plan_text = None
     try:
-        plan_text = (GOVERNANCE_DIR / "plan-tracker.md").read_text(
+        plan_text = (governance_dir / "plan-tracker.md").read_text(
             encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         plan_text = None
@@ -821,7 +848,7 @@ def check_goal_layer_contract_readiness(packet_path=None):
         if packet is None:
             issues = ["missing execution packet"]
         else:
-            issues = _validate_product_success_contract(packet)
+            issues = validate_contract(packet)
         units.append({
             "task_id": task_id,
             "contract_ready": not issues,

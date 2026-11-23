@@ -6,16 +6,8 @@ helpers (`parse_open_risks`, `_parse_context_open_risks`), and the
 REQ-145.3 / FIX-265 mitigation-closure watchdog
 (`check_risk_mitigation_closure`, Check 36).
 
-This module owns the risk check domain. Shared helpers and constants still
-defined in verify_workflow.py (`RISK_PATH`, `_context_file`, `_context_task`,
-and plan-tracker constants) are reached through a deferred module reference
-rather than a top-level import, so verify_workflow.py can import this module
-at module load time without an import cycle.
-
-Functions with cross-domain callers (`_risk_status_is_closed` is used by the
-release-blockers check; `_check_risk_has_closed` is used by gate auto-judge)
-STAY in verify_workflow.py and are reached via the deferred accessor — they
-are not duplicated here (ADR-016 §3.2 / §4.3 KEEP rule).
+The ledger checks accept paths and the mitigation reference pattern directly.
+Context projections use the project context owner by default.
 
 See docs/architecture/ADR-016-verify-phase5-extraction-0.70.0.md for the
 design and the line-number baseline used during extraction.
@@ -30,90 +22,76 @@ from pathlib import Path
 from risk_rows import display_cell, iso_day, iter_active_risks, status_bucket
 from task_priority import compute_unblocked_tasks, parse_task_dependencies
 
-# ── Shared-helper access (deferred to avoid import cycle) ──────────
-# Same deferred-_vw() pattern as checks.manifest (Phase 1) and
-# checks.capability_registry (Phase 2). The shared names are resolved lazily
-# on the first call into this module (after verify_workflow has finished
-# loading) and cached in this module's globals for subsequent calls, so the
-# moved function bodies can reference them by bare name unchanged.
-
-_VW_CACHE = None
+_DEFAULT_INPUT = object()
 
 
-def _vw():
-    """Return the verify_workflow module (imported lazily, cached).
-
-    Cached so repeated calls reuse the same module reference (REVIEW-FIX-153
-    P2, same pattern as checks.manifest / checks.capability_registry).
-    """
-    global _VW_CACHE
-    if _VW_CACHE is None:
-        import verify_workflow  # noqa: WPS433 (deferred import on purpose)
-        _VW_CACHE = verify_workflow
-    return _VW_CACHE
+def _context_readers():
+    from project_context import _context_task
+    from resolve_entry import package_context_file
+    return package_context_file, _context_task
 
 
-# Shared names this domain reaches back into verify_workflow for. Refreshed
-# on every call into `_resolve_shared()` (NOT cached) so test-time monkey-
-# patching of verify_workflow attributes propagates, and so the moved
-# function bodies can reference them by bare name (byte-identical bodies,
-# per ADR-016 §5.3 "no behavioral change").
-_SHARED_NAMES = (
-    "RISK_PATH",
-    "_context_file",
-    "_context_task",
-    "SAMPLE_PATH",  # REQ-145.3: plan-tracker (host facts), live map build
-    "_TASK_ID_IN_REF_RE",  # REQ-145.3: task-id reference regex (prose scan)
-)
+def _legacy_aliases():
+    from hot_governance_facts import _TASK_ID_IN_REF_RE
+    context_file, context_task = _context_readers()
+    return (_host_ledger("risk-log.md"), _host_ledger("plan-tracker.md"),
+            context_file, context_task, _TASK_ID_IN_REF_RE)
 
 
 def _resolve_shared():
-    """Refresh this module's globals with shared names from verify_workflow.
-
-    Re-fetches on EVERY call (not cached) so test-time monkey-patching of
-    verify_workflow attributes (e.g. `patch.object(vw, "RISK_PATH", ...)`)
-    propagates into this module's bare-name lookups. The cost is negligible:
-    these checks run once per CLI invocation, not in a hot loop, and `getattr`
-    on a cached module reference is cheap. This mirrors how checks.manifest
-    re-resolves `ROOT = _root()` inside each function body (Phase 1 precedent).
-    """
-    vw = _vw()
-    g = globals()
-    for _name in _SHARED_NAMES:
-        g[_name] = getattr(vw, _name)
+    """Refresh the five names exposed by an explicit call to this legacy hook."""
+    global RISK_PATH, SAMPLE_PATH, _context_file, _context_task, _TASK_ID_IN_REF_RE
+    RISK_PATH, SAMPLE_PATH, _context_file, _context_task, _TASK_ID_IN_REF_RE = _legacy_aliases()
 
 
-# ── Shared non-closed risk inventory and time-based checks ───────────────────
+def _host_ledger(filename):
+    from resolve_entry import current_host_root
+    return Path(current_host_root()) / ".governance" / filename
+
+
+def _risk_path():
+    return _host_ledger("risk-log.md")
+
+
+def _plan_path():
+    return _host_ledger("plan-tracker.md")
+
+
+def _task_reference_pattern():
+    from hot_governance_facts import _TASK_ID_IN_REF_RE
+    return _TASK_ID_IN_REF_RE
+
 
 def is_risk_status_open(status):
     """Unknown risk states stay active until explicitly resolved."""
     return status_bucket(status) != "closed"
 
 
-def _logged_rows():
-    _resolve_shared()
-    content = RISK_PATH.read_text(encoding="utf-8") if RISK_PATH.is_file() else ""
+def _logged_rows(risk_path=_DEFAULT_INPUT):
+    path = risk_path if risk_path is not _DEFAULT_INPUT else _risk_path()
+    content = path.read_text(encoding="utf-8") if path.is_file() else ""
     return iter_active_risks(content)
 
 
-def _parse_context_open_risks(root):
-    _resolve_shared()
-    path = _context_file(root, ".governance/risk-log.md")
+def _parse_context_open_risks(root, *, context_file=None, context_task=None):
+    if context_file is None or context_task is None:
+        context_file, context_task = _context_readers()
+    path = context_file(root, ".governance/risk-log.md")
     if not path.is_file():
         return []
-    return [_context_task(row.id, row.description or row.id, row.status,
+    return [context_task(row.id, row.description or row.id, row.status,
                           ".governance/risk-log.md", row.raw_line, kind="risk")
             for row in iter_active_risks(path.read_text(encoding="utf-8"))]
 
 
-def parse_open_risks():
+def parse_open_risks(*, risk_path=_DEFAULT_INPUT):
     """Preserve the original list of (risk ID, opening date) pairs."""
-    return [(row.id, row.opened_date) for row in _logged_rows()]
+    return [(row.id, row.opened_date) for row in _logged_rows(risk_path)]
 
 
-def parse_active_risks(risk_content=None):
+def parse_active_risks(risk_content=None, *, risk_path=_DEFAULT_INPUT):
     """Read the status view, including legacy date fields and deadline signals."""
-    rows = _logged_rows() if risk_content is None else iter_active_risks(risk_content)
+    rows = _logged_rows(risk_path) if risk_content is None else iter_active_risks(risk_content)
 
     today = date.today()
     result = []
@@ -134,12 +112,12 @@ def parse_active_risks(risk_content=None):
     return result
 
 
-def check_risk_staleness():
+def check_risk_staleness(*, risk_path=_DEFAULT_INPUT):
     """Measure age since registration, independently of the escalation deadline."""
     today = date.today()
     result = {"total_open": 0, "stale": [], "fresh": [],
               "unknown_registration": [], "unknown_status_ids": []}
-    for row in _logged_rows():
+    for row in _logged_rows(risk_path):
         result["total_open"] += 1
         if row.bucket == "unknown":
             result["unknown_status_ids"].append(row.id)
@@ -152,12 +130,12 @@ def check_risk_staleness():
     return result
 
 
-def check_risk_escalation():
+def check_risk_escalation(*, risk_path=_DEFAULT_INPUT):
     """Evaluate pure ISO deadlines and disclose absent or unjudgeable dates."""
     today = date.today()
     result = {"total_open": 0, "escalation_count": 0, "escalated": [],
               "no_deadline_ids": [], "invalid_deadline_ids": []}
-    for row in _logged_rows():
+    for row in _logged_rows(risk_path):
         result["total_open"] += 1
         if row.deadline_kind == "none":
             result["no_deadline_ids"].append(row.id)
@@ -275,7 +253,7 @@ def _mitigation_deadline_overdue(deadline_str, today):
     return today > deadline
 
 
-def _archive_terminal_task_statuses():
+def _archive_terminal_task_statuses(plan_path):
     """FIX-412: the archive-index TASK face, as ``{task_id: status_cell}``.
 
     B1 rule (archive/index.md exists → archived evidence is valid): rows
@@ -288,7 +266,7 @@ def _archive_terminal_task_statuses():
     hot-only behavior is the exact pre-FIX-412 fallback).
     """
     try:
-        path = Path(SAMPLE_PATH).parent / "archive" / "index.md"
+        path = Path(plan_path).parent / "archive" / "index.md"
         if not path.is_file():
             return {}
     except (OSError, ValueError):
@@ -318,7 +296,7 @@ def _archive_terminal_task_statuses():
     return statuses
 
 
-def _default_task_status_map():
+def _default_task_status_map(plan_path=_DEFAULT_INPUT):
     """Build ``{task_id: raw status cell}`` from task_priority (FIX-265 / F11).
 
     ``compute_unblocked_tasks`` keeps its internal ``status_map`` private
@@ -335,7 +313,9 @@ def _default_task_status_map():
     R3-absent false-flagging (B1: archived evidence is valid evidence).
     """
     try:
-        tasks = parse_task_dependencies(SAMPLE_PATH)
+        if plan_path is _DEFAULT_INPUT:
+            plan_path = _plan_path()
+        tasks = parse_task_dependencies(plan_path)
         report = compute_unblocked_tasks(tasks)
     except Exception:  # noqa: BLE001 — fail-safe: any parse failure = unavailable
         return None
@@ -345,7 +325,7 @@ def _default_task_status_map():
         for entry in bucket:
             dep = entry.task if hasattr(entry, "task") else entry
             status_map[dep.task_id] = dep.status
-    for task_id, cell in _archive_terminal_task_statuses().items():
+    for task_id, cell in _archive_terminal_task_statuses(plan_path).items():
         status_map.setdefault(task_id, cell)
     return status_map
 
@@ -358,7 +338,8 @@ def _mitigation_result(result, verdict, reason):
     return result
 
 
-def check_risk_mitigation_closure(risk_content=None, task_status_map=None):
+def check_risk_mitigation_closure(risk_content=None, task_status_map=None, *, risk_path=_DEFAULT_INPUT, plan_path=_DEFAULT_INPUT,
+                                  task_id_pattern=_DEFAULT_INPUT):
     """FIX-265 / REQ-145.3 (design §3.3): Check 36 — risk mitigation closure.
 
     Every risk whose status is NOT ``已关闭`` must be provably closed by
@@ -411,21 +392,24 @@ def check_risk_mitigation_closure(risk_content=None, task_status_map=None):
             "violation_count": 0,
         },
     }
-    _resolve_shared()
+    if task_id_pattern is _DEFAULT_INPUT:
+        task_id_pattern = _task_reference_pattern()
 
     content = risk_content
     if content is None:
-        if not RISK_PATH.is_file():
+        if risk_path is _DEFAULT_INPUT:
+            risk_path = _risk_path()
+        if not risk_path.is_file():
             return _mitigation_result(
                 result, "no-verdict", "risk-log.md not found — nothing to judge")
         try:
-            content = RISK_PATH.read_text(encoding="utf-8")
+            content = risk_path.read_text(encoding="utf-8")
         except (IOError, OSError):
             return _mitigation_result(
                 result, "no-verdict", "risk-log.md unreadable — nothing to judge")
 
     if task_status_map is None:
-        task_status_map = _default_task_status_map()
+        task_status_map = _default_task_status_map(plan_path)
 
     today = date.today()
     for line in (content or "").split("\n"):
@@ -468,9 +452,9 @@ def check_risk_mitigation_closure(risk_content=None, task_status_map=None):
         # (only when the primary column yields no task id). Union + dedupe.
         refs = set()
         if (ref_cell or "").strip() not in _RISK_NO_REF_PLACEHOLDERS:
-            refs = set(_TASK_ID_IN_REF_RE.findall(ref_cell))
+            refs = set(task_id_pattern.findall(ref_cell))
         if not refs:
-            refs = set(_TASK_ID_IN_REF_RE.findall(mitigation or ""))
+            refs = set(task_id_pattern.findall(mitigation or ""))
 
         if not refs:
             # R4 content-level disclosure (a non-closed risk whose mitigation

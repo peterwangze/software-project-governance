@@ -13,10 +13,12 @@ _DSH_COMMANDS = {
 }
 
 
-def _dsh_handler_source(path, definition, depth=0):
-    """Follow the directly imported DSH adapters in the inspected installation."""
-    owners = {"dsh_doctor", "dsh_compat", "host_validation_cli", "host_loader_probes",
-              "checks.dsh_smoke", "checks.dsh_boundary"}
+_DSH_CALL_OWNERS = {"dsh_doctor", "dsh_compat", "host_validation_cli", "host_loader_probes",
+                    "checks.dsh_smoke", "checks.dsh_boundary"}
+
+
+def _handler_source(path, definition, depth=0, *, owners=_DSH_CALL_OWNERS):
+    """Follow the handler's directly imported adapters in the inspected installation."""
     calls = [node for node in ast.walk(definition)
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
     for node in definition.body:
@@ -36,25 +38,101 @@ def _dsh_handler_source(path, definition, depth=0):
             if not invocations or not all(_binds_explicit_call(call, provider) for call in invocations):
                 return False
             if depth == 0 and node.module in {"host_validation_cli", "host_loader_probes"}:
-                if not _dsh_handler_source(path, provider, depth + 1):
+                if not _handler_source(path, provider, depth + 1):
                     return False
     return True
 
 
-def _dsh_owner_is_loadable(path, registry, module, handler, namespace_call):
-    whitelist = next((row.value for row in registry if isinstance(row, ast.AnnAssign)
-                      and isinstance(row.target, ast.Name) and row.target.id == "LOADER_WHITELIST"), None)
-    if not isinstance(whitelist, ast.Tuple):
-        return False
-    if module not in {node.value for node in whitelist.elts if isinstance(node, ast.Constant)}:
-        return False
+def _final_registry_whitelist(registry):
+    """Read the last literal loader set, refusing later unrecognized uses at module scope."""
+    name = "LOADER_WHITELIST"
+    for row in reversed(registry):
+        if isinstance(row, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if row.name == name:
+                break
+            continue
+        if isinstance(row, (ast.Import, ast.ImportFrom)):
+            if any((item.asname or item.name.split(".")[0]) == name for item in row.names):
+                break
+            continue
+        if not any(isinstance(node, ast.Name) and node.id == name for node in ast.walk(row)):
+            continue
+        targets = row.targets if isinstance(row, ast.Assign) else [getattr(row, "target", None)]
+        if (len(targets) == 1 and isinstance(targets[0], ast.Name) and targets[0].id == name
+                and isinstance(row, (ast.Assign, ast.AnnAssign))
+                and isinstance(row.value, (ast.List, ast.Tuple, ast.Set))):
+            return {item.value for item in row.value.elts if isinstance(item, ast.Constant)}
+        break
+    return set()
+
+
+def _registered_owner_definition(path, registry, module, handler, namespace_call):
+    if module not in _final_registry_whitelist(registry):
+        return None
     source = path.with_name(module + ".py")
     try:
         statements = ast.parse(source.read_text(encoding="utf-8"), filename=str(source)).body
     except (OSError, UnicodeError, SyntaxError):
         return False
     function = _local_definition(statements, handler)
-    return _binds_explicit_call(namespace_call, function) and _dsh_handler_source(path, function, depth=1)
+    return function if _binds_explicit_call(namespace_call, function) else None
+
+
+def _dsh_owner_is_loadable(path, registry, module, handler, namespace_call):
+    function = _registered_owner_definition(path, registry, module, handler, namespace_call)
+    return bool(function) and _handler_source(path, function, depth=1)
+
+
+def _gate_review_is_wired(path, function):
+    """Follow the scoped gate command's imported providers to its review invocation."""
+    if not function:
+        return False
+    body = function.body[1:] if ast.get_docstring(function) else function.body
+    bindings = {}
+    providers = {"loop_workflow": "gate_review", "resolve_entry": "current_host_root"}
+    for node in body[:2]:
+        if not isinstance(node, ast.ImportFrom) or node.level or len(node.names) != 1:
+            return False
+        member = node.names[0]
+        if providers.get(node.module) != member.name:
+            return False
+        bindings[member.name] = member.asname or member.name
+    if len(bindings) != 2 or len(set(bindings.values())) != 2 or not function.args.args:
+        return False
+    # The required-arguments guard precedes the single scoped transaction.
+    # Resolve the helpers at this actual call site, including local import aliases.
+    if len(body) < 4 or not isinstance(body[2], ast.If) or not isinstance(body[3], ast.Try):
+        return False
+    first = body[3].body[0]
+    if not isinstance(first, ast.Assign) or not isinstance(first.value, ast.Call):
+        return False
+    call = first.value
+    args = function.args.args[0].arg
+    if (args in bindings.values() or ast.unparse(call.func) != bindings["gate_review"] or call.keywords
+            or [ast.unparse(arg) for arg in call.args] != [
+                bindings["current_host_root"] + "()", args + ".unit", args + ".gate_id.upper()", args + ".review"]):
+        return False
+    return _handler_source(path, function, owners=providers)
+
+
+def _gate_owner_dispatch(path, registry, handler, call):
+    """The normal loader dispatches this literal row, without the DSH argv adapter."""
+    loader = _local_definition(registry, "load_handler")
+    if loader is None:
+        return False
+    body = loader.body[1:] if ast.get_docstring(loader) else loader.body
+    if len(body) != 3 or ast.unparse(body[0]) != "path = command_spec(key).handler":
+        return False
+    adapter = body[1]
+    if (not isinstance(adapter, ast.If) or adapter.orelse
+            or ast.unparse(adapter.test) != "parsed_args and path == 'dsh_doctor.main'"):
+        return False
+    if ast.unparse(body[2]) != "return resolve_loader(path)":
+        return False
+    if not _binds_explicit_call(body[2].value, _local_definition(registry, "resolve_loader")):
+        return False
+    function = _registered_owner_definition(path, registry, "governance_fact_cli", handler, call)
+    return _gate_review_is_wired(path, function)
 
 
 def _dsh_registered_dispatch(path, key, handler, matches, registry, namespace_call):
@@ -111,6 +189,9 @@ def _has_dispatch(path, statements, key, handler):
                         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
                         and node.target.id == "_COMMANDS")
             matches = [binding for binding in ast.literal_eval(rows) if binding[0] == key]
+            if (key == "gate-check" and handler == "cmd_gate_check"
+                    and matches == [(key, "governance_fact_cli.cmd_gate_check")]):
+                return _gate_owner_dispatch(path, registry, handler, call)
             if _DSH_COMMANDS.get(key) == handler:
                 return _dsh_registered_dispatch(path, key, handler, matches, registry, call)
             return matches == [(key, f"verify_workflow.{handler}")]
@@ -276,7 +357,7 @@ def _schema_declares_parser(path, wrapper, invocation, key):
     return found
 
 
-def _capability_delegates(definition, module, owner_body, positional, keywords, setup=()):
+def _delegates_to_owner(definition, module, owner_body, positional, keywords, setup=()):
     """Recognize a direct, unconditional import and return in the shipped adapters."""
     body = definition.body[1:] if ast.get_docstring(definition) is not None else definition.body
     if len(body) != len(setup) + 2:
@@ -344,12 +425,12 @@ def _has_capability_handler(path, functions):
         owners[module] = body
     paths = {"requirements_path": "CAPABILITY_CONTEXT_DOC_PATH", "tools_path": "CAPABILITY_CONTEXT_TOOLS_PATH"}
     return (
-        _capability_delegates(handler, "status_cli", owners["status_cli"], [handler.args.args[0].arg],
+        _delegates_to_owner(handler, "status_cli", owners["status_cli"], [handler.args.args[0].arg],
                               {"plugin_root": "ROOT", "discover": discover, "validate": validate,
                                "display_path": "_display_path"})
-        and _capability_delegates(functions[discover], "capability_context", owners["capability_context"],
+        and _delegates_to_owner(functions[discover], "capability_context", owners["capability_context"],
                                   ["_context_root(root)"], {**paths, "check_registry": "check_capability_registry"})
-        and _capability_delegates(functions[validate], "capability_context", owners["capability_context"],
+        and _delegates_to_owner(functions[validate], "capability_context", owners["capability_context"],
                                   ["root", "context"], {**paths, "policy": "policy", "display_path": "_display_path"},
                                   setup=("root", "context", "policy"))
     )
@@ -375,10 +456,22 @@ def inspect_cli_registration(path: Path, key: str, handler: str) -> dict:
                 break
     has_parser = _declares_parser(parser_body, key) or schema_parser
     has_handler = handler in functions
-    if handler == "cmd_capability_context":
+    if key == "gate-check" and handler == "cmd_gate_check":
+        definition = _local_definition(tree.body, handler)
+        has_handler = definition is not None
+        if has_handler and any(isinstance(node, ast.ImportFrom) and node.module == "governance_fact_cli"
+                               for node in definition.body):
+            try:
+                owner = ast.parse(path.with_name("governance_fact_cli.py").read_text(encoding="utf-8")).body
+                has_handler = (not definition.decorator_list and len(definition.args.args) == 1
+                               and _delegates_to_owner(definition, "governance_fact_cli", owner,
+                                                         [definition.args.args[0].arg], {}))
+            except (OSError, SyntaxError, UnicodeError):
+                has_handler = False
+    elif handler == "cmd_capability_context":
         has_handler = _has_capability_handler(path, functions)
     elif has_handler and _DSH_COMMANDS.get(key) == handler:
         definition = _local_definition(tree.body, handler)
-        has_handler = definition is not None and _dsh_handler_source(path, definition)
+        has_handler = definition is not None and _handler_source(path, definition)
     return {"main": main is not None, "handler": has_handler,
             "argparse": has_parser, "dispatch": _has_dispatch(path, statements, key, handler)}

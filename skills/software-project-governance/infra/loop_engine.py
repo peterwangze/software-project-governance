@@ -17,8 +17,7 @@ Two additive slices live in this module:
     :func:`rollup_loop_state`, a PURE READ that produces a per-flow-unit
     loop_state decomposition (resolving RISK-037 criterion 2: the
     plan-tracker's single ``当前阶段`` field is replaced by a per-unit view).
-    Reads flow-unit-runtime.json via a deferred verify_workflow import
-    (``_vw()`` pattern, same as loop_health.py). Load-bearing invariant:
+    Reads flow-unit-runtime.json from the explicitly selected or current host. Load-bearing invariant:
     ``no_global_stage: True`` is ALWAYS set — the result contains no field
     that collapses multiple units into one stage.
   - **FEAT-044 (0.88.0 slice E3)** — subagent round budget + heartbeat
@@ -943,30 +942,8 @@ def interrupt_recovery_payload(unit_id, tier, *, reason, idle_rounds=None,
 # tests/test_loop_rollup.py.
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ─── Deferred verify_workflow import (avoid import cycle) ──────────────────
-# loop_engine.py MUST NOT import verify_workflow at module top level — that
-# would create a cycle (verify_workflow imports this module's rollup via the
-# cmd_loop_rollup thin entry). We resolve verify_workflow lazily on first
-# runtime read, mirroring the ``_vw()`` pattern in loop_health.py.
-_VW_CACHE = None
-
-
-def _vw():
-    """Lazy accessor for verify_workflow (deferred to avoid the import cycle).
-
-    loop_engine.py MUST NOT import verify_workflow at module top level — that
-    would create a cycle (verify_workflow imports this module's rollup via the
-    ``cmd_loop_rollup`` thin entry). We resolve verify_workflow lazily on first
-    runtime read, exactly mirroring the ``_vw()`` pattern in loop_health.py.
-    """
-    global _VW_CACHE
-    if _VW_CACHE is None:
-        import verify_workflow  # noqa: WPS433 deferred import
-        _VW_CACHE = verify_workflow
-    return _VW_CACHE
-
-
 def rollup_loop_state(root=None, plugin_home=None):
     """Read the same committed project state used by bootstrap and the dashboard."""
     from governance_readers import loop_state
-    return loop_state(root if root is not None else _vw().HOST_PROJECT_ROOT)
+    from resolve_entry import current_host_root
+    return loop_state(root if root is not None else current_host_root())

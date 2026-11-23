@@ -4,6 +4,39 @@ import re
 from typing import Callable, NamedTuple
 
 
+PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS = {
+    "user": str,
+    "job_to_be_done": str,
+    "non_goals": list,
+    "success_metrics": list,
+    "competitive_baseline": str,
+    "done_definition": list,
+}
+
+PRODUCT_SUCCESS_PLACEHOLDER_RE = re.compile(
+    r"(?:\b(?:todo|tbd|to_be_defined|n/?a|none|null|unknown)\b|待补|待定|暂无|占位)",
+    re.IGNORECASE,
+)
+
+PRODUCT_SUCCESS_PROCESS_ONLY_RE = re.compile(
+    r"(?:check-governance|verify_workflow|evidence-log|plan-tracker|review|commit|push|archive|"
+    r"治理|证据|归档|提交|审查|记录|hook|\bgate\s*(?:G?\d+\s*)?(?:已?通过|pass(?:ed)?\b))",
+    re.IGNORECASE,
+)
+
+PRODUCT_SUCCESS_USER_OUTCOME_RE = re.compile(
+    r"(?:user|customer|persona|outcome|value|usable|acceptance|scenario|quality|competitive|"
+    r"用户|客户|使用者|产品|体验|价值|可用|可见|验收|场景|质量|竞争)",
+    re.IGNORECASE,
+)
+
+PRODUCT_SUCCESS_RUNNABLE_RE = re.compile(
+    r"(?:e2e|test|unit|integration|fixture|ci|command|script|execute|run|pass|"
+    r"测试|验证|用例|命令|脚本|执行|通过)",
+    re.IGNORECASE,
+)
+
+
 class ProductSuccessPolicy(NamedTuple):
     required_fields: dict
     placeholder: re.Pattern
@@ -58,7 +91,7 @@ def _is_meaningful_product_success_list(value, placeholder):
     )
 
 
-def _is_process_only_product_success_metric(value, process_only):
+def _is_process_only_product_success_metric(value, process_only=PRODUCT_SUCCESS_PROCESS_ONLY_RE):
     text = value.strip()
     if not process_only.search(text):
         return False
@@ -70,6 +103,16 @@ def _is_process_only_product_success_metric(value, process_only):
         text, re.IGNORECASE,
     )
     return interaction is None
+
+
+def _default_product_success_policy():
+    return ProductSuccessPolicy(PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS, PRODUCT_SUCCESS_PLACEHOLDER_RE,
+                                _is_process_only_product_success_metric, PRODUCT_SUCCESS_USER_OUTCOME_RE,
+                                PRODUCT_SUCCESS_RUNNABLE_RE)
+
+
+def validate_default_product_success_contract(packet):
+    return _validate_product_success_contract(packet, _default_product_success_policy())
 
 
 def _validate_product_success_contract(packet, policy: ProductSuccessPolicy):

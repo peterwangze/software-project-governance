@@ -283,6 +283,82 @@ class ContractShapeTests(unittest.TestCase):
 
 class CommandRegistryTests(unittest.TestCase):
 
+    def test_gate_handler_follows_public_override_and_restoration(self):
+        import governance_fact_cli
+        import verify_workflow as workflow
+
+        native = reg.load_handler("gate-check", parsed_args=True)
+        self.assertIs(native, governance_fact_cli.cmd_gate_check)
+        def override(args):
+            return args.unit
+
+        with patch.object(workflow, "cmd_gate_check", override):
+            selected = reg.load_handler("gate-check", parsed_args=True)
+            self.assertIs(selected, override)
+            self.assertEqual(selected(SimpleNamespace(unit="FIX-535")), "FIX-535")
+        with patch.object(workflow, "cmd_gate_check", None):
+            with self.assertRaisesRegex(reg.LoaderResolutionError, "verify_workflow.cmd_gate_check.*NoneType"):
+                reg.load_handler("gate-check", parsed_args=True)
+        original = workflow.cmd_gate_check
+        try:
+            del workflow.cmd_gate_check
+            with self.assertRaisesRegex(reg.LoaderResolutionError, "does not define 'cmd_gate_check'"):
+                reg.load_handler("gate-check")
+        finally:
+            workflow.cmd_gate_check = original
+        self.assertIs(reg.load_handler("gate-check"), native)
+
+    def test_gate_registration_observes_the_inspected_owner_and_real_namespace_call(self):
+        import shutil
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("verify_workflow", "registry", "workflow_cli", "workflow_cli_checks",
+                         "workflow_cli_operations", "governance_fact_cli", "loop_workflow", "resolve_entry"):
+                shutil.copyfile(_INFRA_DIR / (name + ".py"), root / (name + ".py"))
+            def inspect_gate():
+                return inspect_cli_registration(root / "verify_workflow.py", "gate-check", "cmd_gate_check")
+            self.assertTrue(all(inspect_gate().values()))
+            owner = root / "governance_fact_cli.py"
+            original = owner.read_bytes()
+            for replacement in (None, b"def cmd_gate_check(args, extra): pass", b"cmd_gate_check = None",
+                                b"def cmd_gate_check(args): yield args", b"def (", original + b"\ncmd_gate_check = None"):
+                with self.subTest(replacement=None if replacement is None else replacement[-32:]):
+                    if replacement is None:
+                        owner.unlink()
+                    else:
+                        owner.write_bytes(replacement)
+                    self.assertFalse(inspect_gate()["dispatch"])
+                    owner.write_bytes(original)
+            for provider, name in (("loop_workflow", "gate_review"), ("resolve_entry", "current_host_root")):
+                imported = f"from {provider} import {name}".encode()
+                with self.subTest(provider=provider):
+                    for replacement in (b"pass", f"from missing_provider import {name}".encode(),
+                                        imported + b" as wrong_reference"):
+                        owner.write_bytes(original.replace(imported, replacement))
+                        self.assertFalse(inspect_gate()["dispatch"])
+                    owner.write_bytes(original)
+            owner.write_bytes(original.replace(b"from loop_workflow import gate_review",
+                                               b"from loop_workflow import gate_review as review")
+                                      .replace(b"= gate_review(", b"= review("))
+            self.assertTrue(inspect_gate()["dispatch"])
+            owner.write_bytes(original)
+            registry_source = root / "registry.py"
+            declared = registry_source.read_bytes()
+            for override in (b"LOADER_WHITELIST = ()", b"del LOADER_WHITELIST",
+                             b"LOADER_WHITELIST = ['governance_fact_cli']\nLOADER_WHITELIST.clear()"):
+                registry_source.write_bytes(declared + b"\n" + override)
+                self.assertFalse(inspect_gate()["dispatch"])
+            registry_source.write_bytes(declared)
+            dependency = root / "loop_workflow.py"
+            source = dependency.read_bytes()
+            dependency.write_bytes(source + b"\ngate_review = None")
+            self.assertFalse(inspect_gate()["dispatch"])
+            dependency.write_bytes(source)
+            self.assertTrue(all(inspect_gate().values()))
+
     def test_declares_the_frozen_key_count(self):
         self.assertEqual(len(reg.COMMAND_SPECS), _frozen_faces()["cli_dispatch"]["key_count"])
         self.assertEqual(len(reg.command_keys()), _frozen_faces()["cli_dispatch"]["key_count"])
@@ -367,7 +443,7 @@ class CommandRegistryTests(unittest.TestCase):
             "check-injection-budget",
             "check-manifest-consistency", "check-review-debt",
             "decision-append", "dsh-doctor",
-            "evidence-append",
+            "evidence-append", "gate-check",
             "governance-bootstrap",
             "governance-cost-report",
             "locks-amend", "locks-extend", "locks-release",
@@ -843,8 +919,7 @@ class DelegatedLoaderTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.module:
                 for alias in node.names:
                     bound = alias.asname or alias.name.split(".")[0]
-                    aliases[bound] = (f"{node.module}.{alias.name}"
-                                      if alias.asname else node.module)
+                    aliases[bound] = f"{node.module}.{alias.name}"
         return aliases
 
     def test_disclosure_covers_the_delegating_segments(self):
@@ -865,15 +940,26 @@ class DelegatedLoaderTests(unittest.TestCase):
                             and node.name == attr)
             body = [node for node in function.body
                     if not isinstance(node, ast.Expr)]
-            self.assertEqual(len(body), 1, f"{attr} is no longer a wrapper")
-            call = body[0].value if isinstance(body[0], ast.Return) else None
-            self.assertIsInstance(call, ast.Call)
-            self.assertIsInstance(call.func, ast.Attribute)
-            self.assertEqual(call.func.attr,
-                             reg.loader_attr(reg.check_spec(check_id).loader))
-            target = aliases.get(call.func.value.id)
-            self.assertEqual(target,
-                             reg.loader_module(reg.check_spec(check_id).loader))
+            expected = reg.check_spec(check_id).loader
+            if len(body) == 2:
+                binding, result = body
+                self.assertIsInstance(binding, ast.ImportFrom)
+                self.assertEqual(binding.level, 0)
+                self.assertEqual(len(binding.names), 1)
+                imported = binding.names[0]
+                self.assertEqual(f"{binding.module}.{imported.name}", expected)
+                self.assertIsInstance(result, ast.Return)
+                self.assertIsInstance(result.value, ast.Call)
+                self.assertIsInstance(result.value.func, ast.Name)
+                self.assertEqual(result.value.func.id, imported.asname or imported.name)
+            else:
+                self.assertEqual(len(body), 1, f"{attr} is no longer a wrapper")
+                self.assertIsInstance(body[0], ast.Return)
+                call = body[0].value
+                self.assertIsInstance(call, ast.Call)
+                self.assertIsInstance(call.func, ast.Attribute)
+                self.assertEqual(call.func.attr, reg.loader_attr(expected))
+                self.assertEqual(aliases.get(call.func.value.id), reg.loader_module(expected))
 
 
 # ── ③ loader whitelist / assembly path ──────────────────────────────────────

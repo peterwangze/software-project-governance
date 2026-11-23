@@ -53,7 +53,7 @@ Caliber decisions (each anchored to a measurement, not to preference):
      toward the gate). Segment 28o increments ``all_issues`` conditionally
      (``fatal_on_error``, default false in ``core/architecture-health.json``)
      and is therefore declared BLOCKING: the check *can* reach the gate.
-  3. **Two segments are reached through a delegating engine wrapper**
+  3. **Some segments are reached through a delegating engine wrapper**
      (``check-24`` → ``checks.version``, ``check-28b`` → ``checks.projection``).
      The declared loader names the *implementing* module; the degradation is
      disclosed in ``DELEGATED_LOADERS`` and machine-verified by the test
@@ -174,19 +174,25 @@ accepted baseline).
 """
 
 DELEGATED_LOADERS: Dict[str, str] = {
+    "check-2": "verify_workflow.check_risk_staleness",
+    "check-8": "verify_workflow.check_risk_escalation",
     "check-24": "verify_workflow.check_version_consistency",
     "check-28b": "verify_workflow.check_projection_sync",
+    "check-32": "verify_workflow.check_change_triage",
+    "check-35": "verify_workflow.check_snapshot_freshness",
+    "check-39": "verify_workflow.check_r1_completion_gate",
 }
 """Segment → engine-side delegating wrapper (disclosure, §3.3).
 
-Both segments' declared loaders point at the implementing domain module while
-the engine still reaches it through a one-statement wrapper. Declaring the
-wrapper as the loader would cement the coupling the strangler removes, so the
+The declared loaders name the implementing domains. The engine calls a thin
+adapter when a check needs its legacy host paths or an existing release facade.
+Declaring the wrapper as the loader would cement the coupling the strangler removes, so the
 implementation host is declared and the degradation is explicit here.
 """
 
 LOADER_WHITELIST: Tuple[str, ...] = (
     ENGINE_MODULE,
+    "governance_fact_cli",
     "archguard_ratchet",
     "checks.capability_registry",
     "checks.ci_domain",
@@ -369,7 +375,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_external_project_validation"),
     ("first-run-demo", "verify_workflow.cmd_first_run_demo"),
     ("gate", "verify_workflow.cmd_gate"),
-    ("gate-check", "verify_workflow.cmd_gate_check"),
+    ("gate-check", "governance_fact_cli.cmd_gate_check"),
     ("gates", "verify_workflow.cmd_gates"),
     ("gemini-auth-preflight", "verify_workflow.cmd_gemini_auth_preflight"),
     ("generate-deterministic-scaffold",
@@ -589,21 +595,24 @@ def resolve_loader(loader_path: str) -> Callable:
         raise LoaderResolutionError(
             f"module {module_name!r} does not define {attr!r} "
             f"(declared loader {loader_path!r}) — registration drift") from exc
+    binding = None
     if module_name in ("host_loader_probes", "dsh_compat", "host_validation_cli") and attr.startswith("cmd_"):
-        # Consult an active DSH binding only if the workflow has installed one.
-        # Standalone commands require only the owner they actually dispatch to.
         probes = sys.modules.get("host_loader_probes")
         if probes is not None:
-            try:
-                effective = probes.effective_command(attr, target)
-            except AttributeError as exc:
-                legacy_path = f"{ENGINE_MODULE}.{attr}"
-                raise LoaderResolutionError(
-                    f"module {ENGINE_MODULE!r} does not define {attr!r} "
-                    f"(declared loader {legacy_path!r}) — registration drift") from exc
-            if effective is not target:
-                target = effective
-                loader_path = f"{ENGINE_MODULE}.{attr}"
+            binding = probes.effective_command
+    elif loader_path == "governance_fact_cli.cmd_gate_check":
+        binding = getattr(module, "effective_gate_command", None)
+    if binding is not None:
+        try:
+            effective = binding(attr, target)
+        except AttributeError as exc:
+            legacy_path = f"{ENGINE_MODULE}.{attr}"
+            raise LoaderResolutionError(
+                f"module {ENGINE_MODULE!r} does not define {attr!r} "
+                f"(declared loader {legacy_path!r}) — registration drift") from exc
+        if effective is not target:
+            target = effective
+            loader_path = f"{ENGINE_MODULE}.{attr}"
     if not callable(target):
         raise LoaderResolutionError(
             f"{loader_path!r} resolves to {type(target).__name__}, not a "

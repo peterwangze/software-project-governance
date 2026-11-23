@@ -5,6 +5,17 @@ from datetime import date
 from pathlib import Path
 
 
+_W7_TERMINAL_MARKERS = (
+    "✅", "已发布", "已关闭", "已终止", "已撤回", "失效", "不可信", "取消", "废弃",
+)
+
+_W7_ACTIVE_MARKERS = ("进行中", "待执行", "推进中", "⏳", "🔄")
+
+_W7_TERMINAL_DATE_RE = re.compile(r"^[（(]\s*\d{4}-\d{2}-\d{2}")
+
+_WRITER_OP_ANCHOR_RE = re.compile(r"〔op-[0-9a-f]{32}〕")
+
+
 def _extract_section(content, heading, stop_headings=None):
     """Extract lines between a ## heading and the next ## heading."""
     lines = content.split("\n")
@@ -353,7 +364,7 @@ def parse_recent_decisions(n=5, decision_content=None, *, governance_dir):
     return rows[:n]
 
 
-def _w7_terminal_assertion_positions(text, *, markers, terminal_date):
+def _w7_terminal_assertion_positions(text, *, markers=_W7_TERMINAL_MARKERS, terminal_date=_W7_TERMINAL_DATE_RE):
     """Positions of terminal-state ASSERTIONS in a mixed status cell.
 
     R1 (segment-scope tightening, CODE-R0 P2-1 / DESIGN-R0 P2-3): a
@@ -412,7 +423,10 @@ def _w7_terminal_assertion_positions(text, *, markers, terminal_date):
     return positions
 
 
-def _status_is_writer_committed_cell(text, *, operation_anchor, state_chain):
+_DEFAULT_STATE_CHAIN = object()
+
+
+def _status_is_writer_committed_cell(text, *, operation_anchor=_WRITER_OP_ANCHOR_RE, state_chain=_DEFAULT_STATE_CHAIN):
     """True when an already-cleaned status cell is a writer-committed
     TERMINAL row (FIX-393): the writer chain's first hit is ``committed``
     AND the ops receipt anchor 〔op-<32hex>〕 is present. The anchor is the
@@ -420,6 +434,8 @@ def _status_is_writer_committed_cell(text, *, operation_anchor, state_chain):
     「committed」 without it was not written by the governed writer (the
     B-1 hand-edit class) and is never guessed terminal.
     """
+    if state_chain is _DEFAULT_STATE_CHAIN:
+        from task_row_update import _STATE_MARKER_CHAIN as state_chain
     if not operation_anchor.search(text):
         return False
     for state, pattern in state_chain:
@@ -428,7 +444,9 @@ def _status_is_writer_committed_cell(text, *, operation_anchor, state_chain):
     return False
 
 
-def _status_is_completed_cell(cell, *, active_markers, writer_committed, terminal_positions):
+def _status_is_completed_cell(cell, *, active_markers=_W7_ACTIVE_MARKERS,
+                              writer_committed=_status_is_writer_committed_cell,
+                              terminal_positions=_w7_terminal_assertion_positions):
     """Completed status test for task rows (dogfood ✅ conventions + host text-only).
 
     - Any cell with "未完成"/"待完成" is NOT completed.

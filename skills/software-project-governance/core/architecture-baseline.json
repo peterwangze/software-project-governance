@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "485e1fb13fa88e2ce7a2868f87cd064a3a65ef2b",
+    "git_head": "4f6ff60a46776934e2c547248c4fe8e1c7234cef",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 20542,
+    "anchor_loc": 20016,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -412,14 +412,12 @@
       "cmd_agent_runtime_e2e": 14,
       "cmd_capability_context": 25,
       "cmd_change_triage": 2,
-      "cmd_check_acceptance_contracts": 8,
       "cmd_check_agent_locks": 7,
       "cmd_check_agent_team": 18,
       "cmd_check_archive_integrity": 13,
       "cmd_check_commit_scope": 9,
       "cmd_check_complexity": 7,
       "cmd_check_cross_references": 24,
-      "cmd_check_deterministic_scaffolds": 8,
       "cmd_check_dsh_boundary": 1,
       "cmd_check_duplicate_code": 7,
       "cmd_check_exploration_channels": 10,
@@ -433,15 +431,12 @@
       "cmd_check_host_capability_context": 13,
       "cmd_check_hot_fact_source": 6,
       "cmd_check_injection_contract": 7,
-      "cmd_check_interruption_policy": 11,
       "cmd_check_lifecycle_registry": 8,
       "cmd_check_loop_health": 4,
       "cmd_check_loop_role_skills": 5,
       "cmd_check_mainstream_agent_loading": 6,
       "cmd_check_plugin_freshness": 8,
-      "cmd_check_product_success_contracts": 8,
       "cmd_check_projection_sync": 11,
-      "cmd_check_quality_budget": 8,
       "cmd_check_readme_pack_guidance": 6,
       "cmd_check_release": 14,
       "cmd_check_runtime_readiness_matrix": 6,
@@ -451,7 +446,6 @@
       "cmd_check_technical_debt": 6,
       "cmd_check_user_impact": 11,
       "cmd_check_version_consistency": 10,
-      "cmd_check_vertical_slices": 8,
       "cmd_demand_source_revise": 1,
       "cmd_e2e_check": 26,
       "cmd_execution_packet": 3,
@@ -459,7 +453,6 @@
       "cmd_gate_check": 3,
       "cmd_gates": 1,
       "cmd_gemini_auth_preflight": 11,
-      "cmd_generate_deterministic_scaffold": 3,
       "cmd_governance_context": 1,
       "cmd_governance_write_guard": 10,
       "cmd_next_candidates": 1,
@@ -476,7 +469,7 @@
       "cmd_write_guard_bootstrap": 2,
       "main": 1
     },
-    "total": 583
+    "total": 529
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",

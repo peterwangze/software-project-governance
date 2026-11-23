@@ -53,7 +53,9 @@ Isolation and access boundaries (M7.7 (a) precedent, FEAT-015/016)
   directory from the assigning caller. Ordinary host checks can deliberately
   select the configured profile with ``--use-host-profile`` or an explicit
   environment mapping. Both read ``$DSH_HOME/profiles`` to resolve the plugin
-  set dsh would load. No default user profile is inferred. The guard writes
+  set dsh would load. An explicit install, or a named composition checked
+  against the CLI on PATH, can use package schemas without reading either
+  inherited profile directory. No default user profile is inferred. The guard writes
   nothing to ``$DSH_HOME``, and the probe subprocess runs with ``DSH_HOME``
   redirected to a freshly created empty temp directory which is deleted
   afterwards.
@@ -2332,7 +2334,7 @@ def _resolve_verdict(report: dict, failures: list, plane: str,
                 f"({_reason_histogram(coverage)}) — disclosed as [NOT_RUN]")
 
 
-def _profile_environment(env, isolated_home, use_host_profile):
+def _profile_environment(env, isolated_home, use_host_profile, *, install, compositions, which):
     """Resolve the caller's profile authority before doing any host discovery."""
     import dsh_contract
 
@@ -2342,8 +2344,21 @@ def _profile_environment(env, isolated_home, use_host_profile):
     ambient_home = _env_text(environment, home_key)
     if isolated_home is None:
         if env is None and not use_host_profile and (ambient_home or _env_text(environment, profile_key)):
-            return None, ("profile discovery needs an explicit --isolated-home DIR "
-                          "or --use-host-profile to read the configured host profile")
+            # Choosing an installation or a preset does not authorize enumerating
+            # an inherited profile, even as a fallback plane for missing packages.
+            environment.pop(home_key, None)
+            environment.pop(profile_key, None)
+            install_keys = (_fact("_install_dir_env"), _fact("_node_modules_env"),
+                            dsh_contract.get("host.planes.env.desktop_app_dir"))
+            if install is not None or any(_env_text(environment, key) for key in install_keys):
+                return environment, None
+            if compositions is not None and which("dsh"):
+                return environment, None
+            reason = ("profile discovery needs an explicit --isolated-home DIR "
+                      "or --use-host-profile to read the configured host profile")
+            if compositions is not None or not _env_text(environment, "PATH"):
+                reason = f"installed dsh not available from the install settings or PATH. {reason}"
+            return None, reason
         return environment, None
 
     expected = Path(isolated_home)
@@ -2459,7 +2474,8 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         # product FAIL even when compositions, the install or Node are absent.
         # Use the probe's own renderer so the preflight cannot drift from it.
         _render_probe_script()
-        env, refusal = _profile_environment(env, isolated_home, use_host_profile)
+        env, refusal = _profile_environment(env, isolated_home, use_host_profile,
+                                            install=install, compositions=compositions, which=which)
         if refusal:
             report["reason"] = refusal
             if isolated_home is not None:

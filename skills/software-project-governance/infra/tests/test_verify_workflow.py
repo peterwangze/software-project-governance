@@ -25123,18 +25123,25 @@ class Fix479Check9TerminalStatusNormalizationTests(unittest.TestCase):
             self.assertFalse(vw._status_is_terminal_cell(cell), cell)
 
     def test_call_sites_share_single_terminal_predicate(self):
-        """Both plan-table call sites (check_task_deadline Check 9 +
-        check_protocol_compliance DRI) source the SAME predicate; the old
-        scattered bare-word tuple leaves zero residue."""
+        """Both public checks must follow the same replaceable terminal predicate."""
         import inspect
         from checks import commit
+        from gate_consistency import check_protocol_compliance
 
-        dri = inspect.getsource(vw.check_protocol_compliance)
-        deadline = inspect.getsource(commit.check_task_deadline)
-        self.assertIn("if _status_is_terminal_cell(status):", dri)
-        self.assertIn("if status_is_terminal_cell(status):", deadline)
-        self.assertIn("status_is_terminal_cell=_status_is_terminal_cell", inspect.getsource(vw.check_task_deadline))
-        self.assertNotIn('in ("已完成", "已终止")', dri + deadline)
+        # Both rows are overdue and lack a DRI. Reverse which one counts as
+        # terminal so a copied default classifier cannot pass either check.
+        rows = [self._row("FIX-901", "进行中", owner=""),
+                self._row("FIX-902", "✅ 已完成", owner="")]
+        with patch.object(vw, "_status_is_terminal_cell", lambda status: status == "进行中"):
+            deadline = self._deadline_result(rows)
+            dri = self._dri_result(rows)
+        self.assertEqual([task["task_id"] for task in deadline["overdue"]], ["FIX-902"])
+        self.assertEqual([issue["task_id"] for issue in dri["dri_violations"]], ["FIX-902"])
+
+        for consumer in (vw.check_task_deadline, vw.check_protocol_compliance,
+                         commit.check_task_deadline, check_protocol_compliance):
+            with self.subTest(consumer=f"{consumer.__module__}.{consumer.__name__}"):
+                self.assertNotIn('in ("已完成", "已终止")', inspect.getsource(consumer))
 
     def test_dri_check_skips_emoji_terminal_rows(self):
         """DRI face (the other same-shape call site): emoji-prefixed

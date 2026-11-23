@@ -8001,6 +8001,65 @@ class ExternalProjectValidationHarnessTests(unittest.TestCase):
 
         return fake_copy, fake_run
 
+    def test_external_validation_named_and_star_exports_match_policy(self):
+        import external_project_policy
+
+        names = ("EXTERNAL_PROJECT_NATIVE_ENTRY_FILES", "EXTERNAL_PROJECT_NATIVE_ENTRY_PATTERNS",
+                 "EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS", "EXTERNAL_PROJECT_VALIDATION_COMMANDS",
+                 "EXTERNAL_PROJECT_VALIDATION_BOUNDARY")
+        named, star = {}, {}
+        exec("from verify_workflow import " + ", ".join(names), named)
+        exec("from verify_workflow import *", star)
+        for name in names:
+            with self.subTest(name=name):
+                self.assertIs(named[name], getattr(external_project_policy, name))
+                self.assertIs(star[name], named[name])
+
+    def test_external_validation_uses_live_entry_policy_and_readers(self):
+        copy, run = self._patch_external_validation_commands()
+        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+            target = Path(td) / "target"
+            hooks = target / ".git/hooks"
+            hooks.mkdir(parents=True)
+            hook = _INFRA_DIR / "hooks/post-commit"
+            shutil.copyfile(hook, hooks / hook.name)
+            (target / "CLAUDE.md").write_text("skills/software-project-governance/", encoding="utf-8")
+            entry = target / "POLICY.md"
+            entry.write_text("# Policy\nAPP_POLICY\n", encoding="utf-8")
+            stack.enter_context(patch.multiple(
+                vw, EXTERNAL_PROJECT_NATIVE_ENTRY_FILES=("POLICY.md",),
+                EXTERNAL_PROJECT_NATIVE_ENTRY_PATTERNS=(("custom", re.compile("APP_POLICY"), "policy finding"),),
+                EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS=("post-commit",),
+                EXTERNAL_PROJECT_VALIDATION_COMMANDS=[("custom command", ["status", "--json"])],
+                EXTERNAL_PROJECT_VALIDATION_BOUNDARY="fixture boundary",
+                _copy_external_validation_surface=copy, _run_external_validation_command=run))
+            stack.enter_context(patch.object(vw, "_prepare_external_validation_git"))
+            read = stack.enter_context(patch.object(vw, "_external_validation_read_text",
+                                                    wraps=vw._external_validation_read_text))
+            canonical = stack.enter_context(patch.object(vw, "_external_validation_canonical_hook_text",
+                                                         wraps=vw._external_validation_canonical_hook_text))
+            render = stack.enter_context(patch.object(vw, "_external_validation_plan_tracker",
+                                                      wraps=vw._external_validation_plan_tracker))
+            failed = vw.run_external_project_validation(target)
+            rows = failed["target_diagnostics"]
+            self.assertEqual([(row["path"], row["status"]) for row in rows],
+                             [("POLICY.md", "FAIL"), (".git/hooks/post-commit", "PASS")])
+            self.assertEqual((rows[0]["line"], rows[0]["message"]), (2, "custom: policy finding"))
+            self.assertFalse(failed["pass"])
+            self.assertEqual(failed["no_overclaim_boundary"], "fixture boundary")
+            self.assertEqual([(row["label"], row["args"]) for row in failed["commands"]],
+                             [("custom command", ["status", "--json"])])
+            read.assert_has_calls([mock.call(entry), mock.call(hooks / hook.name)])
+            canonical.assert_called_once_with("post-commit")
+            render.assert_called_once()
+
+            entry.write_text("# Cleared\n", encoding="utf-8")
+            self.assertTrue(vw.run_external_project_validation(target)["pass"])
+            for rejected in (vw.run_external_project_validation(target / "absent"),
+                             vw.run_external_project_validation(target, workspace_parent=target)):
+                self.assertFalse(rejected["pass"])
+                self.assertEqual(rejected["no_overclaim_boundary"], "fixture boundary")
+
     def test_external_validation_rejects_missing_or_empty_target(self):
         with tempfile.TemporaryDirectory() as td:
             empty = Path(td) / "empty"
@@ -8135,6 +8194,48 @@ class ExternalProjectValidationHarnessTests(unittest.TestCase):
         self.assertEqual(result["exit_code"], 124)
         self.assertIn("partial", result["stdout_tail"])
         self.assertIn("timed out", result["stderr_tail"])
+
+    def test_target_hooks_use_selected_plugin_source_before_workspace_creation(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "target"
+            source = Path(td) / "other-plugin"
+            target_hooks = target / ".git/hooks"
+            source_hooks = source / "skills/software-project-governance/infra/hooks"
+            target_hooks.mkdir(parents=True)
+            source_hooks.mkdir(parents=True)
+            (target / "app.py").write_text("pass", encoding="utf-8")
+            for name in vw.EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS:
+                hook = f"#!/bin/sh\n# @version: 0.0.1\n# {name}\n"
+                (target_hooks / name).write_text(hook, encoding="utf-8")
+                (source_hooks / name).write_text(hook, encoding="utf-8")
+            before = self._target_file_snapshot(target)
+            with patch.object(vw, "ROOT", source):
+                result = vw.run_external_project_validation(target, workspace_parent=target)
+            self.assertFalse(result["pass"])
+            rows = [row for row in result["target_diagnostics"]
+                    if row["category"] == "target-installed-hook"]
+            self.assertEqual([row["status"] for row in rows],
+                             ["PASS"] * len(vw.EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS))
+            self.assertEqual(before, self._target_file_snapshot(target))
+
+    def test_workspace_retention_after_preparation_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "target"
+            parent = Path(td) / "workspaces"
+            target.mkdir()
+            parent.mkdir()
+            (target / "app.py").write_text("pass", encoding="utf-8")
+            before = self._target_file_snapshot(target)
+            for keep in (False, True):
+                with self.subTest(keep=keep):
+                    with patch.object(vw, "_copy_external_validation_surface",
+                                      side_effect=RuntimeError("copy failed")):
+                        with self.assertRaisesRegex(RuntimeError, "copy failed"):
+                            vw.run_external_project_validation(
+                                target, keep_workspace=keep, workspace_parent=parent,
+                            )
+                    self.assertEqual(len(list(parent.iterdir())), int(keep))
+                    self.assertEqual(before, self._target_file_snapshot(target))
 
     def test_external_validation_reports_target_native_diagnostics_without_mutating_target(self):
         with tempfile.TemporaryDirectory() as td:

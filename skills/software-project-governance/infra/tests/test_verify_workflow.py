@@ -25525,5 +25525,66 @@ class DeliveryContractBindingTests(unittest.TestCase):
                     self.assertTrue(result["pass"])
 
 
+class HostContractBindingTests(unittest.TestCase):
+    def test_dsh_registration_requires_the_final_owner_to_accept_the_dispatched_namespace(self):
+        from cli_registration import inspect_cli_registration
+
+        owners = {
+            "check-dsh-boundary": "host_validation_cli",
+            "check-dsh-preset-smoke": "host_loader_probes",
+            "check-dsh-preset-compat": "dsh_compat",
+            "dsh-doctor": "host_validation_cli",
+        }
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for relative in ("verify_workflow.py", "workflow_cli.py", "workflow_cli_checks.py",
+                             "workflow_cli_operations.py", "registry.py", "dsh_doctor.py",
+                             "checks/dsh_boundary.py", "checks/dsh_smoke.py",
+                             *(module + ".py" for module in set(owners.values()))):
+                target = root / relative
+                target.parent.mkdir(exist_ok=True, parents=True)
+                shutil.copyfile(_INFRA_DIR / relative, target)
+            for key, module in owners.items():
+                handler = "cmd_" + key.replace("-", "_")
+                owner = root / (module + ".py")
+                original = owner.read_text(encoding="utf-8")
+                signature = "def " + handler + "(args"
+                self.assertEqual(original.count(signature), 1)
+                for label, source, usable in (
+                    ("healthy", original, True),
+                    ("required positional", original.replace(signature, signature + ", policy"), False),
+                    ("optional positional", original.replace(signature, signature + ", policy=None"), True),
+                    ("final non-callable", original + "\\n" + handler + " = None\\n", False),
+                    ("restored", original, True),
+                ):
+                    with self.subTest(key=key, state=label):
+                        owner.write_text(source, encoding="utf-8")
+                        facts = inspect_cli_registration(root / "verify_workflow.py", key, handler)
+                        self.assertEqual(facts, {"main": True, "handler": usable,
+                                                 "argparse": True, "dispatch": usable})
+
+    def test_host_policy_named_wildcard_and_runtime_bindings(self):
+        import adapter_contracts
+        import host_loading_claims
+        from verify_workflow import MAINSTREAM_AGENT_LOADING_TIER1, RUNTIME_CAPABILITY_KEYS
+
+        exported = {}
+        exec("from verify_workflow import *", exported)
+        for name, value, owner in (
+            ("MAINSTREAM_AGENT_LOADING_TIER1", MAINSTREAM_AGENT_LOADING_TIER1, host_loading_claims),
+            ("RUNTIME_CAPABILITY_KEYS", RUNTIME_CAPABILITY_KEYS, adapter_contracts),
+        ):
+            self.assertIs(value, getattr(owner, name))
+            self.assertIs(exported[name], value)
+            self.assertIn(name, dir(vw))
+
+        # Capability validation reads the old entry's policy on each call.
+        args = (Path("fixture"), Path("fixture/adapter-manifest.json"),
+                {"adapter_id": "codex", "runtime_capabilities": {}})
+        with patch.object(vw, "RUNTIME_CAPABILITY_KEYS", ("test_only_capability",)):
+            self.assertTrue(any("test_only_capability" in issue
+                                for issue in vw._validate_runtime_capabilities(*args)))
+
+
 if __name__ == "__main__":
     unittest.main()

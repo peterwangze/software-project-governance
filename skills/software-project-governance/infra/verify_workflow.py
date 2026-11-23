@@ -127,11 +127,6 @@ import urllib.request
 import webbrowser
 from datetime import datetime, date
 
-from external_project_policy import (
-    EXTERNAL_PROJECT_NATIVE_ENTRY_FILES, EXTERNAL_PROJECT_NATIVE_ENTRY_PATTERNS,
-    EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS, EXTERNAL_PROJECT_VALIDATION_BOUNDARY,
-    EXTERNAL_PROJECT_VALIDATION_COMMANDS,
-)
 
 from checks import commit as commit_checks
 from checks import projection as projection_checks
@@ -1323,93 +1318,91 @@ def check_snippets():
     return failures
 
 
-LOOP_ROLE_SKILL_CONTRACTS = (
-    "requirement-review", "design-review", "tech-review", "code-review",
-    "test-review", "release-review", "retro-review",
-)
+_HOST_POLICY_OWNERS = {
+    **dict.fromkeys((
+        'EXTERNAL_PROJECT_NATIVE_ENTRY_FILES', 'EXTERNAL_PROJECT_NATIVE_ENTRY_PATTERNS',
+        'EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS', 'EXTERNAL_PROJECT_VALIDATION_BOUNDARY',
+        'EXTERNAL_PROJECT_VALIDATION_COMMANDS',
+    ), 'external_project_policy'),
+    **dict.fromkeys((
+        'ADAPTER_REQUIRED_KEYS', 'ADAPTER_RUNTIME_CAPABILITY_POLICY', 'MAINSTREAM_AGENT_ADAPTERS',
+        'RUNTIME_CAPABILITY_KEYS', 'RUNTIME_CAPABILITY_STATUSES',
+    ), 'adapter_contracts'),
+    **dict.fromkeys((
+        'FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES', 'FIRST_SESSION_MEASUREMENT_PATH',
+        'RUNTIME_MATRIX_AGENT_IDS', 'RUNTIME_MATRIX_RESEARCH_ONLY_IDS', 'RUNTIME_READINESS_MATRIX_PATH',
+    ), 'adapter_readiness'),
+    **dict.fromkeys((
+        'CHANNEL_ANCHOR_DATE_STRICT_RE', 'CHANNEL_DATE_ANCHOR_ADAPTERS', 'CHANNEL_EVIDENCE_DATE_RE',
+        'CHANNEL_EVIDENCE_STALE_DAYS', 'CONSULT_DRAW_MARKER', 'EXPLORATION_CHANNEL_KEYS',
+        'EXPLORATION_CHANNEL_STATUSES', 'EXPLORATION_SAMPLE_REPORTS', 'QUOTE_SYNC_ADAPTER_MANIFESTS',
+    ), 'exploration_evidence'),
+    **dict.fromkeys((
+        'GOVERNANCE_PACKS_PATH', 'GOVERNANCE_PACK_BOUNDARY_TOKENS', 'GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS',
+        'GOVERNANCE_PACK_IDS', 'GOVERNANCE_PACK_KNOWN_CHECKS', 'GOVERNANCE_PACK_PROFILE_IDS',
+        'GOVERNANCE_PACK_RELEASE_BOUNDARY_PATH', 'GOVERNANCE_PACK_RELEASE_BOUNDARY_TOKENS',
+        'GOVERNANCE_PACK_REQUIRED_FIELDS', 'GOVERNANCE_PACK_STATUS_BOUNDARY_TOKENS',
+        'GOVERNANCE_PACK_STATUS_DOC_PATHS', 'GOVERNANCE_PACK_STATUS_FORBIDDEN_OVERCLAIMS',
+        'README_PACK_GUIDANCE_REQUIRED_TOKENS',
+    ), 'host_governance_packs'),
+    **dict.fromkeys((
+        'DSH_SMOKE_ATTRIBUTED_CONCURRENT_WRITES_RE', 'DSH_SMOKE_REAL_HOME_WRITES_RE',
+        'DSH_SMOKE_RESULT_PASS_RE', 'DSH_UPGRADE_REGRESSION_LABEL',
+    ), 'host_loader_probes'),
+    **dict.fromkeys((
+        'ADAPTER_CLAIM_REGISTRY', 'EVIDENCE_LEVEL_MARKER_RE', 'MAINSTREAM_AGENT_LOADING_ADAPTERS',
+        'MAINSTREAM_AGENT_LOADING_BOUNDARY_TOKENS', 'MAINSTREAM_AGENT_LOADING_DOC_PATH',
+        'MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS', 'MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS',
+        'MAINSTREAM_AGENT_LOADING_README_TOKENS', 'MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS',
+        'MAINSTREAM_AGENT_LOADING_REQUIREMENTS_TOKENS', 'MAINSTREAM_AGENT_LOADING_TIER1',
+        'MAINSTREAM_AGENT_LOADING_TIER2',
+    ), 'host_loading_claims'),
+    **dict.fromkeys((
+        '_KNOWN_VERIFY_FAILURE_SIGNATURES',
+    ), 'product_fixture_validation'),
+    **dict.fromkeys((
+        'GEMINI_API_KEY_ENV_VARS', 'GEMINI_AUTH_REMEDIATION', 'GEMINI_GCA_CONFIG_ENV_VARS',
+        'GEMINI_GCA_CREDENTIAL_ENV_VARS', 'GEMINI_VERTEX_CONFIG_ENV_VARS',
+        'GEMINI_VERTEX_CREDENTIAL_ENV_VARS', 'OPENCODE_LEGAL_DEEPSEEK_MODELS',
+        'OPENCODE_PROVIDER_MODEL_REMEDIATION',
+    ), 'runtime_preflight'),
+    **dict.fromkeys((
+        'ACTIVE_AGENT_ROLES', 'LOOP_ROLE_SKILL_CONTRACTS', 'NAMED_REVIEWER_ROLES',
+    ), 'team_activation'),
+}
+
+
+def __getattr__(name):
+    """Resolve the public archive reader and installed host policies on first access."""
+    if name == "GovernanceDataSource":
+        return _archive_reader_class()
+    module = _HOST_POLICY_OWNERS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(module), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(globals().keys() | _HOST_POLICY_OWNERS.keys() | {"GovernanceDataSource"})
+
+
+def _host_policy(name):
+    """Read the current legacy binding, including changes made by programmatic callers."""
+    try:
+        return globals()[name]
+    except KeyError:
+        return __getattr__(name)
 
 
 def check_loop_role_skill_consistency(root=None):
-    """Each reviewer consumes its named local gates and the shared decision contract."""
-    root = Path(root) if root is not None else ROOT
-    mapping_path = root / "skills/software-project-governance/references/loop-role-mapping.md"
-    issues = []
-    if not mapping_path.is_file():
-        return {"passed": False, "skills_checked": 0,
-                "issues": [f"missing shared loop-role mapping: {_display_path(mapping_path, root)}"]}
-    mapping = _read_text_normalized(mapping_path)
-    for token in ("`APPROVED`", "`APPROVED_WITH_NOTES`", "unresolved_blockers=0", "`NEEDS_CHANGE`",
-                  "`BLOCKED`", "review-record", "loop status --unit"):
-        if token not in mapping:
-            issues.append(f"shared review contract missing {token}")
-    for name in LOOP_ROLE_SKILL_CONTRACTS:
-        rows = re.findall(rf"^\|\s*`{re.escape(name)}`\s*\|([^\n]+)", mapping, re.M)
-        if len(rows) != 1:
-            issues.append(f"shared review contract must map {name} exactly once")
-        expected = set(re.findall(r"\bG\d+\b", rows[0])) if len(rows) == 1 else set()
-        if not expected or not expected <= set(LIFECYCLE_REGISTRY_GATES):
-            issues.append(f"shared review contract has missing or unknown gates for {name}")
-        path = root / "skills" / name / "SKILL.md"
-        if not path.is_file():
-            issues.append(f"missing review SKILL: {_display_path(path, root)}")
-            continue
-        section = _markdown_section_by_prefix(_read_text_normalized(path), "## 循环角色")
-        refs = re.findall(r"\[[^\]]+\]\(([^)]+)\)", section)
-        if not any((path.parent / ref).resolve() == mapping_path.resolve() for ref in refs):
-            issues.append(f"{name}: no resolvable shared loop-role mapping reference")
-        actual = set(re.findall(r"\bG\d+\b", section))
-        if actual != expected:
-            issues.append(f"{name}: consumes {sorted(actual)}, expected {sorted(expected)} from its review contract")
-    return {
-        "passed": not issues,
-        "skills_checked": len(LOOP_ROLE_SKILL_CONTRACTS),
-        "issues": issues,
-    }
-
-
-ACTIVE_AGENT_ROLES = [
-    "Analyst",
-    "Architect",
-    "Developer",
-    "Governance Developer",
-    "QA",
-    "Code Reviewer",
-    "Design Reviewer",
-    "Requirement Reviewer",
-    "Test Reviewer",
-    "Release Reviewer",
-    "Retro Reviewer",
-    "DevOps",
-    "Release",
-    "Maintenance",
-]
-
-NAMED_REVIEWER_ROLES = [
-    "Code Reviewer",
-    "Design Reviewer",
-    "Requirement Reviewer",
-    "Test Reviewer",
-    "Release Reviewer",
-    "Retro Reviewer",
-]
-
-MAINSTREAM_AGENT_ADAPTERS = ["claude", "codex", "gemini", "opencode", "dsh", "pi"]
-ADAPTER_REQUIRED_KEYS = [
-    "adapter_id",
-    "workflow_id",
-    "entry_type",
-    "support_status",
-    "supported_runtime",
-    "trigger",
-    "inputs",
-    "outputs",
-    "gate_behavior",
-    "validation",
-    "native_entry",
-    "runtime_e2e",
-    "runtime_capabilities",
-    "launcher",
-]
+    from team_activation import check_loop_role_skill_consistency as run
+    return run(
+        root, package_root=ROOT, lifecycle_registry_gates=LIFECYCLE_REGISTRY_GATES,
+        loop_role_skill_contracts=_host_policy('LOOP_ROLE_SKILL_CONTRACTS'), display_path=_display_path,
+        markdown_section_by_prefix=_markdown_section_by_prefix, read_text_normalized=_read_text_normalized,
+    )
 
 
 def _markdown_has_heading(content, level, title):
@@ -1910,219 +1903,15 @@ def check_hot_fact_source_consistency(plan_tracker_path=None):
 
 
 def _load_adapter_manifest(adapter_dir):
-    manifest_path = adapter_dir / "adapter-manifest.json"
-    if not manifest_path.exists():
-        return None, [f"{_display_path(manifest_path)}: missing adapter manifest"]
-    try:
-        return json.loads(manifest_path.read_text(encoding="utf-8")), []
-    except json.JSONDecodeError as exc:
-        return None, [f"{_display_path(manifest_path)}: invalid JSON: {exc}"]
+    from adapter_readiness import _load_adapter_manifest as run
+    return run(adapter_dir, display_path=_display_path)
 
 
 def _run_version_command(command):
-    completed = subprocess.run(
-        command,
-        shell=True,
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    output = (completed.stdout or completed.stderr or "").strip()
-    return completed.returncode, output
+    from runtime_preflight import _run_version_command as run
+    return run(command, package_root=ROOT)
 
 
-RUNTIME_READINESS_MATRIX_PATH = ROOT / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
-RUNTIME_MATRIX_AGENT_IDS = ["claude", "codex", "gemini", "opencode", "dsh", "pi", "cursor", "copilot"]
-RUNTIME_MATRIX_RESEARCH_ONLY_IDS = ["cursor", "copilot"]
-MAINSTREAM_AGENT_LOADING_DOC_PATH = ROOT / "docs/requirements/mainstream-agent-loading-0.47.0.md"
-MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS = [
-    "README.md",
-    "adapters/claude/README.md",
-    "adapters/codex/README.md",
-    "adapters/gemini/README.md",
-    "adapters/opencode/README.md",
-    "adapters/dsh/README.md",
-    "adapters/pi/README.md",
-    "docs/requirements/mainstream-agent-loading-0.47.0.md",
-]
-MAINSTREAM_AGENT_LOADING_TIER1 = [
-    "Codex",
-    "Claude Code",
-    "Gemini CLI",
-    "opencode",
-    "DeepSeek Harness",
-    "Pi",
-]
-MAINSTREAM_AGENT_LOADING_TIER2 = [
-    "Cursor",
-    "GitHub Copilot coding agent",
-    "Cline",
-    "Windsurf/Cascade",
-    "Kiro",
-]
-MAINSTREAM_AGENT_LOADING_ADAPTERS = {
-    "claude": {
-        "display": "Claude Code",
-        "path": "adapters/claude/README.md",
-        "tokens": [
-            "Tier 1",
-            "Load",
-            "Verify",
-            "Boundary",
-            "skills/software-project-governance/SKILL.md",
-            "python adapters/claude/launch.py",
-            "check-agent-adapters",
-            "check-agent-adapters --runtime",
-        ],
-    },
-    "codex": {
-        "display": "Codex",
-        "path": "adapters/codex/README.md",
-        "tokens": [
-            "Tier 1",
-            "Load",
-            "Verify",
-            "Boundary",
-            "skills/software-project-governance/SKILL.md",
-            ".codex-plugin/plugin.json",
-            ".agents/plugins/marketplace.json",
-            "python adapters/codex/launch.py",
-            "check-agent-adapters",
-            "agent-runtime-e2e --agent codex",
-        ],
-    },
-    "gemini": {
-        "display": "Gemini CLI",
-        "path": "adapters/gemini/README.md",
-        "tokens": [
-            "Tier 1",
-            "Load",
-            "Verify",
-            "Boundary",
-            "GEMINI.md",
-            "skills/software-project-governance/SKILL.md",
-            "python adapters/gemini/launch.py",
-            "gemini-auth-preflight",
-            "agent-runtime-e2e --agent gemini",
-        ],
-    },
-    "opencode": {
-        "display": "opencode",
-        "path": "adapters/opencode/README.md",
-        "tokens": [
-            "Tier 1",
-            "Load",
-            "Verification",
-            "Boundary",
-            "AGENTS.md",
-            "skills/software-project-governance/SKILL.md",
-            "python adapters/opencode/launch.py",
-            "opencode-provider-preflight",
-            "agent-runtime-e2e --agent opencode",
-        ],
-    },
-    "dsh": {
-        "display": "DeepSeek Harness",
-        "path": "adapters/dsh/README.md",
-        "tokens": [
-            "Tier 1",
-            "加载模型",
-            "验证",
-            "能力边界",
-            "skills/software-project-governance/SKILL.md",
-            "python adapters/dsh/launch.py",
-            "check-agent-adapters",
-        ],
-    },
-    "pi": {
-        "display": "Pi",
-        "path": "adapters/pi/README.md",
-        "tokens": [
-            "Tier 1",
-            "Load",
-            "Verify",
-            "Boundary",
-            "AGENTS.md",
-            "skills/software-project-governance/SKILL.md",
-            "python adapters/pi/launch.py",
-            "check-agent-adapters",
-            "agent-runtime-e2e --agent pi",
-        ],
-    },
-}
-MAINSTREAM_AGENT_LOADING_README_TOKENS = [
-    "Mainstream Agent Loading",
-    "Tier 1 loading guide",
-    "Tier 2 compatibility and research rows",
-    "docs/requirements/mainstream-agent-loading-0.47.0.md",
-    "check-agent-adapters --runtime",
-]
-MAINSTREAM_AGENT_LOADING_REQUIREMENTS_TOKENS = [
-    "Mainstream Agent Loading Readiness 0.47.0",
-    "Official Surface Findings",
-    "Current Repository Facts",
-    "FIX-122",
-    "check-mainstream-agent-loading --fail-on-issues",
-    "No-Overclaim Boundary",
-    "RESEARCH_ONLY / NOT_RUNTIME_VERIFIED",
-]
-MAINSTREAM_AGENT_LOADING_BOUNDARY_TOKENS = [
-    "No official approval",
-    "No marketplace approval",
-    "No universal/full runtime support",
-    "No Codex Desktop marketplace-management E2E PASS",
-    "RISK-036 remains open",
-]
-MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS = [
-    "official approval",
-    "marketplace approval",
-    "universal/full runtime support",
-    "universal runtime support",
-    "full runtime support",
-    "codex desktop marketplace-management e2e pass",
-    "desktop marketplace e2e pass",
-]
-MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS = [
-    "tier 2 runtime pass",
-    "tier 2 runtime passed",
-    "tier 2 runtime verified",
-    "tier 2 target-cwd e2e pass",
-    "tier 2 target-cwd e2e passed",
-    "cursor runtime pass",
-    "github copilot coding agent runtime pass",
-    "copilot coding agent runtime pass",
-    "cline runtime pass",
-    "windsurf/cascade runtime pass",
-    "windsurf runtime pass",
-    "cascade runtime pass",
-    "kiro runtime pass",
-    "official approval granted",
-    "officially approved",
-    "marketplace approval granted",
-    "marketplace approved",
-    "universal runtime support is verified",
-    "universal runtime support verified",
-    "full runtime support is verified",
-    "full runtime support verified",
-    "universal/full runtime support is verified",
-    "universal/full runtime support verified",
-    "codex desktop marketplace-management e2e pass",
-    "codex desktop marketplace-management e2e passed",
-    "desktop marketplace e2e pass",
-    "desktop marketplace e2e passed",
-    "automatic best-tool selection",
-    "automatically selects the best tool",
-    "catalog runtime pass",
-    "catalog runtime passed",
-    "catalog entry runtime pass",
-    "catalog entry runtime passed",
-    "1.0.0 production-ready",
-    "risk-036 closed",
-]
-FIRST_SESSION_MEASUREMENT_PATH = ROOT / "docs/requirements/first-session-measurement-0.43.0.md"
-FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES = {"PASS", "BLOCKED", "NOT_MEASURED"}
-GOVERNANCE_PACKS_PATH = ROOT / "skills/software-project-governance/core/governance-packs.json"
 LIFECYCLE_REGISTRY_PATH = ROOT / "skills/software-project-governance/core/lifecycle-registry.json"
 LIFECYCLE_REGISTRY_ACTIVE_MODE = "classic-phase-gate"
 LIFECYCLE_REGISTRY_DYNAMIC_MODE = "dynamic-flow-gate"
@@ -2259,131 +2048,6 @@ GATE_EXECUTION_ALLOWED_FUNCTIONS = {
     "check_risk_has_closed",
     "check_version_consistency_heuristic",
 }
-GOVERNANCE_PACK_IDS = [
-    "governance-core",
-    "quality-gates",
-    "release-governance",
-    "agent-team",
-    "enterprise",
-]
-GOVERNANCE_PACK_REQUIRED_FIELDS = [
-    "id",
-    "title",
-    "description",
-    "default_profiles",
-    "capabilities",
-    "user_value",
-    "files",
-    "checks",
-    "validation_commands",
-    "no_overclaim_boundary",
-]
-GOVERNANCE_PACK_PROFILE_IDS = {"lite", "standard", "strict"}
-GOVERNANCE_PACK_KNOWN_CHECKS = {
-    "verify",
-    "status",
-    "governance-context",
-    "check-governance",
-    "check-manifest-consistency",
-    "check-agent-adapters",
-    "check-release",
-    "e2e-check",
-    "first-run-demo",
-    "agent-runtime-e2e",
-    "gemini-auth-preflight",
-    "opencode-provider-preflight",
-    "check-cross-references",
-    "check-sequential-ids",
-    "check-structural-validity",
-    "check-commit-scope",
-    "check-goal-alignment",
-    "check-user-impact",
-    "check-agent-team",
-    "check-review-debt",
-    "check-version-consistency",
-    "check-projection-sync",
-    "check-hot-fact-source",
-    "check-runtime-readiness-matrix",
-    "check-first-session-measurement",
-    "check-product-success-contracts",
-    "check-acceptance-contracts",
-    "check-quality-budget",
-    "check-vertical-slices",
-    "check-deterministic-scaffolds",
-    "check-scaffold-templates",
-    "check-interruption-policy",
-    "check-user-interruption-policy",
-    "generate-deterministic-scaffold",
-    "check-locks",
-    "check-archive-integrity",
-    "check-governance-packs",
-    "check-readme-pack-guidance",
-    "check-governance-pack-status",
-    "check-capability-registry",
-    "check-lifecycle-registry",
-    "check-flow-unit-runtime",
-    "check-loop-health",
-    "check-host-capability-context",
-    "check-mainstream-agent-loading",
-}
-GOVERNANCE_PACK_STATUS_DOC_PATHS = [
-    "commands/governance-status.md",
-    # FEAT-038 (AUDIT-154 A-7): the `/governance` Delivery Trust Snapshot /
-    # pack doc-surface contract moved from the router layer into the on-demand
-    # Scenario F document; the router layer keeps a pointer, so the
-    # pack-status token guard follows the owning document on both faces.
-    "commands/governance/scenario-f.md",
-    "project/e2e-test-project/commands/governance-status.md",
-    "project/e2e-test-project/commands/governance/scenario-f.md",
-]
-GOVERNANCE_PACK_STATUS_BOUNDARY_TOKENS = [
-    "pack membership",
-    "pack enabled",
-    "task evidence",
-    "independent review",
-    "quality gates",
-    "release gates",
-    "official approval",
-    "marketplace approval",
-    "universal/full runtime support",
-    "1.0.0 production-ready",
-]
-GOVERNANCE_PACK_RELEASE_BOUNDARY_PATH = "docs/requirements/composable-governance-packs-0.44.0.md"
-GOVERNANCE_PACK_RELEASE_BOUNDARY_TOKENS = [
-    "Pack boundary/no-overclaim detail",
-    "Pack membership is not task evidence.",
-    "`pack enabled` does not mean task evidence exists.",
-    "`pack enabled` does not mean independent review passed.",
-    "`pack enabled` does not mean quality gates passed.",
-    "`pack enabled` does not mean release gates passed.",
-    "`pack enabled` does not mean official approval was granted.",
-    "`pack enabled` does not mean marketplace approval was granted.",
-    "`pack enabled` does not mean universal/full runtime support is verified.",
-    "`pack enabled` does not mean 1.0.0 production-ready.",
-]
-GOVERNANCE_PACK_STATUS_FORBIDDEN_OVERCLAIMS = [
-    "pack enabled means task evidence exists",
-    "pack enabled means independent review passed",
-    "pack enabled means quality gates passed",
-    "pack enabled means release gates passed",
-    "pack enabled means official approval",
-    "pack enabled means marketplace approval",
-    "pack enabled means universal runtime support",
-    "pack enabled means full runtime support",
-    "pack enabled means 1.0.0 production-ready",
-    "pack membership means task evidence exists",
-    "pack membership means independent review passed",
-    "pack membership means quality gates passed",
-    "pack membership means release gates passed",
-    "pack membership means official approval",
-    "pack membership means marketplace approval",
-    "pack membership means universal runtime support",
-    "pack membership means full runtime support",
-    "pack membership means 1.0.0 production-ready",
-    "pack membership is completion evidence",
-    "pack membership is task evidence",
-    "pack enabled is task evidence",
-]
 GOVERNANCE_CONTEXT_REQUIRED_FIELDS = [
     "status",
     "detected_item",
@@ -2519,276 +2183,49 @@ HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS = {
     "codex_cli_blocked": "restricted benchmark scenario: Codex CLI blocked",
     "gemini_auth_blocked": "restricted benchmark scenario: Gemini auth blocked",
 }
-GOVERNANCE_PACK_BOUNDARY_TOKENS = [
-    "No official approval",
-    "No marketplace approval",
-    "No universal or full runtime support",
-    "RISK-036 remains open",
-]
-GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS = [
-    "officially approved",
-    "official approval granted",
-    "marketplace approved",
-    "marketplace approval granted",
-    "universal runtime support is verified",
-    "full runtime support is verified",
-    "1.0.0 production-ready",
-    "pack enabled means release passed",
-    "pack enabled means governance review passed",
-]
-README_PACK_GUIDANCE_REQUIRED_TOKENS = [
-    "Packs are capability modules; profiles are governance intensity presets.",
-    "Profiles stay `lite` / `standard` / `strict`",
-    "registry-first",
-    "no physical split",
-    "`governance-core`",
-    "`quality-gates`",
-    "`release-governance`",
-    "`agent-team`",
-    "`enterprise`",
-    "Pack membership is not completion evidence.",
-    "`pack enabled` does not mean task evidence exists",
-    "independent review passed",
-    "quality gates passed",
-    "release gates passed",
-    "official approval was granted",
-    "marketplace approval was granted",
-    "universal/full runtime support is verified",
-    "Pack 是能力模块，profile 是治理强度预设",
-    "profile 仍然只有 `lite` / `standard` / `strict`",
-    "Pack 归属不是完成证据",
-    "`pack enabled` 不等于任务证据存在",
-]
 
 
 def _parse_markdown_table_rows(content, section_title=None):
-    if section_title:
-        marker = f"## {section_title}"
-        start = content.find(marker)
-        if start == -1:
-            return []
-        next_start = content.find("\n## ", start + len(marker))
-        content = content[start:next_start if next_start != -1 else len(content)]
-    rows = []
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("|") or "---" in line:
-            continue
-        cells = [cell.strip() for cell in line.strip("|").split("|")]
-        if len(cells) >= 2:
-            rows.append(cells)
-    return rows
+    from adapter_readiness import _parse_markdown_table_rows as run
+    return run(content, section_title)
 
 
 def _matrix_status_for_manifest(manifest):
-    runtime_e2e = manifest.get("runtime_e2e", {}) if isinstance(manifest, dict) else {}
-    full = runtime_e2e.get("full_e2e_verified")
-    agent_status = runtime_e2e.get("agent_runtime_e2e", {}).get("status")
-    if full is True and agent_status == "passed":
-        return "PASS"
-    if agent_status == "blocked":
-        return "BLOCKED"
-    return "DEGRADED"
+    from adapter_readiness import _matrix_status_for_manifest as run
+    return run(manifest)
 
 
 def check_runtime_readiness_matrix(root=None):
-    """FIX-106: public runtime/readiness matrix must match adapter facts."""
-    root = root or ROOT
-    matrix_path = root / "docs/requirements/runtime-readiness-matrix-0.43.0.md"
-    failures = []
-    if not matrix_path.exists():
-        return [f"{_display_path(matrix_path, root)}: missing public runtime/readiness matrix"]
-
-    content = matrix_path.read_text(encoding="utf-8")
-    rows = _parse_markdown_table_rows(content, section_title="Summary")
-    if not rows:
-        failures.append(f"{_display_path(matrix_path, root)}: missing `## Summary` runtime/readiness table")
-    matrix = {}
-    for cells in rows:
-        agent_id = cells[0].lower().strip("`* ")
-        if agent_id in RUNTIME_MATRIX_AGENT_IDS:
-            matrix[agent_id] = " | ".join(cells)
-
-    for agent_id in RUNTIME_MATRIX_AGENT_IDS:
-        if agent_id not in matrix:
-            failures.append(f"{_display_path(matrix_path, root)}: missing matrix row for {agent_id}")
-
-    for adapter_id in MAINSTREAM_AGENT_ADAPTERS:
-        adapter_dir = root / "adapters" / adapter_id
-        manifest, manifest_failures = _load_adapter_manifest(adapter_dir)
-        failures.extend(manifest_failures)
-        if not manifest:
-            continue
-        row = matrix.get(adapter_id, "")
-        expected_status = _matrix_status_for_manifest(manifest)
-        if expected_status not in row:
-            failures.append(
-                f"{_display_path(matrix_path, root)}: {adapter_id} row must contain {expected_status} from adapter manifest"
-            )
-        runtime_e2e = manifest.get("runtime_e2e", {})
-        version_command = runtime_e2e.get("version_command", "")
-        if version_command and version_command not in row:
-            failures.append(
-                f"{_display_path(matrix_path, root)}: {adapter_id} row missing version command `{version_command}`"
-            )
-        agent_runtime = runtime_e2e.get("agent_runtime_e2e", {})
-        blocked_reason = agent_runtime.get("blocked_reason", "")
-        if expected_status == "BLOCKED" and blocked_reason:
-            reason_token = blocked_reason.split(";")[0].split(".")[0].strip()
-            if reason_token and reason_token not in row:
-                failures.append(
-                    f"{_display_path(matrix_path, root)}: {adapter_id} BLOCKED row missing blocked reason from manifest"
-                )
-        capabilities = manifest.get("runtime_capabilities", {})
-        closure = capabilities.get("workflow_closure", {})
-        closure_status = closure.get("status", "").upper()
-        if closure_status and closure_status not in row:
-            failures.append(
-                f"{_display_path(matrix_path, root)}: {adapter_id} row missing workflow_closure status {closure_status}"
-            )
-
-    for agent_id in RUNTIME_MATRIX_RESEARCH_ONLY_IDS:
-        row = matrix.get(agent_id, "")
-        if "RESEARCH_ONLY" not in row or "NOT_RUNTIME_VERIFIED" not in row:
-            failures.append(
-                f"{_display_path(matrix_path, root)}: {agent_id} row must be RESEARCH_ONLY and NOT_RUNTIME_VERIFIED"
-            )
-        forbidden = ["FULL_E2E", "UNIVERSAL", "OFFICIAL_APPROVAL", "MARKETPLACE_APPROVAL"]
-        for token in forbidden:
-            if token in row:
-                failures.append(f"{_display_path(matrix_path, root)}: {agent_id} row overclaims {token}")
-
-    required_boundary_tokens = [
-        "No official approval",
-        "No marketplace approval",
-        "No universal/full runtime support",
-        "RISK-036 remains open",
-    ]
-    for token in required_boundary_tokens:
-        if token not in content:
-            failures.append(f"{_display_path(matrix_path, root)}: missing no-overclaim boundary token `{token}`")
-
-    return failures
+    from adapter_readiness import check_runtime_readiness_matrix as run, ReadinessPlatforms
+    return run(
+        root, package_root=ROOT, display_path=_display_path, load_adapter_manifest=_load_adapter_manifest,
+        matrix_status_for_manifest=_matrix_status_for_manifest,
+        parse_markdown_table_rows=_parse_markdown_table_rows,
+        platforms=ReadinessPlatforms(
+            mainstream_agent_adapters=_host_policy('MAINSTREAM_AGENT_ADAPTERS'),
+            agent_ids=_host_policy('RUNTIME_MATRIX_AGENT_IDS'),
+            research_only_ids=_host_policy('RUNTIME_MATRIX_RESEARCH_ONLY_IDS'),
+        ),
+    )
 
 
 def check_first_session_measurement(root=None):
-    """FIX-107: separate local demo proof from external first-session measurement."""
-    root = root or ROOT
-    measurement_path = root / "docs/requirements/first-session-measurement-0.43.0.md"
-    failures = []
-    if not measurement_path.exists():
-        return [f"{_display_path(measurement_path, root)}: missing first-session measurement evidence"]
-
-    content = measurement_path.read_text(encoding="utf-8")
-    rows = _parse_markdown_table_rows(content, section_title="Measurement Status")
-    if not rows:
-        failures.append(f"{_display_path(measurement_path, root)}: missing `## Measurement Status` table")
-    measurement = {}
-    for cells in rows:
-        signal = cells[0].lower().strip("`* ")
-        if signal in {"local_demo", "external_pilot", "release_note_boundary"}:
-            measurement[signal] = cells
-
-    for signal in ("local_demo", "external_pilot", "release_note_boundary"):
-        if signal not in measurement:
-            failures.append(f"{_display_path(measurement_path, root)}: missing measurement row for {signal}")
-
-    local_row = " | ".join(measurement.get("local_demo", []))
-    if "PASS" not in local_row or "LOCAL_DEMO_ONLY" not in local_row:
-        failures.append(f"{_display_path(measurement_path, root)}: local_demo row must be PASS and LOCAL_DEMO_ONLY")
-    if "first-run-demo --assert-snapshot" not in local_row:
-        failures.append(f"{_display_path(measurement_path, root)}: local_demo row missing first-run-demo command")
-
-    external_cells = measurement.get("external_pilot", [])
-    external_status = external_cells[1].upper() if len(external_cells) > 1 else ""
-    external_row = " | ".join(external_cells)
-    external_lower = external_row.lower()
-    if external_status not in FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES:
-        failures.append(
-            f"{_display_path(measurement_path, root)}: external_pilot status must be one of "
-            f"{sorted(FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES)}"
-        )
-    if external_status == "PASS":
-        local_demo_tokens = ("LOCAL_DEMO_ONLY", "first-run-demo", "local demo")
-        if any(token.lower() in external_lower for token in local_demo_tokens):
-            failures.append(
-                f"{_display_path(measurement_path, root)}: external_pilot PASS cannot use local demo evidence"
-            )
-        if "4/5" not in external_row and "5/5" not in external_row:
-            failures.append(
-                f"{_display_path(measurement_path, root)}: external_pilot PASS requires at least 4/5 measured users"
-            )
-        pass_required_tokens = [
-            ("external pilot", "external pilot evidence"),
-            ("Delivery Trust Snapshot", "Delivery Trust Snapshot reached"),
-            ("within 5 minutes", "within 5 minutes"),
-            ("trust signal", "trust signal named"),
-            ("evidence", "evidence location"),
-        ]
-        for token, label in pass_required_tokens:
-            if token.lower() not in external_lower:
-                failures.append(
-                    f"{_display_path(measurement_path, root)}: external_pilot PASS requires {label}"
-                )
-        if "setup" not in external_lower and "resume" not in external_lower:
-            failures.append(
-                f"{_display_path(measurement_path, root)}: external_pilot PASS requires setup or resume path"
-            )
-        over_five = [
-            match.group(0)
-            for match in re.finditer(r"\b([6-9]|[1-9]\d+)\s+minutes?\b", external_lower)
-        ]
-        if over_five:
-            failures.append(
-                f"{_display_path(measurement_path, root)}: external_pilot PASS exceeds five-minute limit: {', '.join(over_five)}"
-            )
-    elif external_status == "NOT_MEASURED":
-        if "0/5" not in external_row:
-            failures.append(f"{_display_path(measurement_path, root)}: NOT_MEASURED external_pilot row must state 0/5 measured")
-        if "4/5" not in external_row or "within 5 minutes" not in external_row:
-            failures.append(
-                f"{_display_path(measurement_path, root)}: NOT_MEASURED external_pilot row must preserve 4/5 within 5 minutes target"
-            )
-    elif external_status == "BLOCKED" and "blocked" not in external_lower:
-        failures.append(f"{_display_path(measurement_path, root)}: BLOCKED external_pilot row requires blocked reason")
-
-    release_row = " | ".join(measurement.get("release_note_boundary", []))
-    if "PASS" not in release_row or "TEXT_GUARD" not in release_row:
-        failures.append(f"{_display_path(measurement_path, root)}: release_note_boundary row must be PASS and TEXT_GUARD")
-
-    required_tokens = [
-        "Do not convert local demo PASS into external pilot PASS",
-        "local_demo=PASS",
-        "external_pilot=NOT_MEASURED",
-        "No official approval",
-        "No marketplace approval",
-        "No universal/full runtime support",
-        "RISK-036 remains open",
-    ]
-    for token in required_tokens:
-        if token not in content:
-            failures.append(f"{_display_path(measurement_path, root)}: missing first-session boundary token `{token}`")
-
-    return failures
+    from adapter_readiness import check_first_session_measurement as run
+    return run(
+        root, package_root=ROOT,
+        first_session_measurement_allowed_statuses=_host_policy('FIRST_SESSION_MEASUREMENT_ALLOWED_STATUSES'),
+        display_path=_display_path, parse_markdown_table_rows=_parse_markdown_table_rows,
+    )
 
 
 def _governance_pack_text_values(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _governance_pack_text_values(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _governance_pack_text_values(item)
+    from host_governance_packs import _governance_pack_text_values as run
+    return run(value, governance_pack_text_values=_governance_pack_text_values)
 
 
 def _governance_pack_file_path(entry):
-    if isinstance(entry, str):
-        return entry
-    if isinstance(entry, dict):
-        return entry.get("path")
-    return None
+    from host_governance_packs import _governance_pack_file_path as run
+    return run(entry)
 
 
 def _is_valid_string_list(value):
@@ -3260,1365 +2697,226 @@ def _flow_unit_runtime_path(root=None):
 
 
 def check_governance_packs(root=None):
-    """FIX-108: canonical governance pack registry must be factual and checkable."""
-    root = root or ROOT
-    registry_path = root / "skills/software-project-governance/core/governance-packs.json"
-    manifest_path = root / "skills/software-project-governance/core/manifest.json"
-    failures = []
-    display = _display_path(registry_path, root)
-    if not registry_path.exists():
-        return [f"{display}: missing governance pack registry"]
-
-    try:
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return [f"{display}: invalid JSON: {exc}"]
-
-    if registry.get("workflow") != "software-project-governance":
-        failures.append(f"{display}: workflow must be software-project-governance")
-    if registry.get("source_of_truth") is not True:
-        failures.append(f"{display}: source_of_truth must be true")
-    if registry.get("pack_mode") != "registry-first-no-physical-split":
-        failures.append(f"{display}: pack_mode must be registry-first-no-physical-split")
-
-    if not manifest_path.exists():
-        failures.append(f"{display}: core/manifest.json is required to make the pack registry a canonical product artifact")
-    else:
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            artifact_entries = _manifest_artifact_entries(manifest)
-            registry_artifacts = [
-                entry for entry in artifact_entries
-                if entry.get("id") == "governance-pack-registry"
-                and entry.get("path") == "skills/software-project-governance/core/governance-packs.json"
-            ]
-            if not registry_artifacts:
-                failures.append(
-                    f"{display}: core/manifest.json must declare governance-pack-registry as a canonical product artifact"
-                )
-        except json.JSONDecodeError as exc:
-            failures.append(f"{_display_path(manifest_path, root)}: invalid JSON: {exc}")
-
-    for token in GOVERNANCE_PACK_BOUNDARY_TOKENS:
-        if token not in registry.get("no_overclaim_boundary", []):
-            failures.append(f"{display}: missing no-overclaim boundary token `{token}`")
-
-    required_pack_ids = registry.get("required_pack_ids")
-    if required_pack_ids != GOVERNANCE_PACK_IDS:
-        failures.append(f"{display}: required_pack_ids must be {GOVERNANCE_PACK_IDS}")
-
-    packs = registry.get("packs")
-    if not isinstance(packs, list) or not packs:
-        return failures + [f"{display}: packs must be a non-empty list"]
-
-    seen_ids = []
-    for pack in packs:
-        if not isinstance(pack, dict):
-            failures.append(f"{display}: each pack must be an object")
-            continue
-        pack_id = pack.get("id", "<missing>")
-        seen_ids.append(pack_id)
-        pack_label = f"{display}: pack {pack_id}"
-
-        for field in GOVERNANCE_PACK_REQUIRED_FIELDS:
-            if field not in pack:
-                failures.append(f"{pack_label}: missing required field `{field}`")
-
-        if pack_id not in GOVERNANCE_PACK_IDS:
-            failures.append(f"{pack_label}: unknown pack id")
-
-        for field in ("title", "description"):
-            if not isinstance(pack.get(field), str) or not pack.get(field, "").strip():
-                failures.append(f"{pack_label}: `{field}` must be a non-empty string")
-
-        profiles = pack.get("default_profiles")
-        if not isinstance(profiles, list) or not profiles:
-            failures.append(f"{pack_label}: default_profiles must be a non-empty list")
-        else:
-            invalid_profiles = [p for p in profiles if p not in GOVERNANCE_PACK_PROFILE_IDS]
-            if invalid_profiles:
-                failures.append(f"{pack_label}: unknown default_profiles {invalid_profiles}")
-
-        for field in ("capabilities", "user_value", "checks", "validation_commands", "no_overclaim_boundary"):
-            value = pack.get(field)
-            if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
-                failures.append(f"{pack_label}: `{field}` must be a non-empty string list")
-
-        files = pack.get("files")
-        if not isinstance(files, list) or not files:
-            failures.append(f"{pack_label}: files must be a non-empty list")
-        else:
-            for entry in files:
-                rel_path = _governance_pack_file_path(entry)
-                if not isinstance(rel_path, str) or not rel_path.strip():
-                    failures.append(f"{pack_label}: file entry must contain non-empty path")
-                    continue
-                target = root / rel_path
-                if not target.exists():
-                    failures.append(f"{pack_label}: referenced file `{rel_path}` does not exist")
-
-        for check in pack.get("checks", []):
-            if check not in GOVERNANCE_PACK_KNOWN_CHECKS:
-                failures.append(f"{pack_label}: unknown referenced check `{check}`")
-
-        commands = pack.get("validation_commands", [])
-        for command in commands if isinstance(commands, list) else []:
-            if "verify_workflow.py" not in command and not command.startswith("python -m unittest"):
-                failures.append(f"{pack_label}: validation command must call verify_workflow.py or unittest: `{command}`")
-
-        boundary = " ".join(pack.get("no_overclaim_boundary", []))
-        if "does not" not in boundary.lower() and "not " not in boundary.lower():
-            failures.append(f"{pack_label}: no_overclaim_boundary must explicitly deny overclaim")
-
-    duplicates = sorted({pack_id for pack_id in seen_ids if seen_ids.count(pack_id) > 1})
-    for pack_id in duplicates:
-        failures.append(f"{display}: duplicate pack id `{pack_id}`")
-    missing_ids = [pack_id for pack_id in GOVERNANCE_PACK_IDS if pack_id not in seen_ids]
-    if missing_ids:
-        failures.append(f"{display}: missing required pack id(s): {', '.join(missing_ids)}")
-    unknown_ids = [pack_id for pack_id in seen_ids if pack_id not in GOVERNANCE_PACK_IDS]
-    if unknown_ids:
-        failures.append(f"{display}: unknown pack id(s): {', '.join(sorted(set(unknown_ids)))}")
-
-    all_text_lines = "\n".join(_governance_pack_text_values(registry)).splitlines()
-    for phrase in GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS:
-        if any(phrase in line.lower() and not _line_has_scoped_claim_negation(line, phrase) for line in all_text_lines):
-            failures.append(f"{display}: forbidden overclaim wording `{phrase}`")
-
-    return failures
+    from host_governance_packs import check_governance_packs as run, PackRules
+    return run(
+        root, package_root=ROOT, display_path=_display_path,
+        governance_pack_file_path=_governance_pack_file_path,
+        governance_pack_text_values=_governance_pack_text_values,
+        line_has_scoped_claim_negation=_line_has_scoped_claim_negation,
+        manifest_artifact_entries=_manifest_artifact_entries,
+        packs_rules=PackRules(
+            boundary_tokens=_host_policy('GOVERNANCE_PACK_BOUNDARY_TOKENS'),
+            forbidden_overclaims=_host_policy('GOVERNANCE_PACK_FORBIDDEN_OVERCLAIMS'),
+            ids=_host_policy('GOVERNANCE_PACK_IDS'),
+            known_checks=_host_policy('GOVERNANCE_PACK_KNOWN_CHECKS'),
+            profile_ids=_host_policy('GOVERNANCE_PACK_PROFILE_IDS'),
+            required_fields=_host_policy('GOVERNANCE_PACK_REQUIRED_FIELDS'),
+        ),
+    )
 
 
 def check_readme_pack_guidance(root=None):
-    """FIX-109: README first-run guidance must map profiles to packs without overclaim."""
-    root = root or ROOT
-    readme_path = root / "README.md"
-    display = _display_path(readme_path, root)
-    if not readme_path.exists():
-        return [f"{display}: missing README"]
-
-    content = readme_path.read_text(encoding="utf-8")
-    failures = []
-    for token in README_PACK_GUIDANCE_REQUIRED_TOKENS:
-        if token not in content:
-            failures.append(f"{display}: missing README pack guidance token `{token}`")
-
-    for pack_id in GOVERNANCE_PACK_IDS:
-        if f"`{pack_id}`" not in content:
-            failures.append(f"{display}: missing pack id `{pack_id}` in README guidance")
-
-    profile_rows = {
-        "**lite**": ["`governance-core`"],
-        "**standard**": ["`governance-core`", "`quality-gates`", "`release-governance`", "`agent-team`"],
-        "**strict**": ["`governance-core`", "`quality-gates`", "`release-governance`", "`agent-team`", "`enterprise`"],
-    }
-    readme_lines = content.splitlines()
-    for profile, pack_tokens in profile_rows.items():
-        matching_lines = [
-            line for line in readme_lines
-            if profile in line and all(pack_token in line for pack_token in pack_tokens)
-        ]
-        if not matching_lines:
-            failures.append(
-                f"{display}: profile {profile} guidance missing pack mapping {', '.join(pack_tokens)}"
-            )
-
-    forbidden_pack_enabled_claims = [
-        "pack enabled means release passed",
-        "pack enabled means governance review passed",
-        "pack enabled means quality gates passed",
-        "pack enabled means official approval",
-        "pack enabled means marketplace approval",
-        "pack enabled means universal runtime support",
-    ]
-    lower_content = content.lower()
-    for phrase in forbidden_pack_enabled_claims:
-        if phrase in lower_content:
-            failures.append(f"{display}: forbidden README pack overclaim `{phrase}`")
-
-    direct_claims = [
-        "officially approved",
-        "official approval granted",
-        "marketplace approved",
-        "marketplace approval granted",
-        "universal runtime support is verified",
-        "full runtime support is verified",
-        "1.0.0 production-ready",
-    ]
-    for phrase in direct_claims:
-        if any(phrase in line.lower() and not _line_has_scoped_claim_negation(line, phrase)
-               for line in readme_lines):
-            failures.append(f"{display}: forbidden README pack overclaim `{phrase}`")
-
-    return failures
+    from host_governance_packs import check_readme_pack_guidance as run
+    return run(
+        root, package_root=ROOT, governance_pack_ids=_host_policy('GOVERNANCE_PACK_IDS'),
+        readme_pack_guidance_required_tokens=_host_policy('README_PACK_GUIDANCE_REQUIRED_TOKENS'),
+        display_path=_display_path, line_has_scoped_claim_negation=_line_has_scoped_claim_negation,
+    )
 
 
 def _mainstream_loading_line_has_safe_negation(lines, index, phrase):
-    line = lines[index]
-    lower_line = line.lower()
-    phrase_lower = phrase.lower()
-    phrase_positions = [match.start() for match in re.finditer(re.escape(phrase_lower), lower_line)]
-    if not phrase_positions:
-        return False
-    clause_separators = ";；.!?！？|:："
-    list_item_separators = ",，、;" + clause_separators
-    positive_claim_markers = (
-        " exists",
-        " exist",
-        " is ",
-        " are ",
-        " available",
-        " verified",
-        " granted",
-        " approved",
-        " supported",
-        " passed",
-        " enabled",
-        " for all",
-        " across all",
-        " production-ready",
-        " ready",
+    from host_loading_claims import _mainstream_loading_line_has_safe_negation as run
+    return run(
+        lines, index, phrase,
+        mainstream_agent_loading_forbidden_claim_terms=_host_policy('MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS'),
+        mainstream_agent_loading_forbidden_overclaims=_host_policy('MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS'),
     )
-    strong_negation_markers = (
-        "does not claim",
-        "do not claim",
-        "does not prove",
-        "do not prove",
-        "does not mean",
-        "do not mean",
-        "doesn't mean",
-        "don't mean",
-        "is not a claim of",
-        "it is not a claim of",
-        "not a claim of",
-        "is not evidence of",
-        "are not evidence of",
-        "not evidence of",
-        "without",
-    )
-    weak_negation_markers = (
-        "not",
-        "no",
-    )
-
-    def list_negation_covers_phrase(phrase_index):
-        prefix = lower_line[:phrase_index]
-        marker_hits = []
-        for marker in strong_negation_markers + weak_negation_markers:
-            marker_start = prefix.rfind(marker)
-            if marker_start != -1:
-                marker_hits.append((marker_start, marker_start + len(marker), marker))
-        if not marker_hits:
-            return False
-
-        _marker_start, marker_end, marker = max(marker_hits, key=lambda hit: (hit[1], hit[0]))
-        candidate_prefix = lower_line[marker_end:phrase_index]
-        reduced_prefix = candidate_prefix
-        for claim_term in sorted(MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS, key=len, reverse=True):
-            reduced_prefix = reduced_prefix.replace(claim_term, "")
-        for overclaim in sorted(MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS, key=len, reverse=True):
-            reduced_prefix = reduced_prefix.replace(overclaim, "")
-        reduced_prefix = re.sub(r"\b(and|or)\b", "", reduced_prefix)
-        reduced_prefix = re.sub(r"[\s,，、/]+", "", reduced_prefix)
-        if reduced_prefix:
-            return False
-
-        phrase_end = phrase_index + len(phrase_lower)
-        suffix_end_candidates = [
-            lower_line.find(separator, phrase_end)
-            for separator in list_item_separators
-            if lower_line.find(separator, phrase_end) != -1
-        ]
-        suffix_end = min(suffix_end_candidates) if suffix_end_candidates else len(lower_line)
-        local_suffix = lower_line[phrase_end:suffix_end]
-        strong_negation = marker in strong_negation_markers
-        if not strong_negation and any(marker in f" {local_suffix} " for marker in positive_claim_markers):
-            return False
-        reduced_suffix = local_suffix
-        for claim_term in sorted(MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS, key=len, reverse=True):
-            reduced_suffix = reduced_suffix.replace(claim_term, "")
-        for overclaim in sorted(MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS, key=len, reverse=True):
-            reduced_suffix = reduced_suffix.replace(overclaim, "")
-        if strong_negation:
-            reduced_suffix = re.sub(
-                r"\b(is|are|was|were|be|been|being|status|claim|proof|evidence|"
-                r"verified|granted|approved|supported|ready|available|passed)\b",
-                "",
-                reduced_suffix,
-            )
-        reduced_suffix = re.sub(r"\b(and|or)\b", "", reduced_suffix)
-        reduced_suffix = re.sub(r"[\s,，、/]+", "", reduced_suffix)
-        return not reduced_suffix
-
-    safe_occurrences = 0
-    for phrase_index in phrase_positions:
-        clause_start = max((lower_line.rfind(separator, 0, phrase_index) for separator in clause_separators), default=-1) + 1
-        clause_end_candidates = [
-            lower_line.find(separator, phrase_index + len(phrase_lower))
-            for separator in clause_separators
-            if lower_line.find(separator, phrase_index + len(phrase_lower)) != -1
-        ]
-        clause_end = min(clause_end_candidates) if clause_end_candidates else len(lower_line)
-        local_clause = lower_line[clause_start:clause_end]
-        local_prefix = lower_line[clause_start:phrase_index]
-        if any(marker in local_prefix for marker in strong_negation_markers):
-            safe_occurrences += 1
-            continue
-        if re.search(r"\bnot(?:\s+[a-z0-9/-]+){0,3}\s+$", local_prefix):
-            safe_occurrences += 1
-            continue
-        if any(
-            marker in local_clause
-            for marker in (
-                f"no {phrase_lower}",
-                f"not {phrase_lower}",
-                f"do not claim {phrase_lower}",
-                f"does not claim {phrase_lower}",
-                f"without {phrase_lower}",
-                f"avoid {phrase_lower}",
-                f"not a claim of {phrase_lower}",
-                f"not evidence of {phrase_lower}",
-            )
-        ):
-            safe_occurrences += 1
-            continue
-        zh_clause_start = max(
-            (lower_line.rfind(separator, 0, phrase_index) for separator in "；。！？|:："),
-            default=-1,
-        ) + 1
-        zh_local_prefix = lower_line[zh_clause_start:phrase_index]
-        if any(marker in zh_local_prefix for marker in ("不要", "不得", "不能", "不是", "不声明", "不代表", "不等于")):
-            safe_occurrences += 1
-            continue
-        if (
-            phrase_lower in MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS
-            or phrase_lower in MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS
-        ) and list_negation_covers_phrase(phrase_index):
-            safe_occurrences += 1
-            continue
-    previous_non_empty = []
-    for previous in reversed(lines[max(0, index - 10):index]):
-        if previous.strip():
-            previous_non_empty.append(previous.strip().lower())
-        if len(previous_non_empty) >= 2:
-            break
-    if any(
-        previous.endswith("is not:")
-        or previous.endswith("it is not:")
-        or previous.endswith("are not:")
-        or previous.endswith("not:")
-        for previous in previous_non_empty
-    ):
-        return True
-    if line.lstrip().startswith("-"):
-        prior_block = "\n".join(lines[max(0, index - 12):index]).lower()
-        if "it is not:" in prior_block or "is not:" in prior_block or "are not:" in prior_block:
-            return True
-    return safe_occurrences == len(phrase_positions)
 
 
 def _append_mainstream_loading_overclaim_issues(failures, path, content, root):
-    display = _display_path(path, root)
-    lines = content.splitlines()
-    for term in MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS:
-        for index, line in enumerate(lines):
-            lower_line = line.lower()
-            if (
-                term in {"universal runtime support", "full runtime support"}
-                and "universal/full runtime support" in lower_line
-                and _mainstream_loading_line_has_safe_negation(lines, index, "universal/full runtime support")
-            ):
-                continue
-            if term in lower_line and not _mainstream_loading_line_has_safe_negation(lines, index, term):
-                failures.append(f"{display}: forbidden mainstream agent loading claim `{term}`")
-                break
-    for phrase in MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS:
-        for index, line in enumerate(lines):
-            lower_line = line.lower()
-            if phrase in lower_line and not _mainstream_loading_line_has_safe_negation(lines, index, phrase):
-                failures.append(f"{display}: forbidden mainstream agent loading overclaim `{phrase}`")
-                break
-
-    tier2_needles = [agent.lower() for agent in MAINSTREAM_AGENT_LOADING_TIER2]
-    for line in lines:
-        lower = line.lower()
-        if not any(agent in lower for agent in tier2_needles):
-            continue
-        if "pass" not in lower and "verified" not in lower and "available" not in lower:
-            continue
-        safe_research_boundary = (
-            "no runtime pass" in lower
-            or "no adapter manifest or runtime pass" in lower
-            or "no adapter manifest and no runtime pass" in lower
-            or "do not" in lower and "claim runtime pass" in lower
-            or "not_runtime_verified" in lower
-            or "not runtime verified" in lower
-            or "not runtime pass" in lower
-            or "research_only" in lower
-            or "research-only" in lower
-        )
-        if safe_research_boundary:
-            continue
-        if _line_has_scoped_claim_negation(line, "runtime pass"):
-            continue
-        failures.append(f"{display}: Tier 2 row must not claim runtime PASS/verified/available: {line.strip()}")
+    from host_loading_claims import _append_mainstream_loading_overclaim_issues as run, LoadingClaimBoundaries
+    return run(
+        failures, path, content, root, display_path=_display_path,
+        line_has_scoped_claim_negation=_line_has_scoped_claim_negation,
+        mainstream_loading_line_has_safe_negation=_mainstream_loading_line_has_safe_negation,
+        claims=LoadingClaimBoundaries(
+            forbidden_claim_terms=_host_policy('MAINSTREAM_AGENT_LOADING_FORBIDDEN_CLAIM_TERMS'),
+            forbidden_overclaims=_host_policy('MAINSTREAM_AGENT_LOADING_FORBIDDEN_OVERCLAIMS'),
+            tier2=_host_policy('MAINSTREAM_AGENT_LOADING_TIER2'),
+        ),
+    )
 
 
 def _append_mainstream_loading_common_doc_issues(failures, path, content, root, *, require_boundary=True):
-    display = _display_path(path, root)
-    if "Mainstream Agent Loading" not in content and "Tier 1" not in content:
-        failures.append(f"{display}: missing mainstream agent loading guidance")
-    if require_boundary:
-        lower_content = content.lower()
-        for token in (
-            "official approval",
-            "marketplace approval",
-            "universal/full runtime support",
-            "codex desktop marketplace-management e2e pass",
-        ):
-            if token not in lower_content:
-                failures.append(f"{display}: missing mainstream loading boundary phrase `{token}`")
+    from host_loading_claims import _append_mainstream_loading_common_doc_issues as run
+    return run(failures, path, content, root, require_boundary=require_boundary, display_path=_display_path)
 
 
 def check_mainstream_agent_loading(root=None):
-    """FIX-122: README and adapter loading guidance must stay synchronized and no-overclaim safe."""
-    root = Path(root) if root is not None else ROOT
-    failures = []
-    contents = {}
-
-    for rel_path in MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS:
-        path = root / rel_path
-        display = _display_path(path, root)
-        if not path.is_file():
-            failures.append(f"{display}: missing mainstream agent loading artifact")
-            continue
-        content = path.read_text(encoding="utf-8")
-        contents[rel_path] = content
-        _append_mainstream_loading_overclaim_issues(failures, path, content, root)
-
-    readme_rel = "README.md"
-    readme_content = contents.get(readme_rel, "")
-    if readme_content:
-        readme_path = root / readme_rel
-        _append_mainstream_loading_common_doc_issues(failures, readme_path, readme_content, root)
-        for token in MAINSTREAM_AGENT_LOADING_README_TOKENS:
-            if token not in readme_content:
-                failures.append(f"{_display_path(readme_path, root)}: missing README mainstream loading token `{token}`")
-        for agent in MAINSTREAM_AGENT_LOADING_TIER1 + MAINSTREAM_AGENT_LOADING_TIER2:
-            if agent not in readme_content:
-                failures.append(f"{_display_path(readme_path, root)}: missing mainstream agent row/token `{agent}`")
-        for agent in MAINSTREAM_AGENT_LOADING_TIER2:
-            rows = [line for line in readme_content.splitlines() if agent.lower() in line.lower()]
-            if not rows:
-                continue
-            joined = " ".join(rows).lower()
-            if "compatibility reference only" not in joined or "no adapter manifest" not in joined or "runtime pass" not in joined:
-                failures.append(
-                    f"{_display_path(readme_path, root)}: Tier 2 row for {agent} must say compatibility reference only, no adapter manifest, and no runtime PASS"
-                )
-
-    requirements_rel = "docs/requirements/mainstream-agent-loading-0.47.0.md"
-    requirements_content = contents.get(requirements_rel, "")
-    if requirements_content:
-        requirements_path = root / requirements_rel
-        _append_mainstream_loading_common_doc_issues(failures, requirements_path, requirements_content, root)
-        for token in MAINSTREAM_AGENT_LOADING_REQUIREMENTS_TOKENS:
-            if token not in requirements_content:
-                failures.append(
-                    f"{_display_path(requirements_path, root)}: missing mainstream loading requirements token `{token}`"
-                )
-        for agent in MAINSTREAM_AGENT_LOADING_TIER1 + MAINSTREAM_AGENT_LOADING_TIER2:
-            if agent not in requirements_content:
-                failures.append(f"{_display_path(requirements_path, root)}: missing requirements row/token `{agent}`")
-
-        official_rows = _parse_markdown_table_rows(requirements_content, section_title="Official Surface Findings")
-        official_agents = {}
-        for cells in official_rows:
-            agent = cells[0].strip("`* ")
-            if agent in MAINSTREAM_AGENT_LOADING_TIER1 + MAINSTREAM_AGENT_LOADING_TIER2:
-                official_agents[agent] = cells
-        for agent in MAINSTREAM_AGENT_LOADING_TIER1 + MAINSTREAM_AGENT_LOADING_TIER2:
-            cells = official_agents.get(agent)
-            if not cells:
-                failures.append(f"{_display_path(requirements_path, root)}: missing Official Surface Findings row for {agent}")
-                continue
-            row_text = " | ".join(cells)
-            if "https://" not in row_text:
-                failures.append(f"{_display_path(requirements_path, root)}: {agent} row missing source citation URL")
-            if agent in MAINSTREAM_AGENT_LOADING_TIER2:
-                row_lower = row_text.lower()
-                denies_runtime = (
-                    "no runtime pass" in row_lower
-                    or "no adapter manifest or runtime pass" in row_lower
-                    or "no adapter manifest and runtime pass" in row_lower
-                    or "not runtime verified" in row_lower
-                    or "not_runtime_verified" in row_lower
-                    or ("do not" in row_lower and "claim runtime pass" in row_lower)
-                )
-                if "compatibility row only" not in row_lower or not denies_runtime:
-                    failures.append(
-                        f"{_display_path(requirements_path, root)}: {agent} row must be compatibility-only and deny runtime PASS"
-                    )
-
-    for adapter_id, spec in MAINSTREAM_AGENT_LOADING_ADAPTERS.items():
-        rel_path = spec["path"]
-        content = contents.get(rel_path, "")
-        if not content:
-            continue
-        path = root / rel_path
-        display = _display_path(path, root)
-        for token in spec["tokens"]:
-            if token not in content:
-                failures.append(f"{display}: {adapter_id} adapter README missing token `{token}`")
-        boundary_lower = content.lower()
-        for token in ("official approval", "marketplace approval", "universal/full runtime support"):
-            if token not in boundary_lower:
-                failures.append(f"{display}: {adapter_id} adapter README missing boundary phrase `{token}`")
-        if adapter_id in {"claude", "codex", "gemini", "opencode"} and "pass/degraded" not in boundary_lower:
-            failures.append(f"{display}: {adapter_id} adapter README must preserve PASS/DEGRADED runtime boundary")
-
-    return failures
+    from host_loading_claims import check_mainstream_agent_loading as run, HostLoadingRules
+    return run(
+        root, package_root=ROOT,
+        append_mainstream_loading_common_doc_issues=_append_mainstream_loading_common_doc_issues,
+        append_mainstream_loading_overclaim_issues=_append_mainstream_loading_overclaim_issues,
+        display_path=_display_path, parse_markdown_table_rows=_parse_markdown_table_rows,
+        loading=HostLoadingRules(
+            adapters=_host_policy('MAINSTREAM_AGENT_LOADING_ADAPTERS'),
+            readme_tokens=_host_policy('MAINSTREAM_AGENT_LOADING_README_TOKENS'),
+            required_docs=_host_policy('MAINSTREAM_AGENT_LOADING_REQUIRED_DOCS'),
+            requirements_tokens=_host_policy('MAINSTREAM_AGENT_LOADING_REQUIREMENTS_TOKENS'),
+            tier1=_host_policy('MAINSTREAM_AGENT_LOADING_TIER1'),
+            tier2=_host_policy('MAINSTREAM_AGENT_LOADING_TIER2'),
+        ),
+    )
 
 
 def _append_pack_overclaim_issues(failures, path, content, root):
-    display = _display_path(path, root)
-    lines = content.splitlines()
-    for phrase in GOVERNANCE_PACK_STATUS_FORBIDDEN_OVERCLAIMS:
-        for line in lines:
-            if phrase in line.lower() and not _line_has_scoped_claim_negation(line, phrase):
-                failures.append(f"{display}: forbidden pack status overclaim `{phrase}`")
-                break
-
-    direct_claims = [
-        "officially approved",
-        "official approval granted",
-        "marketplace approved",
-        "marketplace approval granted",
-        "universal runtime support is verified",
-        "full runtime support is verified",
-        "1.0.0 production-ready",
-    ]
-    for phrase in direct_claims:
-        for line in lines:
-            if phrase in line.lower() and not _line_has_scoped_claim_negation(line, phrase):
-                failures.append(f"{display}: forbidden pack status overclaim `{phrase}`")
-                break
+    from host_governance_packs import _append_pack_overclaim_issues as run
+    return run(
+        failures, path, content, root,
+        governance_pack_status_forbidden_overclaims=_host_policy('GOVERNANCE_PACK_STATUS_FORBIDDEN_OVERCLAIMS'),
+        display_path=_display_path, line_has_scoped_claim_negation=_line_has_scoped_claim_negation,
+    )
 
 
 def _append_missing_status_boundary_issues(failures, path, content, root):
-    display = _display_path(path, root)
-    boundary_lines = [line for line in content.splitlines() if "Pack boundary:" in line]
-    if not boundary_lines:
-        failures.append(f"{display}: missing status pack boundary line")
-        return
-
-    for index, line in enumerate(boundary_lines, start=1):
-        lower = line.lower()
-        for token in GOVERNANCE_PACK_STATUS_BOUNDARY_TOKENS:
-            if token not in lower:
-                failures.append(
-                    f"{display}: status pack boundary line {index} missing token `{token}`"
-                )
+    from host_governance_packs import _append_missing_status_boundary_issues as run
+    return run(
+        failures, path, content, root,
+        governance_pack_status_boundary_tokens=_host_policy('GOVERNANCE_PACK_STATUS_BOUNDARY_TOKENS'),
+        display_path=_display_path,
+    )
 
 
 def check_governance_pack_status(root=None):
-    """FIX-111: status and release surfaces must disclose pack boundaries without overclaim."""
-    root = root or ROOT
-    failures = []
-
-    for rel_path in GOVERNANCE_PACK_STATUS_DOC_PATHS:
-        path = root / rel_path
-        display = _display_path(path, root)
-        if not path.exists():
-            failures.append(f"{display}: missing pack-aware status contract")
-            continue
-        content = path.read_text(encoding="utf-8")
-        if "Pack boundary:" in content:
-            _append_missing_status_boundary_issues(failures, path, content, root)
-        _append_pack_overclaim_issues(failures, path, content, root)
-
-    release_path = root / GOVERNANCE_PACK_RELEASE_BOUNDARY_PATH
-    release_display = _display_path(release_path, root)
-    if not release_path.exists():
-        failures.append(f"{release_display}: missing release pack boundary document")
-    else:
-        release_content = release_path.read_text(encoding="utf-8")
-        for token in GOVERNANCE_PACK_RELEASE_BOUNDARY_TOKENS:
-            if token not in release_content:
-                failures.append(f"{release_display}: missing release pack boundary token `{token}`")
-        _append_pack_overclaim_issues(failures, release_path, release_content, root)
-
-    return failures
+    from host_governance_packs import check_governance_pack_status as run, PackReleaseBoundaries
+    return run(
+        root, package_root=ROOT,
+        append_missing_status_boundary_issues=_append_missing_status_boundary_issues,
+        append_pack_overclaim_issues=_append_pack_overclaim_issues, display_path=_display_path,
+        release=PackReleaseBoundaries(
+            release_boundary_path=_host_policy('GOVERNANCE_PACK_RELEASE_BOUNDARY_PATH'),
+            release_boundary_tokens=_host_policy('GOVERNANCE_PACK_RELEASE_BOUNDARY_TOKENS'),
+            status_doc_paths=_host_policy('GOVERNANCE_PACK_STATUS_DOC_PATHS'),
+        ),
+    )
 
 
 def _validate_runtime_e2e_block(root, manifest_path, runtime_e2e, field_name, allow_unsupported=False):
-    """Validate FIX-074 explicit E2E status blocks in adapter manifests."""
-    block = runtime_e2e.get(field_name)
-    if not isinstance(block, dict):
-        return [f"{_display_path(manifest_path, root)}: runtime_e2e.{field_name} must be an object"]
-
-    allowed_statuses = {"passed", "blocked"}
-    if allow_unsupported:
-        allowed_statuses.add("unsupported")
-
-    status = block.get("status")
-    failures = []
-    if status not in allowed_statuses:
-        failures.append(
-            f"{_display_path(manifest_path, root)}: runtime_e2e.{field_name}.status must be one of {sorted(allowed_statuses)}"
-        )
-    if not block.get("evidence"):
-        failures.append(f"{_display_path(manifest_path, root)}: runtime_e2e.{field_name}.evidence required")
-    if status == "passed" and (not block.get("command") or not block.get("verified_on")):
-        failures.append(
-            f"{_display_path(manifest_path, root)}: passed runtime_e2e.{field_name} requires command and verified_on"
-        )
-    if status == "blocked" and not block.get("blocked_reason"):
-        failures.append(f"{_display_path(manifest_path, root)}: blocked runtime_e2e.{field_name} requires blocked_reason")
-    return failures
-
-
-RUNTIME_CAPABILITY_KEYS = (
-    "ask_user_question",
-    "sub_agent",
-    "tool_calling",
-    "browser",
-    "mcp",
-    "git_hooks",
-)
-
-RUNTIME_CAPABILITY_STATUSES = {"native", "degraded", "unsupported"}
-
-ADAPTER_RUNTIME_CAPABILITY_POLICY = {
-    "claude": {
-        "ask_user_question": {"degraded"},
-        "sub_agent": {"native"},
-        "tool_calling": {"native"},
-        "browser": {"degraded"},
-        "mcp": {"degraded"},
-        "git_hooks": {"native"},
-    },
-    "codex": {
-        "ask_user_question": {"degraded"},
-        "sub_agent": {"degraded"},
-        "tool_calling": {"degraded"},
-        "browser": {"degraded"},
-        "mcp": {"degraded"},
-        "git_hooks": {"native"},
-    },
-    "gemini": {
-        "ask_user_question": {"unsupported"},
-        "sub_agent": {"unsupported"},
-        "tool_calling": {"degraded"},
-        "browser": {"unsupported"},
-        "mcp": {"degraded"},
-        "git_hooks": {"native"},
-    },
-    "opencode": {
-        "ask_user_question": {"unsupported"},
-        "sub_agent": {"unsupported"},
-        "tool_calling": {"degraded"},
-        "browser": {"unsupported"},
-        "mcp": {"degraded"},
-        "git_hooks": {"native"},
-    },
-    "dsh": {
-        "ask_user_question": {"native"},
-        "sub_agent": {"native"},
-        "tool_calling": {"native"},
-        "browser": {"degraded"},
-        "mcp": {"degraded"},
-        "git_hooks": {"native"},
-    },
-    "pi": {
-        # DEC-359 upgrade (EVD-1715/1716): extension-bridged ask_user_question
-        # and dispatch_agent passed runtime E2E — native with bridged evidence;
-        # headless GOV_ASK_USER_HEADLESS is bounded behavior, not a gap.
-        "ask_user_question": {"native"},
-        "sub_agent": {"native"},
-        "tool_calling": {"native"},
-        "browser": {"unsupported"},
-        "mcp": {"degraded"},
-        "git_hooks": {"native"},
-    },
-}
+    from adapter_contracts import _validate_runtime_e2e_block as run
+    return run(root, manifest_path, runtime_e2e, field_name, allow_unsupported, display_path=_display_path)
 
 
 def _validate_runtime_capabilities(root, manifest_path, manifest):
-    """FIX-082: adapters must declare real host capabilities and degraded modes."""
-    display = _display_path(manifest_path, root)
-    capabilities = manifest.get("runtime_capabilities")
-    if not isinstance(capabilities, dict):
-        return [f"{display}: runtime_capabilities must be an object"]
-
-    failures = []
-    adapter_id = manifest.get("adapter_id")
-    capability_policy = ADAPTER_RUNTIME_CAPABILITY_POLICY.get(adapter_id, {})
-    for key in RUNTIME_CAPABILITY_KEYS:
-        block = capabilities.get(key)
-        if not isinstance(block, dict):
-            failures.append(f"{display}: runtime_capabilities.{key} must be an object")
-            continue
-        status = block.get("status")
-        if status not in RUNTIME_CAPABILITY_STATUSES:
-            failures.append(
-                f"{display}: runtime_capabilities.{key}.status must be one of {sorted(RUNTIME_CAPABILITY_STATUSES)}"
-            )
-        allowed_statuses = capability_policy.get(key)
-        if allowed_statuses and status not in allowed_statuses:
-            failures.append(
-                f"{display}: runtime_capabilities.{key}.status={status} overclaims adapter policy; "
-                f"allowed={sorted(allowed_statuses)}"
-            )
-        if not block.get("evidence"):
-            failures.append(f"{display}: runtime_capabilities.{key}.evidence required")
-        if status in {"degraded", "unsupported"} and not block.get("degraded_mode"):
-            failures.append(f"{display}: runtime_capabilities.{key}.degraded_mode required when status is {status}")
-
-    closure = capabilities.get("workflow_closure")
-    if not isinstance(closure, dict):
-        failures.append(f"{display}: runtime_capabilities.workflow_closure must be an object")
-        return failures
-
-    closure_status = closure.get("status")
-    if closure_status not in {"full", "degraded", "blocked"}:
-        failures.append(f"{display}: runtime_capabilities.workflow_closure.status must be full, degraded, or blocked")
-    if not closure.get("evidence"):
-        failures.append(f"{display}: runtime_capabilities.workflow_closure.evidence required")
-    degraded_capabilities = closure.get("degraded_capabilities")
-    non_native = [
-        key for key in RUNTIME_CAPABILITY_KEYS
-        if isinstance(capabilities.get(key), dict)
-        and capabilities[key].get("status") in {"degraded", "unsupported"}
-    ]
-    if non_native:
-        if closure_status == "full":
-            failures.append(f"{display}: workflow_closure.status=full conflicts with degraded/unsupported capabilities")
-        if not isinstance(degraded_capabilities, list):
-            failures.append(f"{display}: workflow_closure.degraded_capabilities must list non-native capabilities")
-        else:
-            missing = [key for key in non_native if key not in degraded_capabilities]
-            if missing:
-                failures.append(
-                    f"{display}: workflow_closure.degraded_capabilities missing {', '.join(missing)}"
-                )
-    elif closure_status != "full":
-        failures.append(f"{display}: workflow_closure.status must be full when all capabilities are native")
-
-    runtime_e2e = manifest.get("runtime_e2e")
-    if isinstance(runtime_e2e, dict) and runtime_e2e.get("full_e2e_verified") is False and closure_status == "full":
-        failures.append(f"{display}: workflow_closure.status=full requires full_e2e_verified=true or explicit degraded closure")
-    return failures
+    from adapter_contracts import _validate_runtime_capabilities as run, CapabilityRules
+    return run(
+        root, manifest_path, manifest, display_path=_display_path,
+        capabilities_rules=CapabilityRules(
+            policy=_host_policy('ADAPTER_RUNTIME_CAPABILITY_POLICY'),
+            keys=_host_policy('RUNTIME_CAPABILITY_KEYS'),
+            statuses=_host_policy('RUNTIME_CAPABILITY_STATUSES'),
+        ),
+    )
 
 
 def _validate_codex_runtime_e2e_claim(root, manifest_path, runtime_e2e):
-    """FIX-077: Codex full E2E must be real headless codex exec target-cwd evidence."""
-    agent_block = runtime_e2e.get("agent_runtime_e2e", {})
-    if not isinstance(agent_block, dict):
-        return []
-
-    status = agent_block.get("status")
-    full_e2e_verified = runtime_e2e.get("full_e2e_verified")
-    claim_text = " ".join(
-        str(value or "")
-        for value in (
-            agent_block.get("command"),
-            agent_block.get("evidence"),
-            agent_block.get("blocked_reason"),
-        )
-    ).lower()
-    app_session_markers = (
-        "codex app",
-        "current session",
-        "current workflow session",
-        "timeout attempted separately",
-        "attempted separately and timed out",
-    )
-    blocked_markers = (
-        "timed out",
-        "timeout",
-        "blocked",
-        "blocker",
-    )
-    target_cwd_markers = (
-        " -c ",
-        "\n-c ",
-        "\t-c ",
-        "target-cwd",
-        "target cwd",
-        "cwd",
-    )
-    headless_markers = (
-        "--ephemeral",
-        "read-only",
-        "read only",
-        "headless",
-    )
-    failures = []
-    display = _display_path(manifest_path, root)
-    if status == "passed":
-        if "codex exec" not in claim_text:
-            failures.append(
-                f"{display}: Codex agent_runtime_e2e.status=passed requires real codex exec evidence"
-            )
-        if not any(marker in claim_text for marker in target_cwd_markers):
-            failures.append(
-                f"{display}: Codex agent_runtime_e2e.status=passed requires target-cwd evidence"
-            )
-        if not any(marker in claim_text for marker in headless_markers):
-            failures.append(
-                f"{display}: Codex agent_runtime_e2e.status=passed requires headless/read-only/ephemeral evidence"
-            )
-        if any(marker in claim_text for marker in app_session_markers):
-            failures.append(
-                f"{display}: Codex agent_runtime_e2e.status=passed must be real codex exec target-cwd evidence, not Codex App/current session or separately timed-out CLI evidence"
-            )
-        observed = " ".join(str(agent_block.get(key) or "") for key in ("evidence", "blocked_reason")).lower()
-        if any(marker in observed for marker in blocked_markers):
-            failures.append(
-                f"{display}: Codex agent_runtime_e2e.status=passed must not include timeout/blocked evidence"
-            )
-    if status == "blocked" and full_e2e_verified is not False:
-        failures.append(
-            f"{display}: Codex blocked agent_runtime_e2e requires full_e2e_verified=false"
-        )
-    return failures
-
-
-GEMINI_API_KEY_ENV_VARS = (
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-)
-
-GEMINI_VERTEX_CONFIG_ENV_VARS = (
-    "GOOGLE_GENAI_USE_VERTEXAI",
-    "GOOGLE_CLOUD_PROJECT",
-    "GOOGLE_CLOUD_LOCATION",
-)
-
-GEMINI_VERTEX_CREDENTIAL_ENV_VARS = (
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "GOOGLE_ADC_JSON",
-    "GOOGLE_CLOUD_ACCESS_TOKEN",
-)
-
-GEMINI_GCA_CONFIG_ENV_VARS = (
-    "GCA_AUTH_PROVIDER",
-)
-
-GEMINI_GCA_CREDENTIAL_ENV_VARS = (
-    "GCA_TOKEN",
-)
-
-GEMINI_AUTH_REMEDIATION = (
-    "Configure Gemini auth before full agent runtime E2E: set GEMINI_API_KEY "
-    "or GOOGLE_API_KEY, configure Vertex credentials (for example "
-    "GOOGLE_GENAI_USE_VERTEXAI with GOOGLE_CLOUD_PROJECT/LOCATION and ADC), "
-    "configure GCA auth, or login/configure Gemini CLI settings.json with an "
-    "auth provider/token type. Do not record secret values in manifests or logs."
-)
+    from adapter_contracts import _validate_codex_runtime_e2e_claim as run
+    return run(root, manifest_path, runtime_e2e, display_path=_display_path)
 
 
 def _gemini_settings_candidates(home=None):
-    home = Path(home) if home else Path.home()
-    return [
-        home / ".gemini" / "settings.json",
-        home / ".config" / "gemini" / "settings.json",
-    ]
+    from runtime_preflight import _gemini_settings_candidates as run
+    return run(home)
 
 
 def _safe_env_present(name, env=None):
-    env = env if env is not None else os.environ
-    value = env.get(name)
-    return value is not None and str(value).strip() != ""
+    from runtime_preflight import _safe_env_present as run
+    return run(name, env)
 
 
 def _detect_gemini_auth_from_settings(path):
-    try:
-        settings = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    auth_key_markers = ("auth", "credential", "token", "provider", "login")
-    provider_value_markers = ("oauth", "google", "vertex", "gca", "api_key", "apikey", "gemini")
-    stack = [settings]
-    while stack:
-        current = stack.pop()
-        if isinstance(current, dict):
-            for key, value in current.items():
-                key_text = str(key).lower()
-                if isinstance(value, (dict, list)):
-                    stack.append(value)
-                    continue
-                value_text = str(value).strip().lower()
-                if not value_text:
-                    continue
-                if any(marker in key_text for marker in auth_key_markers):
-                    if "token" in key_text:
-                        return f"settings:{path.name}:token_type"
-                    if any(marker in value_text for marker in provider_value_markers):
-                        return f"settings:{path.name}:auth_provider"
-                    return f"settings:{path.name}:auth_config"
-        elif isinstance(current, list):
-            stack.extend(current)
-    return None
+    from runtime_preflight import _detect_gemini_auth_from_settings as run
+    return run(path)
 
 
 def _detect_gemini_env_auth_sources(env=None):
-    env = env if env is not None else os.environ
-    sources = []
-    for name in GEMINI_API_KEY_ENV_VARS:
-        if _safe_env_present(name, env):
-            sources.append(f"env:{name}")
-
-    vertex_enabled = str(env.get("GOOGLE_GENAI_USE_VERTEXAI", "")).strip().lower() in {"1", "true", "yes"}
-    vertex_has_project = _safe_env_present("GOOGLE_CLOUD_PROJECT", env)
-    vertex_has_location = _safe_env_present("GOOGLE_CLOUD_LOCATION", env)
-    vertex_credential_sources = [
-        name for name in GEMINI_VERTEX_CREDENTIAL_ENV_VARS
-        if _safe_env_present(name, env)
-    ]
-    if vertex_enabled and vertex_has_project and vertex_has_location and vertex_credential_sources:
-        sources.append("env:VERTEX:" + "+".join([
-            "GOOGLE_GENAI_USE_VERTEXAI",
-            "GOOGLE_CLOUD_PROJECT",
-            "GOOGLE_CLOUD_LOCATION",
-            *vertex_credential_sources,
-        ]))
-
-    gca_has_provider = _safe_env_present("GCA_AUTH_PROVIDER", env)
-    gca_credential_sources = [
-        name for name in GEMINI_GCA_CREDENTIAL_ENV_VARS
-        if _safe_env_present(name, env)
-    ]
-    if gca_has_provider and gca_credential_sources:
-        sources.append("env:GCA:GCA_AUTH_PROVIDER+" + "+".join(gca_credential_sources))
-    return sources
+    from runtime_preflight import _detect_gemini_env_auth_sources as run, CredentialVariables
+    return run(
+        env, safe_env_present=_safe_env_present,
+        variables=CredentialVariables(
+            api_key_env_vars=_host_policy('GEMINI_API_KEY_ENV_VARS'),
+            gca_credential_env_vars=_host_policy('GEMINI_GCA_CREDENTIAL_ENV_VARS'),
+            vertex_credential_env_vars=_host_policy('GEMINI_VERTEX_CREDENTIAL_ENV_VARS'),
+        ),
+    )
 
 
 def _gemini_auth_preflight(env=None, home=None, which=shutil.which, version_runner=_run_version_command):
-    env = env if env is not None else os.environ
-    result = {
-        "status": "BLOCKED",
-        "command": "python skills/software-project-governance/infra/verify_workflow.py gemini-auth-preflight",
-        "version_command": "gemini --version",
-        "cli_path": None,
-        "version": None,
-        "auth_sources": [],
-        "blocked_reason": None,
-        "remediation": GEMINI_AUTH_REMEDIATION,
-    }
-
-    cli_path = which("gemini")
-    if not cli_path:
-        result["blocked_reason"] = "Gemini CLI not found on PATH"
-        return result
-    result["cli_path"] = str(cli_path)
-
-    returncode, version_output = version_runner("gemini --version")
-    if returncode != 0:
-        result["blocked_reason"] = "Gemini CLI version command failed"
-        result["version"] = _truncate_log(version_output, limit=200)
-        return result
-    result["version"] = _truncate_log(version_output, limit=200)
-
-    result["auth_sources"].extend(_detect_gemini_env_auth_sources(env))
-
-    for path in _gemini_settings_candidates(home=home):
-        source = _detect_gemini_auth_from_settings(path)
-        if source:
-            result["auth_sources"].append(source)
-
-    if result["auth_sources"]:
-        result["status"] = "PASS"
-        result["blocked_reason"] = None
-    else:
-        result["blocked_reason"] = "Gemini auth missing or not configured"
-    return result
+    from runtime_preflight import _gemini_auth_preflight as run
+    return run(
+        env, home, which, version_runner, gemini_auth_remediation=_host_policy('GEMINI_AUTH_REMEDIATION'),
+        detect_gemini_auth_from_settings=_detect_gemini_auth_from_settings,
+        detect_gemini_env_auth_sources=_detect_gemini_env_auth_sources,
+        gemini_settings_candidates=_gemini_settings_candidates, truncate_log=_truncate_log,
+    )
 
 
 def _validate_gemini_auth_preflight_claim(root, manifest_path, runtime_e2e):
-    display = _display_path(manifest_path, root)
-    preflight = runtime_e2e.get("auth_preflight")
-    if not isinstance(preflight, dict):
-        return [f"{display}: Gemini runtime_e2e.auth_preflight must be an object"]
-
-    failures = []
-    status = preflight.get("status")
-    if status not in {"passed", "blocked"}:
-        failures.append(f"{display}: Gemini runtime_e2e.auth_preflight.status must be passed or blocked")
-    if "gemini-auth-preflight" not in str(preflight.get("command", "")):
-        failures.append(f"{display}: Gemini auth_preflight.command must reference gemini-auth-preflight")
-    if not preflight.get("verified_on"):
-        failures.append(f"{display}: Gemini auth_preflight.verified_on required")
-    guidance_text = " ".join(
-        str(value or "")
-        for value in (
-            preflight.get("blocked_reason"),
-            preflight.get("remediation"),
-            runtime_e2e.get("agent_runtime_e2e", {}).get("blocked_reason")
-            if isinstance(runtime_e2e.get("agent_runtime_e2e"), dict) else "",
-        )
-    ).lower()
-    required_guidance = ("gemini_api_key", "google_api_key", "vertex", "gca", "settings")
-    missing = [marker for marker in required_guidance if marker not in guidance_text]
-    if missing:
-        failures.append(
-            f"{display}: Gemini blocked guidance must mention GEMINI_API_KEY / GOOGLE_API_KEY / Vertex / GCA / settings auth"
-        )
-    if status == "blocked":
-        if preflight.get("blocked_reason") != "Gemini auth missing or not configured":
-            failures.append(f"{display}: Gemini blocked auth_preflight requires exact auth missing blocked_reason")
-        agent_e2e = runtime_e2e.get("agent_runtime_e2e")
-        agent_runtime_passed = isinstance(agent_e2e, dict) and agent_e2e.get("status") == "passed"
-        if runtime_e2e.get("full_e2e_verified") is not False and not agent_runtime_passed:
-            failures.append(f"{display}: Gemini blocked auth_preflight requires full_e2e_verified=false")
-        if agent_runtime_passed:
-            evidence_text = " ".join(
-                str(value or "")
-                for value in (
-                    preflight.get("evidence"),
-                    agent_e2e.get("command"),
-                    agent_e2e.get("evidence"),
-                )
-            ).lower()
-            if "gemini_cli_trust_workspace" not in evidence_text or "secret" not in evidence_text:
-                failures.append(
-                    f"{display}: Gemini blocked auth_preflight with passed runtime E2E must document workspace trust and secret-safe boundary"
-                )
-    return failures
-
-
-OPENCODE_LEGAL_DEEPSEEK_MODELS = ("deepseek-v4-pro", "deepseek-v4-flash")
-
-OPENCODE_PROVIDER_MODEL_REMEDIATION = (
-    "Configure opencode with a supported DeepSeek model, for example "
-    "deepseek-v4-pro or deepseek-v4-flash. Remove ANSI escape/suffix residue "
-    "such as deepseek-v4-pro[1m]. Do not record provider API keys or secret "
-    "values in manifests, tests, docs, or logs."
-)
+    from adapter_contracts import _validate_gemini_auth_preflight_claim as run
+    return run(root, manifest_path, runtime_e2e, display_path=_display_path)
 
 
 def _run_opencode_probe_command(command, timeout=15):
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            encoding=locale.getpreferredencoding(False),
-            errors="replace",
-            timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        return 1, str(exc)
-    return completed.returncode, _e2e_output(completed)
+    from runtime_preflight import _run_opencode_probe_command as run
+    return run(command, timeout, package_root=ROOT, e2e_output=_e2e_output)
 
 
 def _opencode_config_candidates(home=None, root=None):
-    home = Path(home) if home else Path.home()
-    root = Path(root) if root else ROOT
-    return [
-        root / "opencode.json",
-        root / "opencode.jsonc",
-        root / "opencode.toml",
-        home / ".config" / "opencode" / "opencode.json",
-        home / ".config" / "opencode" / "opencode.jsonc",
-        home / ".config" / "opencode" / "opencode.toml",
-        home / ".opencode.json",
-    ]
+    from runtime_preflight import _opencode_config_candidates as run
+    return run(home, root, package_root=ROOT)
 
 
 def _sanitize_opencode_probe_text(text):
-    sanitized = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "<ANSI>", text or "")
-    sanitized = re.sub(
-        r"(?i)(api[_-]?key|token|secret|authorization|bearer)\s*[:=]\s*['\"]?[^'\"\s,}]+",
-        r"\1=<redacted>",
-        sanitized,
-    )
-    sanitized = re.sub(r"\bsk-[A-Za-z0-9._-]+", "<redacted-secret>", sanitized)
-    return _truncate_log(sanitized, limit=500)
+    from runtime_preflight import _sanitize_opencode_probe_text as run
+    return run(text, truncate_log=_truncate_log)
 
 
 def _opencode_model_scan(text):
-    raw = text or ""
-    lowered = raw.lower()
-    blocked_markers = []
-    if "\x1b" in raw:
-        blocked_markers.append("ANSI escape residue")
-    if re.search(r"deepseek-v4-(?:pro|flash)\[[0-9;?]*[a-zA-Z]", raw):
-        blocked_markers.append("ANSI suffix residue")
-    if "unsupported model" in lowered or "not supported" in lowered or "invalid model" in lowered:
-        blocked_markers.append("unsupported model output")
-
-    legal_models = [
-        model for model in OPENCODE_LEGAL_DEEPSEEK_MODELS
-        if re.search(rf"(?<![\w.-]){re.escape(model)}(?![\w.-])", raw)
-    ]
-    invalid_candidates = re.findall(r"deepseek-v4-(?:pro|flash)\[[^\s,;\"'}]+", raw)
-    return {
-        "legal_models": sorted(set(legal_models)),
-        "blocked_markers": sorted(set(blocked_markers)),
-        "invalid_candidates": sorted(set(invalid_candidates)),
-    }
+    from runtime_preflight import _opencode_model_scan as run
+    return run(text, opencode_legal_deepseek_models=_host_policy('OPENCODE_LEGAL_DEEPSEEK_MODELS'))
 
 
-def _opencode_provider_model_preflight(
-    home=None,
-    root=None,
-    which=shutil.which,
-    version_runner=_run_version_command,
-    probe_runner=_run_opencode_probe_command,
-    config_candidates=None,
-):
-    result = {
-        "status": "BLOCKED",
-        "command": "python skills/software-project-governance/infra/verify_workflow.py opencode-provider-preflight",
-        "version_command": "opencode --version",
-        "cli_path": None,
-        "version": None,
-        "legal_models": [],
-        "model_sources": [],
-        "blocked_reason": None,
-        "remediation": OPENCODE_PROVIDER_MODEL_REMEDIATION,
-    }
-
-    cli_path = which("opencode")
-    if not cli_path:
-        result["blocked_reason"] = "opencode CLI not found on PATH"
-        return result
-    result["cli_path"] = str(cli_path)
-
-    returncode, version_output = version_runner("opencode --version")
-    if returncode != 0:
-        result["version"] = _sanitize_opencode_probe_text(version_output)
-        result["blocked_reason"] = "opencode CLI version command failed"
-        return result
-    result["version"] = _sanitize_opencode_probe_text(version_output)
-
-    scan_texts = []
-    for command in (["opencode", "models"], ["opencode", "model", "list"]):
-        code, output = probe_runner(command)
-        if output:
-            scan_texts.append((f"command:{' '.join(command)}", output))
-        if code == 0 and output:
-            break
-
-    paths = config_candidates
-    if paths is None:
-        paths = _opencode_config_candidates(home=home, root=root)
-    for path in paths:
-        path = Path(path)
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        scan_texts.append((f"config:{path.name}", content))
-
-    blocked = []
-    for source, text in scan_texts:
-        scan = _opencode_model_scan(text)
-        for model in scan["legal_models"]:
-            if model not in result["legal_models"]:
-                result["legal_models"].append(model)
-        if scan["legal_models"]:
-            result["model_sources"].append(source)
-        if scan["blocked_markers"] or scan["invalid_candidates"]:
-            blocked.append(
-                f"{source}: "
-                + ", ".join(scan["blocked_markers"] + scan["invalid_candidates"])
-            )
-
-    result["legal_models"].sort()
-    if blocked:
-        result["blocked_reason"] = "opencode provider/model config invalid: " + "; ".join(blocked)
-        return result
-    if result["legal_models"]:
-        result["status"] = "PASS"
-        return result
-
-    result["blocked_reason"] = (
-        "opencode provider/model config missing supported DeepSeek model "
-        "(deepseek-v4-pro or deepseek-v4-flash)"
+def _opencode_provider_model_preflight(home=None, root=None, which=shutil.which, version_runner=_run_version_command, probe_runner=_run_opencode_probe_command, config_candidates=None):
+    from runtime_preflight import _opencode_provider_model_preflight as run
+    return run(
+        home, root, which, version_runner, probe_runner, config_candidates,
+        opencode_provider_model_remediation=_host_policy('OPENCODE_PROVIDER_MODEL_REMEDIATION'),
+        opencode_config_candidates=_opencode_config_candidates, opencode_model_scan=_opencode_model_scan,
+        sanitize_opencode_probe_text=_sanitize_opencode_probe_text,
     )
-    return result
 
 
 def _validate_opencode_provider_model_preflight_claim(root, manifest_path, runtime_e2e):
-    display = _display_path(manifest_path, root)
-    preflight = runtime_e2e.get("provider_model_preflight")
-    if not isinstance(preflight, dict):
-        return [f"{display}: opencode runtime_e2e.provider_model_preflight must be an object"]
-
-    failures = []
-    status = preflight.get("status")
-    if status not in {"passed", "blocked"}:
-        failures.append(f"{display}: opencode provider_model_preflight.status must be passed or blocked")
-    if "opencode-provider-preflight" not in str(preflight.get("command", "")):
-        failures.append(f"{display}: opencode provider_model_preflight.command must reference opencode-provider-preflight")
-    if not preflight.get("verified_on"):
-        failures.append(f"{display}: opencode provider_model_preflight.verified_on required")
-    models = preflight.get("legal_models")
-    if status == "passed":
-        if not isinstance(models, list) or not set(models).intersection(OPENCODE_LEGAL_DEEPSEEK_MODELS):
-            failures.append(f"{display}: opencode passed provider_model_preflight requires deepseek-v4-pro or deepseek-v4-flash")
-        agent_status = runtime_e2e.get("agent_runtime_e2e", {}).get("status")
-        if agent_status == "passed" and runtime_e2e.get("full_e2e_verified") is not True:
-            failures.append(f"{display}: opencode passed agent_runtime_e2e requires full_e2e_verified=true")
-    if status == "blocked" and runtime_e2e.get("full_e2e_verified") is not False:
-        failures.append(f"{display}: opencode blocked provider_model_preflight requires full_e2e_verified=false")
-
-    guidance_text = " ".join(
-        str(value or "")
-        for value in (
-            preflight.get("blocked_reason"),
-            preflight.get("remediation"),
-            preflight.get("evidence"),
-        )
-    ).lower()
-    if status == "blocked" and not all(marker in guidance_text for marker in OPENCODE_LEGAL_DEEPSEEK_MODELS):
-        failures.append(f"{display}: opencode blocked guidance must mention deepseek-v4-pro and deepseek-v4-flash")
-    return failures
+    from adapter_contracts import _validate_opencode_provider_model_preflight_claim as run
+    return run(
+        root, manifest_path, runtime_e2e,
+        opencode_legal_deepseek_models=_host_policy('OPENCODE_LEGAL_DEEPSEEK_MODELS'),
+        display_path=_display_path,
+    )
 
 
 def check_agent_adapter_contract(root=None, run_runtime=False):
-    """FIX-071: mainstream agent adapters must be explicit and not overclaim coverage."""
-    root = root or ROOT
-    failures = []
-    reports = []
-
-    for adapter_id in MAINSTREAM_AGENT_ADAPTERS:
-        adapter_dir = root / "adapters" / adapter_id
-        readme_path = adapter_dir / "README.md"
-        launch_path = adapter_dir / "launch.py"
-        for path in [readme_path, launch_path]:
-            if not path.exists():
-                failures.append(f"{_display_path(path, root)}: missing adapter asset")
-
-        manifest, manifest_failures = _load_adapter_manifest(adapter_dir)
-        failures.extend(manifest_failures)
-        if not manifest:
-            continue
-
-        for key in ADAPTER_REQUIRED_KEYS:
-            if key not in manifest:
-                failures.append(f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: missing `{key}`")
-
-        if manifest.get("adapter_id") != adapter_id:
-            failures.append(
-                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: adapter_id must be `{adapter_id}`"
-            )
-        if manifest.get("workflow_id") != "software-project-governance":
-            failures.append(
-                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: workflow_id must be software-project-governance"
-            )
-        if manifest.get("launcher") != f"adapters/{adapter_id}/launch.py":
-            failures.append(
-                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: launcher path mismatch"
-            )
-
-        support_status = manifest.get("support_status", "")
-        runtime_e2e = manifest.get("runtime_e2e", {})
-        native_entry = manifest.get("native_entry", {})
-        manifest_path = adapter_dir / "adapter-manifest.json"
-        malformed_runtime_e2e = False
-        failures.extend(_validate_runtime_capabilities(root, manifest_path, manifest))
-        if not isinstance(native_entry, dict) or not native_entry:
-            failures.append(f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: native_entry must be non-empty")
-        if not isinstance(runtime_e2e, dict) or not runtime_e2e.get("command") or not runtime_e2e.get("version_command"):
-            failures.append(f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime_e2e command/version_command required")
-            runtime_e2e = {}
-            malformed_runtime_e2e = True
-        else:
-            failures.extend(
-                _validate_runtime_e2e_block(
-                    root, manifest_path, runtime_e2e, "target_cwd_e2e",
-                    allow_unsupported=(support_status == "not-supported-current-release"),
-                )
-            )
-            failures.extend(
-                _validate_runtime_e2e_block(
-                    root, manifest_path, runtime_e2e, "agent_runtime_e2e",
-                    allow_unsupported=(support_status == "not-supported-current-release"),
-                )
-            )
-            if adapter_id == "codex":
-                failures.extend(_validate_codex_runtime_e2e_claim(root, manifest_path, runtime_e2e))
-            if adapter_id == "gemini":
-                failures.extend(_validate_gemini_auth_preflight_claim(root, manifest_path, runtime_e2e))
-            if adapter_id == "opencode":
-                failures.extend(_validate_opencode_provider_model_preflight_claim(root, manifest_path, runtime_e2e))
-            if runtime_e2e.get("full_e2e_verified") is True:
-                target_status = runtime_e2e.get("target_cwd_e2e", {}).get("status")
-                agent_status = runtime_e2e.get("agent_runtime_e2e", {}).get("status")
-                if target_status != "passed" or agent_status != "passed":
-                    failures.append(
-                        f"{_display_path(manifest_path, root)}: full_e2e_verified=true requires target_cwd_e2e and agent_runtime_e2e passed"
-                    )
-
-        if support_status == "not-supported-current-release":
-            if runtime_e2e.get("e2e_level") != "unsupported":
-                failures.append(
-                    f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: unsupported adapter runtime_e2e.e2e_level must be unsupported"
-                )
-            if manifest.get("no_full_coverage_claim") is not True:
-                failures.append(
-                    f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: unsupported adapter must set no_full_coverage_claim=true"
-                )
-            if not manifest.get("unsupported_reason"):
-                failures.append(
-                    f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: unsupported adapter must explain unsupported_reason"
-                )
-            reports.append((adapter_id, "UNSUPPORTED", manifest.get("unsupported_reason", "")))
-            continue
-
-        if support_status != "runtime-verified":
-            failures.append(
-                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: support_status must be runtime-verified or not-supported-current-release"
-            )
-            continue
-
-        if manifest.get("no_full_coverage_claim") is True:
-            failures.append(
-                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime-verified adapter must not keep no_full_coverage_claim=true"
-            )
-        if runtime_e2e.get("e2e_level") not in ("runtime-version-probe", "real-agent-target-cwd"):
-            failures.append(
-                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime-verified adapter runtime_e2e.e2e_level must be runtime-version-probe or real-agent-target-cwd"
-            )
-        if manifest.get("no_full_coverage_claim") is True and runtime_e2e.get("full_e2e_verified") is True:
-            failures.append(
-                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: no_full_coverage_claim=true conflicts with full_e2e_verified=true"
-            )
-        if not runtime_e2e.get("verified_on") or not runtime_e2e.get("evidence"):
-            failures.append(
-                f"{_display_path(adapter_dir / 'adapter-manifest.json', root)}: runtime-verified adapter must include verified_on and evidence"
-            )
-        if malformed_runtime_e2e:
-            reports.append((adapter_id, "FAIL", "invalid runtime_e2e"))
-            continue
-
-        if run_runtime:
-            command_name = runtime_e2e.get("command", "")
-            if not shutil.which(command_name):
-                failures.append(f"{adapter_id}: runtime command `{command_name}` not found on PATH")
-                reports.append((adapter_id, "FAIL", "command not found"))
-                continue
-            returncode, output = _run_version_command(runtime_e2e["version_command"])
-            if returncode != 0:
-                failures.append(f"{adapter_id}: runtime command failed: {runtime_e2e['version_command']}")
-                reports.append((adapter_id, "FAIL", output))
-            else:
-                reports.append((adapter_id, "PASS", output))
-        else:
-            reports.append((adapter_id, "STATIC", support_status))
-
-    for adapter_id, status, detail in reports:
-        print(f"[{status}] agent adapter {adapter_id}: {detail}")
-    for failure in failures:
-        print(f"[FAIL] agent adapter contract: {failure}")
-    if not failures:
-        print("[OK] agent adapter contracts synchronized")
-    return failures
+    from adapter_contracts import check_agent_adapter_contract as run
+    return run(
+        root, run_runtime, package_root=ROOT, adapter_required_keys=_host_policy('ADAPTER_REQUIRED_KEYS'),
+        mainstream_agent_adapters=_host_policy('MAINSTREAM_AGENT_ADAPTERS'), display_path=_display_path,
+        load_adapter_manifest=_load_adapter_manifest, run_version_command=_run_version_command,
+        validate_codex_runtime_e2e_claim=_validate_codex_runtime_e2e_claim,
+        validate_gemini_auth_preflight_claim=_validate_gemini_auth_preflight_claim,
+        validate_opencode_provider_model_preflight_claim=_validate_opencode_provider_model_preflight_claim,
+        validate_runtime_capabilities=_validate_runtime_capabilities,
+        validate_runtime_e2e_block=_validate_runtime_e2e_block,
+    )
 
 
 # FIX-400 (2026-09-28) wall-clock recalibration 180 -> 2333, following the
@@ -5417,120 +3715,18 @@ def emit_injection_budget_section(indent="  ", result=None):
 # Fail-closed: a missing launcher, a non-zero exit, a timeout, or an isolation
 # refusal is FAIL with the launcher's diagnostics — never a silent PASS. The
 # temp home is removed afterwards so the gate leaves no residue.
-DSH_SMOKE_REAL_HOME_WRITES_RE = re.compile(
-    r"\[SMOKE\]\s*real-home writes\s*:\s*(\d+)")
-DSH_SMOKE_ATTRIBUTED_CONCURRENT_WRITES_RE = re.compile(
-    r"\[SMOKE\]\s*attributed concurrent writes\s*:\s*(\d+)")
-DSH_SMOKE_RESULT_PASS_RE = re.compile(r"\[SMOKE\]\s*Result:\s*PASS")
 
 
 def check_dsh_preset_smoke(root=None, timeout=120):
-    """FEAT-015 / RISK-049 ②: run the isolated preset-session smoke gate.
-
-    ``root`` overrides the package root (test seam); it defaults to
-    PLUGIN_ROOT, where ``adapters/dsh/launch.py`` lives. Returns
-    the verdict, reason, launcher exit code, output and isolation witness.
-
-    FIX-442: keep launcher attribution separate from smoke-owned writes.
-    """
-    package_root = Path(root) if root is not None else PLUGIN_ROOT
-    launcher = package_root / "adapters" / "dsh" / "launch.py"
-    result = {
-        "verdict": "FAIL",
-        "reason": "",
-        "exit_code": None,
-        "details": [],
-        "isolation": {
-            "temp_home": None,
-            "real_home_writes": None,
-            "attributed_concurrent_writes": None,
-        },
-    }
-    if not launcher.is_file():
-        result["reason"] = f"dsh launcher missing: {launcher.as_posix()}"
-        return result
-
-    from dsh_temp import make_private_dir
-    try:
-        temp_home = make_private_dir("spg-dsh-smoke-")
-    except OSError as exc:
-        result["reason"] = f"could not create private DSH smoke directory: {exc}"
-        return result
-    result["isolation"]["temp_home"] = temp_home.as_posix()
-    env = os.environ.copy()
-    env["DSH_HOME"] = str(temp_home)
-    try:
-        proc = subprocess.run(
-            [sys.executable, str(launcher), "--smoke"],
-            cwd=str(package_root),
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        result["reason"] = f"smoke timed out after {timeout}s"
-        return result
-    except OSError as exc:
-        result["reason"] = f"smoke could not start: {exc}"
-        return result
-    finally:
-        shutil.rmtree(temp_home, ignore_errors=True)
-
-    result["exit_code"] = proc.returncode
-    output = (proc.stdout or "") + (proc.stderr or "")
-    result["details"] = [
-        line.strip() for line in output.splitlines() if line.strip()]
-    writes = DSH_SMOKE_REAL_HOME_WRITES_RE.search(output)
-    if writes:
-        result["isolation"]["real_home_writes"] = int(writes.group(1))
-    attributed = DSH_SMOKE_ATTRIBUTED_CONCURRENT_WRITES_RE.search(output)
-    if attributed:
-        result["isolation"]["attributed_concurrent_writes"] = int(
-            attributed.group(1))
-
-    if proc.returncode == 0 and DSH_SMOKE_RESULT_PASS_RE.search(output):
-        if result["isolation"]["real_home_writes"] not in (0, None):
-            result["reason"] = (
-                "smoke reported real-home writes="
-                f"{result['isolation']['real_home_writes']} — refusing to "
-                "accept the run as PASS")
-            return result
-        result["verdict"] = "PASS"
-        # FIX-442: the reason must stay truthful when the launcher excluded
-        # concurrent-session writes — the smoke touched nothing, but the
-        # real home DID change during the window, and that is disclosed
-        # here instead of the blanket "real ~/.dsh untouched" claim.
-        reason = (
-            "isolated preset-session smoke PASSED (skill catalog + "
-            "/governance gesture resolved; real ~/.dsh untouched by the "
-            "smoke")
-        attributed_count = result["isolation"]["attributed_concurrent_writes"]
-        if attributed_count:
-            reason += (
-                f"; {attributed_count} write-face change(s) attributed to "
-                "a concurrent active session and excluded (time-window + "
-                "entry-semantics dual factor, FIX-442)")
-        result["reason"] = reason + ")"
-        return result
-
-    if proc.returncode == 2 and re.search(
-            r"^\[SMOKE\] Result: NOT_RUN \(exit 2\) HOST_PLANE_ABSENT:", output, re.MULTILINE):
-        result["verdict"] = "NOT_RUN"
-        result["reason"] = "no installed DSH host plane for the isolated upgrade smoke"
-        return result
-
-    diagnostics = [
-        detail for detail in result["details"]
-        if "[FAIL]" in detail or "[REFUSED]" in detail or "FAIL:" in detail
-    ]
-    result["reason"] = (
-        f"smoke exit {proc.returncode}"
-        + (f": {diagnostics[0]}" if diagnostics else "")
+    from host_loader_probes import check_dsh_preset_smoke as run, SmokeMarkers
+    return run(
+        root, timeout, plugin_root=PLUGIN_ROOT,
+        markers=SmokeMarkers(
+            concurrent_writes=_host_policy('DSH_SMOKE_ATTRIBUTED_CONCURRENT_WRITES_RE'),
+            home_writes=_host_policy('DSH_SMOKE_REAL_HOME_WRITES_RE'),
+            passed=_host_policy('DSH_SMOKE_RESULT_PASS_RE'),
+        ),
     )
-    return result
 
 
 # ── FEAT-016 / RISK-049 ③: dsh upgrade regression as a release gate ──────────
@@ -5547,52 +3743,17 @@ def check_dsh_preset_smoke(root=None, timeout=120):
 # (SPG_RELEASE_GATE_TIMEOUT env override, module default — the FIX-400
 # recalibration provenance lives on _RELEASE_GATE_TIMEOUT_DEFAULT).
 
-DSH_UPGRADE_REGRESSION_LABEL = "dsh preset-session smoke (isolated upgrade regression)"
 
 
 def run_dsh_upgrade_regression_gates(smoke_runner=None):
-    """FEAT-016 / RISK-049 ③: run the dsh upgrade regression command set.
-
-    Composition (minimal, per triage): the FEAT-015 isolated preset-session
-    smoke — preset install + skill-catalog load under a temp DSH_HOME. Each
-    result matches the release execution-gate result shape (label / pass /
-    exit_code / issue / command) so check_release_readiness renders it like
-    any other gate. ``smoke_runner`` is a test seam; production always uses
-    check_dsh_preset_smoke (reuse only — never a reimplementation).
-
-    Returns ``{"results": [...], "issues": [...], "isolation":
-    {"temp_dsh_home", "real_home_writes", "mechanism"}}``.
-    """
-    if smoke_runner is None:
-        smoke_runner = check_dsh_preset_smoke
-    timeout = _resolve_release_gate_timeout(
-        os.environ.get(_RELEASE_GATE_TIMEOUT_ENV, ""))
-    smoke = smoke_runner(timeout=timeout)
-    launcher = PLUGIN_ROOT / "adapters" / "dsh" / "launch.py"
-    passed = smoke["verdict"] == "PASS"
-    gate = {
-        "label": DSH_UPGRADE_REGRESSION_LABEL,
-        "pass": passed,
-        "exit_code": smoke["exit_code"],
-        "issue": None if passed else (
-            f"{DSH_UPGRADE_REGRESSION_LABEL}: {smoke['reason']}"),
-        "command": (
-            f"{sys.executable} {launcher.as_posix()} --smoke"
-            " (temp DSH_HOME redirection, real home zero-write)"),
-    }
-    isolation = {
-        "temp_dsh_home": smoke["isolation"].get("temp_home"),
-        "real_home_writes": smoke["isolation"].get("real_home_writes"),
-        "mechanism": (
-            "env redirection to a temp DSH_HOME (M7.7 (a)); the launcher "
-            "fingerprints the real home and the smoke refuses PASS on any "
-            "real-home write (FEAT-015 real-home-writes detection)"),
-    }
-    return {
-        "results": [gate],
-        "issues": [gate["issue"]] if gate["issue"] else [],
-        "isolation": isolation,
-    }
+    from host_loader_probes import run_dsh_upgrade_regression_gates as run
+    return run(
+        smoke_runner, plugin_root=PLUGIN_ROOT,
+        dsh_upgrade_regression_label=_host_policy('DSH_UPGRADE_REGRESSION_LABEL'),
+        release_gate_timeout_env=_RELEASE_GATE_TIMEOUT_ENV,
+        resolve_release_gate_timeout=_resolve_release_gate_timeout,
+        check_dsh_preset_smoke=check_dsh_preset_smoke,
+    )
 
 
 # ── FEAT-080 / ADR-021 B3: provenance wiring plumbing ──────────────────────
@@ -6025,7 +4186,7 @@ def check_release_lineage(version, mode="candidate", release_commit=None, remote
 def _specialist_skill_owner_issues(root, router):
     """Check the same role files and skill-table binding that a dispatched agent reads."""
     roles = {path.stem: path for path in (root / "agents").glob("*.md")}
-    expected = {role.lower().replace(" ", "-") for role in ACTIVE_AGENT_ROLES}
+    expected = {role.lower().replace(" ", "-") for role in _host_policy('ACTIVE_AGENT_ROLES')}
     issues = [f"active role files differ: {sorted(set(roles) ^ expected)}"] if set(roles) != expected else []
     specialists = {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
     specialists -= {"software-project-governance", "main-workflow"}
@@ -6113,20 +4274,20 @@ def check_architecture_fact_source(
             failures.append(f"{rel_skill_index}: {activity} has no artifact consumer")
         local_reviewers = re.findall(r"`([a-z]+-review)`", consumers)
         reviewed.update(local_reviewers)
-        if local_reviewers and not any(role in consumers for role in NAMED_REVIEWER_ROLES):
+        if local_reviewers and not any(role in consumers for role in _host_policy('NAMED_REVIEWER_ROLES')):
             failures.append(f"{rel_skill_index}: {activity} needs a named independent reviewer")
         if "Governance Developer" in producers and "`code-review`" in consumers and "Code Reviewer" in consumers:
             governance_route = True
     if not governance_route:
         failures.append(f"{rel_skill_index}: missing Governance Developer → independent Code Reviewer route")
-    for name in sorted(set(LOOP_ROLE_SKILL_CONTRACTS) - reviewed):
+    for name in sorted(set(_host_policy('LOOP_ROLE_SKILL_CONTRACTS')) - reviewed):
         failures.append(f"{rel_skill_index}: missing independent consumer for {name}")
     agent_protocol_content = contents[agent_protocol_path]
     rel_protocol = _display_path(agent_protocol_path)
-    for role in ACTIVE_AGENT_ROLES:
+    for role in _host_policy('ACTIVE_AGENT_ROLES'):
         if not _markdown_has_heading(agent_protocol_content, 3, role):
             failures.append(f"{rel_protocol}: missing active role communication contract: {role}")
-    for reviewer_role in NAMED_REVIEWER_ROLES:
+    for reviewer_role in _host_policy('NAMED_REVIEWER_ROLES'):
         if not _markdown_has_heading(agent_protocol_content, 3, reviewer_role):
             failures.append(f"{rel_protocol}: missing named reviewer communication contract: {reviewer_role}")
     if _markdown_has_heading(agent_protocol_content, 3, "Reviewer"):
@@ -6575,10 +4736,8 @@ def _load_archive_module():
 # ── SYSGAP-030: GovernanceDataSource (archive-aware data source) ──
 
 @_cache
-def __getattr__(name):
-    """Resolve the historical public class on first access, including wildcard imports."""
-    if name != "GovernanceDataSource":
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+def _archive_reader_class():
+    """Build the historical public type once across imports and programmatic overrides."""
     from governance_archive_data import GovernanceDataSource as ArchiveReader
 
     class GovernanceDataSource(ArchiveReader):
@@ -6600,12 +4759,8 @@ def __getattr__(name):
         def _expand_task_ids(text):
             return expand_task_ids(text)
 
-    GovernanceDataSource.__qualname__ = name
-    return globals().setdefault(name, GovernanceDataSource)
-
-
-def __dir__():
-    return sorted(set(globals()) | {"GovernanceDataSource"})
+    GovernanceDataSource.__qualname__ = "GovernanceDataSource"
+    return globals().setdefault("GovernanceDataSource", GovernanceDataSource)
 
 
 def _archive_reader(*args, **kwargs):
@@ -7414,72 +5569,14 @@ def cmd_stages(args):
 # 规则的转述拷贝（×6 同步债务）。每个 note MUST 携带规范标记，且规范源文件
 # MUST 仍然携带该标记（双向 fail-closed）——转述/规则漂移均可机检。标记常量
 # 只是 join key，不是平行事实源：规则语义只活在 M10.3（FIX-272 动态锚先例）。
-QUOTE_SYNC_ADAPTER_MANIFESTS = (
-    "adapters/claude/adapter-manifest.json",
-    "adapters/codex/adapter-manifest.json",
-    "adapters/gemini/adapter-manifest.json",
-    "adapters/opencode/adapter-manifest.json",
-    "adapters/dsh/adapter-manifest.json",
-    "adapters/pi/adapter-manifest.json",
-)
-CONSULT_DRAW_MARKER = "生成≠咨询"
 
 
 def _check_quote_sync_issues():
-    """FIX-432 (F-4 / F-A2): citation/paraphrase sync guard, fail-closed.
-
-    Missing or unparsable canonical surfaces are issues, never silent skips.
-    """
-    issues = []
-    bp_path = ROOT / "skills/software-project-governance/references/behavior-protocol.md"
-    skill_path = ROOT / "skills/software-project-governance/SKILL.md"
-    try:
-        bp_text = bp_path.read_text(encoding="utf-8")
-    except OSError:
-        return [f"quote sync: {bp_path.as_posix()} unreadable (fail-closed)"]
-    try:
-        skill_text = skill_path.read_text(encoding="utf-8")
-    except OSError:
-        return [f"quote sync: {skill_path.as_posix()} unreadable (fail-closed)"]
-
-    # F-4: M10.4 trigger citation must be verbatim-present in SKILL.md.
-    m = re.search(
-        r"任务级触发入口位于 SKILL\.md「Agent 分发路由」表后一行：「(.*?)」",
-        bp_text,
+    from exploration_evidence import _check_quote_sync_issues as run
+    return run(
+        package_root=ROOT, consult_draw_marker=_host_policy('CONSULT_DRAW_MARKER'),
+        quote_sync_adapter_manifests=_host_policy('QUOTE_SYNC_ADAPTER_MANIFESTS'),
     )
-    if not m:
-        issues.append(
-            "quote sync: behavior-protocol.md M10.4 trigger-citation anchor line "
-            "missing or reworded (fail-closed; update citation and guard regex together)"
-        )
-    elif m.group(1) not in skill_text:
-        issues.append(
-            "quote sync: M10.4 citation no longer verbatim in SKILL.md injection "
-            "surface — sync the SKILL.md trigger line and the M10.4 citation in one change"
-        )
-
-    # F-A2: canonical consult-draw marker must live in M10.3 AND in all six notes.
-    if CONSULT_DRAW_MARKER not in bp_text:
-        issues.append(
-            f"quote sync: canonical consult-draw marker '{CONSULT_DRAW_MARKER}' no "
-            "longer present in behavior-protocol.md M10.3 (fail-closed; move the rule "
-            "marker, the six adapter notes and this guard together)"
-        )
-    else:
-        for rel in QUOTE_SYNC_ADAPTER_MANIFESTS:
-            path = ROOT / rel
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                note = (payload.get("exploration_channels") or {}).get("note", "")
-            except (OSError, json.JSONDecodeError):
-                issues.append(f"quote sync: {rel} unreadable or invalid JSON (fail-closed)")
-                continue
-            if CONSULT_DRAW_MARKER not in note:
-                issues.append(
-                    f"quote sync: {rel} exploration_channels.note lost canonical marker "
-                    f"'{CONSULT_DRAW_MARKER}' (paraphrase drift, F-A2)"
-                )
-    return issues
 
 
 # ── FEAT-088 (F-A3 / REVIEW-FEAT-086-DESIGN-R0 BM-1 residual): exploration-
@@ -7516,217 +5613,38 @@ def _check_quote_sync_issues():
 # degradation path spelled out so the advice is the honest one. False-alarm
 # protection: FAIL fires only on definite facts (missing / malformed /
 # dangling / self-contradictory anchors), never on heuristics.
-EXPLORATION_CHANNEL_KEYS = ("discover", "inspect", "consult", "validate")
-EXPLORATION_CHANNEL_STATUSES = ("native", "degraded", "unsupported")
-CHANNEL_EVIDENCE_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
-CHANNEL_ANCHOR_DATE_STRICT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: Adapters whose native channel declarations MUST carry dated anchors.
 #: FEAT-088 remediates the dsh plane (F-A3); the other five enroll by
 #: adopting the same anchor fields and adding their adapter_id here. Any
 #: adapter that voluntarily carries anchor fields is validated meanwhile
 #: (forward-compatible generalization, no retroactive FAIL on the five
 #: not-yet-enrolled manifests — FEAT-088's scope guard).
-CHANNEL_DATE_ANCHOR_ADAPTERS = ("dsh",)
 #: Anchor staleness advisory threshold — aligned with the dsh host
 #: contract's evidence TTL (verified_on_ttl_days = 180) rather than
 #: inventing a second clock. Advisory only: staleness is age, not breakage.
-CHANNEL_EVIDENCE_STALE_DAYS = 180
 
 
 def _anchor_date_or_none(value):
-    """A strict YYYY-MM-DD that is also a real calendar date, else ``None``."""
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not CHANNEL_ANCHOR_DATE_STRICT_RE.match(text):
-        return None
-    try:
-        return datetime.strptime(text, "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    from exploration_evidence import _anchor_date_or_none as run
+    return run(
+        value, channel_anchor_date_strict_re=_host_policy('CHANNEL_ANCHOR_DATE_STRICT_RE'),
+        timestamp_type=datetime,
+    )
 
 
 def check_exploration_channels(root=None):
-    """FEAT-088 (F-A3): exploration-channel evidence-form guard, fail-closed.
-
-    Reads the six adapter manifests' ``exploration_channels`` blocks and
-    judges, per the M10.3 four-channel vocabulary: structural conformance
-    (channels present, status vocabulary, non-empty mapping/evidence) for
-    every adapter, plus the dated-evidence-anchor requirement for the
-    native declarations of enrolled adapters. Layer (b) probes are strictly
-    read-only (anchor-document resolution). Returns a dict with ``issues``
-    (gate-counted), ``advisories`` (WARN-only, never counted),
-    ``adapters`` (per-adapter face), ``probe_layering`` (the honesty
-    statement above, machine-restated) and ``pass``.
-    """
-    base = Path(root) if root is not None else ROOT
-    issues = []
-    advisories = []
-    faces = {}
-    for rel in QUOTE_SYNC_ADAPTER_MANIFESTS:
-        adapter_id = Path(rel).parent.name  # adapters/<id>/adapter-manifest.json
-        face = {"manifest": rel, "dated_anchor_required":
-                adapter_id in CHANNEL_DATE_ANCHOR_ADAPTERS}
-        faces[adapter_id] = face
-        path = base / rel
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
-            issues.append(
-                f"exploration channels: {rel} unreadable or invalid JSON "
-                f"({type(error).__name__}: {error}) (fail-closed)")
-            face["error"] = True
-            continue
-        node = payload.get("exploration_channels")
-        if not isinstance(node, dict):
-            issues.append(
-                f"exploration channels: {rel} has no exploration_channels "
-                f"block (fail-closed)")
-            face["error"] = True
-            continue
-        channels = node.get("channels")
-        if not isinstance(channels, dict):
-            issues.append(
-                f"exploration channels: {rel} exploration_channels.channels "
-                f"is missing or not an object (fail-closed)")
-            face["error"] = True
-            continue
-        missing = [key for key in EXPLORATION_CHANNEL_KEYS if key not in channels]
-        extra = sorted(key for key in channels if key not in EXPLORATION_CHANNEL_KEYS)
-        if missing:
-            issues.append(
-                f"exploration channels: {rel} is missing channel "
-                f"declaration(s) {missing} (M10.3 fixes exactly four)")
-        if extra:
-            issues.append(
-                f"exploration channels: {rel} declares channel(s) unknown to "
-                f"M10.3: {extra}")
-        face["native_anchored"] = {}
-        for key in EXPLORATION_CHANNEL_KEYS:
-            channel = channels.get(key)
-            if not isinstance(channel, dict):
-                if key in channels:
-                    issues.append(
-                        f"exploration channels: {rel} channels.{key} is not "
-                        f"an object")
-                continue
-            status = channel.get("status")
-            if status not in EXPLORATION_CHANNEL_STATUSES:
-                issues.append(
-                    f"exploration channels: {rel} channels.{key}.status="
-                    f"{status!r} is outside the M10.3 vocabulary "
-                    f"{list(EXPLORATION_CHANNEL_STATUSES)}")
-            for field in ("mapping", "evidence"):
-                value = channel.get(field)
-                if not isinstance(value, str) or not value.strip():
-                    issues.append(
-                        f"exploration channels: {rel} channels.{key}.{field} "
-                        f"is missing or empty")
-            if status != "native":
-                continue
-            # ── dated-anchor face: layer (a) form + layer (b) probes ──
-            verified_on = channel.get("verified_on")
-            evidence_text = channel.get("evidence") or ""
-            inline_dates = CHANNEL_EVIDENCE_DATE_RE.findall(evidence_text)
-            anchor_date = _anchor_date_or_none(verified_on)
-            if verified_on is not None and anchor_date is None:
-                issues.append(
-                    f"exploration channels: {rel} channels.{key}.verified_on="
-                    f"{verified_on!r} is not a valid YYYY-MM-DD calendar date")
-            if anchor_date is not None and inline_dates \
-                    and verified_on.strip() not in inline_dates:
-                issues.append(
-                    f"exploration channels: {rel} channels.{key} evidence "
-                    f"prose date(s) {sorted(set(inline_dates))} disagree with "
-                    f"verified_on={verified_on.strip()!r} — two forms of the "
-                    f"same fact must not drift")
-            if face["dated_anchor_required"] and anchor_date is None \
-                    and not inline_dates:
-                issues.append(
-                    f"exploration channels: {rel} channels.{key} is declared "
-                    f"native without a dated evidence anchor (F-A3): add "
-                    f"verified_on (YYYY-MM-DD, optionally evidence_ref) or an "
-                    f"inline date in the evidence text (the dated-E2E "
-                    f"convention); or declare the channel degraded/unsupported "
-                    f"honestly with a degraded_mode per EXP-03 — honest "
-                    f"degradation is legal, capability masquerade is not")
-            ref = channel.get("evidence_ref")
-            if ref is not None and not isinstance(ref, str):
-                issues.append(
-                    f"exploration channels: {rel} channels.{key}.evidence_ref "
-                    f"must be a repository-relative path string")
-            elif isinstance(ref, str) and ref.strip():
-                ref_norm = ref.strip().replace("\\", "/")
-                ref_path = base / ref_norm
-                if not ref_path.is_file():
-                    issues.append(
-                        f"exploration channels: {rel} channels.{key}."
-                        f"evidence_ref '{ref_norm}' does not exist in the "
-                        f"repository (dangling dated anchor)")
-                elif anchor_date is not None:
-                    # FIX-436 (F-C1, option b / DEC-317(2)): the corroboration
-                    # below is a DOCUMENT-WIDE substring match — deliberately
-                    # weaker than the §-level granularity the evidence prose
-                    # may claim ("evidence_ref §3(c) saw …"). A heuristic
-                    # §-neighborhood rule would fire definite FAILs on legal
-                    # shapes (the false-alarm class this guard forbids), so
-                    # the boundary is disclosed here and in
-                    # probe_layering.feasible_probe; §-level positioning stays
-                    # human-review territory.
-                    try:
-                        ref_text = ref_path.read_text(
-                            encoding="utf-8", errors="replace")
-                    except OSError:
-                        ref_text = ""
-                    if verified_on.strip() not in ref_text:
-                        issues.append(
-                            f"exploration channels: {rel} channels.{key} "
-                            f"anchor date {verified_on.strip()!r} is not "
-                            f"present in evidence_ref '{ref_norm}' — the dated "
-                            f"claim is not corroborated by the cited document")
-            face["native_anchored"][key] = {
-                "verified_on": verified_on.strip()
-                if isinstance(verified_on, str) else verified_on,
-                "inline_date_only": anchor_date is None and bool(inline_dates),
-                "age_days": ((date.today() - anchor_date).days
-                             if anchor_date is not None else None),
-            }
-            if anchor_date is not None:
-                age = (date.today() - anchor_date).days
-                if age > CHANNEL_EVIDENCE_STALE_DAYS:
-                    advisories.append(
-                        f"exploration channels: {rel} channels.{key} anchor "
-                        f"is {age} days old (> {CHANNEL_EVIDENCE_STALE_DAYS}): "
-                        f"re-verify from a live session and re-date the anchor; "
-                        f"if the channel is unavailable at runtime, record "
-                        f"判定=受限 per EXP-03 (M10.2) — never mark offline "
-                        f"knowledge as channel results")
-    return {
-        "issues": issues,
-        "advisories": advisories,
-        "adapters": faces,
-        "dated_anchor_adapters": list(CHANNEL_DATE_ANCHOR_ADAPTERS),
-        "probe_layering": {
-            "static_evidence_form": (
-                "native declarations of enrolled adapters must carry dated "
-                "anchors (this check, FAIL-able)"),
-            "feasible_probe": (
-                "evidence_ref existence + anchor-date corroboration in the "
-                "cited document (read-only, DOCUMENT-WIDE substring match, "
-                "NOT section-scoped — a date present anywhere in the cited "
-                "document corroborates, so the §-level granularity claimed "
-                "by evidence prose is human-review territory; FIX-436 "
-                "F-C1/DEC-317(2); the only live checks a CLI process can "
-                "honestly perform here)"),
-            "not_probeable": (
-                "host-session tool liveness (web_search / route_agent) is "
-                "NOT probed and NOT claimed — harness-layer tools are "
-                "outside a CLI process's reach; runtime drift is governed by "
-                "the manifest degraded_mode + EXP-03 and by re-dating the "
-                "anchor from a live session"),
-        },
-        "pass": not issues,
-    }
+    from exploration_evidence import check_exploration_channels as run, ChannelRules
+    return run(
+        root, package_root=ROOT, anchor_date_or_none=_anchor_date_or_none, calendar_date=date,
+        channel_rules=ChannelRules(
+            dated_adapters=_host_policy('CHANNEL_DATE_ANCHOR_ADAPTERS'),
+            evidence_date=_host_policy('CHANNEL_EVIDENCE_DATE_RE'),
+            stale_days=_host_policy('CHANNEL_EVIDENCE_STALE_DAYS'),
+            keys=_host_policy('EXPLORATION_CHANNEL_KEYS'),
+            statuses=_host_policy('EXPLORATION_CHANNEL_STATUSES'),
+            manifests=_host_policy('QUOTE_SYNC_ADAPTER_MANIFESTS'),
+        ),
+    )
 
 
 # ── FIX-436 (F-B3 / DEC-317): M10.2 sample-report exploration-block ──
@@ -7741,38 +5659,11 @@ def check_exploration_channels(root=None):
 # committed usage examples). It deliberately does NOT judge omission
 # legality (honest vs lazy stays human-review territory, DEC-317 reason
 # ②) and never counts toward any gate (MUST NOT be made a blocking FAIL).
-EXPLORATION_SAMPLE_REPORTS = (
-    "docs/research/feat-086-prospective-samples-2026-10-04.md",
-    "docs/research/feat-087-channel-loss-samples-2026-10-05.md",
-)
 
 
 def check_exploration_sample_advisories(root=None):
-    """FIX-436 (F-B3 / DEC-317): WARN-class presence advisory, never FAIL.
-
-    Returns advisory strings (empty when every known sample report still
-    carries an ``exploration:`` block). Callers MUST render these as
-    non-counting advisories.
-    """
-    base = Path(root) if root is not None else ROOT
-    advisories = []
-    for rel in EXPLORATION_SAMPLE_REPORTS:
-        try:
-            text = (base / rel).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            advisories.append(
-                f"exploration samples: {rel} unreadable — cannot verify "
-                f"the M10.2 exemplar exploration blocks (advisory, FIX-436 "
-                f"F-B3/DEC-317)")
-            continue
-        if not re.search(r"(?m)^exploration:", text):
-            advisories.append(
-                f"exploration samples: {rel} carries no `exploration:` "
-                f"block — the M10.2 schema's committed usage examples "
-                f"should not lose their trace blocks (advisory, FIX-436 "
-                f"F-B3/DEC-317; honest-vs-lazy omission stays "
-                f"human-judged)")
-    return advisories
+    from exploration_evidence import check_exploration_sample_advisories as run
+    return run(root, package_root=ROOT, exploration_sample_reports=_host_policy('EXPLORATION_SAMPLE_REPORTS'))
 
 
 def check_cross_references():
@@ -10182,217 +8073,18 @@ def cmd_execution_packet(args):
 # ── SYSGAP-036: Agent Activation Check (Check 20) ────────────────
 
 def check_agent_activation():
-    """SYSGAP-036: Check 20 — Analyst/Architect activation for P0 cross-layer tasks.
-
-    For P0 tasks involving >= 2 architecture layers of product code change,
-    verify that Analyst/Architect agents were activated for impact analysis.
-
-    Detection:
-    - P0 tasks: parsed from plan-tracker tracking tables (priority column index 11)
-    - Product code: evidence file locations in skills/, agents/, infra/, etc.
-    - Cross-layer: >= 2 distinct top-level directories in evidence locations
-    - Analyst involvement: evidence author contains "Analyst" or description
-      contains "Analyst:" marker
-
-    Returns dict with total_p0_cross_layer, analyst_activated, analyst_bypassed, pass.
-    """
-    PRODUCT_CODE_PATTERNS = [
-        "skills/", "agents/", "infra/", "commands/",
-        "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
-        "project/",
-    ]
-    ARCH_LAYER_MAP = {
-        "skills/": "skills",
-        "commands/": "commands",
-        "agents/": "agents",
-        "infra/": "infra",
-        "adapters/": "adapters",
-        "project/": "project",
-        ".claude-plugin/": "claude-plugin",
-        ".codex-plugin/": "codex-plugin",
-        ".agents/": "agents-plugin",
-    }
-
-    result = {
-        "total_p0_cross_layer": 0,
-        "analyst_activated": 0,
-        "analyst_bypassed": 0,
-        "bypassed_tasks": [],
-        "pass": True,
-    }
-
-    # Parse P0 completed tasks from plan-tracker
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    p0_tasks = {}  # task_id -> True
-
-    for line in content.split("\n"):
-        line_stripped = line.strip()
-        if not line_stripped.startswith("| ") or "---" in line_stripped:
-            continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) < 11:
-            continue
-        task_id_match = re.match(r"([A-Z]+-\d+)", parts[1])
-        if not task_id_match:
-            continue
-        task_id = task_id_match.group(1)
-        # Column indices: real format has 20 cols (priority at [11]), test format has 10 (priority at [3])
-        status = parts[10] if len(parts) > 10 else ""
-        if len(parts) >= 13:
-            priority = parts[11] if len(parts) > 11 else ""  # full 20-column format
-        elif len(parts) >= 5:
-            priority = parts[3] if len(parts) > 3 else ""    # simplified 10-column test format
-        else:
-            priority = ""
-        if priority == "P0" and status == "已完成":
-            p0_tasks[task_id] = True
-
-    if not p0_tasks:
-        return result
-
-    # Read evidence-log
-    if not EVIDENCE_PATH.is_file():
-        return result
-    evidence_content = EVIDENCE_PATH.read_text(encoding="utf-8")
-
-    # Build map: task_id -> [(evd_id, file_location, entry_method, description, evd_type)]
-    task_entries = {}
-    for line in evidence_content.split("\n"):
-        line = line.strip()
-        if not line.startswith("| EVD-"):
-            continue
-        # FIX-372: split via _split_governance_table_row (not raw split) so
-        # pipes inside JSON/code-span cells stay intact; the len(parts) < 9
-        # guard keeps the same row-shape reachability (parts[0..8]).
-        parts = [p.strip() for p in _split_governance_table_row(line)]
-        if len(parts) < 9:
-            continue
-        evd_id = parts[1]
-        raw_ids = parts[2]
-        # FIX-372 (review-FIX-368-CODE-R0 P1-1): LIVE evidence-log column
-        # layout is parts[3]=type, parts[4]=description, parts[5]=fact basis,
-        # parts[6]=file location (10 data cells -> 12 split parts incl. the
-        # leading/trailing empties). The pre-fix parts[4]/parts[5] read was a
-        # +1 offset: evd_type read the description column, so
-        # evd_type == "影响分析" was always false and the impact scan swept
-        # the fact-basis column — Check 20 fail-open (analyst_bypassed
-        # systematically under-counted).
-        evd_type = parts[3] if len(parts) > 3 else ""
-        description = parts[4] if len(parts) > 4 else ""
-        file_location = parts[6] if len(parts) > 6 else ""
-        # FIX-372 (P3-1): parts[7] is the 录入方式 column in LIVE rows
-        # (recorder identity, e.g. "Coordinator 机写"); legacy rows kept the
-        # author there — the column position did not drift, only its label.
-        # Either way the cell carries the recorder identity, so the
-        # Analyst/Architect substring check stays on parts[7]; renamed from
-        # `author` to `entry_method` to match the LIVE column semantics.
-        entry_method = parts[7] if len(parts) > 7 else ""
-
-        for tid in expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else []:
-            task_entries.setdefault(tid, []).append(
-                (evd_id, file_location, entry_method, description, evd_type)
-            )
-
-    for task_id in sorted(p0_tasks):
-        entries = task_entries.get(task_id, [])
-        if not entries:
-            continue
-
-        # Check product code involvement
-        is_product_code = any(
-            any(pat in file_loc for pat in PRODUCT_CODE_PATTERNS)
-            for _, file_loc, _, _, _ in entries
-        )
-        if not is_product_code:
-            continue
-
-        # Count architecture layers
-        all_locs = " ".join(file_loc for _, file_loc, _, _, _ in entries)
-        layers = set()
-        for prefix, layer_name in ARCH_LAYER_MAP.items():
-            if prefix in all_locs:
-                layers.add(layer_name)
-        if len(layers) < 2:
-            # Not cross-layer — skip (only single layer change)
-            continue
-
-        result["total_p0_cross_layer"] += 1
-
-        # Check for Analyst/Architect involvement
-        # Look for impact analysis evidence entries covering this task
-        has_impact_analysis = False
-        has_analyst_involvement = False
-
-        for _, _, entry_method, description, evd_type in entries:
-            if evd_type == "影响分析" or "影响分析" in description:
-                has_impact_analysis = True
-                if "Analyst" in entry_method or "Architect" in entry_method:
-                    has_analyst_involvement = True
-                if "Analyst:" in description or "Architect:" in description:
-                    has_analyst_involvement = True
-
-        # Also check if any evidence entry for ANY task has impact analysis
-        # that references this task (e.g., separate Analyst analysis entry)
-        for line in evidence_content.split("\n"):
-            line = line.strip()
-            if not line.startswith("| EVD-"):
-                continue
-            # FIX-372: same LIVE layout alignment as the main scan above —
-            # parts[3]=type gate, parts[4]=description, parts[7]=entry method
-            # (P1-1/P3-1). Pre-fix the parts[4] != "影响分析" gate was near
-            # always true, leaving this cross-reference path effectively dead.
-            parts = [p.strip() for p in _split_governance_table_row(line)]
-            if len(parts) < 9:
-                continue
-            evd_type = parts[3] if len(parts) > 3 else ""
-            if evd_type != "影响分析":
-                continue
-            raw_ids = parts[2]
-            description = parts[4] if len(parts) > 4 else ""
-            entry_method = parts[7] if len(parts) > 7 else ""
-            covered = expand_task_ids(raw_ids) if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids) else set()
-            if task_id in covered:
-                has_impact_analysis = True
-                if "Analyst" in entry_method or "Architect" in entry_method:
-                    has_analyst_involvement = True
-                if "Analyst:" in description or "Architect:" in description:
-                    has_analyst_involvement = True
-
-        if has_impact_analysis and not has_analyst_involvement:
-            result["analyst_bypassed"] += 1
-            result["bypassed_tasks"].append(task_id)
-        elif has_impact_analysis and has_analyst_involvement:
-            result["analyst_activated"] += 1
-        # If no impact analysis at all, the task was completed without any
-        # analysis — not counted as "bypassed" (analysis step entirely skipped)
-
-    result["pass"] = result["analyst_bypassed"] == 0
-    return result
+    from team_activation import check_agent_activation as run
+    return run(
+        evidence_path=EVIDENCE_PATH, plan_path=SAMPLE_PATH,
+        split_governance_table_row=_split_governance_table_row, expand_task_ids=expand_task_ids,
+    )
 
 
 # ── FIX-038: Profile Consistency Check (Check 23) ──────────────────
 
 def check_profile_consistency():
-    """Validate the declared profile and the review behind any closed work unit."""
-    from governance_readers import loop_state, project_config
-
-    result = {"profile": None, "issues": [], "pass": True}
-    if not SAMPLE_PATH.is_file():
-        result["issues"].append("plan-tracker.md not found")
-    else:
-        config = project_config(SAMPLE_PATH.read_text(encoding="utf-8"))
-        declared = re.match(r"^\s*(\w+)", config.get("Profile", ""))
-        result["profile"] = declared.group(1).lower() if declared else None
-        if result["profile"] not in {"lightweight", "standard", "strict"}:
-            result["issues"].append("Profile must be lightweight, standard or strict")
-        view = loop_state(SAMPLE_PATH.parent.parent)
-        if view["state"] == "invalid":
-            result["issues"].append(view["message"])
-        for unit in view["units"]:
-            if unit["runtime_status"] == "completed" and not unit["last_review"]:
-                result["issues"].append(f"{unit['flow_unit_id']}: completed unit has no review evidence")
-    result["pass"] = not result["issues"]
-    return result
+    from team_activation import check_profile_consistency as run
+    return run(plan_path=SAMPLE_PATH)
 def _evidence_task_type_index():
     """FIX-174 R1 (P0-3): map task_id -> joined type+description text scanned
     from the evidence-log, so _task_routing_exempt can heuristically infer a
@@ -12166,219 +9858,34 @@ def cmd_check_plugin_freshness(_args):
 
 
 def _e2e_command_matrix():
-    """Return the source-root CLI proxy matrix used by cmd_e2e_check().
-
-    These commands intentionally run from ROOT because verify_workflow.py
-    derives its data paths from the source tree. They are CLI execution
-    proxies, not full external-project cwd execution.
-    """
-    verify_py = Path(__file__).resolve()
-    cleanup_py = verify_py.with_name("cleanup.py")
-    python = sys.executable
-    return [
-        {
-            "label": "/governance-status",
-            "kind": "source_cli_proxy",
-            "command": [python, str(verify_py), "status", "--json"],
-            "validator": _validate_e2e_status,
-        },
-        {
-            "label": "/governance-gates",
-            "kind": "source_cli_proxy",
-            "command": [python, str(verify_py), "gates"],
-            "validator": _validate_e2e_gates,
-        },
-        {
-            "label": "/governance-gate G99",
-            "kind": "source_cli_proxy",
-            "command": [python, str(verify_py), "gate", "G99"],
-            "validator": _validate_e2e_gate_g99,
-        },
-        {
-            "label": "/governance-cleanup",
-            "kind": "source_cli_proxy",
-            "command": [python, str(cleanup_py), "--dry-run", "--json"],
-            "validator": _validate_e2e_cleanup,
-            "accepted_exit_codes": {0, 1},
-        },
-        {
-            "label": "/governance-verify",
-            "kind": "source_cli_proxy",
-            "command": [python, str(verify_py), "verify"],
-            "validator": _validate_e2e_verify_known_failure,
-            "expected_known_failure": True,
-        },
-        {
-            "label": "/governance Scenario F proxy",
-            "kind": "source_cli_proxy",
-            "command": [python, str(verify_py), "loop", "status", "--json"],
-            "validator": _validate_e2e_governance_proxy,
-        },
-    ]
+    from product_fixture_validation import _e2e_command_matrix as run
+    return run(
+        validate_e2e_cleanup=_validate_e2e_cleanup, validate_e2e_gate_g99=_validate_e2e_gate_g99,
+        validate_e2e_gates=_validate_e2e_gates, validate_e2e_governance_proxy=_validate_e2e_governance_proxy,
+        validate_e2e_status=_validate_e2e_status,
+        validate_e2e_verify_known_failure=_validate_e2e_verify_known_failure,
+    )
 
 
 def _e2e_target_cwd_command_matrix(e2e_dir):
-    """Return executable commands that run from the external target cwd."""
-    target_verify_py = e2e_dir / "skills/software-project-governance/infra/verify_workflow.py"
-    target_cleanup_py = e2e_dir / "skills/software-project-governance/infra/cleanup.py"
-    python = sys.executable
-    return [
-        {
-            "label": "target-cwd /governance-status",
-            "kind": "target_cwd_command",
-            "cwd": e2e_dir,
-            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "status", "--json"],
-            "validator": _validate_e2e_status,
-        },
-        {
-            "label": "target-cwd /governance-gates",
-            "kind": "target_cwd_command",
-            "cwd": e2e_dir,
-            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "gates"],
-            "validator": _validate_e2e_gates,
-        },
-        {
-            "label": "target-cwd /governance-gate G99",
-            "kind": "target_cwd_command",
-            "cwd": e2e_dir,
-            "command": [python, str(target_verify_py.relative_to(e2e_dir)), "gate", "G99"],
-            "validator": _validate_e2e_gate_g99,
-        },
-        {
-            "label": "target-cwd /governance-cleanup",
-            "kind": "target_cwd_command",
-            "cwd": e2e_dir,
-            "command": [python, str(target_cleanup_py.relative_to(e2e_dir)), "--dry-run", "--json"],
-            "validator": _validate_e2e_cleanup,
-            "accepted_exit_codes": {0, 1},
-        },
-    ]
+    from product_fixture_validation import _e2e_target_cwd_command_matrix as run
+    return run(
+        e2e_dir, validate_e2e_cleanup=_validate_e2e_cleanup, validate_e2e_gate_g99=_validate_e2e_gate_g99,
+        validate_e2e_gates=_validate_e2e_gates, validate_e2e_status=_validate_e2e_status,
+    )
 
 
 def _e2e_target_fixture_checks(e2e_dir):
-    """Return direct checks against the tracked e2e-test-project fixture."""
-    governance_dir = e2e_dir / ".governance"
-    plan_tracker_path = governance_dir / "plan-tracker.md"
-    target_skill_path = e2e_dir / "skills" / "software-project-governance" / "SKILL.md"
-    target_version = (
-        _extract_plan_workflow_version(plan_tracker_path)
-        or _extract_skill_version(target_skill_path)
-        or _extract_skill_version(ROOT / "skills/software-project-governance/SKILL.md")
+    from product_fixture_validation import _e2e_target_fixture_checks as run
+    return run(
+        e2e_dir, package_root=ROOT, extract_plan_workflow_version=_extract_plan_workflow_version,
+        extract_skill_version=_extract_skill_version,
     )
-    return [
-        {
-            "label": "CLAUDE.md bootstrap fixture",
-            "path": e2e_dir / "CLAUDE.md",
-            "needles": ["Governance Bootstrap", "SELF-CHECK", "AskUserQuestion"],
-        },
-        {
-            "label": "AGENTS.md Codex/opencode native entry fixture",
-            "path": e2e_dir / "AGENTS.md",
-            "needles": [
-                "Governance Bootstrap",
-                "SELF-CHECK",
-                "Codex",
-                "opencode",
-                "skills/software-project-governance/SKILL.md",
-            ],
-        },
-        {
-            "label": "GEMINI.md native entry fixture",
-            "path": e2e_dir / "GEMINI.md",
-            "needles": [
-                "Governance Bootstrap",
-                "SELF-CHECK",
-                "Gemini",
-                "skills/software-project-governance/SKILL.md",
-            ],
-        },
-        {
-            "label": "tracked governance files",
-            "paths": [
-                governance_dir / "plan-tracker.md",
-                governance_dir / "evidence-log.md",
-                governance_dir / "decision-log.md",
-                governance_dir / "risk-log.md",
-                governance_dir / "session-snapshot.md",
-            ],
-        },
-        {
-            "label": "target plan-tracker project config",
-            "path": plan_tracker_path,
-            "needles": ["工作流版本", target_version, "操作权限模式", "default-confirm"],
-        },
-        {
-            "label": "target workflow skill version",
-            "path": target_skill_path,
-            "expected_skill_version": target_version,
-            "needles": ["Coordinator", "Agent Team"],
-        },
-        {
-            "label": "target /governance route contract (router layer)",
-            "path": e2e_dir / "commands" / "governance.md",
-            "needles": ["commands/governance/scenario-f.md", "AskUserQuestion", "Coordinator"],
-        },
-        {
-            "label": "target status restores scoped work",
-            "path": e2e_dir / "commands" / "governance-status.md",
-            "needles": ["governance-bootstrap --format json", "loop status --unit", "loop status --json"],
-        },
-    ]
 
 
 def _e2e_contract_checks():
-    """Return checks that need host runtime or static command contracts."""
-    return [
-        {
-            "label": "/governance-review code",
-            "kind": "AGENT_RUNTIME_REQUIRED",
-            "path": ROOT / "commands/governance-review.md",
-            "needles": [
-                "Reviewer Agent",
-                "code-review",
-                "代码审查",
-                "general-purpose",
-                "degraded evidence",
-                "不得解锁",
-            ],
-            "reason": "Agent spawn is provided by the host platform, not Python.",
-        },
-        {
-            "label": "AskUserQuestion interaction boundary",
-            "kind": "AGENT_RUNTIME_REQUIRED",
-            "path": ROOT / "commands/governance.md",
-            "needles": ["AskUserQuestion"],
-            "reason": "Interactive user choice requires platform runtime tools.",
-        },
-        {
-            "label": "/governance route contract (router layer)",
-            "kind": "CONTRACT_CHECK",
-            "path": ROOT / "commands/governance.md",
-            "needles": [
-                "Scenario F",
-                "场景路由",
-                "commands/governance/scenario-f.md",
-            ],
-            "reason": "FEAT-038: the router layer routes to the owning Scenario document.",
-        },
-        {
-            "label": "/governance Scenario F route contract",
-            "kind": "CONTRACT_CHECK",
-            "path": ROOT / "commands/governance/scenario-f.md",
-            "needles": [
-                "Scenario F",
-                "../governance-status.md",
-            ],
-            "reason": "Executable coverage comes from the Scenario F status proxy.",
-        },
-        {
-            "label": "/governance-status work-unit recovery",
-            "kind": "CONTRACT_CHECK",
-            "path": ROOT / "commands/governance-status.md",
-            "needles": ["governance-bootstrap --format json", "loop status --unit", "loop status --json"],
-            "reason": "Status output is the runnable first-run snapshot signal.",
-        },
-    ]
+    from product_fixture_validation import _e2e_contract_checks as run
+    return run(package_root=ROOT)
 
 
 # DSH has a headless profile. The adapter tracks live-session evidence separately.
@@ -12388,802 +9895,198 @@ AGENT_RUNTIME_E2E_PLATFORMS = ("claude", "codex", "gemini", "opencode", "pi")
 
 
 def _agent_runtime_e2e_prompt(agent_id):
-    return (
-        "Read the local governance bootstrap and the native work units. Use an open unit ID, "
-        "or any recorded unit ID if all are closed. Use [] only if there are no units. "
-        "Answer with exactly these "
-        f"machine-readable fields if the workflow is loaded: E2E_PLATFORM={agent_id}; "
-        "E2E_AGENT=<workflow role>; E2E_UNIT=<work unit ID or []>; "
-        "E2E_MODE=<trigger x permission>. "
-        "Do not modify files."
-    )
+    from host_certification import _agent_runtime_e2e_prompt as run
+    return run(agent_id)
 
 
 def _agent_runtime_e2e_command_matrix(e2e_dir=None):
-    """Return real agent runtime E2E commands for mainstream code agents."""
-    e2e_dir = e2e_dir or ROOT / "project/e2e-test-project"
-    prompts = {
-        agent_id: _agent_runtime_e2e_prompt(agent_id)
-        for agent_id in AGENT_RUNTIME_E2E_PLATFORMS
-    }
-    return [
-        {
-            "agent": "claude",
-            "label": "Claude real agent target cwd",
-            "cwd": e2e_dir,
-            "command": [
-                "claude",
-                "-p",
-                prompts["claude"],
-                "--permission-mode",
-                "default",
-                "--allowedTools",
-                "Read",
-                "--output-format",
-                "text",
-            ],
-            "validator": _validate_agent_runtime_e2e_passed,
-        },
-        {
-            "agent": "codex",
-            "label": "Codex CLI headless target cwd",
-            "cwd": e2e_dir,
-            "command": [
-                "codex",
-                "exec",
-                "-C",
-                ".",
-                "-s",
-                "read-only",
-                "--ephemeral",
-                prompts["codex"],
-            ],
-            "validator": _validate_agent_runtime_e2e_passed,
-        },
-        {
-            "agent": "gemini",
-            "label": "Gemini CLI target cwd",
-            "cwd": e2e_dir,
-            "command": [
-                "gemini",
-                "--prompt",
-                prompts["gemini"],
-                "--approval-mode",
-                "plan",
-                "--output-format",
-                "text",
-            ],
-            "validator": _validate_agent_runtime_e2e_passed,
-        },
-        {
-            "agent": "opencode",
-            "label": "opencode CLI target cwd",
-            "cwd": e2e_dir,
-            "command": [
-                "opencode",
-                "run",
-                "--dir",
-                ".",
-                "--format",
-                "json",
-                prompts["opencode"],
-            ],
-            "validator": _validate_agent_runtime_e2e_passed,
-        },
-        {
-            # FEAT-100: pi mixed-scope entry (user ruling #3) — real agent-dir
-            # read-only credentials + --no-session (zero write surface) +
-            # --tools read (read-only subset) + -na (one-shot trust denial;
-            # context files load without trust per pi security.md L57).
-            "agent": "pi",
-            "label": "pi CLI headless target cwd",
-            "cwd": e2e_dir,
-            "command": [
-                "pi",
-                "-p",
-                prompts["pi"],
-                "--tools",
-                "read",
-                "--no-session",
-                "-na",
-            ],
-            "validator": _validate_agent_runtime_e2e_passed,
-        },
-    ]
+    from host_certification import _agent_runtime_e2e_command_matrix as run
+    return run(
+        e2e_dir, package_root=ROOT, agent_runtime_e2e_platforms=AGENT_RUNTIME_E2E_PLATFORMS,
+        agent_runtime_e2e_prompt=_agent_runtime_e2e_prompt,
+        validate_agent_runtime_e2e_passed=_validate_agent_runtime_e2e_passed,
+    )
 
 
 def _run_e2e_subprocess(command, timeout=30, cwd=None):
-    """Run a matrix command and return subprocess.CompletedProcess."""
-    return subprocess.run(
-        command,
-        cwd=str(cwd or ROOT),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
+    from product_fixture_validation import _run_e2e_subprocess as run
+    return run(command, timeout, cwd, package_root=ROOT)
 
 
 def _e2e_output(result):
-    return (result.stdout or "") + "\n" + (result.stderr or "")
+    from product_fixture_validation import _e2e_output as run
+    return run(result)
 
 
 def _truncate_log(text, limit=1200):
-    text = re.sub(r"\s+", " ", (text or "")).strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "...[truncated]"
+    from product_fixture_validation import _truncate_log as run
+    return run(text, limit)
 
 
 def _coerce_e2e_text(value):
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode(locale.getpreferredencoding(False), errors="replace")
-    return str(value)
+    from product_fixture_validation import _coerce_e2e_text as run
+    return run(value)
 
 
 def _has_all(text, needles):
-    return all(needle in text for needle in needles)
+    from product_fixture_validation import _has_all as run
+    return run(text, needles)
 
 
 def _e2e_json_object(result):
-    try:
-        value = json.loads(result.stdout)
-    except (ValueError, TypeError):
-        return {}
-    return value if isinstance(value, dict) else {}
+    from product_fixture_validation import _e2e_json_object as run
+    return run(result)
 
 
 def _valid_e2e_loop_view(view):
-    if not isinstance(view, dict) or view.get("state") not in ("ready", "empty"):
-        return False
-    units = view.get("units")
-    if not isinstance(units, list) or view["state"] == "empty" and units:
-        return False
-    if view["state"] == "ready" and not units and not view.get("omitted_units"):
-        return False
-    for unit in units:
-        if not isinstance(unit, dict) or not all(unit.get(key) for key in
-                ("flow_unit_id", "goal", "acceptance", "gate_id", "gate_status", "runtime_status", "next_action")):
-            return False
-        if unit["runtime_status"] == "completed" and not (unit.get("last_review") or {}).get("evidence_ref"):
-            return False
-    return True
+    from product_fixture_validation import _valid_e2e_loop_view as run
+    return run(view)
 
 
 def _validate_e2e_status(result):
-    payload = _e2e_json_object(result)
-    project = payload.get("project")
-    view = payload.get("loops")
-    ok = (result.returncode == 0 and isinstance(project, dict)
-          and project.get("permission_mode") in ("", "maximum-autonomy", "default-confirm")
-          and _valid_e2e_loop_view(view) and view.get("no_global_stage") is True)
-    return ok, "host status reports project.permission_mode and current work with scoped acceptance"
+    from product_fixture_validation import _validate_e2e_status as run
+    return run(result, e2e_json_object=_e2e_json_object, valid_e2e_loop_view=_valid_e2e_loop_view)
 
 
 def _validate_e2e_gates(result):
-    return result.returncode == 0 and _valid_e2e_loop_view(_e2e_json_object(result)), "all gates belong to recorded work units"
+    from product_fixture_validation import _validate_e2e_gates as run
+    return run(result, e2e_json_object=_e2e_json_object, valid_e2e_loop_view=_valid_e2e_loop_view)
 
 
 def _validate_e2e_gate_g99(result):
-    report = _e2e_json_object(result)
-    ok = result.returncode != 0 and report.get("state") in ("empty", "ready") and report.get("units") == []
-    return ok, "unknown gate has no matching work unit and returns nonzero"
+    from product_fixture_validation import _validate_e2e_gate_g99 as run
+    return run(result, e2e_json_object=_e2e_json_object)
 def _validate_e2e_cleanup(result):
-    output = _e2e_output(result).strip()
-    try:
-        report = json.loads(output)
-    except json.JSONDecodeError:
-        return False, "cleanup emitted non-JSON output"
-
-    if report.get("status") == "clean":
-        return True, "cleanup dry-run executed and reported status=clean"
-
-    required = {"manifest_version", "dry_run", "total_redundant", "classification"}
-    ok = (
-        result.returncode == 0
-        and required.issubset(report.keys())
-        and report.get("dry_run") is True
-    )
-    return ok, "cleanup dry-run executed and emitted redundancy report"
-
-
-_KNOWN_VERIFY_FAILURE_SIGNATURES = {
-    "missing snippet in .governance/evidence-log.md: evd-001",
-    "missing snippet in .governance/evidence-log.md: evd-051",
-    "missing snippet in skills/software-project-governance/skill.md: coordinator 接管用户交互",
-    "missing snippet in skills/software-project-governance/skill.md: producer-reviewer 分离",
-}
+    from product_fixture_validation import _validate_e2e_cleanup as run
+    return run(result, e2e_output=_e2e_output)
 
 
 def _normalize_e2e_verify_failure(line):
-    line = line.replace("\\", "/").strip().lower()
-    return re.sub(r"\s+", " ", line)
+    from product_fixture_validation import _normalize_e2e_verify_failure as run
+    return run(line)
 
 
 def _extract_e2e_verify_failures(output):
-    failures = []
-    for line in output.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("- "):
-            failures.append(_normalize_e2e_verify_failure(stripped[2:]))
-    return failures
+    from product_fixture_validation import _extract_e2e_verify_failures as run
+    return run(output, normalize_e2e_verify_failure=_normalize_e2e_verify_failure)
 
 
 def _validate_e2e_verify_known_failure(result):
-    output = _e2e_output(result)
-    if result.returncode == 0 and "Workflow Plugin Verification" in output and "Verification Result: PASSED" in output:
-        return True, "verify command executed and passed"
-
-    failures = set(_extract_e2e_verify_failures(output))
-    ok = (
-        result.returncode != 0
-        and "Workflow Plugin Verification" in output
-        and "Verification Result: FAILED" in output
-        and bool(failures)
-        and failures.issubset(_KNOWN_VERIFY_FAILURE_SIGNATURES)
-        and bool(failures & _KNOWN_VERIFY_FAILURE_SIGNATURES)
+    from product_fixture_validation import _validate_e2e_verify_known_failure as run
+    return run(
+        result, known_verify_failure_signatures=_host_policy('_KNOWN_VERIFY_FAILURE_SIGNATURES'),
+        e2e_output=_e2e_output, extract_e2e_verify_failures=_extract_e2e_verify_failures,
     )
-    if ok:
-        return True, "verify command executed and all failures are known allowed signatures"
-
-    unknown = sorted(failures - _KNOWN_VERIFY_FAILURE_SIGNATURES)
-    detail = []
-    if unknown:
-        detail.append(f"unknown failures={unknown}")
-    if not failures:
-        detail.append("no parseable verification failure lines")
-    if result.returncode == 0:
-        detail.append("verify command returned 0")
-    return False, "verify failure did not match allowed known signatures; " + "; ".join(detail)
 
 
 def _evaluate_e2e_target_fixture_check(entry):
-    paths = entry.get("paths")
-    if paths:
-        missing = [str(path.relative_to(ROOT)) for path in paths if not path.exists()]
-        return {
-            "label": entry["label"],
-            "status": "PASS" if not missing else "FAIL",
-            "message": "all tracked fixture files exist" if not missing else f"missing files={missing}",
-        }
-
-    path = entry["path"]
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return {
-            "label": entry["label"],
-            "status": "FAIL",
-            "message": f"fixture file unavailable: {exc}",
-        }
-
-    missing = [needle for needle in entry["needles"] if needle not in text]
-    if "expected_skill_version" in entry:
-        version = _extract_skill_version(path)
-        if not version or version != entry["expected_skill_version"]:
-            missing.append(f"skill version {entry['expected_skill_version']}")
-    return {
-        "label": entry["label"],
-        "status": "PASS" if not missing else "FAIL",
-        "message": "fixture content matches expected markers" if not missing else f"missing markers={missing}",
-    }
+    from product_fixture_validation import _evaluate_e2e_target_fixture_check as run
+    return run(entry, package_root=ROOT, extract_skill_version=_extract_skill_version)
 
 
 def _validate_e2e_governance_proxy(result):
-    report = _e2e_json_object(result)
-    ok = result.returncode == 0 and report.get("no_global_stage") is True and _valid_e2e_loop_view(report)
-    return ok, "Scenario F recovers the active work-unit snapshot"
+    from product_fixture_validation import _validate_e2e_governance_proxy as run
+    return run(result, e2e_json_object=_e2e_json_object, valid_e2e_loop_view=_valid_e2e_loop_view)
 def _evaluate_e2e_command(entry, runner=_run_e2e_subprocess):
-    """Execute one E2E matrix entry and normalize its result."""
-    try:
-        try:
-            result = runner(entry["command"], cwd=entry.get("cwd"))
-        except TypeError:
-            result = runner(entry["command"])
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {
-            "label": entry["label"],
-            "kind": entry.get("kind", "source_cli_proxy"),
-            "status": "FAIL",
-            "exit_code": None,
-            "message": f"subprocess did not complete: {exc}",
-            "command": entry["command"],
-        }
-
-    accepted = entry.get("accepted_exit_codes")
-    if accepted is not None and result.returncode not in accepted:
-        return {
-            "label": entry["label"],
-            "kind": entry.get("kind", "source_cli_proxy"),
-            "status": "FAIL",
-            "exit_code": result.returncode,
-            "message": f"unexpected exit code; accepted={sorted(accepted)}",
-            "command": entry["command"],
-        }
-
-    ok, message = entry["validator"](result)
-    if not ok:
-        return {
-            "label": entry["label"],
-            "kind": entry.get("kind", "source_cli_proxy"),
-            "status": "FAIL",
-            "exit_code": result.returncode,
-            "message": message,
-            "command": entry["command"],
-        }
-
-    status = "EXPECTED_KNOWN_FAILURE" if entry.get("expected_known_failure") and result.returncode != 0 else "PASS"
-    return {
-        "label": entry["label"],
-        "kind": entry.get("kind", "source_cli_proxy"),
-        "status": status,
-        "exit_code": result.returncode,
-        "message": message,
-        "command": entry["command"],
-    }
+    from product_fixture_validation import _evaluate_e2e_command as run
+    return run(entry, runner)
 
 
 def _evaluate_e2e_contract_check(entry):
-    path = entry["path"]
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return {
-            "label": entry["label"],
-            "status": entry["kind"],
-            "ok": False,
-            "message": f"contract file unavailable: {exc}",
-        }
-
-    ok = _has_all(text, entry["needles"])
-    suffix = "contract present" if ok else "contract incomplete"
-    return {
-        "label": entry["label"],
-        "status": entry["kind"],
-        "ok": ok,
-        "message": f"{suffix}; {entry['reason']}",
-    }
+    from product_fixture_validation import _evaluate_e2e_contract_check as run
+    return run(entry, has_all=_has_all)
 
 
 def _validate_agent_runtime_e2e_passed(agent_id, result, root=None):
-    output = _e2e_output(result)
-    if result.returncode != 0:
-        return False, f"real agent exited with code {result.returncode}"
-
-    fields = _parse_agent_runtime_e2e_fields(output)
-    if not fields:
-        return False, "real agent output missing structured E2E_PLATFORM/E2E_AGENT/E2E_UNIT/E2E_MODE response"
-    from governance_readers import loop_state
-    view = loop_state(root or ROOT / "project/e2e-test-project")
-    if view["state"] == "invalid":
-        return False, view["message"]
-    current = [u for u in view["units"] if u["runtime_status"] not in ("completed", "withdrawn")]
-    expected = {u["flow_unit_id"] for u in current or view["units"]} or {"[]"}
-    for response in fields:
-        platform = response.get("E2E_PLATFORM", "")
-        workflow_agent = response.get("E2E_AGENT", "")
-        unit_id = response.get("E2E_UNIT", "")
-        mode = response.get("E2E_MODE", "")
-        if (
-            platform == agent_id
-            and _is_valid_agent_runtime_workflow_agent(workflow_agent)
-            and unit_id in expected
-            and _is_valid_agent_runtime_mode(mode)
-        ):
-            return True, (
-                f"real agent output includes structured response: "
-                f"E2E_PLATFORM={platform}; E2E_AGENT={workflow_agent}; "
-                f"E2E_UNIT={unit_id}; E2E_MODE={mode}"
-            )
-    return False, (
-        "real agent output did not include a complete non-placeholder "
-        f"E2E response with platform={agent_id}"
+    from host_certification import _validate_agent_runtime_e2e_passed as run
+    return run(
+        agent_id, result, root, package_root=ROOT, e2e_output=_e2e_output,
+        is_valid_agent_runtime_mode=_is_valid_agent_runtime_mode,
+        is_valid_agent_runtime_workflow_agent=_is_valid_agent_runtime_workflow_agent,
+        parse_agent_runtime_e2e_fields=_parse_agent_runtime_e2e_fields,
     )
 
 
 def _agent_runtime_e2e_candidate_texts(output):
-    """Return text payloads from agent output while preserving plain text logs."""
-    candidates = []
-    for line in (output or "").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            event = json.loads(stripped)
-        except json.JSONDecodeError:
-            candidates.append(line)
-            continue
-        if not isinstance(event, dict):
-            candidates.append(line)
-            continue
-        extracted = False
-        part = event.get("part")
-        if isinstance(part, dict) and isinstance(part.get("text"), str):
-            candidates.append(part["text"])
-            extracted = True
-        if isinstance(event.get("text"), str):
-            candidates.append(event["text"])
-            extracted = True
-        if not extracted:
-            candidates.append(line)
-    return candidates or [output or ""]
+    from host_certification import _agent_runtime_e2e_candidate_texts as run
+    return run(output)
 
 
 def _parse_agent_runtime_e2e_fields(output):
-    """Extract E2E field groups from semicolon/newline-delimited agent output."""
-    groups = []
-    current = {}
-    for candidate in _agent_runtime_e2e_candidate_texts(output):
-        for match in re.finditer(r"\b(E2E_PLATFORM|E2E_AGENT|E2E_UNIT|E2E_MODE)\s*=\s*([^;\r\n]+)", candidate or ""):
-            key, value = match.group(1), match.group(2).strip()
-            if key == "E2E_PLATFORM" and "E2E_PLATFORM" in current:
-                groups.append(current)
-                current = {}
-            current[key] = value
-            if {"E2E_PLATFORM", "E2E_AGENT", "E2E_UNIT", "E2E_MODE"}.issubset(current):
-                groups.append(current)
-                current = {}
-    if current:
-        groups.append(current)
-    return groups
+    from host_certification import _parse_agent_runtime_e2e_fields as run
+    return run(output, agent_runtime_e2e_candidate_texts=_agent_runtime_e2e_candidate_texts)
 
 
 def _is_non_placeholder_agent_runtime_value(value):
-    value = (value or "").strip()
-    lowered = value.lower()
-    if not value:
-        return False
-    if value.startswith("<") and value.endswith(">"):
-        return False
-    placeholder_markers = ("placeholder", "work unit id or []", "trigger x permission")
-    return not any(marker in lowered for marker in placeholder_markers)
+    from host_certification import _is_non_placeholder_agent_runtime_value as run
+    return run(value)
 
 
 def _is_valid_agent_runtime_workflow_agent(value):
-    if not _is_non_placeholder_agent_runtime_value(value):
-        return False
-    return value.strip().lower() not in AGENT_RUNTIME_E2E_PLATFORMS
+    from host_certification import _is_valid_agent_runtime_workflow_agent as run
+    return run(
+        value, agent_runtime_e2e_platforms=AGENT_RUNTIME_E2E_PLATFORMS,
+        is_non_placeholder_agent_runtime_value=_is_non_placeholder_agent_runtime_value,
+    )
 
 
 def _is_valid_agent_runtime_mode(value):
-    if not _is_non_placeholder_agent_runtime_value(value):
-        return False
-    parts = [part.strip() for part in value.split(" x ")]
-    if len(parts) != 2 or not all(_is_non_placeholder_agent_runtime_value(part) for part in parts):
-        return False
-    trigger_mode, permission_mode = parts
-    return (
-        trigger_mode in {"always-on", "on-demand", "silent-track"}
-        and permission_mode in {"maximum-autonomy", "default-confirm"}
-    )
+    from host_certification import _is_valid_agent_runtime_mode as run
+    return run(value, is_non_placeholder_agent_runtime_value=_is_non_placeholder_agent_runtime_value)
 
 
-def _classify_agent_runtime_blocked(agent_id, output="", exception=None):
-    """Return blocked_reason for known environment/runtime blockers."""
-    lowered = (output or "").lower()
-    if isinstance(exception, FileNotFoundError):
-        return f"{agent_id} runtime command not found on PATH"
-    if isinstance(exception, PermissionError):
-        return f"{agent_id} runtime command could not start due to OS permission/path resolution"
-    if agent_id == "codex" and isinstance(exception, subprocess.TimeoutExpired):
-        return "Codex CLI target-cwd command timed out"
-    if agent_id == "codex" and "timed out" in lowered:
-        return "Codex CLI target-cwd command timed out"
-    if agent_id == "gemini":
-        auth_markers = [
-            "gemini_api_key",
-            "google_api_key",
-            "api key",
-            "auth",
-            "authenticate",
-            "authentication",
-            "credential",
-            "login",
-            "vertex",
-            "gca",
-        ]
-        if any(marker in lowered for marker in auth_markers):
-            return (
-                "Gemini auth missing or not configured; configure GEMINI_API_KEY, "
-                "GOOGLE_API_KEY, Vertex credentials, GCA auth, or Gemini settings auth."
-            )
-    if agent_id == "opencode":
-        if isinstance(exception, subprocess.TimeoutExpired):
-            return (
-                "opencode CLI target-cwd command timed out; increase timeout "
-                "or inspect partial tool use before classifying as provider/model invalid"
-            )
-        if "timed out" in lowered or "timeout" in lowered:
-            return (
-                "opencode CLI target-cwd command timed out; increase timeout "
-                "or inspect partial tool use before classifying as provider/model invalid"
-            )
-        invalid_model_markers = [
-            "deepseek-v4-pro[1m]",
-            "invalid model",
-            "model not",
-            "unsupported model",
-            "not supported",
-        ]
-        if any(marker in lowered for marker in invalid_model_markers):
-            return "opencode provider/model config invalid"
-    return None
+def _classify_agent_runtime_blocked(agent_id, output='', exception=None):
+    from host_certification import _classify_agent_runtime_blocked as run
+    return run(agent_id, output, exception)
 
 
 def _resolve_agent_runtime_command(command):
-    """Resolve PATH/PATHEXT shims before Popen, especially npm .cmd shims on Windows."""
-    if not command:
-        return command
-    resolved = shutil.which(command[0])
-    if not resolved:
-        return command
-    return [resolved, *command[1:]]
+    from host_certification import _resolve_agent_runtime_command as run
+    return run(command)
 
 
 def _run_agent_runtime_e2e_subprocess(command, timeout=120, cwd=None):
-    command = _resolve_agent_runtime_command(command)
-    popen_kwargs = {}
-    if os.name != "nt":
-        popen_kwargs["start_new_session"] = True
-    process = subprocess.Popen(
-        command,
-        cwd=str(cwd or ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding=locale.getpreferredencoding(False),
-        errors="replace",
-        **popen_kwargs,
-    )
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        _cleanup_agent_runtime_process_tree(process)
-        stdout, stderr = process.communicate()
-        raise subprocess.TimeoutExpired(
-            exc.cmd,
-            exc.timeout,
-            output=stdout,
-            stderr=stderr,
-        ) from exc
-    return subprocess.CompletedProcess(
-        command,
-        process.returncode,
-        stdout=stdout,
-        stderr=stderr,
+    from host_certification import _run_agent_runtime_e2e_subprocess as run
+    return run(
+        command, timeout, cwd, package_root=ROOT,
+        cleanup_agent_runtime_process_tree=_cleanup_agent_runtime_process_tree,
+        resolve_agent_runtime_command=_resolve_agent_runtime_command,
     )
 
 
 def _cleanup_agent_runtime_process_tree(process):
-    """Best-effort cleanup for agent runtime shims and their child process trees."""
-    pid = getattr(process, "pid", None)
-    if not pid:
-        return
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=10,
-            )
-            return
-        except (subprocess.SubprocessError, OSError):
-            pass
-    else:
-        try:
-            os.killpg(pid, signal.SIGKILL)
-            return
-        except (OSError, ProcessLookupError):
-            pass
-    try:
-        process.kill()
-    except OSError:
-        pass
+    from host_certification import _cleanup_agent_runtime_process_tree as run
+    return run(process)
 
 
-def _evaluate_agent_runtime_e2e_command(
-    entry,
-    timeout=120,
-    runner=_run_agent_runtime_e2e_subprocess,
-):
-    """Execute one real agent runtime command and normalize pass/blocked/fail."""
-    agent_id = entry["agent"]
-    command = entry["command"]
-    cwd = entry.get("cwd")
-    try:
-        try:
-            result = runner(command, timeout=timeout, cwd=cwd)
-        except TypeError:
-            result = runner(command)
-    except subprocess.TimeoutExpired as exc:
-        output = _coerce_e2e_text(exc.stdout) + "\n" + _coerce_e2e_text(exc.stderr)
-        blocked_reason = _classify_agent_runtime_blocked(agent_id, output, exc)
-        status = "BLOCKED" if blocked_reason else "FAIL"
-        return {
-            "agent": agent_id,
-            "label": entry["label"],
-            "status": status,
-            "exit_code": None,
-            "command": command,
-            "cwd": cwd,
-            "message": blocked_reason or f"unclassified timeout: {exc}",
-            "blocked_reason": blocked_reason,
-            "log_summary": _truncate_log(output or str(exc)),
-        }
-    except (OSError, FileNotFoundError) as exc:
-        blocked_reason = _classify_agent_runtime_blocked(agent_id, "", exc)
-        status = "BLOCKED" if blocked_reason else "FAIL"
-        return {
-            "agent": agent_id,
-            "label": entry["label"],
-            "status": status,
-            "exit_code": None,
-            "command": command,
-            "cwd": cwd,
-            "message": blocked_reason or f"subprocess did not start: {exc}",
-            "blocked_reason": blocked_reason,
-            "log_summary": _truncate_log(str(exc)),
-        }
-
-    output = _e2e_output(result)
-    ok, message = entry["validator"](agent_id, result, root=cwd)
-    if ok:
-        return {
-            "agent": agent_id,
-            "label": entry["label"],
-            "status": "PASS",
-            "exit_code": result.returncode,
-            "command": command,
-            "cwd": cwd,
-            "message": message,
-            "blocked_reason": None,
-            "log_summary": _truncate_log(output),
-        }
-
-    blocked_reason = _classify_agent_runtime_blocked(agent_id, output)
-    if blocked_reason:
-        return {
-            "agent": agent_id,
-            "label": entry["label"],
-            "status": "BLOCKED",
-            "exit_code": result.returncode,
-            "command": command,
-            "cwd": cwd,
-            "message": blocked_reason,
-            "blocked_reason": blocked_reason,
-            "log_summary": _truncate_log(output),
-        }
-
-    return {
-        "agent": agent_id,
-        "label": entry["label"],
-        "status": "FAIL",
-        "exit_code": result.returncode,
-        "command": command,
-        "cwd": cwd,
-        "message": message,
-        "blocked_reason": None,
-        "log_summary": _truncate_log(output),
-    }
+def _evaluate_agent_runtime_e2e_command(entry, timeout=120, runner=_run_agent_runtime_e2e_subprocess):
+    from host_certification import _evaluate_agent_runtime_e2e_command as run
+    return run(
+        entry, timeout, runner, classify_agent_runtime_blocked=_classify_agent_runtime_blocked,
+        coerce_e2e_text=_coerce_e2e_text, e2e_output=_e2e_output, truncate_log=_truncate_log,
+    )
 
 
 def cmd_agent_runtime_e2e(args):
-    """Run real agent runtime E2E command matrix against e2e-test-project."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
-    target = Path(getattr(args, "target", None) or ROOT / "project/e2e-test-project")
-    timeout = getattr(args, "timeout", 120)
-    requested_agents = set(getattr(args, "agent", None) or AGENT_RUNTIME_E2E_PLATFORMS)
-    matrix = [
-        entry for entry in _agent_runtime_e2e_command_matrix(target)
-        if entry["agent"] in requested_agents
-    ]
-    if not target.exists():
-        print(f"[FAIL] target not found: {target}")
-        sys.exit(1)
-
-    results = [
-        _evaluate_agent_runtime_e2e_command(entry, timeout=timeout)
-        for entry in matrix
-    ]
-
-    print("=== Agent Runtime E2E Harness ===")
-    print(f"Target: {target}")
-    print(f"Timeout: {timeout}s")
-    print("Schema: status in PASS/BLOCKED/FAIL; BLOCKED means known environment or agent-runtime configuration blocker.\n")
-
-    for result in results:
-        command = " ".join(str(part) for part in result["command"])
-        print(f"[{result['status']}] {result['agent']}: {result['label']} (exit={result['exit_code']})")
-        print(f"  cwd: {result['cwd']}")
-        print(f"  command: {command}")
-        print(f"  message: {result['message']}")
-        if result["blocked_reason"]:
-            print(f"  blocked_reason: {result['blocked_reason']}")
-        if result["log_summary"]:
-            print(f"  log_summary: {result['log_summary']}")
-
-    pass_count = sum(1 for r in results if r["status"] == "PASS")
-    blocked_count = sum(1 for r in results if r["status"] == "BLOCKED")
-    fail_count = sum(1 for r in results if r["status"] == "FAIL")
-    print(
-        "\n=== Result: "
-        f"pass={pass_count}, blocked={blocked_count}, fail={fail_count}, total={len(results)} ==="
+    from host_certification import cmd_agent_runtime_e2e as run
+    return run(
+        args, package_root=ROOT, agent_runtime_e2e_platforms=AGENT_RUNTIME_E2E_PLATFORMS,
+        agent_runtime_e2e_command_matrix=_agent_runtime_e2e_command_matrix,
+        evaluate_agent_runtime_e2e_command=_evaluate_agent_runtime_e2e_command,
     )
-    if fail_count:
-        print("ACTION: Fix unclassified harness/runtime failures above.")
-        sys.exit(1)
-    print("Agent runtime E2E harness completed; blocked entries are environment/configuration evidence, not harness failures.")
 
 
 def cmd_gemini_auth_preflight(_args):
-    """Check Gemini CLI availability and authentication sources without leaking secrets."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
-    result = _gemini_auth_preflight()
-    print("=== Gemini Auth Preflight ===")
-    print(f"status: {result['status']}")
-    print(f"command: {result['command']}")
-    print(f"version_command: {result['version_command']}")
-    print(f"cli_path: {result['cli_path'] or 'not found'}")
-    if result["version"]:
-        print(f"version: {result['version']}")
-    if result["auth_sources"]:
-        print("auth_sources:")
-        for source in result["auth_sources"]:
-            print(f" - {source}")
-    else:
-        print("auth_sources: none")
-    if result["blocked_reason"]:
-        print(f"blocked_reason: {result['blocked_reason']}")
-    print(f"remediation: {result['remediation']}")
-    if result["status"] != "PASS":
-        sys.exit(1)
+    from runtime_preflight import cmd_gemini_auth_preflight as run
+    return run(_args, gemini_auth_preflight=_gemini_auth_preflight)
 
 
 def cmd_opencode_provider_preflight(_args):
-    """Check opencode CLI and DeepSeek provider/model config without leaking secrets."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
-    result = _opencode_provider_model_preflight()
-    print("=== opencode Provider/Model Preflight ===")
-    print(f"status: {result['status']}")
-    print(f"command: {result['command']}")
-    print(f"version_command: {result['version_command']}")
-    print(f"cli_path: {result['cli_path'] or 'not found'}")
-    if result["version"]:
-        print(f"version: {result['version']}")
-    if result["legal_models"]:
-        print("legal_models:")
-        for model in result["legal_models"]:
-            print(f" - {model}")
-    else:
-        print("legal_models: none")
-    if result["model_sources"]:
-        print("model_sources:")
-        for source in result["model_sources"]:
-            print(f" - {source}")
-    else:
-        print("model_sources: none")
-    if result["blocked_reason"]:
-        print(f"blocked_reason: {_sanitize_opencode_probe_text(result['blocked_reason'])}")
-    print(f"remediation: {_sanitize_opencode_probe_text(result['remediation'])}")
-    if result["status"] != "PASS":
-        sys.exit(1)
+    from runtime_preflight import cmd_opencode_provider_preflight as run
+    return run(
+        _args, opencode_provider_model_preflight=_opencode_provider_model_preflight,
+        sanitize_opencode_probe_text=_sanitize_opencode_probe_text,
+    )
 
 
 def _external_validation_read_text(path):
@@ -13526,123 +10429,18 @@ def check_complexity(root=None, schema=None):
 #                  (dates optional — "未验证" is a legal static detail).
 #
 # Annotation marker (machine-checked): 〔<level>: <detail>〕
-EVIDENCE_LEVEL_MARKER_RE = re.compile(
-    r"〔(live-session|isolation|static)[:：]([^\〕]{0,300}?)〕")
 
 # Claim registry: the dsh user-availability claim surface (RISK-049 ② —
 # data, not heuristics; extend per adapter when new user-facing claims
 # land). A registry line MUST carry ≥1 valid evidence-level marker.
-ADAPTER_CLAIM_REGISTRY = (
-    ("dsh-session-projection",
-     re.compile(r"每个会话\*{0,2}中可用|load in every session of that profile"),
-     "dsh bundle session projection availability"),
-    ("dsh-preset-roster",
-     re.compile(r"直接出现在预设选择器|appears in the preset roster"),
-     "dsh shipped preset roster appearance"),
-    ("dsh-governance-gesture",
-     re.compile(r"即加载统一治理入口"),
-     "dsh /governance gesture entry load"),
-    ("dsh-install-forms-boundary",
-     re.compile(r"Both forms were re-verified|两种 plugin add 与 launch\.py 预设安装"),
-     "dsh install forms verification boundary"),
-)
 
 
 def check_readme_claim_evidence_levels(readme_path=None):
-    """FEAT-014 / RISK-049 ①: README adapter claim→evidence level check.
-
-    Two machine judgments over the public README and packaged DSH adapter guide:
-
-    1. UNANNOTATED — every line matching a registry claim pattern MUST
-       carry ≥1 valid evidence-level marker 〔level: detail〕 on the same
-       line (per-line granularity; the marker binds the claim to its
-       evidence level — the machine-checkable mapping).
-    2. INTEGRITY — every marker must name a registered level; live-session
-       and isolation details MUST contain an ISO date (their verification
-       event). static is the explicit no-execution-evidence label and does
-       not require a date.
-
-    Advisory WARN (Check 28t, 28s precedent — fatal_on_error=false): WARNs
-    do not increment check-governance all_issues; escalation to FAIL is the
-    registered tightening path (RISK-049 closure review).
-
-    Returns {"verdict": "PASS"|"WARN"|"no-verdict", "reason", "warnings",
-    "stats"} — never raises; a missing README is no-verdict.
-    """
-    paths = ([Path(readme_path)] if readme_path is not None else
-             [ROOT / "README.md", ROOT / "adapters" / "dsh" / "README.md"])
-    result = {
-        "verdict": "no-verdict",
-        "reason": "",
-        "warnings": [],
-        "stats": {
-            "claims_checked": 0, "claims_annotated": 0,
-            "markers_found": 0, "markers_invalid": 0,
-            "levels": {"live-session": 0, "isolation": 0, "static": 0},
-        },
-    }
-    warnings = result["warnings"]
-    stats = result["stats"]
-    for path in paths:
-        if not path.is_file():
-            result["reason"] = f"{path} not found — Check 28t has nothing to judge"
-            return result
-        content = path.read_text(encoding="utf-8")
-        # 1. Marker integrity (every marker anywhere in the README).
-        for marker_match in EVIDENCE_LEVEL_MARKER_RE.finditer(content):
-            level, detail = marker_match.group(1), marker_match.group(2)
-            stats["markers_found"] += 1
-            stats["levels"][level] += 1
-            if level in ("live-session", "isolation") \
-                    and not re.search(r"\d{4}-\d{2}-\d{2}", detail):
-                stats["markers_invalid"] += 1
-                warnings.append({
-                    "rule": "INTEGRITY",
-                    "claim_id": None,
-                    "reason": "evidence-level marker 〔{0}: {1}〕 lacks the "
-                              "required ISO verification date ({0} claims MUST "
-                              "cite their verification date)".format(
-                                  level, detail),
-                })
-
-        # 2. Registry claims must carry a marker on the claim line.
-        for lineno, line in enumerate(content.splitlines(), 1):
-            for claim_id, pattern, description in ADAPTER_CLAIM_REGISTRY:
-                if not pattern.search(line):
-                    continue
-                stats["claims_checked"] += 1
-                if EVIDENCE_LEVEL_MARKER_RE.search(line):
-                    stats["claims_annotated"] += 1
-                else:
-                    warnings.append({
-                        "rule": "UNANNOTATED",
-                        "claim_id": claim_id,
-                        "reason": "{3} L{0}: adapter claim `{1}` ({2}) lacks "
-                                  "an evidence-level marker "
-                                  "〔live-session|isolation|static: …〕 — the "
-                                  "RISK-049 ① claim→evidence mapping".format(
-                                      lineno, claim_id, description, path),
-                    })
-
-    if warnings:
-        result["verdict"] = "WARN"
-        result["reason"] = (
-            "{0} README claim-evidence mapping WARN(s) — advisory "
-            "(RISK-049 ①; escalation path registered)".format(
-                len(warnings)))
-    elif stats["claims_checked"]:
-        result["verdict"] = "PASS"
-        result["reason"] = (
-            "{0} registry claim(s) all carry valid evidence-level "
-            "markers ({1} marker(s): live-session {2} / isolation {3} / "
-            "static {4})".format(
-                stats["claims_checked"], stats["markers_found"],
-                stats["levels"]["live-session"],
-                stats["levels"]["isolation"], stats["levels"]["static"]))
-    else:
-        result["reason"] = (
-            "no registry adapter claims found in README — nothing to judge")
-    return result
+    from host_loading_claims import check_readme_claim_evidence_levels as run
+    return run(
+        readme_path, package_root=ROOT, adapter_claim_registry=_host_policy('ADAPTER_CLAIM_REGISTRY'),
+        evidence_level_marker_re=_host_policy('EVIDENCE_LEVEL_MARKER_RE'),
+    )
 
 
 def check_governance_data_size(root=None, schema=None):
@@ -13770,9 +10568,9 @@ def _run_external_validation_command(workspace, args, timeout=120):
 def _external_validation_target_native_diagnostics(target):
     from external_project_diagnostics import target_native_diagnostics
     return target_native_diagnostics(
-        target, entry_files=EXTERNAL_PROJECT_NATIVE_ENTRY_FILES,
-        entry_patterns=EXTERNAL_PROJECT_NATIVE_ENTRY_PATTERNS,
-        required_hooks=EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS,
+        target, entry_files=_host_policy('EXTERNAL_PROJECT_NATIVE_ENTRY_FILES'),
+        entry_patterns=_host_policy('EXTERNAL_PROJECT_NATIVE_ENTRY_PATTERNS'),
+        required_hooks=_host_policy('EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS'),
         read_text=_external_validation_read_text, canonical_hook_text=_external_validation_canonical_hook_text)
 
 
@@ -13784,7 +10582,7 @@ def run_external_project_validation(target, keep_workspace=False, workspace_pare
         write_governance=_write_external_validation_governance,
         prepare_git=_prepare_external_validation_git,
         run_command=_run_external_validation_command,
-        commands=EXTERNAL_PROJECT_VALIDATION_COMMANDS, boundary=EXTERNAL_PROJECT_VALIDATION_BOUNDARY,
+        commands=_host_policy('EXTERNAL_PROJECT_VALIDATION_COMMANDS'), boundary=_host_policy('EXTERNAL_PROJECT_VALIDATION_BOUNDARY'),
     )
 
 
@@ -13794,101 +10592,15 @@ def cmd_external_project_validation(args):
 
 
 def cmd_e2e_check(_args):
-    """Run command-backed E2E governance verification."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
-    e2e_dir = ROOT / "project/e2e-test-project"
-    if not e2e_dir.exists():
-        print("[SKIPPED] project/e2e-test-project/ not found")
-        return
-
-    source_cli_results = [
-        _evaluate_e2e_command(entry) for entry in _e2e_command_matrix()
-    ]
-    # Install the working skill into a disposable external host. The tracked
-    # fixture contains project facts, but intentionally excludes the installed CLI.
-    with tempfile.TemporaryDirectory(prefix="governance-e2e-host-") as temporary:
-        target = Path(temporary)
-        shutil.copytree(e2e_dir / ".governance", target / ".governance")
-        plugin = Path("skills/software-project-governance")
-        shutil.copytree(PLUGIN_ROOT / plugin, target / plugin,
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "tests"))
-        target_cwd_results = [
-            _evaluate_e2e_command(entry) for entry in _e2e_target_cwd_command_matrix(target)
-        ]
-    fixture_results = [
-        _evaluate_e2e_target_fixture_check(entry)
-        for entry in _e2e_target_fixture_checks(e2e_dir)
-    ]
-    contract_results = [
-        _evaluate_e2e_contract_check(entry) for entry in _e2e_contract_checks()
-    ]
-
-    print("=== E2E Governance Verification ===")
-    print(f"Target: {e2e_dir}")
-    print("Mode: source CLI proxy + isolated external installation + tracked project fixture checks\n")
-
-    print("--- Source CLI proxy command matrix ---")
-    print(f"  cwd: {ROOT}")
-    print("  note: verify_workflow.py is source-root bound; these are executable CLI proxies, not external-project cwd runs.")
-    for result in source_cli_results:
-        command = " ".join(str(part) for part in result["command"])
-        print(
-            f"  [{result['status']}] {result['label']} "
-            f"(exit={result['exit_code']})"
-        )
-        print(f"      command: {command}")
-        print(f"      assert: {result['message']}")
-
-    print("\n--- External target cwd command matrix ---")
-    print(f"  cwd: {target}")
-    print("  note: these commands exercised the current skill installed into a disposable external host.")
-    for result in target_cwd_results:
-        command = " ".join(str(part) for part in result["command"])
-        print(
-            f"  [{result['status']}] {result['label']} "
-            f"(exit={result['exit_code']})"
-        )
-        print(f"      command: {command}")
-        print(f"      assert: {result['message']}")
-
-    print("\n--- Target fixture checks ---")
-    print(f"  fixture: {e2e_dir}")
-    for result in fixture_results:
-        print(f"  [{result['status']}] {result['label']}")
-        print(f"      assert: {result['message']}")
-
-    print("\n--- Contract/runtime-only checks ---")
-    for result in contract_results:
-        marker = "OK" if result["ok"] else "CHECK_FAILED"
-        print(f"  [{result['status']}:{marker}] {result['label']}")
-        print(f"      note: {result['message']}")
-
-    passed = sum(1 for r in source_cli_results if r["status"] == "PASS")
-    failed = sum(1 for r in source_cli_results if r["status"] == "FAIL")
-    known = sum(1 for r in source_cli_results if r["status"] == "EXPECTED_KNOWN_FAILURE")
-    target_cwd_passed = sum(1 for r in target_cwd_results if r["status"] == "PASS")
-    target_cwd_failed = sum(1 for r in target_cwd_results if r["status"] == "FAIL")
-    fixture_passed = sum(1 for r in fixture_results if r["status"] == "PASS")
-    fixture_failed = sum(1 for r in fixture_results if r["status"] == "FAIL")
-    contract_count = len(contract_results)
-    contract_failed = sum(1 for r in contract_results if not r["ok"])
-
-    print(
-        "\n=== Result: "
-        f"source_cli_proxy_pass={passed}, source_cli_proxy_fail={failed}, "
-        f"expected_known_failure={known}, "
-        f"target_cwd_pass={target_cwd_passed}, target_cwd_fail={target_cwd_failed}, "
-        f"target_fixture_pass={fixture_passed}, target_fixture_fail={fixture_failed}, "
-        f"contract_only={contract_count}, contract_check_failed={contract_failed} ==="
+    from product_fixture_validation import cmd_e2e_check as run
+    return run(
+        _args, plugin_root=PLUGIN_ROOT, package_root=ROOT, e2e_command_matrix=_e2e_command_matrix,
+        e2e_contract_checks=_e2e_contract_checks,
+        e2e_target_cwd_command_matrix=_e2e_target_cwd_command_matrix,
+        e2e_target_fixture_checks=_e2e_target_fixture_checks, evaluate_e2e_command=_evaluate_e2e_command,
+        evaluate_e2e_contract_check=_evaluate_e2e_contract_check,
+        evaluate_e2e_target_fixture_check=_evaluate_e2e_target_fixture_check,
     )
-    if failed > 0 or target_cwd_failed > 0 or fixture_failed > 0:
-        print("ACTION: Fix source CLI proxy, target cwd, or target fixture failures above.")
-        sys.exit(1)
-    print("Source CLI proxy matrix, external target cwd commands, and target fixture checks passed; runtime contracts reported separately.")
 
 
 # cmd_check_manifest_consistency moved to checks/manifest.py in 0.59.0
@@ -13896,10 +10608,8 @@ def cmd_e2e_check(_args):
 
 
 def cmd_check_agent_adapters(args):
-    """Check mainstream code agent adapter contracts and optional local runtimes."""
-    failures = check_agent_adapter_contract(run_runtime=getattr(args, "runtime", False))
-    if failures:
-        sys.exit(1)
+    from host_validation_cli import cmd_check_agent_adapters as run
+    return run(args, check_agent_adapter_contract=check_agent_adapter_contract)
 
 
 def cmd_check_release(args):
@@ -14049,53 +10759,13 @@ def cmd_check_cross_references(args):
 
 
 def cmd_check_exploration_channels(args):
-    """CLI wrapper for the exploration-channel evidence-form guard (FEAT-088).
-
-    The manifest machine-check face behind F-A3: dated-anchor form rules for
-    native declarations of enrolled adapters, read-only anchor-document
-    probes, WARN-only staleness advisories, and the probe-layering honesty
-    statement (what this check can and cannot verify — it never claims to
-    have probed host-session tool liveness).
-    """
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-    result = check_exploration_channels()
-    print()
-    print("=== Exploration-Channel Evidence-Form Check (FEAT-088 F-A3) ===")
-    print(f"  Adapters requiring dated anchors: "
-          f"{result['dated_anchor_adapters']}")
-    if result["issues"]:
-        print(f"  [FAIL] {len(result['issues'])} issue(s):")
-        for issue in result["issues"]:
-            print(f"    - {issue}")
-    else:
-        print("  [PASS] All channel declarations conform (structure for all "
-              "six adapters; dated anchors on enrolled native declarations).")
-    if result["advisories"]:
-        print(f"  [ADVISORY] {len(result['advisories'])} staleness advisory(ies) "
-              f"(WARN-only, not counted):")
-        for advisory in result["advisories"]:
-            print(f"    - {advisory}")
-    print("\n  Probe layering (honesty statement):")
-    for label, text in (result.get("probe_layering") or {}).items():
-        print(f"    - {label}: {text}")
-    if result["issues"] and getattr(args, "fail_on_issues", False):
-        sys.exit(1)
+    from exploration_evidence import cmd_check_exploration_channels as run
+    return run(args, check_exploration_channels=check_exploration_channels)
 
 
 def cmd_check_loop_role_skills(_args):
-    """CLI wrapper for the FIX-191 review SKILL loop-role contract."""
-    result = check_loop_role_skill_consistency()
-    print("=== Review SKILL Loop-Role Consistency Check ===")
-    print(f"  Skills checked: {result['skills_checked']}")
-    if result["issues"]:
-        print(f"  [FAIL] {len(result['issues'])} issue(s):")
-        for issue in result["issues"]:
-            print(f"    - {issue}")
-        sys.exit(1)
-    print("  [PASS] All review SKILL loop-role contracts are consistent.")
+    from host_validation_cli import cmd_check_loop_role_skills as run
+    return run(_args, check_loop_role_skill_consistency=check_loop_role_skill_consistency)
 
 
 def cmd_check_sequential_ids(args):
@@ -14285,56 +10955,8 @@ def cmd_check_user_impact(args):
 # ── SYSGAP-037: check-agent-team subcommand ──────────────────────
 
 def cmd_check_agent_team(args):
-    """Run Check 19 (Agent Team Review) + Check 20 (Agent Activation) together."""
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-
-    issues = 0
-
-    # Check 19: Agent Team Review
-    print("\n=== Check 19: Agent Team Review (SYSGAP-035) ===")
-    atr_result = check_agent_team_review()
-    print(f"  Product-code tasks (completed): {atr_result['total_tasks']}")
-    print(f"  Reviewed: {atr_result['reviewed']}")
-    if atr_result["unreviewed"] > 0:
-        issues += atr_result["unreviewed"]
-        print(f"  [FAIL] {atr_result['unreviewed']} product-code task(s) without review evidence:")
-        for tid in atr_result["review_gap_tasks"]:
-            print(f"    - {tid}")
-    else:
-        if atr_result["total_tasks"] > 0:
-            print(f"  [PASS] All product-code tasks have review evidence.")
-        else:
-            print(f"  [PASS] No product-code tasks to review.")
-
-    # Check 20: Agent Activation
-    print("\n=== Check 20: Agent Activation (SYSGAP-036) ===")
-    aa_result = check_agent_activation()
-    print(f"  P0 cross-layer product tasks: {aa_result['total_p0_cross_layer']}")
-    print(f"  Analyst activated: {aa_result['analyst_activated']}")
-    if aa_result["analyst_bypassed"] > 0:
-        issues += aa_result["analyst_bypassed"]
-        print(f"  [FAIL] {aa_result['analyst_bypassed']} task(s) with impact analysis but no Analyst:")
-        for tid in aa_result["bypassed_tasks"]:
-            print(f"    - {tid}")
-    else:
-        if aa_result["total_p0_cross_layer"] > 0:
-            print(f"  [PASS] All P0 cross-layer tasks have Analyst involvement.")
-        else:
-            print(f"  [PASS] No P0 cross-layer product tasks to check.")
-
-    # Summary
-    print(f"\n  ── Agent Team Check Summary ──")
-    if issues == 0:
-        print(f"  Result: PASSED — 0 issues found")
-    else:
-        print(f"  Result: ISSUES FOUND — {issues} issue(s)")
-    print()
-
-    if args.fail_on_issues and issues > 0:
-        sys.exit(1)
+    from host_validation_cli import cmd_check_agent_team as run
+    return run(args, check_agent_activation=check_agent_activation, check_agent_team_review=check_agent_team_review)
 
 
 def cmd_check_version_consistency(_args):
@@ -14431,60 +11053,23 @@ def cmd_check_injection_contract(args):
 
 
 def cmd_check_dsh_preset_smoke(args):
-    """Run the isolated DSH preset-session smoke gate (FEAT-015)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    from checks.dsh_smoke import emit_cli_result
-
-    status = emit_cli_result(check_dsh_preset_smoke())
-    if status and getattr(args, "fail_on_issues", False):
-        sys.exit(status)
+    from host_loader_probes import cmd_check_dsh_preset_smoke as run
+    return run(args, smoke=check_dsh_preset_smoke)
 
 
 def cmd_check_dsh_preset_compat(args):
-    """Validate preset composition rows against the resolved plugin set's schemas.
-
-    Thin dispatch only — rendering lives in ``dsh_compat`` (R4: orchestration
-    output belongs to the render layer, and this new engine function starts
-    with a print budget of zero).
-    """
-    from dsh_compat import run_cli
-
-    return run_cli(fail_on_issues=getattr(args, "fail_on_issues", False),
-                   isolated_home=getattr(args, "isolated_home", None),
-                   use_host_profile=getattr(args, "use_host_profile", False))
+    from dsh_compat import cmd_check_dsh_preset_compat as run
+    return run(args)
 
 
 def cmd_check_dsh_boundary(args):
-    """Check 28w (FEAT-031): the dependency-boundary contract guard.
-
-    Thin dispatch only — the criteria and the rendering live in
-    ``checks.dsh_boundary`` (C-15/R4: the monolith's print budget does not
-    grow). Lazy import: the engine's frozen startup import budget (R6, 196
-    modules) must not move, and the check must stay loadable when the
-    registry itself is the broken component.
-    """
-    from checks.dsh_boundary import check_dsh_boundary, emit_check_section, failed
-
-    report = check_dsh_boundary()
-    if getattr(args, "json", False):
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-    else:
-        emit_check_section(report=report)
-    if failed(report) and getattr(args, "fail_on_issues", False):
-        sys.exit(1)
+    from host_validation_cli import cmd_check_dsh_boundary as run
+    return run(args)
 
 
 def cmd_dsh_doctor(args):
-    """Run the doctor with parsed engine arguments and propagate its exit scale."""
-    from dsh_doctor import run_cli
-
-    code = run_cli(args)
-    if code:
-        sys.exit(code)
-    return code
+    from host_validation_cli import cmd_dsh_doctor as run
+    return run(args)
 
 
 def cmd_release_ledger(args):
@@ -14568,66 +11153,18 @@ def cmd_check_hot_fact_source(args):
 
 
 def cmd_check_runtime_readiness_matrix(args):
-    """Run public runtime/readiness matrix consistency guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    issues = check_runtime_readiness_matrix()
-    print("\n=== Runtime Readiness Matrix Check ===")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — public runtime/readiness matrix matches adapter facts")
-    print()
+    from host_validation_cli import cmd_check_runtime_readiness_matrix as run
+    return run(args, check_runtime_readiness_matrix=check_runtime_readiness_matrix)
 
 
 def cmd_check_first_session_measurement(args):
-    """Run first-session measurement consistency guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    issues = check_first_session_measurement()
-    print("\n=== First-Session Measurement Check ===")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — local demo proof is separated from external first-session measurement")
-    print()
+    from host_validation_cli import cmd_check_first_session_measurement as run
+    return run(args, check_first_session_measurement=check_first_session_measurement)
 
 
 def cmd_check_governance_packs(args):
-    """Run governance pack registry consistency guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    issues = check_governance_packs()
-    print("\n=== Governance Pack Registry Check ===")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — governance pack registry is complete and factual")
-    print()
+    from host_validation_cli import cmd_check_governance_packs as run
+    return run(args, check_governance_packs=check_governance_packs)
 
 
 # cmd_check_capability_registry moved to checks/capability_registry.py in 0.61.1
@@ -14683,24 +11220,8 @@ def cmd_check_host_capability_context(args):
 
 
 def cmd_check_mainstream_agent_loading(args):
-    """Run FIX-122 mainstream agent loading guidance guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    issues = check_mainstream_agent_loading()
-    print("\n=== Mainstream Agent Loading Check ===")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — mainstream loading guidance is synchronized and no-overclaim safe")
-    print()
+    from host_validation_cli import cmd_check_mainstream_agent_loading as run
+    return run(args, check_mainstream_agent_loading=check_mainstream_agent_loading)
 
 
 # ── ArchGuard command handlers (REQ-101 / FIX-152 / 0.58.0, advisory-only) ─────
@@ -15596,45 +12117,13 @@ def cmd_check_governance_data_size(args):
 
 
 def cmd_check_readme_pack_guidance(args):
-    """Run README first-run profile-to-pack guidance guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    issues = check_readme_pack_guidance()
-    print("\n=== README Pack Guidance Check ===")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — README maps first-run profiles to packs without overclaim")
-    print()
+    from host_validation_cli import cmd_check_readme_pack_guidance as run
+    return run(args, check_readme_pack_guidance=check_readme_pack_guidance)
 
 
 def cmd_check_governance_pack_status(args):
-    """Run pack-aware status and release boundary guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    issues = check_governance_pack_status()
-    print("\n=== Governance Pack Status Boundary Check ===")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — status and release surfaces expose pack boundaries without overclaim")
-    print()
+    from host_validation_cli import cmd_check_governance_pack_status as run
+    return run(args, check_governance_pack_status=check_governance_pack_status)
 
 
 def cmd_check_product_success_contracts(args):
@@ -16106,8 +12595,36 @@ def main(argv=None):
     return registry.load_handler(args.command or "verify", parsed_args=True)(args)
 
 
-# Preserve the original wildcard surface, including the lazily loaded archive reader.
-__all__ = [name for name in globals() if not name.startswith("_")] + ["GovernanceDataSource"]
+_DSH_WORKFLOW_COMMANDS = {cmd.__name__: cmd for cmd in (
+    cmd_check_dsh_preset_smoke, cmd_check_dsh_preset_compat, cmd_check_dsh_boundary, cmd_dsh_doctor,
+)}
+
+
+def _effective_dsh_command(name, native):
+    if name in _DSH_WORKFLOW_COMMANDS:
+        if name not in globals():
+            raise AttributeError(name)
+        current = globals()[name]
+        if current is not _DSH_WORKFLOW_COMMANDS[name]:
+            return current
+    return native
+
+
+try:
+    from host_loader_probes import bind_workflow_dsh as _bind_workflow_dsh
+except ModuleNotFoundError as error:
+    if error.name != "host_loader_probes":
+        raise
+else:
+    if __name__ in ("verify_workflow", "__main__"):
+        _bind_workflow_dsh(smoke=lambda **kwargs: check_dsh_preset_smoke(**kwargs),
+                           channels=lambda root: check_exploration_channels(root),
+                           command=_effective_dsh_command)
+
+
+__all__ = sorted({name for name in globals() if not name.startswith("_")}
+                 | {name for name in _HOST_POLICY_OWNERS if not name.startswith("_")}
+                 | {"GovernanceDataSource"})
 
 
 if __name__ == "__main__":

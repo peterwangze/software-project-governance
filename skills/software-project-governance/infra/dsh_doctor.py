@@ -23,8 +23,8 @@ not silently pass.
   * **Lazy, isolated imports.** ``dsh_compat`` and ``launch.py`` are reached
     through a subprocess or a function-local import, so "the guard is broken"
     — the most likely reason to call this command — still produces a report.
-    The reverse link (``verify_workflow`` → here) is a function-local import
-    too, keeping the engine's frozen startup import budget at 196.
+    The parsed command and the standalone argv entry load the doctor on demand.
+    Smoke and channel checks are supplied by their domain owners.
   * **Single verdict (R0 BT-R-02 / K-12).** The boundary criteria are computed
     once, by ``checks.dsh_boundary``; this module never re-derives them. It also
     never re-derives the ``coverage`` block — it *projects*
@@ -1040,7 +1040,7 @@ def run_isolated_smoke(root: Optional[Path] = None, timeout: int = 120) -> Dict[
     """Run the isolated preset-session smoke and return its structured result.
 
     A *dispatcher*, not a second implementation: the smoke itself lives in
-    ``verify_workflow.check_dsh_preset_smoke`` (one owner, one implementation —
+    ``host_loader_probes.check_dsh_preset_smoke`` (one owner, one implementation —
     reimplementing it here would create the second verdict R0 BT-R-02 forbids).
     Imported function-locally so this module stays importable when the engine is
     the broken component.
@@ -1049,9 +1049,9 @@ def run_isolated_smoke(root: Optional[Path] = None, timeout: int = 120) -> Dict[
     engine = root / "skills" / "software-project-governance" / "infra"
     if str(engine) not in sys.path:
         sys.path.insert(0, str(engine))
-    from verify_workflow import check_dsh_preset_smoke  # noqa: PLC0415 — lazy
+    from host_loader_probes import doctor_smoke
 
-    return check_dsh_preset_smoke(timeout=timeout)
+    return doctor_smoke(root, timeout=timeout)
 
 
 def _unverified_due_to_env(ctx: Context) -> List[str]:
@@ -1185,7 +1185,7 @@ def stage_s7_hooks(ctx: Context) -> StageOutcome:
 def _channel_projection(ctx: Context) -> Dict[str, Any]:
     """Project the engine's exploration-channel guard — never re-derive it.
 
-    The judgment has one owner: ``verify_workflow.check_exploration_channels``
+    The judgment has one owner: ``exploration_evidence.check_exploration_channels``
     (the BT-R-02 single-verdict rule the S2/S3/S7 projections follow). The
     doctor only surfaces it, so the diagnostic entry and the gate cannot
     disagree about the same manifest state. Crash-isolated like a stage
@@ -1202,8 +1202,8 @@ def _channel_projection(ctx: Context) -> Dict[str, Any]:
         engine = Path(__file__).resolve().parent
         if str(engine) not in sys.path:
             sys.path.insert(0, str(engine))
-        from verify_workflow import check_exploration_channels  # noqa: PLC0415 — lazy
-        result = check_exploration_channels(ctx.root)
+        from host_loader_probes import doctor_channels
+        result = doctor_channels(ctx.root)
     except Exception as error:  # noqa: BLE001 — projection degradation
         return {
             "check": "check-exploration-channels",

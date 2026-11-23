@@ -82,6 +82,7 @@ from __future__ import annotations
 
 import importlib
 import re
+import sys
 from dataclasses import dataclass, field, fields as dataclass_fields
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -209,6 +210,8 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     "checks.version",
     "dsh_compat",
     "dsh_doctor",
+    "host_loader_probes",
+    "host_validation_cli",
     # FEAT-032 (0.84.0 slice A-1): governance cost observability handler —
     # self-contained module, engine wires dispatch only (archguard_ratchet
     # pattern); stdlib-only at import time, zstandard lazy (R6 face +1).
@@ -300,9 +303,9 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
     ("check-deterministic-scaffolds",
      "verify_workflow.cmd_check_deterministic_scaffolds"),
     ("check-dsh-preset-compat",
-     "verify_workflow.cmd_check_dsh_preset_compat"),
-    ("check-dsh-preset-smoke", "verify_workflow.cmd_check_dsh_preset_smoke"),
-    ("check-dsh-boundary", "verify_workflow.cmd_check_dsh_boundary"),
+     "dsh_compat.cmd_check_dsh_preset_compat"),
+    ("check-dsh-preset-smoke", "host_loader_probes.cmd_check_dsh_preset_smoke"),
+    ("check-dsh-boundary", "host_validation_cli.cmd_check_dsh_boundary"),
     ("check-duplicate-code", "verify_workflow.cmd_check_duplicate_code"),
     ("check-entry-bootstrap-sync",
      "checks.projection.cmd_check_entry_bootstrap_sync"),
@@ -586,6 +589,21 @@ def resolve_loader(loader_path: str) -> Callable:
         raise LoaderResolutionError(
             f"module {module_name!r} does not define {attr!r} "
             f"(declared loader {loader_path!r}) — registration drift") from exc
+    if module_name in ("host_loader_probes", "dsh_compat", "host_validation_cli") and attr.startswith("cmd_"):
+        # Consult an active DSH binding only if the workflow has installed one.
+        # Standalone commands require only the owner they actually dispatch to.
+        probes = sys.modules.get("host_loader_probes")
+        if probes is not None:
+            try:
+                effective = probes.effective_command(attr, target)
+            except AttributeError as exc:
+                legacy_path = f"{ENGINE_MODULE}.{attr}"
+                raise LoaderResolutionError(
+                    f"module {ENGINE_MODULE!r} does not define {attr!r} "
+                    f"(declared loader {legacy_path!r}) — registration drift") from exc
+            if effective is not target:
+                target = effective
+                loader_path = f"{ENGINE_MODULE}.{attr}"
     if not callable(target):
         raise LoaderResolutionError(
             f"{loader_path!r} resolves to {type(target).__name__}, not a "
@@ -650,7 +668,7 @@ def load_handler(key: CommandKey, *, parsed_args: bool = False) -> Callable:
     if parsed_args and path == "dsh_doctor.main":
         # Standalone DSH consumers pass argv and receive an exit code. The
         # workflow adapter accepts a Namespace and propagates refusals via SystemExit.
-        path = "verify_workflow.cmd_dsh_doctor"
+        path = "host_validation_cli.cmd_dsh_doctor"
     return resolve_loader(path)
 
 

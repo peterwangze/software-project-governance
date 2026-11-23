@@ -562,6 +562,23 @@ class SmokeStageTests(DoctorCase):
         s6 = self.stages_of(report)["S6"]
         self.assertIn("unverified_due_to_env", s6["credible_face"])
 
+    def test_standalone_smoke_reads_the_supplied_root_without_loading_the_engine(self):
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as temp:
+            script = (
+                "import json, sys; from pathlib import Path; import dsh_doctor; "
+                "print(json.dumps([dsh_doctor.run_isolated_smoke(Path(sys.argv[1])), "
+                "'verify_workflow' in sys.modules]))"
+            )
+            env = dict(os.environ, PYTHONPATH=str(_INFRA_DIR), PYTHONDONTWRITEBYTECODE="1")
+            proc = subprocess.run([sys.executable, "-X", "utf8", "-c", script, temp],
+                                  cwd=temp, env=env, capture_output=True, check=True)
+            result, loaded_engine = json.loads(proc.stdout)
+            self.assertFalse(loaded_engine)
+            self.assertEqual(result["verdict"], "FAIL")
+            self.assertIn((Path(temp) / "adapters/dsh/launch.py").as_posix(), result["reason"])
+
     def test_run_isolated_smoke_dispatches_to_the_engine_implementation(self):
         seen = {}
         import verify_workflow

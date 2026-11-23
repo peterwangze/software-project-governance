@@ -311,6 +311,42 @@ class CommandRegistryTests(unittest.TestCase):
                    for attr, keys in reg.handler_alias_groups().items()}
         self.assertEqual(derived, frozen)
 
+    def test_dsh_registry_respects_replaced_workflow_commands(self):
+        import verify_workflow as workflow
+
+        for key in ("check-dsh-preset-compat", "check-dsh-preset-smoke", "check-dsh-boundary", "dsh-doctor"):
+            name = "cmd_" + key.replace("-", "_")
+            with self.subTest(key=key):
+                native = reg.load_handler(key, parsed_args=True)
+                self.assertNotEqual(native.__module__, workflow.__name__)
+                with patch.object(workflow, name, lambda args: args.command) as replacement:
+                    self.assertIs(reg.load_handler(key, parsed_args=True), replacement)
+                    self.assertEqual(workflow.main([key]), key)
+                self.assertIs(reg.load_handler(key, parsed_args=True), native)
+
+    def test_dsh_routes_observe_the_inspected_installation(self):
+        import shutil
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / "infra"
+            shutil.copytree(_INFRA_DIR, target, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+            engine = target / ENGINE.name
+            for key, handler, module in (
+                ("check-dsh-preset-compat", "cmd_check_dsh_preset_compat", "dsh_compat.py"),
+                ("check-dsh-preset-smoke", "cmd_check_dsh_preset_smoke", "host_loader_probes.py"),
+                ("dsh-doctor", "cmd_dsh_doctor", "host_validation_cli.py"),
+            ):
+                with self.subTest(key=key):
+                    owner = target / module
+                    saved = owner.read_bytes()
+                    self.assertTrue(all(inspect_cli_registration(engine, key, handler).values()))
+                    owner.unlink()
+                    self.assertFalse(inspect_cli_registration(engine, key, handler)["handler"])
+                    owner.write_bytes(saved)
+                    self.assertTrue(all(inspect_cli_registration(engine, key, handler).values()))
+
     def test_engine_hosted_and_domain_hosted_keys_are_disclosed(self):
         definitions = _engine_modules()
         for spec in reg.COMMAND_SPECS:
@@ -326,6 +362,7 @@ class CommandRegistryTests(unittest.TestCase):
             "authority-ledger",
             "baseline-evaluate", "baseline-register",
             "check-capability-registry",
+            "check-dsh-boundary", "check-dsh-preset-compat", "check-dsh-preset-smoke",
             "check-entry-bootstrap-sync",
             "check-injection-budget",
             "check-manifest-consistency", "check-review-debt",

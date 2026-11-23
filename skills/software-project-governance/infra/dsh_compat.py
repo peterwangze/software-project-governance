@@ -2784,6 +2784,13 @@ def emit_check_section(stream=None) -> int:
     return 0
 
 
+def cmd_check_dsh_preset_compat(args):
+    """Run the installed preset compatibility check with options from the workflow CLI."""
+    return run_cli(fail_on_issues=getattr(args, "fail_on_issues", False),
+                   isolated_home=getattr(args, "isolated_home", None),
+                   use_host_profile=getattr(args, "use_host_profile", False))
+
+
 def run_cli(fail_on_issues: bool = False, stream=None, *, isolated_home=None,
             use_host_profile=False) -> int:
     """Render the standalone report for `verify_workflow check-dsh-preset-compat`."""

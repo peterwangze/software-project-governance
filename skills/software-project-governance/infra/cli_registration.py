@@ -5,6 +5,84 @@ import sys
 from pathlib import Path
 
 
+_DSH_COMMANDS = {
+    "dsh-doctor": "cmd_dsh_doctor",
+    "check-dsh-boundary": "cmd_check_dsh_boundary",
+    "check-dsh-preset-compat": "cmd_check_dsh_preset_compat",
+    "check-dsh-preset-smoke": "cmd_check_dsh_preset_smoke",
+}
+
+
+def _dsh_handler_source(path, definition, depth=0):
+    """Follow the directly imported DSH adapters in the inspected installation."""
+    owners = {"dsh_doctor", "dsh_compat", "host_validation_cli", "host_loader_probes",
+              "checks.dsh_smoke", "checks.dsh_boundary"}
+    calls = [node for node in ast.walk(definition)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+    for node in definition.body:
+        if not isinstance(node, ast.ImportFrom) or node.module not in owners:
+            continue
+        if node.level:
+            return False
+        source = path.parent.joinpath(*node.module.split(".")).with_suffix(".py")
+        try:
+            statements = ast.parse(source.read_text(encoding="utf-8"), filename=str(source)).body
+        except (OSError, UnicodeError, SyntaxError):
+            return False
+        for alias in node.names:
+            provider = _local_definition(statements, alias.name)
+            bound = alias.asname or alias.name
+            invocations = [call for call in calls if call.func.id == bound]
+            if not invocations or not all(_binds_explicit_call(call, provider) for call in invocations):
+                return False
+            if depth == 0 and node.module in {"host_validation_cli", "host_loader_probes"}:
+                if not _dsh_handler_source(path, provider, depth + 1):
+                    return False
+    return True
+
+
+def _dsh_owner_is_loadable(path, registry, module, handler, namespace_call):
+    whitelist = next((row.value for row in registry if isinstance(row, ast.AnnAssign)
+                      and isinstance(row.target, ast.Name) and row.target.id == "LOADER_WHITELIST"), None)
+    if not isinstance(whitelist, ast.Tuple):
+        return False
+    if module not in {node.value for node in whitelist.elts if isinstance(node, ast.Constant)}:
+        return False
+    source = path.with_name(module + ".py")
+    try:
+        statements = ast.parse(source.read_text(encoding="utf-8"), filename=str(source)).body
+    except (OSError, UnicodeError, SyntaxError):
+        return False
+    function = _local_definition(statements, handler)
+    return _binds_explicit_call(namespace_call, function) and _dsh_handler_source(path, function, depth=1)
+
+
+def _dsh_registered_dispatch(path, key, handler, matches, registry, namespace_call):
+    if key == "dsh-doctor":
+        if matches != [(key, "dsh_doctor.main")]:
+            return False
+        loader = next((fn for fn in registry if isinstance(fn, ast.FunctionDef) and fn.name == "load_handler"), None)
+        if loader is None:
+            return False
+        # main supplies a Namespace. Only the shipped parsed-args branch adapts
+        # the argv entry; seeing dsh_doctor.main in the table alone is insufficient.
+        body = loader.body[1:] if ast.get_docstring(loader) else loader.body
+        if len(body) != 3 or not isinstance(body[1], ast.If) or len(body[1].body) != 1 or body[1].orelse:
+            return False
+        route = ast.unparse(body[1].body[0])
+        return (ast.unparse(body[0]) == "path = command_spec(key).handler"
+                and ast.unparse(body[1].test) == "parsed_args and path == 'dsh_doctor.main'"
+                and (route == "path = 'verify_workflow.cmd_dsh_doctor'" or
+                     (route == "path = 'host_validation_cli.cmd_dsh_doctor'" and
+                      _dsh_owner_is_loadable(path, registry, "host_validation_cli", handler, namespace_call)))
+                and ast.unparse(body[2]) == "return resolve_loader(path)")
+    owner = {"check-dsh-preset-compat": "dsh_compat", "check-dsh-boundary": "host_validation_cli",
+             "check-dsh-preset-smoke": "host_loader_probes"}[key]
+    if matches == [(key, f"{owner}.{handler}")]:
+        return _dsh_owner_is_loadable(path, registry, owner, handler, namespace_call)
+    return matches == [(key, f"verify_workflow.{handler}")]
+
+
 def _has_dispatch(path, statements, key, handler):
     args_parsed = any(
         isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "args" for t in node.targets)
@@ -28,10 +106,13 @@ def _has_dispatch(path, statements, key, handler):
     if ast.unparse(target) == "registry.load_handler(args.command or 'verify', parsed_args=True)":
         try:
             source = path.with_name("registry.py").read_text(encoding="utf-8")
-            rows = next(node.value for node in ast.parse(source).body
+            registry = ast.parse(source).body
+            rows = next(node.value for node in registry
                         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
                         and node.target.id == "_COMMANDS")
             matches = [binding for binding in ast.literal_eval(rows) if binding[0] == key]
+            if _DSH_COMMANDS.get(key) == handler:
+                return _dsh_registered_dispatch(path, key, handler, matches, registry, call)
             return matches == [(key, f"verify_workflow.{handler}")]
         except (OSError, UnicodeError, SyntaxError, StopIteration, IndexError, KeyError, TypeError, ValueError):
             return False
@@ -86,19 +167,14 @@ def _contains_yield(node):
     return any(_contains_yield(child) for child in ast.iter_child_nodes(node))
 
 
-def _binds_schema_call(call, definition, *, wrapper=False):
-    """Recognize the shipped synchronous functions and their explicit arguments."""
+def _binds_explicit_call(call, definition):
+    """Bind explicit arguments to a directly defined synchronous callable."""
     if not isinstance(definition, ast.FunctionDef):
         return False
     args = definition.args
     if (definition.decorator_list or getattr(definition, "type_params", ())
             or args.posonlyargs or args.vararg or args.kwarg
-            or any(value is not None for value in args.kw_defaults)
             or any(_contains_yield(statement) for statement in definition.body)):
-        return False
-    # Only the engine wrapper has a default: _build_cli_parser(parser_argv=()).
-    if args.defaults and not (wrapper and len(args.args) == len(args.defaults) == 1
-                              and isinstance(args.defaults[0], ast.Tuple) and not args.defaults[0].elts):
         return False
     if (len(call.args) > len(args.args) or any(isinstance(arg, ast.Starred) for arg in call.args)
             or any(keyword.arg is None for keyword in call.keywords)):
@@ -106,9 +182,21 @@ def _binds_schema_call(call, definition, *, wrapper=False):
     positional = [arg.arg for arg in args.args]
     named_only = [arg.arg for arg in args.kwonlyargs]
     given = positional[:len(call.args)] + [kw.arg for kw in call.keywords]
-    required = positional[:len(positional) - len(args.defaults)] + named_only
+    required = positional[:len(positional) - len(args.defaults)] + [
+        name for name, default in zip(named_only, args.kw_defaults) if default is None]
     return (len(given) == len(set(given)) and set(required) <= set(given)
             and set(given) <= set(positional + named_only))
+
+
+def _binds_schema_call(call, definition, *, wrapper=False):
+    """The shipped parser families require all arguments except the wrapper's empty tuple."""
+    if not _binds_explicit_call(call, definition):
+        return False
+    args = definition.args
+    if any(default is not None for default in args.kw_defaults):
+        return False
+    return not args.defaults or (wrapper and len(args.args) == len(args.defaults) == 1
+                                 and isinstance(args.defaults[0], ast.Tuple) and not args.defaults[0].elts)
 
 
 def _local_definition(statements, name, kind=ast.FunctionDef):
@@ -286,7 +374,11 @@ def inspect_cli_registration(path: Path, key: str, handler: str) -> dict:
                     schema_parser = _schema_declares_parser(path, builder, node.value, key)
                 break
     has_parser = _declares_parser(parser_body, key) or schema_parser
-    has_handler = (_has_capability_handler(path, functions) if handler == "cmd_capability_context"
-                   else handler in functions)
+    has_handler = handler in functions
+    if handler == "cmd_capability_context":
+        has_handler = _has_capability_handler(path, functions)
+    elif has_handler and _DSH_COMMANDS.get(key) == handler:
+        definition = _local_definition(tree.body, handler)
+        has_handler = definition is not None and _dsh_handler_source(path, definition)
     return {"main": main is not None, "handler": has_handler,
             "argparse": has_parser, "dispatch": _has_dispatch(path, statements, key, handler)}

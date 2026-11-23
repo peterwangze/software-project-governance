@@ -44,7 +44,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Run native lock, bootstrap and encoding tests
+      - name: Run native lock, bootstrap, encoding and review binding tests
         working-directory: skills/software-project-governance/infra/tests
         run: >-
           python -m unittest -v
@@ -52,3 +52,5 @@ jobs:
           test_verify_workflow.BootstrapScriptTests.test_bootstrap_cmd_success_emits_envelope_on_windows
           test_verify_workflow.BootstrapScriptTests.test_bootstrap_cmd_timeout_classified_on_windows
           test_utf8_read_guard.Utf8ReadSimulationTests.test_bare_getcontent_reproduces_gbk_mojibake_on_gbk_codepage
+          test_review_record.PublishedObjectVerificationTests.test_existing_case_alias_uses_git_path_for_comparison_and_consumption
+          test_review_record.PublishedObjectVerificationTests.test_retained_case_variant_of_deletion_and_candidate_case_rename

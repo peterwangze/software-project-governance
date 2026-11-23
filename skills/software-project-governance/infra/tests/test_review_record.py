@@ -194,29 +194,44 @@ class PublishedObjectVerificationTests(unittest.TestCase):
         subject = self.root / name
         subject.parent.mkdir(parents=True)
         subject.write_bytes(b"reviewed\n")
-        if not (self.root / alias).exists():
-            self.skipTest("the temporary host uses case-sensitive lookup")
-        self.git("add", "--", name)
+        alternate = self.root / alias
+        same_entry = alternate.exists()
+        names = [name]
+        if not same_entry:
+            self.git("config", "core.ignorecase", "false")
+            alternate.parent.mkdir(parents=True, exist_ok=True)
+            alternate.write_bytes(b"independent revision\n")
+            self.assertFalse(subject.samefile(alternate))
+            names.append(alias)
+        self.git("add", "--", *names)
         tree = self.git("write-tree")
-        # The working directory's preserved case can differ from Git's index.
-        renamed = subject.with_name("ÅNGSTRÖM.txt")
-        subject.rename(renamed)
-        subject.write_bytes(b"later work\n")
+        if same_entry:
+            # The working directory's preserved case can differ from Git's index.
+            subject.rename(subject.with_name("ÅNGSTRÖM.txt"))
+        reviewed_bytes = alternate.read_bytes()
+        alternate.write_bytes(b"later work\n")
         result = self.write_tree_review(tree, [alias])
         self.assertEqual(result.get("code"), "tree_binding", result)
-        self.assertIn(name, result["error"])
-        subject.write_bytes(b"reviewed\n")
+        self.assertIn(names[-1], result["error"])
+        alternate.write_bytes(reviewed_bytes)
         mixed = self.write_tree_review(tree, [name, alias])
         self.assertNotIn("error", mixed)
-        self.assertEqual([p["path"] for p in mixed["trust"]["bindings"]], [name])
+        self.assertEqual([p["path"] for p in mixed["trust"]["bindings"]], names)
+        facts = review_record.derive_review_facts(self.root, "FIX-523", [mixed["review_id"]])
+        self.assertCountEqual(facts["files_changed"], names)
         file_only = review_record.write_review_record(
             root=self.root, task_id="FIX-523", round_n=1, result="APPROVED", reviewer="Code Reviewer",
             report_path=self.report.name, bind_files=[alias],
         )
         self.assertNotIn("error", file_only)
-        for result in (mixed, file_only):
-            facts = review_record.derive_review_facts(self.root, "FIX-523", [result["review_id"]])
+        self.assertEqual([p["path"] for p in file_only["trust"]["bindings"]], [names[-1]])
+        if same_entry:
+            facts = review_record.derive_review_facts(self.root, "FIX-523", [file_only["review_id"]])
             self.assertEqual(facts["files_changed"], [name])
+        else:
+            # One of two distinct staged files has no review in this receipt.
+            with self.assertRaisesRegex(ValueError, "unreviewed change: " + name):
+                review_record.derive_review_facts(self.root, "FIX-523", [file_only["review_id"]])
 
     def test_case_sensitive_entries_and_hardlinks_keep_distinct_git_names(self):
         directory = self.root / "sensitive"
@@ -284,24 +299,38 @@ class PublishedObjectVerificationTests(unittest.TestCase):
     def test_retained_case_variant_of_deletion_and_candidate_case_rename(self):
         tracked = self.root / "subject.txt"
         renamed = self.root / "SUBJECT.TXT"
-        if not renamed.exists():
-            self.skipTest("the temporary host uses case-sensitive lookup")
+        same_entry = renamed.exists()
         self.git("config", "core.ignorecase", "false")
         self.git("rm", "--cached", "--", tracked.name)
         deleted = self.git("write-tree")
         tracked.rename(renamed)
-        for spelling in (tracked.name, renamed.name):
-            result = self.write_tree_review(deleted, [spelling])
-            self.assertEqual(result.get("code"), "tree_binding", result)
-            self.assertIn("file pin disagrees with reviewed tree at subject.txt", result["error"])
+        if same_entry:
+            for spelling in (tracked.name, renamed.name):
+                result = self.write_tree_review(deleted, [spelling])
+                self.assertEqual(result.get("code"), "tree_binding", result)
+                self.assertIn("file pin disagrees with reviewed tree at subject.txt", result["error"])
+        else:
+            self.assertFalse(tracked.exists())
+            deletion = self.write_tree_review(deleted, [tracked.name, renamed.name])
+            self.assertNotIn("error", deletion)
+            pins = {p["path"]: p for p in deletion["trust"]["bindings"]}
+            self.assertEqual(pins[tracked.name]["mode"], "000000")
+            self.assertEqual(pins[renamed.name]["hash"], self.git("hash-object", "--", renamed.name))
+            facts = review_record.derive_review_facts(self.root, "FIX-523", [deletion["review_id"]])
+            self.assertEqual(facts["files_changed"], [tracked.name])
         self.git("add", "--", renamed.name)
-        # An index-only match must not displace the frozen tree's deletion.
-        self.assertIn("file pin disagrees", self.write_tree_review(deleted, [renamed.name])["error"])
+        if same_entry:
+            # An index-only match must not displace the frozen tree's deletion.
+            self.assertIn("file pin disagrees", self.write_tree_review(deleted, [renamed.name])["error"])
+        else:
+            with self.assertRaisesRegex(ValueError, "file pin disagrees with reviewed tree at SUBJECT.TXT"):
+                review_record.derive_review_facts(self.root, "FIX-523", [deletion["review_id"]])
         # The new candidate actually contains the rename and takes precedence over HEAD.
         new_tree = self.git("write-tree")
-        accepted = self.write_tree_review(new_tree, [tracked.name, renamed.name])
+        accepted = self.write_tree_review(new_tree, [tracked.name, renamed.name], round_n=1)
         self.assertNotIn("error", accepted)
-        self.assertEqual([p["path"] for p in accepted["trust"]["bindings"]], [renamed.name])
+        expected = [renamed.name] if same_entry else [tracked.name, renamed.name]
+        self.assertEqual([p["path"] for p in accepted["trust"]["bindings"]], expected)
         facts = review_record.derive_review_facts(self.root, "FIX-523", [accepted["review_id"]])
         self.assertEqual(facts["review"]["conclusion"], "APPROVED")
 

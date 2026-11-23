@@ -4166,10 +4166,31 @@ def cmd_gate_check(args):
     return run(args)
 
 def check_plugin_freshness():
-    """Compare installed plugin version with source repository HEAD."""
+    """Compare the installed plugin record with the version of this package."""
     import json
     import subprocess
-    from datetime import datetime
+    from resolve_entry import read_release_version
+
+    def plugin_record(path, *, allow_list=False):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return {}
+        if isinstance(data, dict):
+            data = data.get("plugins")
+        elif not allow_list:
+            return {}
+        if isinstance(data, list):
+            for plugin in data:
+                if isinstance(plugin, dict) and plugin.get("name") == "software-project-governance":
+                    return plugin
+        return {}
+
+    def registry_version(record):
+        version = record.get("version")
+        if isinstance(version, str) and re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", version):
+            return version
+        return "unknown"
 
     result = {
         "installed_version": "unknown",
@@ -4186,38 +4207,22 @@ def check_plugin_freshness():
     installed_json = ROOT / ".claude-plugin" / "installed_plugins.json"
     if not installed_json.exists():
         # Try Claude's global installed_plugins.json
-        import os as _os
-        home = _os.path.expanduser("~")
-        installed_json = _os_path(home) / ".claude" / "installed_plugins.json"
+        installed_json = Path.home() / ".claude" / "installed_plugins.json"
 
-    if installed_json.exists():
-        try:
-            with open(installed_json, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            plugins = data.get("plugins", data) if isinstance(data, dict) else data
-            if isinstance(plugins, list):
-                for p in plugins:
-                    if p.get("name") == "software-project-governance":
-                        result["installed_version"] = p.get("version", "unknown")
-                        result["installed_commit"] = (p.get("gitCommitSha") or "unknown")[:7]
-                        result["installed_date"] = p.get("installedAt", "unknown")[:10] if p.get("installedAt") else "unknown"
-                        break
-        except (json.JSONDecodeError, KeyError, IOError):
-            pass
+    installed = plugin_record(installed_json, allow_list=True)
+    result["installed_version"] = registry_version(installed)
+    commit, date = installed.get("gitCommitSha"), installed.get("installedAt")
+    if isinstance(commit, str) and commit:
+        result["installed_commit"] = commit[:7]
+    if isinstance(date, str) and date:
+        result["installed_date"] = date[:10]
 
-    # Read source version from marketplace.json
-    marketplace_json = ROOT / ".claude-plugin" / "marketplace.json"
-    if marketplace_json.exists():
-        try:
-            with open(marketplace_json, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            plugins = data.get("plugins", [])
-            for p in plugins:
-                if p.get("name") == "software-project-governance":
-                    result["source_version"] = p.get("version", "unknown")
-                    break
-        except (json.JSONDecodeError, KeyError, IOError):
-            pass
+    skill = ROOT / "skills/software-project-governance/SKILL.md"
+    if skill.exists():
+        result["source_version"] = read_release_version(skill) or "unknown"
+    else:
+        marketplace = ROOT / ".claude-plugin" / "marketplace.json"
+        result["source_version"] = registry_version(plugin_record(marketplace))
 
     # Get source HEAD commit
     try:
@@ -4231,12 +4236,16 @@ def check_plugin_freshness():
         pass
 
     # Determine status
-    if result["installed_version"] == result["source_version"]:
+    if result["installed_version"] == "unknown":
+        result["status"] = "UNKNOWN (plugin not installed via marketplace?)"
+        result["action"] = ("Check the plugin installation and its registered version."
+                            if installed_json.exists() else "Run /plugin marketplace add <path> to install.")
+    elif result["source_version"] == "unknown":
+        result["status"] = "UNKNOWN (source version unavailable)"
+        result["action"] = "Check the package SKILL.md version or the legacy marketplace version."
+    elif result["installed_version"] == result["source_version"]:
         result["status"] = "UP TO DATE"
         result["action"] = "No action needed."
-    elif result["installed_version"] == "unknown":
-        result["status"] = "UNKNOWN (plugin not installed via marketplace?)"
-        result["action"] = "Run /plugin marketplace add <path> to install."
     else:
         result["status"] = "OUTDATED"
         result["action"] = "Run /plugin update software-project-governance  or  /reload-plugins"

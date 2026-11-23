@@ -42,7 +42,7 @@
     "validation_inventories": [
       {
         "id": "required-snippets",
-        "source": "skills/software-project-governance/infra/verify_workflow.py",
+        "source": "skills/software-project-governance/infra/plugin_assets.py",
         "symbol": "REQUIRED_SNIPPETS",
         "value_type": "dict",
         "min_entries": 40,
@@ -54,7 +54,7 @@
       },
       {
         "id": "fixture-mirror-patterns",
-        "source": "skills/software-project-governance/infra/verify_workflow.py",
+        "source": "skills/software-project-governance/infra/repository_projection.py",
         "symbol": "PROJECTION_SYNC_PATTERNS",
         "value_type": "sequence",
         "min_entries": 12,

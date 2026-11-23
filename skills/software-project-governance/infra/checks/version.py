@@ -75,6 +75,37 @@ def _tracked_entry_files(root: Path, names) -> set:
     return {line.strip() for line in result.stdout.splitlines() if line.strip() in names}
 
 
+def _snippet_version_issues(root: Path, expected: str) -> List[str]:
+    from release.projection import declared_inventory_binding, _inventory_value
+    try:
+        verifier, symbol = declared_inventory_binding(root, "required-snippets")
+        if symbol is not None:
+            kind, _, members = _inventory_value(verifier, symbol)
+            if kind != "dict":
+                raise ValueError(f"{symbol} must be a literal dictionary")
+            if any(re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", item) and item != expected for item in members):
+                return [f"[FAIL] {verifier.name} snippet: hardcoded version mismatch"]
+            return []
+    except (OSError, ValueError) as exc:
+        return [f"[FAIL] required snippets inventory: {exc}"]
+
+    # Historical versions use a sentinel to delimit the inline inventory.
+    if not verifier.is_file():
+        return []
+    content = verifier.read_text(encoding="utf-8")
+    block = re.search(r"REQUIRED_SNIPPETS\s*=\s*\{(?P<body>.*?)\n\}\n{2,}# ── Manifest", content, re.S)
+    if not block:
+        return ["[FAIL] verify_workflow.py snippet: REQUIRED_SNIPPETS block not found"]
+    else:
+        versions = set()
+        for line in block.group("body").splitlines():
+            if not line.strip().startswith("#"):
+                versions.update(re.findall(r'"([0-9]+\.[0-9]+\.[0-9]+)"', line))
+        if any(version != expected for version in versions):
+            return ["[FAIL] verify_workflow.py snippet: hardcoded version mismatch"]
+    return []
+
+
 def check_version_consistency(root: Path, host_root: Optional[Path] = None) -> List[str]:
     facts = version_facts(root)
     source = facts.get("SKILL.md (source of truth)", "")
@@ -84,19 +115,7 @@ def check_version_consistency(root: Path, host_root: Optional[Path] = None) -> L
     for label, version in facts.items():
         if label != "SKILL.md (source of truth)" and version != source:
             issues.append(f"[FAIL] {label}: version={version or 'NOT FOUND'}, expected={source}")
-    verifier = root / "skills/software-project-governance/infra/verify_workflow.py"
-    if verifier.is_file():
-        content = verifier.read_text(encoding="utf-8")
-        block = re.search(r"REQUIRED_SNIPPETS\s*=\s*\{(?P<body>.*?)\n\}\n{2,}# ── Manifest", content, re.S)
-        if not block:
-            issues.append("[FAIL] verify_workflow.py snippet: REQUIRED_SNIPPETS block not found")
-        else:
-            versions = set()
-            for line in block.group("body").splitlines():
-                if not line.strip().startswith("#"):
-                    versions.update(re.findall(r'"([0-9]+\.[0-9]+\.[0-9]+)"', line))
-            if any(version != source for version in versions):
-                issues.append("[FAIL] verify_workflow.py snippet: hardcoded version mismatch")
+    issues.extend(_snippet_version_issues(root, source))
     hooks = root / "skills/software-project-governance/infra/hooks"
     for name in ("pre-commit", "commit-msg", "post-commit", "prepare-commit-msg"):
         path = hooks / name

@@ -115,8 +115,8 @@ def _gate_review_is_wired(path, function):
     return _handler_source(path, function, owners=providers)
 
 
-def _gate_owner_dispatch(path, registry, handler, call):
-    """The normal loader dispatches this literal row, without the DSH argv adapter."""
+def _dispatches_declared_handler(registry):
+    """The parsed Namespace uses the registered path, with only the shipped DSH argv adapter."""
     loader = _local_definition(registry, "load_handler")
     if loader is None:
         return False
@@ -129,7 +129,11 @@ def _gate_owner_dispatch(path, registry, handler, call):
         return False
     if ast.unparse(body[2]) != "return resolve_loader(path)":
         return False
-    if not _binds_explicit_call(body[2].value, _local_definition(registry, "resolve_loader")):
+    return _binds_explicit_call(body[2].value, _local_definition(registry, "resolve_loader"))
+
+
+def _gate_owner_dispatch(path, registry, handler, call):
+    if not _dispatches_declared_handler(registry):
         return False
     function = _registered_owner_definition(path, registry, "governance_fact_cli", handler, call)
     return _gate_review_is_wired(path, function)
@@ -160,8 +164,248 @@ def _dsh_registered_dispatch(path, key, handler, matches, registry, namespace_ca
         return _dsh_owner_is_loadable(path, registry, owner, handler, namespace_call)
     return matches == [(key, f"verify_workflow.{handler}")]
 
+_RELEASE_COMMANDS = {
+    "release-ledger": "cmd_release_ledger",
+    "release-projection": "cmd_release_projection",
+    "quality-tools": "cmd_quality_tools",
+}
 
-def _has_dispatch(path, statements, key, handler):
+
+# These are the three public Namespace adapters shipped with the release CLI.
+# Slots correspond to the tuple returned by the adapter's input reader.
+_RELEASE_ADAPTERS = {
+    "cmd_release_ledger": ("_render_ledger", "_ledger_inputs",
+                           ("host_project_root", "plugin_root", "repository_context", "validate_release_ledger")),
+    "cmd_release_projection": ("_render_projection", "_projection_inputs",
+                               ("plugin_root", "check_projections", "write_projections")),
+    "cmd_quality_tools": ("_render_quality", "_quality_probe", ("probe_quality_tools",)),
+}
+
+
+def _module_body(path, module):
+    if not isinstance(module, str) or not all(part.isidentifier() for part in module.split(".")):
+        return ()
+    source = path.parent.joinpath(*module.split(".")).with_suffix(".py")
+    try:
+        return ast.parse(source.read_text(encoding="utf-8"), filename=str(source)).body
+    except (OSError, UnicodeError, SyntaxError):
+        return ()
+
+
+def _release_provider_available(path, function):
+    """Read the native provider's package imports and the bindings it actually returns."""
+    if function is None or not function.body or not isinstance(function.body[-1], ast.Return):
+        return False
+    imports = set()
+    for statement in function.body[:-1]:
+        if not isinstance(statement, ast.ImportFrom) or statement.level or not statement.module:
+            return False
+        owner = _module_body(path, statement.module)
+        for alias in statement.names:
+            kind = ast.ClassDef if alias.name == "RepositoryContext" else ast.FunctionDef
+            if _local_definition(owner, alias.name, kind) is None:
+                return False
+            imports.add(alias.asname or alias.name)
+    value = function.body[-1].value
+    members = value.elts if isinstance(value, ast.Tuple) else [value]
+    for member in members:
+        if isinstance(member, ast.Call) and not member.args and not member.keywords:
+            member = member.func
+        if not isinstance(member, ast.Name) or member.id not in imports:
+            return False
+    return bool(members)
+
+
+def _release_module_binding(engine, name):
+    """Find the last direct binding of a selected release collaborator."""
+    for node in reversed(engine):
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name == name:
+            return node
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                (item.asname or item.name.split(".")[0]) == name for item in node.names):
+            return node
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.Delete)):
+            targets = node.targets if hasattr(node, "targets") else [node.target]
+            if any(isinstance(ref, ast.Name) and ref.id == name for target in targets for ref in ast.walk(target)):
+                return node
+    return None
+
+
+def _release_import_available(path, engine, name, kind):
+    binding = _release_module_binding(engine, name)
+    if isinstance(binding, kind):
+        return True
+    if not isinstance(binding, ast.ImportFrom) or binding.level:
+        return False
+    alias = next(item for item in binding.names if (item.asname or item.name) == name)
+    return _local_definition(_module_body(path, binding.module), alias.name, kind) is not None
+
+
+def _release_policy_available(path, engine, expression):
+    if (not isinstance(expression, ast.Call) or expression.args or expression.keywords
+            or not isinstance(expression.func, ast.Call)):
+        return False
+    lookup = expression.func
+    if (ast.unparse(lookup.func) != "_product_policy" or lookup.keywords or len(lookup.args) != 1
+            or not isinstance(lookup.args[0], ast.Constant) or not isinstance(lookup.args[0].value, str)):
+        return False
+    name = lookup.args[0].value
+    reader = _release_module_binding(engine, "_product_policy")
+    if isinstance(reader, ast.Assign) and isinstance(reader.value, ast.Name):
+        reader = _local_definition(engine, reader.value.id)
+    if not isinstance(reader, ast.FunctionDef):
+        return False
+    binding = _release_module_binding(engine, "_PRODUCT_POLICY_OWNERS")
+    if not isinstance(binding, ast.Assign) or not isinstance(binding.value, ast.Dict):
+        return False
+    owners = {key.value: value.value for key, value in zip(binding.value.keys, binding.value.values)
+              if isinstance(key, ast.Constant) and isinstance(value, ast.Constant)}
+    return _local_definition(_module_body(path, owners.get(name)), name) is not None
+
+
+def _engine_release_inputs(path, engine, selected, keywords):
+    if not isinstance(selected, ast.Lambda) or selected.args.args or selected.args.kwonlyargs:
+        return False
+    value = selected.body
+    if keywords == ("probe_quality_tools",):
+        return _release_policy_available(path, engine, value)
+    if not isinstance(value, ast.Tuple) or len(value.elts) != len(keywords):
+        return False
+    for role, member in zip(keywords, value.elts):
+        if role in ("plugin_root", "host_project_root"):
+            if role == "plugin_root":
+                if not isinstance(member, ast.Lambda) or member.args.args or member.args.kwonlyargs:
+                    return False
+                member = member.body
+            if not isinstance(member, ast.Name) or not isinstance(_release_module_binding(engine, member.id), ast.Assign):
+                return False
+        else:
+            kind = ast.ClassDef if role == "repository_context" else ast.FunctionDef
+            if not isinstance(member, ast.Name) or not _release_import_available(path, engine, member.id, kind):
+                return False
+    return True
+
+
+def _selected_release_inputs(path, engine, owner, provider, keywords):
+    """The owner defaults apply unless the target actually binds other inputs for __main__."""
+    for block in engine:
+        if not isinstance(block, ast.Try) or not block.body or not isinstance(block.body[0], ast.ImportFrom):
+            continue
+        imported = block.body[0]
+        binding = next((item for item in imported.names if item.name == "bind_release_commands"
+                        or item.asname == "_bind_release_commands"), None)
+        if binding is None:
+            continue
+        if imported.level or imported.module != "release_validation_cli" or binding.name != "bind_release_commands":
+            return False
+        binder = binding.asname or binding.name
+        for guard in block.orelse:
+            if not isinstance(guard, ast.If) or not isinstance(guard.test, ast.Compare):
+                return False
+            test = guard.test
+            if ast.unparse(test.left) != "__name__" or len(test.ops) != 1:
+                return False
+            literal = test.comparators[0]
+            if isinstance(test.ops[0], ast.In) and isinstance(literal, (ast.Tuple, ast.List, ast.Set)):
+                if not all(isinstance(item, ast.Constant) for item in literal.elts):
+                    return False
+                active = any(item.value == "__main__" for item in literal.elts)
+            elif isinstance(test.ops[0], ast.Eq) and isinstance(literal, ast.Constant):
+                active = literal.value == "__main__"
+            else:
+                return False
+            branch = guard.body if active else guard.orelse
+            if not branch:
+                continue
+            if len(branch) != 1 or not isinstance(branch[0], ast.Expr):
+                return False
+            call = branch[0].value
+            install = _local_definition(owner, "bind_release_commands")
+            if (not isinstance(call, ast.Call) or ast.unparse(call.func) != binder
+                    or not _binds_explicit_call(call, install)):
+                return False
+            selected = {kw.arg: kw.value for kw in call.keywords}
+            command = selected.get("command")
+            if not isinstance(command, ast.Name) or _local_definition(engine, command.id) is None:
+                return False
+            # Only the explicitly global names change the owner. Other targets
+            # of the same unpacking assignment are locals and leave the native reader intact.
+            body = install.body[1:] if ast.get_docstring(install) else install.body
+            if not body or not all(isinstance(stmt, ast.Global) for stmt in body[:-1]):
+                return False
+            module_names = {name for stmt in body[:-1] for name in stmt.names}
+            assignment = body[-1]
+            if (not isinstance(assignment, ast.Assign) or len(assignment.targets) != 1
+                    or not isinstance(assignment.targets[0], ast.Tuple) or not isinstance(assignment.value, ast.Tuple)):
+                return False
+            targets, values = assignment.targets[0].elts, assignment.value.elts
+            if len(targets) != len(values) or not all(isinstance(item, ast.Name) for item in targets + values):
+                return False
+            if any(value.id not in selected for value in values):
+                return False
+            overrides = {target.id: value.id for target, value in zip(targets, values)
+                         if target.id in module_names}
+            parameter = overrides.get(provider)
+            if parameter is not None:
+                return _engine_release_inputs(path, engine, selected.get(parameter), keywords)
+    return _release_provider_available(path, _local_definition(owner, provider))
+
+
+def _release_owner_accepts(path, engine, handler, invocation):
+    statements = _module_body(path, "release_validation_cli")
+    function = _local_definition(statements, handler)
+    if (not _binds_explicit_call(invocation, function) or not function.args.args):
+        return False
+    renderer, provider, keywords = _RELEASE_ADAPTERS[handler]
+    body = function.body[1:] if ast.get_docstring(function) else function.body
+    if not body or not isinstance(body[-1], ast.Return) or not isinstance(body[-1].value, ast.Call):
+        return False
+    call = body[-1].value
+    if (not isinstance(call.func, ast.Name) or call.func.id != renderer
+            or len(call.args) != 1 or not isinstance(call.args[0], ast.Name)
+            or call.args[0].id != function.args.args[0].arg
+            or not _binds_explicit_call(call, _local_definition(statements, renderer))):
+        return False
+    if len(keywords) == 1:
+        if len(body) != 1:
+            return False
+        bindings = [provider]
+    else:
+        if len(body) != 2 or not isinstance(body[0], ast.Assign) or len(body[0].targets) != 1:
+            return False
+        target, reader = body[0].targets[0], body[0].value
+        if (not isinstance(target, ast.Tuple) or not all(isinstance(item, ast.Name) for item in target.elts)
+                or not isinstance(reader, ast.Call) or not isinstance(reader.func, ast.Name)
+                or reader.func.id != provider or reader.args or reader.keywords):
+            return False
+        bindings = [item.id for item in target.elts]
+    passed = {item.arg: item.value.id for item in call.keywords if isinstance(item.value, ast.Name)}
+    return (len(bindings) == len(keywords) and len(set(bindings)) == len(bindings)
+            and passed == dict(zip(keywords, bindings))
+            and _selected_release_inputs(path, engine, statements, provider, keywords))
+
+
+def _release_handler_is_loadable(path, engine, function):
+    if function is None:
+        return False
+    body = function.body[1:] if ast.get_docstring(function) else function.body
+    if not any(isinstance(node, ast.ImportFrom) and node.module == "release_validation_cli" for node in body):
+        # The historical command implements output and validation in this file.
+        return True
+    if len(body) != 2 or not isinstance(body[0], ast.ImportFrom) or body[0].level or len(body[0].names) != 1:
+        return False
+    imported = body[0].names[0]
+    result = body[1]
+    if (imported.name != function.name or not isinstance(result, ast.Return)
+            or not isinstance(result.value, ast.Call) or not isinstance(result.value.func, ast.Name)
+            or result.value.func.id != (imported.asname or imported.name) or len(result.value.args) != 1
+            or result.value.keywords or not function.args.args or not isinstance(result.value.args[0], ast.Name)
+            or result.value.args[0].id != function.args.args[0].arg or result.value.args[0].id == result.value.func.id):
+        return False
+    return _release_owner_accepts(path, engine, function.name, result.value)
+
+
+def _has_dispatch(path, engine, statements, key, handler):
     args_parsed = any(
         isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "args" for t in node.targets)
         and isinstance(node.value, ast.Call) and ast.unparse(node.value.func) == "parser.parse_args"
@@ -194,6 +438,12 @@ def _has_dispatch(path, statements, key, handler):
                 return _gate_owner_dispatch(path, registry, handler, call)
             if _DSH_COMMANDS.get(key) == handler:
                 return _dsh_registered_dispatch(path, key, handler, matches, registry, call)
+
+            if (_RELEASE_COMMANDS.get(key) == handler
+                    and matches == [(key, f"release_validation_cli.{handler}")]):
+                return ("release_validation_cli" in _final_registry_whitelist(registry)
+                        and _dispatches_declared_handler(registry)
+                        and _release_owner_accepts(path, engine, handler, call))
             return matches == [(key, f"verify_workflow.{handler}")]
         except (OSError, UnicodeError, SyntaxError, StopIteration, IndexError, KeyError, TypeError, ValueError):
             return False
@@ -473,5 +723,7 @@ def inspect_cli_registration(path: Path, key: str, handler: str) -> dict:
     elif has_handler and _DSH_COMMANDS.get(key) == handler:
         definition = _local_definition(tree.body, handler)
         has_handler = definition is not None and _handler_source(path, definition)
+    elif _RELEASE_COMMANDS.get(key) == handler:
+        has_handler = _release_handler_is_loadable(path, tree.body, _local_definition(tree.body, handler))
     return {"main": main is not None, "handler": has_handler,
-            "argparse": has_parser, "dispatch": _has_dispatch(path, statements, key, handler)}
+            "argparse": has_parser, "dispatch": _has_dispatch(path, tree.body, statements, key, handler)}

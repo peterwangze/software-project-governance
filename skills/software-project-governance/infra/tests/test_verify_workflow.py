@@ -25648,5 +25648,126 @@ class HostContractBindingTests(unittest.TestCase):
                                 for issue in vw._validate_runtime_capabilities(*args)))
 
 
+class ProductInventoryBindingTests(unittest.TestCase):
+    def test_manifest_fallback_observes_changes_made_during_manifest_read(self):
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            root = Path(tmp)
+            missing = root / "after-manifest.txt"
+            stack.enter_context(patch.object(vw, "ROOT", root))
+            stack.enter_context(patch.object(vw, "REQUIRED_FILES", {}))
+            stack.enter_context(patch.object(vw, "OPTIONAL_PROJECTION_FILES", {}))
+            def read_manifest():
+                vw.REQUIRED_FILES = {"changed during read": missing}
+                return None
+            stack.enter_context(patch.object(vw, "build_required_files_from_manifest", read_manifest))
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(vw.check_files(), ["missing required file: changed during read -> after-manifest.txt"])
+
+    def test_manifest_and_ledger_read_the_selected_root_after_their_input_callback(self):
+        import registry
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            first = Path(tmp)
+            second = first / "after-reader"
+            second.mkdir()
+            marker = second / "marker.txt"
+            marker.touch()
+            stack.enter_context(patch.object(vw, "ROOT", first))
+            stack.enter_context(patch.object(vw, "PLUGIN_ROOT", first))
+
+            def read_manifest():
+                vw.ROOT = second
+                return {"marker": marker}
+
+            def context(root, timeout):
+                vw.PLUGIN_ROOT = second
+                return root
+
+            stack.enter_context(patch.object(vw, "build_required_files_from_manifest", read_manifest))
+            stack.enter_context(patch.object(vw, "RepositoryContext", context))
+            validate = stack.enter_context(patch.object(vw, "validate_release_ledger"))
+            validate.return_value.as_dict.return_value = {"state": "PASS"}
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(vw.check_files(), [])
+                registry.load_handler("release-ledger")(SimpleNamespace(no_remote=True))
+            self.assertEqual(validate.call_args.kwargs["manifests_dir"],
+                             second / "skills/software-project-governance/core/releases")
+
+    def test_projection_write_followup_reads_plugin_root_again(self):
+        from types import SimpleNamespace
+        from checks import sd_integrity
+        import registry
+
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp)
+            second = first / "projected"
+            second.mkdir()
+
+            def write(root, config):
+                self.assertEqual(root, first)
+                vw.PLUGIN_ROOT = second
+                return SimpleNamespace(as_dict=lambda: {"state": "PASS"})
+
+            with patch.object(vw, "PLUGIN_ROOT", first), patch.object(vw, "write_projections", write):
+                with patch.object(sd_integrity, "projection_face_paths", return_value={"paths": []}) as paths:
+                    with redirect_stdout(io.StringIO()):
+                        registry.load_handler("release-projection")(SimpleNamespace(write=True))
+                    paths.assert_called_once_with(second, None)
+
+    def test_lazy_policy_removal_before_and_after_read_matches_a_module_attribute(self):
+        # A new interpreter keeps "before first access" independent of suite ordering.
+        code = """
+import sys
+from unittest.mock import patch
+import verify_workflow as v
+for name, owner in (("BLOCKING_LOCK_ISSUE_TYPES", "plugin_assets"),
+                    ("DSH_SMOKE_REAL_HOME_WRITES_RE", "host_loader_probes")):
+    assert name not in vars(v)
+    already_loaded = owner in sys.modules
+    delattr(v, name)
+    assert not hasattr(v, name) and name not in dir(v)
+    assert (owner in sys.modules) == already_loaded
+    marker = object()
+    setattr(v, name, marker)
+    assert getattr(v, name) is marker and name in dir(v)
+    with patch.object(v, name, 42):
+        assert getattr(v, name) == 42
+    assert getattr(v, name) is marker
+    delattr(v, name)
+    assert not hasattr(v, name)
+"""
+        env = dict(os.environ, PYTHONPATH=str(Path(vw.__file__).parent))
+        result = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_policy_exports_and_split_schema_host_roots(self):
+        import architecture_diagnostics
+        import plugin_assets
+        import repository_projection
+        from verify_workflow import REQUIRED_SNIPPETS, PROJECTION_SYNC_PATTERNS
+        namespace = {}
+        exec("from verify_workflow import *", namespace)
+        self.assertIs(REQUIRED_SNIPPETS, plugin_assets.REQUIRED_SNIPPETS)
+        self.assertIs(PROJECTION_SYNC_PATTERNS, repository_projection.PROJECTION_SYNC_PATTERNS)
+        self.assertIs(namespace["REQUIRED_SNIPPETS"], REQUIRED_SNIPPETS)
+        self.assertIsInstance(vw.GIT_REMOTE_NAME_RE, type(re.compile("")))
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            root = Path(tmp)
+            for host_name, size in (("one", 4), ("two", 1)):
+                host = root / host_name
+                gov = host / ".governance"
+                gov.mkdir(parents=True)
+                (gov / "plan-tracker.md").write_bytes(b"x" * size)
+                with patch.object(vw, "HOST_PROJECT_ROOT", host), patch.object(vw, "GOVERNANCE_DIR", gov):
+                    schema = {"governance_data_size": {"files": [".governance/plan-tracker.md"],
+                                                       "warn_bytes": 2, "error_bytes": 3}}
+                    report = vw.check_governance_data_size(schema=schema)
+                    direct = architecture_diagnostics.check_governance_data_size(schema=schema,
+                                                                                  host_project_root=host)
+                    self.assertEqual(report["summary"], direct["summary"])
+                    self.assertEqual(report["summary"]["errors"], int(size > 3))
+
+
 if __name__ == "__main__":
     unittest.main()

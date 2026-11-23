@@ -1,59 +1,53 @@
-"""Manifest domain checks — extracted from verify_workflow.py in 0.59.0.
+"""Validate canonical product artifacts, repository navigation and cleanup scope."""
 
-Scope (DEC-083 Phase 1 / REQ-102): manifest.json canonical-set consistency,
-critical product-artifact guards (FIX-110), and cleanup-scope sync.
-
-This module owns the manifest check domain. Shared helpers that are still
-defined in verify_workflow.py (`_display_path`, `_git_files`,
-`PLUGIN_SCOPE_DIRS`, `ROOT`) are reached through a deferred module reference
-rather than a top-level import, so that verify_workflow.py can import this
-module at module load time without creating an import cycle. When the
-common-helpers domain is extracted in a later release, these references
-will be retargeted to that module.
-
-See docs/requirements/verify-workflow-split-phase1-manifest-domain-0.59.0.md
-for the design and the line-number baseline used during extraction.
-"""
-
-import sys
 import json
-import re
 from pathlib import Path
+import re
+import sys
 
 
-# ── Shared-helper access (deferred to avoid import cycle) ──────────
-# verify_workflow.py imports this module at load time. Reaching the
-# shared helpers via a module reference (instead of `from verify_workflow
-# import ...`) keeps the two modules from locking each other during
-# initialization. The helpers are module-level attributes of
-# verify_workflow.py, so they are available whenever a check here runs.
-
-_VW_CACHE = None
-
-
-def _vw():
-    """Return the verify_workflow module (imported lazily, cached).
-
-    Cached so repeated calls reuse the same module reference instead of
-    re-resolving the import on every invocation (REVIEW-FIX-153 P2).
-    """
-    global _VW_CACHE
-    if _VW_CACHE is None:
-        import verify_workflow  # noqa: WPS433 (deferred import on purpose)
-        _VW_CACHE = verify_workflow
-    return _VW_CACHE
-
-
-def _display_path(path, root=None):
-    return _vw()._display_path(path, root)
-
-
-def _git_files(args):
-    return _vw()._git_files(args)
+PLUGIN_SCOPE_DIRS = {
+    "skills",
+    "agents",
+    "commands",
+    "adapters",
+    # FIX-310: the dsh delivery surface — the preset payload the host row
+    # renders (`agent-presets/governance/`: composition template + preset.yml)
+    # and the host row module itself (`lib/index.js`). Declared here so
+    # cleanup.py can purge stale payload files after an upgrade, and so the
+    # manifest cleanup_scope stays in sync (FIX-053 F-001).
+    "agent-presets",
+    "lib",
+    ".claude-plugin",
+    ".codex-plugin",
+    ".zcode-plugin",
+    ".agents",
+}
 
 
 def _root():
-    return _vw().ROOT
+    from project_paths import package_root
+    return package_root()
+
+
+def _display_path(path, root=None):
+    from project_paths import display_path
+    return display_path(path, root or _root())
+
+
+def _git_files(args):
+    from project_paths import git_files
+    return git_files(args, _root())
+
+
+def _scope_dirs():
+    return PLUGIN_SCOPE_DIRS
+
+
+def bind_manifest_access(*, package_root, display_path, git_files, scope_dirs):
+    """Select the live repository facts used by the compatibility CLI."""
+    global _root, _display_path, _git_files, _scope_dirs
+    _root, _display_path, _git_files, _scope_dirs = package_root, display_path, git_files, scope_dirs
 
 
 def check_repository_navigation(document, navigation, repository_root=None):
@@ -352,7 +346,7 @@ def check_manifest_cleanup_scope(manifest, manifest_path=None):
         return [f"{display}: cleanup_scope.directories must be a non-empty string list"]
 
     normalized = {item.strip().replace("\\", "/") for item in directories}
-    PLUGIN_SCOPE_DIRS = _vw().PLUGIN_SCOPE_DIRS
+    PLUGIN_SCOPE_DIRS = _scope_dirs()
     if normalized != PLUGIN_SCOPE_DIRS:
         return [
             f"{display}: cleanup_scope.directories must match verifier plugin scope "

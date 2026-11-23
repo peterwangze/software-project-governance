@@ -53,13 +53,19 @@ def _apply_project_root_override(project_root):
     if "ARCHIVE_RISKS_DIR" in globals():
         ARCHIVE_RISKS_DIR = GOVERNANCE_DIR / "archive" / "risks"
 
+    global _asset_governance_dir
+    _asset_governance_dir = GOVERNANCE_DIR
     if "REQUIRED_FILES" in globals():
-        REQUIRED_FILES.update({
-            "Governance Plan Tracker": GOVERNANCE_DIR / "plan-tracker.md",
-            "Governance Evidence Log": GOVERNANCE_DIR / "evidence-log.md",
-            "Governance Decision Log": GOVERNANCE_DIR / "decision-log.md",
-            "Governance Risk Log": GOVERNANCE_DIR / "risk-log.md",
-        })
+        REQUIRED_FILES.update(_asset_host_files(GOVERNANCE_DIR))
+
+
+def _asset_host_files(governance_dir):
+    return {
+        "Governance Plan Tracker": governance_dir / "plan-tracker.md",
+        "Governance Evidence Log": governance_dir / "evidence-log.md",
+        "Governance Decision Log": governance_dir / "decision-log.md",
+        "Governance Risk Log": governance_dir / "risk-log.md",
+    }
 
 
 def _dispatch_bootstrap_if_selected(argv):
@@ -136,7 +142,6 @@ from checks import version as version_checks
 from release.context import RepositoryContext
 from release.ledger import validate_release_ledger
 from release.projection import check_projections, write_projections
-from release.quality import probe_quality_tools
 # FEAT-019: ArchGuard ratchet gate (fatal) — self-contained module; the
 # engine only wires dispatch (bootstrap discipline, evolution doc §4).
 from archguard_ratchet import cmd_archguard_ratchet
@@ -293,21 +298,13 @@ _bind_host_root(lambda: HOST_PROJECT_ROOT,
 
 # Governance FACTS live in the host project, never in the plugin cache.
 GOVERNANCE_DIR = HOST_PROJECT_ROOT / ".governance"
+_asset_governance_dir = GOVERNANCE_DIR
 EXECUTION_PACKET_PATH = GOVERNANCE_DIR / "execution-packets.json"
 
 
 def _display_path(path, root=None):
-    """Return repo-relative path when possible, without Path.is_relative_to()."""
-    root = root or ROOT
-    try:
-        path_abs = os.path.abspath(os.fspath(path))
-        root_abs = os.path.abspath(os.fspath(root))
-        common = os.path.commonpath([path_abs, root_abs])
-        if os.path.normcase(common) == os.path.normcase(root_abs):
-            return Path(os.path.relpath(path_abs, root_abs))
-    except (OSError, TypeError, ValueError):
-        return path
-    return path
+    from project_paths import display_path
+    return display_path(path, root or ROOT)
 
 
 def _read_text_normalized(path):
@@ -318,23 +315,7 @@ def _read_text_normalized(path):
 # Directories that constitute the plugin installation boundary.
 # Check 10 (M5 compliance) skips these to avoid false positives from
 # legitimate checklists in plugin SKILL.md files (FIX-054).
-PLUGIN_SCOPE_DIRS = {
-    "skills",
-    "agents",
-    "commands",
-    "adapters",
-    # FIX-310: the dsh delivery surface — the preset payload the host row
-    # renders (`agent-presets/governance/`: composition template + preset.yml)
-    # and the host row module itself (`lib/index.js`). Declared here so
-    # cleanup.py can purge stale payload files after an upgrade, and so the
-    # manifest cleanup_scope stays in sync (FIX-053 F-001).
-    "agent-presets",
-    "lib",
-    ".claude-plugin",
-    ".codex-plugin",
-    ".zcode-plugin",
-    ".agents",
-}
+from checks.manifest import PLUGIN_SCOPE_DIRS
 
 
 def _is_plugin_path(rel_path: str) -> bool:
@@ -361,25 +342,8 @@ def _is_plugin_path(rel_path: str) -> bool:
 
 
 def _git_files(args):
-    """Return repo-relative paths from git, or None when git is unavailable."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(ROOT)] + args,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return None
-    if result.returncode != 0:
-        return None
-    return {
-        line.strip().replace("\\", "/")
-        for line in result.stdout.splitlines()
-        if line.strip()
-    }
+    from project_paths import git_files
+    return git_files(args, ROOT)
 
 
 def _split_markdown_table_row(line):
@@ -387,655 +351,19 @@ def _split_markdown_table_row(line):
     return markdown_table_cells(line)
 
 
-PLATFORM_ENTRY_FILES = {
-    "AGENTS.md",
-    "CLAUDE.md",
-    "GEMINI.md",
-    "CODEX.md",
-}
-
-
-BLOCKING_LOCK_ISSUE_TYPES = {
-    "schema_violation",
-    "orphan_lock",
-    "expired_lock",
-    "task_not_in_plan",
-    "multi_lock_conflict",
-    "format_invalid_json",
-    "format_empty",
-    "format_not_dict",
-    "format_missing_key",
-    "format_type_error",
-    "format_schema_violation",
-}
-
-
 def lock_issue_is_blocking(issue):
-    """Return True when a lock issue should affect --fail-on-issues."""
-    issue_type = issue.get("type", "")
-    normalized = issue_type.removeprefix("format_")
-    return issue_type in BLOCKING_LOCK_ISSUE_TYPES or normalized in BLOCKING_LOCK_ISSUE_TYPES
+    from plugin_assets import lock_issue_is_blocking as run
+    return run(issue, blocking_lock_issue_types=_product_policy("BLOCKING_LOCK_ISSUE_TYPES"))
 
 
 def structural_issue_is_blocking(issue):
-    """Return True when a structural validity issue should fail governance health."""
-    severity = str(issue.get("severity", "ERROR")).upper()
-    return severity not in {"INFO", "WARN", "WARNING"}
+    from plugin_assets import structural_issue_is_blocking as run
+    return run(issue)
 
 
 def blocking_structural_issues(issues):
-    return [issue for issue in issues if structural_issue_is_blocking(issue)]
-
-
-REQUIRED_FILES = {
-    "README": ROOT / "README.md",
-    "Workflow Schema": ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md",
-    "Plugin Contract": ROOT / "skills/software-project-governance/core/protocol/plugin-contract.md",
-    "External Command Contract": ROOT / "skills/software-project-governance/core/protocol/external-command-contract.md",
-    "Headless Runner Sample": ROOT / "skills/software-project-governance/core/protocol/headless-runner-sample.md",
-    "Command Protocol Schema": ROOT / "skills/software-project-governance/core/protocol/command-schema.md",
-    "Workflow Manifest": ROOT / "skills/software-project-governance/core/manifest.md",
-    "Company Practices": ROOT / "project/workflows/software-project-governance/research/company-practices.md",
-    "Plan Tracker": ROOT / "skills/software-project-governance/core/templates/plan-tracker.md",
-    "Evidence Template": ROOT / "skills/software-project-governance/core/templates/evidence-log.md",
-    "Decision Template": ROOT / "skills/software-project-governance/core/templates/decision-log.md",
-    "Risk Template": ROOT / "skills/software-project-governance/core/templates/risk-log.md",
-    "Governance Plan Tracker": GOVERNANCE_DIR / "plan-tracker.md",
-    "Governance Evidence Log": GOVERNANCE_DIR / "evidence-log.md",
-    "Governance Decision Log": GOVERNANCE_DIR / "decision-log.md",
-    "Governance Risk Log": GOVERNANCE_DIR / "risk-log.md",
-    "Skill Main Workflow Entry": ROOT / "skills/main-workflow/SKILL.md",
-    "Skill Tools Index": ROOT / "skills/software-project-governance/infra/TOOLS.md",
-    "Core Stage Gates": ROOT / "skills/software-project-governance/core/stage-gates.md",
-    "Core Lifecycle": ROOT / "skills/software-project-governance/core/lifecycle.md",
-    "Core Profiles": ROOT / "skills/software-project-governance/core/profiles.md",
-    "Core Onboarding": ROOT / "skills/software-project-governance/core/onboarding.md",
-    "Skill References Interaction Boundary": ROOT / "skills/software-project-governance/references/interaction-boundary.md",
-    "Core Audit Framework": ROOT / "skills/software-project-governance/core/audit-framework.md",
-    "Skill References Agent Failure Modes": ROOT / "skills/software-project-governance/references/agent-failure-modes.md",
-    "Skill References Company Practices Summary": ROOT / "skills/software-project-governance/references/company-practices-summary.md",
-    "Agent Integration Research": ROOT / "project/workflows/software-project-governance/research/agent-integration-models.md",
-    "Default Product Shape": ROOT / "project/workflows/software-project-governance/research/default-product-shape.md",
-    "External Capability Minimum Validation": ROOT / "project/workflows/software-project-governance/research/external-capability-minimum-validation.md",
-    "Domestic Agent CLI Compatibility": ROOT / "project/workflows/software-project-governance/research/domestic-agent-cli-compatibility.md",
-    "Repo-local Termination Note": ROOT / "project/workflows/software-project-governance/research/repo-local-termination-note.md",
-    "Governance Init Command": ROOT / "commands/governance-init.md",
-    "Governance Status Command": ROOT / "commands/governance-status.md",
-    "Governance Gate Command": ROOT / "commands/governance-gate.md",
-    "Governance Verify Command": ROOT / "commands/governance-verify.md",
-    "Governance Update Command": ROOT / "commands/governance-update.md",
-    "Codex Skill": ROOT / "skills/software-project-governance/SKILL.md",
-    "Skill Stages Initiation Sub-workflow": ROOT / "skills/stage-initiation/SKILL.md",
-    "Skill Stages Research Sub-workflow": ROOT / "skills/stage-research/SKILL.md",
-    "Skill Stages Architecture Sub-workflow": ROOT / "skills/stage-architecture/SKILL.md",
-    "Skill Stages Development Sub-workflow": ROOT / "skills/stage-development/SKILL.md",
-    "Skill Stages Selection Sub-workflow": ROOT / "skills/stage-selection/SKILL.md",
-    "Skill Stages Infrastructure Sub-workflow": ROOT / "skills/stage-infra/SKILL.md",
-    "Skill Stages Testing Sub-workflow": ROOT / "skills/stage-testing/SKILL.md",
-    "Skill Stages CI-CD Sub-workflow": ROOT / "skills/stage-cicd/SKILL.md",
-    "Skill Stages Release Sub-workflow": ROOT / "skills/stage-release/SKILL.md",
-    "Skill Stages Operations Sub-workflow": ROOT / "skills/stage-operations/SKILL.md",
-    "Skill Stages Maintenance Sub-workflow": ROOT / "skills/stage-maintenance/SKILL.md",
-    "Skill Stages Requirement Clarification": ROOT / "skills/requirement-clarification/SKILL.md",
-    "Skill Stages Tech Review Checklist": ROOT / "skills/tech-review/SKILL.md",
-    "Skill Stages Code Review Standard": ROOT / "skills/code-review/SKILL.md",
-    "Skill Stages Release Checklist": ROOT / "skills/release-checklist/SKILL.md",
-    "SKILL Retro Meeting": ROOT / "skills/retro-meeting/SKILL.md",
-    "SKILL PR-FAQ Template": ROOT / "skills/pr-faq/SKILL.md",
-    "SKILL OKR Template": ROOT / "skills/okr/SKILL.md",
-    "SKILL Six-Pager Template": ROOT / "skills/six-pager/SKILL.md",
-    "Behavior Protocol (M0-M10)": ROOT / "skills/software-project-governance/references/behavior-protocol.md",
-    "Five-Layer Architecture Design": ROOT / "project/references/architecture.md",
-    "Asset Migration Map": ROOT / "project/references/asset-migration-map.md",
-}
-
-OPTIONAL_PROJECTION_FILES = {
-    "Sample Project": ROOT / "project/workflows/software-project-governance/examples/current-project-sample.md",
-    "Sample Evidence": ROOT / "project/workflows/software-project-governance/examples/current-project-evidence-log.md",
-    "Sample Decision": ROOT / "project/workflows/software-project-governance/examples/current-project-decision-log.md",
-    "Sample Risk": ROOT / "project/workflows/software-project-governance/examples/current-project-risk-log.md",
-
-    "Claude Adapter": ROOT / "adapters/claude/README.md",
-    "Claude Adapter Manifest": ROOT / "adapters/claude/adapter-manifest.json",
-    "Claude Launcher": ROOT / "adapters/claude/launch.py",
-    "Codex Adapter": ROOT / "adapters/codex/README.md",
-    "Codex Adapter Manifest": ROOT / "adapters/codex/adapter-manifest.json",
-    "Codex Launcher": ROOT / "adapters/codex/launch.py",
-    "Gemini Adapter": ROOT / "adapters/gemini/README.md",
-    "Gemini Adapter Manifest": ROOT / "adapters/gemini/adapter-manifest.json",
-    "Gemini Launcher": ROOT / "adapters/gemini/launch.py",
-    "opencode Adapter": ROOT / "adapters/opencode/README.md",
-    "opencode Adapter Manifest": ROOT / "adapters/opencode/adapter-manifest.json",
-    "opencode Launcher": ROOT / "adapters/opencode/launch.py",
-    "Pi Adapter": ROOT / "adapters/pi/README.md",
-    "Pi Adapter Manifest": ROOT / "adapters/pi/adapter-manifest.json",
-    "Pi Launcher": ROOT / "adapters/pi/launch.py",
-    "Claude Plugin Marketplace": ROOT / ".claude-plugin/marketplace.json",
-    "Claude Plugin Definition": ROOT / ".claude-plugin/plugin.json",
-    "Codex Plugin Definition": ROOT / ".codex-plugin/plugin.json",
-    "Codex Marketplace": ROOT / ".agents/plugins/marketplace.json",
-    "Core VERSIONING": ROOT / "skills/software-project-governance/core/VERSIONING.md",
-    "Core Task Gate Model": ROOT / "skills/software-project-governance/core/task-gate-model.md",
-    "CHANGELOG": ROOT / "project/CHANGELOG.md",
-}
-
-PROJECTION_SNIPPETS = {
-    ROOT / "project/workflows/software-project-governance/examples/current-project-sample.md": [
-        "已迁移",
-    ],
-    ROOT / "adapters/claude/README.md": [
-        "Tier 1",
-        "## Load",
-        "## Verify",
-        "## Boundary",
-        "skills/software-project-governance/SKILL.md",
-        "python adapters/claude/launch.py",
-        "check-agent-adapters",
-        "check-agent-adapters --runtime",
-    ],
-    ROOT / "adapters/claude/adapter-manifest.json": [
-        "adapter_id", "workflow_id", "native_entry", "runtime_e2e", "runtime_capabilities", "launcher",
-    ],
-    ROOT / "adapters/claude/launch.py": [
-        'MANIFEST_PATH = ROOT / "adapters/claude/adapter-manifest.json"',
-        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Claude")',
-    ],
-    ROOT / "adapters/manifest_report.py": [
-        "{platform} Adapter Launcher", 'print("read_order:")', 'print("native_entry:")',
-        'print("runtime_e2e:")', 'print("validation:")',
-    ],
-    ROOT / "adapters/codex/README.md": [
-        "Tier 1",
-        "## Load",
-        "## Verify",
-        "## Boundary",
-        "skills/software-project-governance/SKILL.md",
-        ".codex-plugin/plugin.json",
-        ".agents/plugins/marketplace.json",
-        "python adapters/codex/launch.py",
-        "check-agent-adapters",
-        "agent-runtime-e2e --agent codex",
-    ],
-    ROOT / "adapters/codex/adapter-manifest.json": [
-        "adapter_id", "workflow_id", "native_entry", "runtime_e2e", "runtime_capabilities", "launcher",
-    ],
-    ROOT / "adapters/codex/launch.py": [
-        'MANIFEST_PATH = ROOT / "adapters/codex/adapter-manifest.json"',
-        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Codex")',
-    ],
-    ROOT / "adapters/gemini/README.md": [
-        "## 兼容要求",
-        "## Gemini 路线判断",
-        "## 默认接入顺序",
-        "## 国内 agent CLI 兼容抽象",
-        "## 适配原则",
-        "## 建议的最小验证顺序",
-    ],
-    ROOT / "adapters/gemini/adapter-manifest.json": [
-        "adapter_id",
-        "support_status",
-        "native_entry",
-        "runtime_e2e",
-        "runtime_capabilities",
-    ],
-    ROOT / "adapters/gemini/launch.py": [
-        "Gemini Adapter Launcher",
-        "runtime_e2e",
-        "native_entry",
-    ],
-    ROOT / "adapters/opencode/README.md": [
-        "opencode Adapter",
-        "full target-cwd agent runtime E2E verified",
-        "opencode-provider-preflight",
-        "check-agent-adapters --runtime",
-    ],
-    ROOT / "adapters/opencode/adapter-manifest.json": [
-        "adapter_id",
-        "runtime-verified",
-        "provider_model_preflight",
-        "runtime_capabilities",
-        "full_e2e_verified",
-    ],
-    ROOT / "adapters/opencode/launch.py": [
-        "opencode Adapter Launcher",
-        "provider_model_preflight",
-        "runtime_e2e",
-    ],
-    ROOT / "adapters/pi/README.md": [
-        "Tier 1",
-        "加载模型",
-        "能力边界",
-        "agent-runtime-e2e --agent pi",
-    ],
-    ROOT / "adapters/pi/adapter-manifest.json": [
-        "ask_user_question",
-        "dispatch_agent",
-        "生成≠咨询",
-        "adapters/pi/extension",
-    ],
-    ROOT / "adapters/pi/launch.py": [
-        "Pi Adapter Launcher",
-        "native_entry",
-        "read_order",
-        "validation",
-    ],
-    ROOT / ".claude-plugin/marketplace.json": [
-        "software-project-governance",
-    ],
-    ROOT / ".claude-plugin/plugin.json": [
-        "software-project-governance",
-        "skills",
-    ],
-    ROOT / ".codex-plugin/plugin.json": [
-        "software-project-governance",
-        "skills",
-    ],
-    ROOT / ".agents/plugins/marketplace.json": [
-        "software-project-governance",
-    ],
-}
-
-# PROJECT_FACT_SNIPPETS removed in 0.61.1 Step A (FIX-155a) — confirmed dead code
-# (zero references across skills/ tests/ project/, only its definition existed).
-
-WORKFLOW_SNIPPETS = {
-    ROOT / "README.md": [
-        "让 coding agent 帮你看护项目质量",
-        "## 安装",
-        "## 5 分钟开始",
-        "## 内部文档",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/agent-integration-models.md": [
-        "## 调研目标",
-        "## Claude Code",
-        "## 通用集成模式对比",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/default-product-shape.md": [
-        "## 方案摘要",
-        "## 分层设计",
-        "## 默认接入矩阵",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/external-capability-minimum-validation.md": [
-        "## 目标",
-        "## 为什么先选 external runner / shared command",
-        "## 最小验证范围",
-        "## 命令约定草案",
-        "software-project-governance.run",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/domestic-agent-cli-compatibility.md": [
-        "## 目标",
-        "## 兼容抽象",
-        "## 默认接入顺序",
-        "## 能力检查清单",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/repo-local-termination-note.md": [
-        "## 终止对象",
-        "## 终止原因",
-        "## 降级后的资产定位",
-        "## 新主线如何接管",
-    ],
-    ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md": [
-        "governance-bootstrap --format json",
-        "loop status --unit",
-        "(../lifecycle.md)",
-        "(../loop-engineering-registry.json)",
-    ],
-    ROOT / "skills/software-project-governance/core/protocol/plugin-contract.md": [
-        "## 最小承载单元",
-        "## 三层承载模型",
-        "## Skill / Plugin 行为描述要素",
-        "## 默认接入要求",
-        "workflow 本体层 + agent 入口投影层 + 外部能力层",
-        "software-project-governance",
-        "stages",
-        "interaction-boundary",
-        "Agent 适配准入标准",
-        "冲击场景",
-        "SC-1",
-    ],
-    ROOT / "skills/software-project-governance/core/protocol/external-command-contract.md": [
-        "## 目标",
-        "software-project-governance.run",
-        "## 最小输入",
-        "## 最小输出",
-        "## write-back targets",
-        "## replacement boundary",
-        "### 协议层（必读）",
-        "### 当前阶段子工作流（按 stage 参数加载）",
-        "interaction-boundary",
-        "Validation Matrix",
-        "失败与阻断语义",
-    ],
-    ROOT / "skills/software-project-governance/core/protocol/headless-runner-sample.md": [
-        "## 目标",
-        "software-project-governance.headless",
-        "## 输入映射",
-        "## execution mode",
-        "dry-run",
-        "## 最小返回样例",
-        "### 当前阶段子工作流（按 stage 参数加载）",
-    ],
-    ROOT / "skills/software-project-governance/core/manifest.md": [
-        "supported_agents",
-        "Claude",
-        "Codex",
-    ],
-}
-
-# FEAT-038 补修 / F-2 (data-inventory-0.80.0.md §F-2): the `REQUIRED_SNIPPETS = {}`
-# + two `.update()` calls removed here were DEAD — the literal below rebinds the
-# name, so check_snippets() never saw them (dead since AUDIT-082/f9a18d0; removal
-# advised by REL-078 CODE R0 L121). Literal is the sole authority; F-2 items open.
-REQUIRED_SNIPPETS = {
-    ROOT / "README.md": [
-        "让 coding agent 帮你看护项目质量",
-        "## 安装",
-        "## 5 分钟开始",
-        "## 内部文档",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/agent-integration-models.md": [
-        "## 调研目标",
-        "## Claude Code",
-        "## 通用集成模式对比",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/default-product-shape.md": [
-        "## 方案摘要",
-        "## 分层设计",
-        "## 默认接入矩阵",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/external-capability-minimum-validation.md": [
-        "## 目标",
-        "## 为什么先选 external runner / shared command",
-        "## 最小验证范围",
-        "## 命令约定草案",
-        "software-project-governance.run",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/domestic-agent-cli-compatibility.md": [
-        "## 目标",
-        "## 兼容抽象",
-        "## 默认接入顺序",
-        "## 能力检查清单",
-    ],
-    ROOT / "project/workflows/software-project-governance/research/repo-local-termination-note.md": [
-        "## 终止对象",
-        "## 终止原因",
-        "## 降级后的资产定位",
-        "## 新主线如何接管",
-    ],
-    ROOT / "project/workflows/software-project-governance/examples/current-project-sample.md": [
-        "已迁移",
-    ],
-    ROOT / "skills/software-project-governance/core/protocol/workflow-schema.md": [
-        "governance-bootstrap --format json",
-        "loop status --unit",
-        "(../lifecycle.md)",
-        "(../loop-engineering-registry.json)",
-    ],
-    ROOT / "skills/software-project-governance/core/protocol/plugin-contract.md": [
-        "## 最小承载单元",
-        "## 三层承载模型",
-        "## Skill / Plugin 行为描述要素",
-        "## 默认接入要求",
-        "workflow 本体层 + agent 入口投影层 + 外部能力层",
-        "software-project-governance",
-        "stages",
-        "interaction-boundary",
-        "Agent 适配准入标准",
-        "冲击场景",
-        "SC-1",
-    ],
-    ROOT / "skills/software-project-governance/core/protocol/external-command-contract.md": [
-        "## 目标",
-        "software-project-governance.run",
-        "## 最小输入",
-        "## 最小输出",
-        "## write-back targets",
-        "## replacement boundary",
-        "### 协议层（必读）",
-        "### 当前阶段子工作流（按 stage 参数加载）",
-        "interaction-boundary",
-        "Validation Matrix",
-        "失败与阻断语义",
-    ],
-    ROOT / "skills/software-project-governance/core/protocol/headless-runner-sample.md": [
-        "## 目标",
-        "software-project-governance.headless",
-        "## 输入映射",
-        "## execution mode",
-        "dry-run",
-        "## 最小返回样例",
-        "### 当前阶段子工作流（按 stage 参数加载）",
-    ],
-    ROOT / "skills/software-project-governance/core/manifest.md": [
-        "supported_agents",
-        "Claude",
-        "Codex",
-    ],
-    # ── Command Protocol Schema + Upgraded Commands ──
-    ROOT / "skills/software-project-governance/core/protocol/command-schema.md": [
-        "## Input Parameters 定义规范",
-        "## Execution Flow 定义规范",
-        "## Output Format 定义规范",
-        "## Error Codes 定义规范",
-        "## Self-Validation 定义规范",
-        "## Agent 执行纪律",
-    ],
-    ROOT / "commands/governance-init.md": [
-        "governance-bootstrap --format json", "resolve.resolved_root_ok",
-        "loop start --unit", "--goal", "--acceptance", "--tier",
-    ],
-    ROOT / "commands/governance-status.md": [
-        "governance-bootstrap --format json", "loop status --unit", "loop status --json",
-    ],
-    ROOT / "commands/governance-gate.md": [
-        "loop status --unit", "loop gate --unit", "--gate", "--review",
-    ],
-    ROOT / "commands/governance-verify.md": [
-        "## 输入参数",
-        "## 执行流程",
-        "## 输出格式",
-        "## 错误码",
-        "## 自校验",
-        "VERIFY-ERR-001",
-    ],
-    ROOT / "commands/governance-update.md": [
-        "## 输入参数",
-        "## 执行流程",
-        "## 输出格式",
-        "## 错误码",
-        "## 自校验",
-        "UPDATE-ERR-001",
-    ],
-    ROOT / "adapters/claude/README.md": [
-        "Tier 1",
-        "## Load",
-        "## Verify",
-        "## Boundary",
-        "skills/software-project-governance/SKILL.md",
-        "python adapters/claude/launch.py",
-        "check-agent-adapters",
-        "check-agent-adapters --runtime",
-    ],
-    ROOT / "adapters/claude/adapter-manifest.json": [
-        "adapter_id",
-        "workflow_id",
-        "native_entry",
-        "launcher",
-    ],
-    ROOT / "adapters/claude/launch.py": [
-        'MANIFEST_PATH = ROOT / "adapters/claude/adapter-manifest.json"',
-        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Claude")',
-    ],
-    ROOT / "adapters/manifest_report.py": [
-        "{platform} Adapter Launcher", 'print("read_order:")', 'print("native_entry:")',
-        'print("runtime_e2e:")', 'print("validation:")',
-    ],
-    ROOT / "adapters/codex/README.md": [
-        "Tier 1",
-        "## Load",
-        "## Verify",
-        "## Boundary",
-        "skills/software-project-governance/SKILL.md",
-        ".codex-plugin/plugin.json",
-        ".agents/plugins/marketplace.json",
-        "python adapters/codex/launch.py",
-        "check-agent-adapters",
-        "agent-runtime-e2e --agent codex",
-    ],
-    ROOT / "adapters/codex/adapter-manifest.json": [
-        "adapter_id",
-        "workflow_id",
-        "launcher",
-    ],
-    ROOT / "adapters/codex/launch.py": [
-        'MANIFEST_PATH = ROOT / "adapters/codex/adapter-manifest.json"',
-        "adapters/manifest_report.py", 'report["print_manifest_report"](MANIFEST_PATH, "Codex")',
-    ],
-    ROOT / "adapters/gemini/README.md": [
-        "## 兼容要求",
-        "## Gemini 路线判断",
-        "## 默认接入顺序",
-        "## 国内 agent CLI 兼容抽象",
-        "## 适配原则",
-        "## 建议的最小验证顺序",
-    ],
-    # Plugin marketplace packaging
-    ROOT / ".claude-plugin/marketplace.json": [
-        "software-project-governance",
-    ],
-    ROOT / ".claude-plugin/plugin.json": [
-        "software-project-governance",
-        "skills",
-    ],
-    ROOT / ".codex-plugin/plugin.json": [
-        "software-project-governance",
-        "skills",
-    ],
-    ROOT / "skills/software-project-governance/SKILL.md": [
-        "# 软件项目治理工作流入口",
-        "加载本 SKILL 后，你进入软件项目治理工作流",
-        "你是 Coordinator，不是单 agent 任务执行者",
-        "Coordinator 接管用户交互",
-        "Producer-Reviewer 分离",
-        "references/behavior-protocol.md",
-        "core/lifecycle.md",
-        "core/stage-gates.md",
-        "core/task-gate-model.md",
-        "references/agent-communication-protocol.md",
-        "六层架构",
-        "适配层（平台投影）",
-        "infra/verify_workflow.py",
-        "infra/hooks/",
-    ],
-    ROOT / "skills/software-project-governance/references/behavior-protocol.md": [
-        "# 行为协议",
-        "M0-M10 强制性规则",
-        "## M0. 合规语言",
-        "## M1. 任务匹配",
-        "## M2. 预加载",
-        "## M3. 输出规则",
-        "## M4. 会话生命周期",
-        "## M5. AskUserQuestion 协议",
-        "## M6. Gate 行为",
-        "## M7. 执行连续性",
-        "## M8. 自检协议",
-        "## M9. 优先级声明",
-        "## M10. 主动生态探索协议",
-        "M7.4 任务完成协议",
-        "M7.5 任务前协议",
-        "证据 → check-governance → 审计 → 交付物审查在 commit 之前 → commit → 继续",
-        "双重机制",
-        "9 项 agent 无法造假的检查",
-        "阶段快速参考",
-        "Profile 快速参考",
-    ],
-    ROOT / "project/references/architecture.md": [
-        "# 六层架构设计",
-        "适配层（Adapter）",
-        "入口层",
-        "业务智能层（Agent 库）",
-        "能力层（SKILL 库）",
-        "基础设施层",
-        "核心层",
-        "依赖方向（铁律）",
-        "能力层 vs 业务智能层（关键区分）",
-        "入口层 vs 适配层（关键区分）",
-        "单向依赖，不可反向",
-        "与协议层概念的对齐",
-    ],
-    ROOT / "skills/software-project-governance/core/audit-framework.md": [
-        "# 审计框架",
-        "审计作为一等治理看护手段",
-        "## 审计维度",
-        "D1 — 项目目标一致性审计",
-        "D2 — 用户使用角度审计",
-        "D3 — 阶段闭环质量审计",
-        "D4 — 修改闭环标准审计",
-        "D5 — 用户易用性审计",
-        "D6 — 质量防护网看护预期审计",
-        "## 审计执行协议",
-        "## Profile 对审计的影响",
-        "## Agent 审计纪律",
-        "governance-critical 文件",
-    ],
-    ROOT / "skills/software-project-governance/references/agent-failure-modes.md": [
-        "# Agent 失败模式文档",
-        "## 失败模式 1：协议跳过",
-        "## 失败模式 2：选择性执行",
-        "## 失败模式 3：幻觉式证据",
-        "## 失败模式 4：虚假闭环",
-        "## 失败模式 5：跨会话失忆",
-        "## 失败模式 6：自我审计矛盾",
-        "## 失败模式 7：虚假归因",
-        "## 失败模式 8：计划漂移",
-        "## 应急流程总览",
-    ],
-    ROOT / ".agents/plugins/marketplace.json": [
-        "software-project-governance",
-    ],
-    ROOT / "skills/software-project-governance/core/stage-gates.md": [
-        "loop status --unit",
-    ],
-    ROOT / "skills/software-project-governance/core/audit-framework.md": [
-        "Tier 完成时",
-    ],
-    ROOT / "skills/software-project-governance/references/behavior-protocol.md": [
-        "完成 Tier 时",
-    ],
-    ROOT / "skills/software-project-governance/core/VERSIONING.md": [
-        "# 版本管理策略",
-        "语义化版本规则",
-        "版本升级触发条件",
-    ],
-    ROOT / "changelog.md": ["](project/CHANGELOG.md)"],
-    ROOT / "project/CHANGELOG.md": [
-        "# 变更日志",
-        "## [0.10.0]",
-        "## [0.9.0]",
-        "## [0.8.0]",
-        "## [0.7.1]",
-        "## [0.7.0]",
-        "## [0.5.0]",
-    ],
-    ROOT / ".claude-plugin/plugin.json": [
-        "0.101.0",
-    ],
-    ROOT / ".claude-plugin/marketplace.json": [
-        "0.101.0",
-    ],
-    ROOT / ".codex-plugin/plugin.json": [
-        "0.101.0",
-    ],
-    ROOT / ".zcode-plugin/plugin.json": [
-        "0.101.0",
-    ],
-    ROOT / "package.json": [
-        "0.101.0",
-    ],
-    ROOT / "skills/software-project-governance/core/manifest.json": [
-        "0.101.0",
-    ],
-}
+    from plugin_assets import blocking_structural_issues as run
+    return run(issues, structural_issue_is_blocking=structural_issue_is_blocking)
 
 
 # ── Manifest domain (extracted to infra/checks/manifest.py in 0.59.0) ──
@@ -1048,6 +376,7 @@ REQUIRED_SNIPPETS = {
 # `infra/` directory is on sys.path[0], so `checks` resolves as a sibling
 # subpackage.
 from checks.manifest import (  # noqa: E402
+    bind_manifest_access as _bind_manifest_access,
     _path_to_label,
     _manifest_product_file_entries,
     _manifest_artifact_entries,
@@ -1062,6 +391,13 @@ from checks.manifest import (  # noqa: E402
     check_manifest_consistency,
     cmd_check_manifest_consistency,
 )
+
+
+if __name__ in ("verify_workflow", "__main__"):
+    _bind_manifest_access(package_root=lambda: ROOT,
+                          display_path=lambda path, root=None: _display_path(path, root),
+                          git_files=lambda args: _git_files(args),
+                          scope_dirs=lambda: PLUGIN_SCOPE_DIRS)
 
 
 def _exception_note(check_id, artifact, severity=None, bytes_value=None):
@@ -1202,8 +538,13 @@ from checks.gate_domain import release_unit_issues
 # workflow/job/run inspection in 0.76.0); facts root = HOST_PROJECT_ROOT
 # (FIX-270 mixed-root semantics — never the plugin ROOT).
 from checks.ci_domain import (  # noqa: E402
+    bind_ci_facts as _bind_ci_facts,
     check_ci_evidence,  # FIX-267 / REQ-145.5 (Check 38)
 )
+
+if __name__ in ("verify_workflow", "__main__"):
+    _bind_ci_facts(lambda: (HOST_PROJECT_ROOT, SAMPLE_PATH))
+
 
 # ── Review domain (extracted to infra/checks/review_domain.py in 0.70.0) ────
 # DEC-083 Phase 5c / ADR-016 / FEAT-009: the agent-team-review protocol
@@ -1297,47 +638,15 @@ def check_r1_completion_gate(root=None, governance_dir=None):
 # ── Existing verification functions ──────────────────────────────
 
 def check_files():
-    failures = []
-
-    # Attempt manifest.json first; fall back to builtin hard-coded dicts
-    required = build_required_files_from_manifest()
-    if required is None:
-        required = REQUIRED_FILES
-        optional = OPTIONAL_PROJECTION_FILES
-    else:
-        optional = {}  # manifest covers everything
-
-    for label, path in required.items():
-        if path.is_file():
-            print(f"[OK] file exists: {label} -> {path.relative_to(ROOT)}")
-        else:
-            failures.append(f"missing required file: {label} -> {path.relative_to(ROOT)}")
-            print(f"[FAIL] missing required file: {label} -> {path.relative_to(ROOT)}")
-
-    for label, path in optional.items():
-        if path.is_file():
-            print(f"[OK] optional projection exists: {label} -> {path.relative_to(ROOT)}")
-        else:
-            print(f"[INFO] optional projection missing: {label} -> {path.relative_to(ROOT)}")
-
-    return failures
+    from plugin_assets import check_files as inspect_files
+    return inspect_files(package_root_now=lambda: ROOT, build_required_files_from_manifest=build_required_files_from_manifest,
+                         fallback_files=lambda: (_product_policy("REQUIRED_FILES"),
+                                                 _product_policy("OPTIONAL_PROJECTION_FILES")))
 
 
 def check_snippets():
-    failures = []
-    for path, snippets in REQUIRED_SNIPPETS.items():
-        if not path.is_file():
-            failures.append(f"missing snippet source file: {_display_path(path)}")
-            print(f"[FAIL] missing snippet source file: {_display_path(path)}")
-            continue
-        content = path.read_text(encoding="utf-8")
-        for snippet in snippets:
-            if snippet in content:
-                print(f"[OK] snippet found: {path.relative_to(ROOT)} :: {snippet}")
-            else:
-                failures.append(f"missing snippet in {path.relative_to(ROOT)}: {snippet}")
-                print(f"[FAIL] missing snippet: {path.relative_to(ROOT)} :: {snippet}")
-    return failures
+    from plugin_assets import check_snippets as run
+    return run(package_root=ROOT, required_snippets=_product_policy("REQUIRED_SNIPPETS"), display_path=_display_path)
 
 
 _HOST_POLICY_OWNERS = {
@@ -1420,20 +729,63 @@ _HOST_POLICY_OWNERS = {
 }
 
 
+_PRODUCT_POLICY_OWNERS = {
+    "probe_quality_tools": "release.quality",
+    "ARCHGUARD_DEFAULT_ROOT_RESIDUE": "architecture_diagnostics",
+    "ARCHGUARD_HOOKS_REL": "architecture_diagnostics",
+    "ARCHGUARD_LEDGER_REL": "architecture_diagnostics",
+    "ARCHGUARD_SCHEMA_REL": "architecture_diagnostics",
+    "BLOCKING_LOCK_ISSUE_TYPES": "plugin_assets",
+    "GIT_LINEAGE_TIMEOUT_SECONDS": "release_provenance",
+    "GIT_REMOTE_NAME_RE": "release_provenance",
+    "INJECTION_CONTRACT_ANCHORS": "repository_projection",
+    "INJECTION_CONTRACT_STAGED_ANCHORS": "repository_projection",
+    "OPTIONAL_PROJECTION_FILES": "plugin_assets",
+    "PLATFORM_ENTRY_FILES": "plugin_assets",
+    "PROJECTION_SNIPPETS": "plugin_assets",
+    "PROJECTION_SYNC_PATTERNS": "repository_projection",
+    "REQUIRED_FILES": "plugin_assets",
+    "REQUIRED_SNIPPETS": "plugin_assets",
+    "VERSION_LINE_ANCHOR": "repository_projection",
+    "WORKFLOW_SNIPPETS": "plugin_assets",
+    "_RELEASE_GATE_TIMEOUT_DEFAULT": "release_execution",
+    "_RELEASE_GATE_TIMEOUT_ENV": "release_execution",
+}
+
+
+_DELETED_POLICIES = set()
+
+
 def __getattr__(name):
-    """Resolve the public archive reader and the installed policy owners on first access."""
+    """Load the historical public policy or archive class on first access."""
     if name == "GovernanceDataSource":
         return _archive_reader_class()
-    module = _HOST_POLICY_OWNERS.get(name)
-    if module is None:
+    owner = _HOST_POLICY_OWNERS.get(name) or _PRODUCT_POLICY_OWNERS.get(name)
+    if owner is None or name in _DELETED_POLICIES:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(importlib.import_module(module), name)
+    value = getattr(importlib.import_module(owner), name)
+    if name == "REQUIRED_FILES":
+        value = dict(value)
+        value.update(_asset_host_files(_asset_governance_dir))
     globals()[name] = value
     return value
 
 
 def __dir__():
-    return sorted(globals().keys() | _HOST_POLICY_OWNERS.keys() | {"GovernanceDataSource"})
+    policies = (_HOST_POLICY_OWNERS.keys() | _PRODUCT_POLICY_OWNERS.keys()) - _DELETED_POLICIES
+    return sorted(globals().keys() | policies | {"GovernanceDataSource"})
+
+
+class _WorkflowModule(type(sys)):
+    def __delattr__(self, name):
+        # These were real module attributes before the owners became lazy. Deleting
+        # one before the first read must work without importing that owner.
+        if name in _HOST_POLICY_OWNERS or name in _PRODUCT_POLICY_OWNERS:
+            if name in self.__dict__ or name in _DELETED_POLICIES:
+                super().__delattr__(name)
+            _DELETED_POLICIES.add(name)
+        else:
+            super().__delattr__(name)
 
 
 def _host_policy(name):
@@ -1441,7 +793,12 @@ def _host_policy(name):
     try:
         return globals()[name]
     except KeyError:
+        if name in _DELETED_POLICIES:
+            raise NameError(f"name '{name}' is not defined") from None
         return __getattr__(name)
+
+
+_product_policy = _host_policy
 
 
 def check_loop_role_skill_consistency(root=None):
@@ -2549,634 +1906,111 @@ def check_agent_adapter_contract(root=None, run_runtime=False):
     )
 
 
-# FIX-400 (2026-09-28) wall-clock recalibration 180 -> 2333, following the
-# DEC-262(1)/FIX-346 discipline (formula re-anchor with measured provenance —
-# silent raises are forbidden; this is a re-anchored budget, NOT a green-wash).
-# The 180 s default dates to FIX-234, when the bounded unit-test suite still
-# fit inside it; the suite has outgrown it deterministically ever since
-# (0.80.0 REL-077 ~258 s; 0.84.0 273.4 s; 0.91.0 M 1554.78 s) and the known
-# check-release FAILED-2 disclosure carries this same cause (DEC-264(2);
-# M-3 RELEASE ruled the wall-clock component non-blocking).
-# Scope: this timeout bounds the four release execution-gate subprocesses in
-# run_release_execution_gates ("verify" / "governance health" / "e2e check" /
-# the "unit tests" -m unittest run over test_verify_workflow.py — the wall-
-# clock driver) plus the FEAT-016 dsh preset-session smoke (upgrade gate).
-# Provenance: 0.91.0 M calibration-session machine records (DEC-264(2)) —
-# full bounded suite 1554.78 s in a single measurement (pwsh-167 M-1 run:
-# 4351P/1F/1S/540 subtests; M-2 dual-source runs pwsh-170/171: 4359P/0F/1S/
-# 527). Single observation, so it serves as the p50 proxy (n=1, disclosed).
-# New budget = p50 x 1.5 = ceil(1554.78 x 1.5) = ceil(2332.17) = 2333 s.
-# Inverse check at calibration time: halved (1166.5 s) it stays RED against
-# the observed run (1554.78 s), so the budget still bites. Same-session
-# targeted corroboration (2026-09-28, this repo): bounded-command
-# representative subset (release/upgrade-gate/smoke/hook classes, exit 0)
-# single run 15.844 s; static TestLoader count 948 methods — the full-suite
-# machine-record anchor above remains the calibration basis. The
-# SPG_RELEASE_GATE_TIMEOUT env override (FIX-234) keeps priority.
-_RELEASE_GATE_TIMEOUT_DEFAULT = 2333
-_RELEASE_GATE_TIMEOUT_ENV = "SPG_RELEASE_GATE_TIMEOUT"
-
-
 def _resolve_release_gate_timeout(raw):
-    """FIX-234: resolve the release-gate timeout from an env-var value.
-
-    Returns the value when it is a positive integer, otherwise the module
-    default (_RELEASE_GATE_TIMEOUT_DEFAULT — 180 s in the FIX-234 era,
-    recalibrated to 2333 s by FIX-400; provenance lives on the constant).
-    Invalid values fall back instead of crashing the gate; that
-    fallback-not-crash contract is unchanged by the recalibration.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return _RELEASE_GATE_TIMEOUT_DEFAULT
-    try:
-        value = int(raw)
-    except ValueError:
-        return _RELEASE_GATE_TIMEOUT_DEFAULT
-    return value if value > 0 else _RELEASE_GATE_TIMEOUT_DEFAULT
+    from release_execution import _resolve_release_gate_timeout as run
+    return run(raw, release_gate_timeout_default=_product_policy("_RELEASE_GATE_TIMEOUT_DEFAULT"))
 
 
 def _run_release_validation_command(label, command, timeout=None):
-    """Run one release validation command and normalize its result.
-
-    timeout: explicit seconds; when None (default) the
-    SPG_RELEASE_GATE_TIMEOUT env var (integer seconds, FIX-234) is honored,
-    falling back to the module default for absent/invalid values.
-    """
-    if timeout is None:
-        timeout = _resolve_release_gate_timeout(
-            os.environ.get(_RELEASE_GATE_TIMEOUT_ENV, "")
-        )
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            encoding=locale.getpreferredencoding(False),
-            errors="replace",
-            timeout=timeout,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        return {
-            "label": label,
-            "pass": False,
-            "exit_code": None,
-            "issue": f"{label}: command did not complete: {exc}",
-            "command": " ".join(str(part) for part in command),
-        }
-
-    output = ((completed.stdout or "") + "\n" + (completed.stderr or "")).strip()
-    issue = None if completed.returncode == 0 else (
-        f"{label}: exit={completed.returncode}; "
-        f"output={output[-500:] if output else '<empty>'}"
+    from release_execution import _run_release_validation_command as run
+    return run(
+        label, command, timeout, package_root=ROOT,
+        release_gate_timeout_env=_product_policy("_RELEASE_GATE_TIMEOUT_ENV"),
+        resolve_release_gate_timeout=_resolve_release_gate_timeout,
     )
-    return {
-        "label": label,
-        "pass": completed.returncode == 0,
-        "exit_code": completed.returncode,
-        "issue": issue,
-        "command": " ".join(str(part) for part in command),
-    }
 
 
-def run_release_execution_gates(runner=_run_release_validation_command,
-                                timeout=None):
-    """Run command-backed release gates that must be green before publishing.
-
-    timeout: optional explicit seconds forwarded to the runner. When omitted,
-    the runner resolves its own timeout (SPG_RELEASE_GATE_TIMEOUT env var,
-    module default — FIX-234, recalibrated by FIX-400). Custom two-arg
-    runners keep working unchanged.
-    """
-    verify_script = ROOT / "skills/software-project-governance/infra/verify_workflow.py"
-    commands = [
-        ("verify", [sys.executable, str(verify_script), "verify"]),
-        ("governance health", [sys.executable, str(verify_script), "check-governance", "--fail-on-issues"]),
-        ("e2e check", [sys.executable, str(verify_script), "e2e-check"]),
-        ("unit tests", [sys.executable, "-m", "unittest", "skills/software-project-governance/infra/tests/test_verify_workflow.py", "-v"]),
-    ]
-    if timeout is None:
-        return [runner(label, command) for label, command in commands]
-    return [runner(label, command, timeout=timeout) for label, command in commands]
+def run_release_execution_gates(runner=_run_release_validation_command, timeout=None):
+    from release_execution import run_release_execution_gates as run
+    return run(runner, timeout, package_root=ROOT)
 
 
 def _release_docs_line_has_guard_context(label, line):
-    if label != "rollback plan":
-        return False
-    lower = line.lower()
-    return (
-        ("release docs" in lower and "changelog" in lower and "声明" in lower)
-        or ("release docs" in lower and "claim" in lower)
-        or ("requirement reports" in lower and "claim" in lower)
-        or "发布提交混入" in lower
-        or "release package mixes" in lower
-    )
+    from product_evidence import _release_docs_line_has_guard_context as run
+    return run(label, line)
 
 
 def _tagged_release_replay_hint(version):
-    """Release-specific acceptance lives with the source and evidence it inspected."""
-    if version in ("0.45.0", "0.46.0", "0.47.0", "0.66.2"):
-        return (f"Release v{version} uses its tagged verifier. From the repository root run:\n"
-                f"  git worktree add --detach ../replay-{version} v{version}\n"
-                "See the historical acceptance steps in skills/software-project-governance/infra/TOOLS.md.")
-    return None
+    from product_evidence import _tagged_release_replay_hint as run
+    return run(version)
 
 
 def check_release_docs_coverage(version, root=None):
-    """REL-021: versioned release docs must be present, tracked, and conservative."""
-    root = Path(root) if root is not None else ROOT
-    issues = []
-    if not version or not re.fullmatch(r"\d+\.\d+\.\d+", version):
-        return issues
-
-    replay_hint = _tagged_release_replay_hint(version)
-    if replay_hint:
-        return [replay_hint]
-
-    release_docs = [
-        ("release checklist", f"docs/release/release-checklist-{version}.md"),
-        ("feature flags", f"docs/release/feature-flags-{version}.md"),
-        ("rollback plan", f"docs/release/rollback-plan-{version}.md"),
-    ]
-    tracked_files = _git_files(["ls-files", "--cached"])
-    manifest_result = check_manifest_consistency(root / "skills/software-project-governance/core/manifest.json")
-    manifest_missing = set(manifest_result.get("missing", [])) if manifest_result.get("pass") is not None else set()
-    manifest_untracked = set(manifest_result.get("untracked", [])) if manifest_result.get("pass") is not None else set()
-    boundary_needles = [
-        "official approval",
-        "marketplace approval",
-        "universal/full runtime support",
-        "external first-session pilot success",
-        "RISK-036",
-    ]
-    forbidden_positive_claims = [
-        "official approval granted",
-        "official approval approved",
-        "officially approved",
-        "marketplace approval granted",
-        "marketplace approval approved",
-        "marketplace approved",
-        "universal runtime support is verified",
-        "universal runtime support is supported",
-        "universal runtime support verified",
-        "universal runtime support supported",
-        "full runtime support is verified",
-        "full runtime support is supported",
-        "full runtime support verified",
-        "full runtime support supported",
-        "universal/full runtime support is verified",
-        "universal/full runtime support is supported",
-        "universal/full runtime support verified",
-        "universal/full runtime support supported",
-        "external first-session pilot success",
-        "external first-session pilot pass",
-        "external first-session pilot passed",
-        "codex desktop marketplace-management e2e pass",
-        "codex desktop marketplace-management e2e passed",
-        "automatic best-tool selection pass",
-        "automatic best-tool selection is passed",
-        "automatic best-tool selection passed",
-        "automatic best-tool selection is available",
-        "automatic best-tool selection available",
-        "automatic best-tool selection is verified",
-        "automatic best-tool selection verified",
-        "universal plugin/skill/tool availability pass",
-        "universal plugin/skill/tool availability is passed",
-        "universal plugin/skill/tool availability passed",
-        "universal plugin/skill/tool availability is available",
-        "universal plugin/skill/tool availability available",
-        "universal plugin/skill/tool availability is verified",
-        "universal plugin/skill/tool availability verified",
-        "catalog entry runtime pass",
-        "catalog entry runtime is passed",
-        "catalog entry runtime passed",
-        "catalog entry runtime is available",
-        "catalog entry runtime available",
-        "catalog entry runtime is verified",
-        "catalog entry runtime verified",
-        "1.0.0 production-ready",
-        "risk-036 closed",
-    ]
-
-    for label, rel_path in release_docs:
-        path = root / rel_path
-        display = _display_path(path, root)
-        if not path.is_file():
-            issues.append(f"{display}: missing {label} for release {version}")
-            continue
-        if tracked_files is not None and rel_path not in tracked_files:
-            issues.append(f"{display}: {label} must be tracked by git")
-        if rel_path in manifest_missing:
-            issues.append(f"{display}: {label} is declared in manifest but missing from tracked files")
-        if rel_path in manifest_untracked:
-            issues.append(f"{display}: {label} exists but is not covered by manifest")
-
-        content = path.read_text(encoding="utf-8")
-        if version not in content:
-            issues.append(f"{display}: {label} missing release version {version}")
-        lower_content = content.lower()
-        missing_needles = [needle for needle in boundary_needles if needle.lower() not in lower_content]
-        if missing_needles:
-            issues.append(f"{display}: {label} missing conservative boundary tokens: {', '.join(missing_needles)}")
-        for phrase in forbidden_positive_claims:
-            for line in content.splitlines():
-                if (
-                    phrase in line.lower()
-                    and not _line_has_scoped_claim_negation(line, phrase)
-                    and not _release_docs_line_has_guard_context(label, line)
-                ):
-                    issues.append(f"{display}: {label} forbidden release docs overclaim `{phrase}`")
-                    break
-
-    return issues
+    from product_evidence import check_release_docs_coverage as run
+    return run(
+        version, root, package_root=ROOT, display_path=_display_path, git_files=_git_files,
+        line_has_scoped_claim_negation=_line_has_scoped_claim_negation,
+        release_docs_line_has_guard_context=_release_docs_line_has_guard_context,
+        tagged_release_replay_hint=_tagged_release_replay_hint,
+        check_manifest_consistency=check_manifest_consistency,
+    )
 
 
 def _markdown_table_row_by_first_cell(content, first_cell):
-    for line in content.splitlines():
-        cells = _split_markdown_table_row(line)
-        if cells and cells[0].strip() == first_cell:
-            return cells
-    return None
+    from product_evidence import _markdown_table_row_by_first_cell as run
+    return run(content, first_cell, split_markdown_table_row=_split_markdown_table_row)
 
 
 def _contains_unnegated_phrase(content, phrases):
-    for line in content.splitlines():
-        lower_line = line.lower()
-        for phrase in phrases:
-            phrase_lower = phrase.lower()
-            if (
-                phrase_lower in lower_line
-                and not _line_has_scoped_claim_negation(line, phrase_lower)
-                and not _line_has_structured_status_negation(line, phrase_lower)
-            ):
-                return True
-    return False
+    from product_evidence import _contains_unnegated_phrase as run
+    return run(
+        content, phrases, line_has_scoped_claim_negation=_line_has_scoped_claim_negation,
+        line_has_structured_status_negation=_line_has_structured_status_negation,
+    )
 
 
 def _line_has_structured_status_negation(line, phrase):
-    lower = line.lower()
-    negated_values = (
-        "no",
-        "false",
-        "fail",
-        "failed",
-        "blocked",
-        "not_run",
-        "not run",
-        "missing",
-        "unavailable",
-        "not_available",
-        "not available",
-    )
-    value_pattern = "|".join(re.escape(value) for value in negated_values)
-    for match in re.finditer(re.escape(phrase.lower()), lower):
-        suffix = lower[match.end():match.end() + 96]
-        if re.match(rf"\s*(?:[:=：|]\s*)+(?:status\s*)?(?:{value_pattern})(?![a-z0-9_-])", suffix):
-            return True
-        if re.match(rf"\s+(?:is|are)\s+(?:{value_pattern})(?![a-z0-9_-])", suffix):
-            return True
-    return False
+    from product_evidence import _line_has_structured_status_negation as run
+    return run(line, phrase)
 
 
 def _risk_status_is_closed(status):
-    normalized = status.strip().strip("*`").lower()
-    return normalized in {
-        "已关闭",
-        "关闭",
-        "closed",
-        "resolved",
-        "closed/resolved",
-        "resolved/closed",
-    } or normalized.startswith("已关闭 ") or normalized.startswith("closed ")
+    from product_evidence import _risk_status_is_closed as run
+    return run(status)
 
 
-def check_one_dot_zero_release_blockers(
-    root=None,
-    risk_log_path=None,
-    external_validation_path=None,
-    official_submission_path=None,
-    desktop_lifecycle_path=None,
-):
-    """FIX-130: hard-block 1.0.0 while final release evidence remains insufficient."""
-    root = Path(root) if root is not None else ROOT
-    risk_log_path = Path(risk_log_path) if risk_log_path is not None else root / ".governance/risk-log.md"
-    external_validation_path = (
-        Path(external_validation_path)
-        if external_validation_path is not None
-        else root / "docs/requirements/external-project-validation-0.49.0.md"
-    )
-    official_submission_path = (
-        Path(official_submission_path)
-        if official_submission_path is not None
-        else root / "docs/requirements/official-submission-final-bundle-review-0.49.0.md"
-    )
-    desktop_lifecycle_path = (
-        Path(desktop_lifecycle_path)
-        if desktop_lifecycle_path is not None
-        else root / "docs/requirements/codex-desktop-marketplace-lifecycle-0.49.0.md"
+def check_one_dot_zero_release_blockers(root=None, risk_log_path=None, external_validation_path=None, official_submission_path=None, desktop_lifecycle_path=None):
+    from product_evidence import check_one_dot_zero_release_blockers as run
+    return run(
+        root, risk_log_path, external_validation_path, official_submission_path, desktop_lifecycle_path,
+        package_root=ROOT, contains_unnegated_phrase=_contains_unnegated_phrase, display_path=_display_path,
+        markdown_table_row_by_first_cell=_markdown_table_row_by_first_cell,
+        risk_status_is_closed=_risk_status_is_closed,
     )
 
-    issues = []
-
-    if not risk_log_path.is_file():
-        issues.append(f"{_display_path(risk_log_path, root)}: missing RISK-036 status for 1.0.0 release")
-    else:
-        risk_content = risk_log_path.read_text(encoding="utf-8")
-        risk_row = _markdown_table_row_by_first_cell(risk_content, "RISK-036")
-        if risk_row is None:
-            issues.append(f"{_display_path(risk_log_path, root)}: missing RISK-036 row for 1.0.0 release")
-        else:
-            status = risk_row[8].strip() if len(risk_row) > 8 else ""
-            if not _risk_status_is_closed(status):
-                status_detail = status or "missing/unknown"
-                issues.append(
-                    "RISK-036 is not explicitly closed "
-                    f"(`{status_detail}`); 1.0.0 release is blocked until the risk is closed"
-                )
-
-    if not external_validation_path.is_file():
-        issues.append(f"{_display_path(external_validation_path, root)}: missing external validation fact source")
-    else:
-        external_content = external_validation_path.read_text(encoding="utf-8")
-        external_lower = external_content.lower()
-        external_blocked_tokens = [
-            "not a full pass",
-            "no external project validation pass",
-            "no external project validation full pass",
-            "no external validation pass",
-            "no external validation full pass",
-            "external validation still未 full pass",
-            "external validation full pass is missing",
-            "missing external validation full pass",
-            "still not full pass",
-            "partial / blocked",
-            "partial/blocked",
-        ]
-        external_pass_tokens = [
-            "external validation full pass",
-            "external project validation full pass",
-            "two external project validations full pass",
-            "2 external project validations full pass",
-        ]
-        has_positive_external_pass = _contains_unnegated_phrase(external_content, external_pass_tokens)
-        if any(token in external_lower for token in external_blocked_tokens):
-            issues.append(
-                f"{_display_path(external_validation_path, root)}: external validation full PASS is missing"
-            )
-        elif not has_positive_external_pass:
-            issues.append(
-                f"{_display_path(external_validation_path, root)}: missing explicit external validation full PASS evidence"
-            )
-
-    if not official_submission_path.is_file():
-        issues.append(f"{_display_path(official_submission_path, root)}: missing official submission result fact source")
-    else:
-        official_content = official_submission_path.read_text(encoding="utf-8")
-        official_lower = official_content.lower()
-        official_blocked_tokens = [
-            "does not report any official response",
-            "no official approval",
-            "no marketplace approval",
-            "not_available",
-            "official result is not_available",
-            "missing official submission result",
-            "missing official approval",
-            "without official approval",
-        ]
-        official_positive_tokens = [
-            "official submission result: approved",
-            "official submission result approved",
-            "official approval granted",
-            "officially approved",
-            "marketplace approval granted",
-        ]
-        has_positive_official_result = _contains_unnegated_phrase(official_content, official_positive_tokens)
-        if any(token in official_lower for token in official_blocked_tokens):
-            issues.append(
-                f"{_display_path(official_submission_path, root)}: official submission result or approval evidence is missing"
-            )
-        elif not has_positive_official_result:
-            issues.append(
-                f"{_display_path(official_submission_path, root)}: missing explicit official submission result or approval evidence"
-            )
-
-    if not desktop_lifecycle_path.is_file():
-        issues.append(f"{_display_path(desktop_lifecycle_path, root)}: missing Codex Desktop lifecycle fact source")
-    else:
-        desktop_content = desktop_lifecycle_path.read_text(encoding="utf-8")
-        desktop_lower = desktop_content.lower()
-        desktop_pass = _contains_unnegated_phrase(desktop_content, [
-            "codex desktop marketplace-management e2e pass",
-            "desktop lifecycle e2e pass",
-            "desktop lifecycle pass",
-        ])
-        conservative_disposition = any(token in desktop_lower for token in [
-            "conservative blocked carry-forward",
-            "conservative blocked carry forward",
-            "carry forward the desktop lifecycle blocker",
-            "keeps 1.0.0 blocked",
-            "desktop ui install/enable/invoke/upgrade/uninstall remains blocked/not_run",
-            "desktop lifecycle remains blocked/not_run",
-        ])
-        if not desktop_pass and not conservative_disposition:
-            issues.append(
-                f"{_display_path(desktop_lifecycle_path, root)}: Codex Desktop lifecycle PASS or explicit conservative disposition is missing"
-            )
-
-    return issues
-
-
-PROJECTION_SYNC_PATTERNS = (
-    "skills/*/SKILL.md",
-    "skills/software-project-governance/SKILL.md",
-    "skills/software-project-governance/core/**/*.md",
-    "skills/software-project-governance/core/**/*.json",
-    "skills/software-project-governance/infra/**/*.py",
-    "skills/software-project-governance/infra/**/*.md",
-    "skills/software-project-governance/infra/**/*.sh",
-    "skills/software-project-governance/infra/hooks/*",
-    "skills/software-project-governance/references/**/*.md",
-    "commands/*.md",
-    # FEAT-038 (AUDIT-154 A-7): `/governance` was split into a router layer plus
-    # per-Scenario on-demand documents under `commands/governance/`. The extra
-    # pattern keeps the fixture-mirror inventory (and its manifest contract
-    # `required_members`) exact — the legacy glob `commands/*.md` does not
-    # descend into the new directory.
-    "commands/governance/*.md",
-    "agents/*.md",
-)
-
-# FIX-253 / REQ-112 (design §6.5): injection-contract anchor registry.
-# Existence-only anchors over the deterministic injection surfaces — the
-# compressed R1/R2/R3 behavior contract must be carried by the DSH persona
-# template, the entry SKILL, and the DSH thin pointer without any on-demand
-# read. Deliberately asserted as keyword presence, never full-text equality
-# (design §4 principle 3: prose-equality checks are brittle). Placement note
-# (design §6.5 R0-S4): this literal lives FAR away from the REQUIRED_SNIPPETS
-# block and its "# ── Manifest" anchor line so checks/version.py L58 regex
-# (`REQUIRED_SNIPPETS\s*=\s*\{(?P<body>.*?)\n\}\n{2,}# ── Manifest`) keeps
-# matching — do not move it into that region.
-#
-# FIX-272 / FEAT-010 R0 F1: the `@version-line` marker is a DYNAMIC anchor —
-# at check time it resolves to the persona version line
-# `治理工作流（v<SKILL.md frontmatter version>）` of the authoritative source
-# (FIX-253 §6.6.3 pattern), so the guard itself can never drift to a stale
-# hardcoded literal (the FIX-250 precedent: preset version line silently
-# drifted to bundle end users). Unresolvable authority → FAIL (fail-closed).
-VERSION_LINE_ANCHOR = "@version-line"
-
-INJECTION_CONTRACT_ANCHORS = {
-    # FIX-310 / DEC-187: the composition template is the SINGLE persona surface
-    # (the former second spelling, `presets/governance/agent.cordis.yml`, is
-    # gone with the copy model), so it carries the whole anchor set:
-    #   * FIX-274 / F-02 — the M7.7 real-environment contract keywords;
-    #   * FIX-272 / FEAT-010 R0 F1 — the persona VERSION-LINE same-source guard
-    #     (`治理工作流（vX.Y.Z）` must track the SKILL.md authority; the
-    #     dsh-persona-version projection guards it too, the dynamic marker here
-    #     is the belt-and-braces layer that also covers a hand-edited file).
-    "agent-presets/governance/persona.md.template": [
-        "关键行为契约", "复审必达", "NEEDS_CHANGE", "完成必推荐",
-        "task-priority-analysis", "选项必带依据",
-        # FIX-260 / REQ-107: 4th contract line — review conclusions MUST be
-        # persisted through the review-record CLI machine path.
-        "审查结论必机录", "review-record",
-        # FIX-274 / F-02 (M7.7 projection): 5th contract line — user
-        # real-environment protection (R1 one-of-three / R4 per-command
-        # relay / R5 acceptance wording).
-        "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
-        # FEAT-072 / DEC-266: three-element recommendation-card contract
-        # (M7.4 step 6 projection — card prose before AskUserQuestion).
-        "三要素", "推荐卡",
-        VERSION_LINE_ANCHOR,
-    ],
-    "skills/software-project-governance/SKILL.md": [
-        "关键行为契约", "复审必达", "完成必推荐",
-        "task-priority-analysis", "选项必带依据",
-        # FIX-274 / F-02 (M7.7 projection): 4th contract item.
-        "真实环境必防护", "三选一", "逐条上报", "隔离环境安装冒烟",
-        # FEAT-072 / DEC-266: three-element recommendation-card contract
-        # (M7.4 step 6 projection — card prose before AskUserQuestion).
-        "三要素", "推荐卡",
-    ],
-    # FEAT-072 / DEC-266: canonical surface — M7.4 step 6c MUST carry the
-    # three full card labels; existence-only, fail-closed like every path
-    # above.
-    "skills/software-project-governance/references/behavior-protocol.md": [
-        "服务目标：", "解决问题：", "方案要点：",
-    ],
-    "adapters/dsh/AGENTS.md.template": ["关键行为契约"],
-}
-
-# FEAT-079 / DEC-290(4): ADR-021 B1b staged anchor registry — the B1a
-# contract-clause anchors, activation-gated. B1a (text) and B1b (registry)
-# are parallel batches with an ordered COMMIT sequence (B1a text commit
-# first); this registry therefore does not fail while the B1a text is
-# absent: every staged anchor absent = stage INACTIVE (disclosed, the
-# commit-order window is legitimate), ANY anchor present = stage ACTIVE and
-# every staged anchor is then a hard existence assertion (a partial
-# injection fails closed — anti-silent-partial). Keyword-anchored like the
-# base registry (ADR-021 §2.1: ordinal counts drift between surfaces,
-# keywords do not). The budget twin of this gate (clause tier freeze line,
-# DEC-290(6)) lives in checks/injection_budget.py.
-INJECTION_CONTRACT_STAGED_ANCHORS = {
-    "ADR-021-B1a": {
-        # persona face: M1 clause + the persona-only 用户点名 (ADR-021 §2.1
-        # file table) + M2 clause.
-        "agent-presets/governance/persona.md.template": [
-            "推荐必标需求源", "用户点名", "发现即闭环",
-        ],
-        "skills/software-project-governance/SKILL.md": [
-            "推荐必标需求源", "发现即闭环",
-        ],
-        "skills/software-project-governance/references/behavior-protocol.md": [
-            "推荐必标需求源", "发现即闭环",
-        ],
-        "adapters/dsh/AGENTS.md.template": [
-            "推荐必标需求源", "发现即闭环",
-        ],
-    },
-}
 
 
 _extract_skill_version = version_checks.extract_skill_version
 
 
 def _extract_json_version(path):
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ""
-    return str(payload.get("version", "")).strip()
+    from repository_projection import _extract_json_version as run
+    return run(path)
 
 
 def _extract_plan_workflow_version(path):
-    if not path.is_file():
-        return ""
-    content = path.read_text(encoding="utf-8")
-    match = re.search(r"工作流版本\*\*:\s*([0-9]+\.[0-9]+\.[0-9]+)", content)
-    if not match:
-        match = re.search(r"工作流版本.*?([0-9]+\.[0-9]+\.[0-9]+)", content)
-    return match.group(1) if match else ""
+    from repository_projection import _extract_plan_workflow_version as run
+    return run(path)
 
 
 def _projection_hash(path):
-    text = _read_text_normalized(path)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    from repository_projection import _projection_hash as run
+    return run(path, read_text_normalized=_read_text_normalized)
 
 
 def _projection_source_files(root, patterns=None):
-    root = Path(root)
-    patterns = patterns or PROJECTION_SYNC_PATTERNS
-    files = set()
-    for pattern in patterns:
-        for path in root.glob(pattern):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(root).as_posix()
-            if "__pycache__" in rel or rel.endswith(".pyc"):
-                continue
-            files.add(rel)
-    return sorted(files)
+    from repository_projection import _projection_source_files as run
+    return run(root, patterns, projection_sync_patterns=_product_policy("PROJECTION_SYNC_PATTERNS"))
 
 
 def _projection_target_tracked_files(root, target_dir):
-    """Return target fixture files tracked by git, or None outside a git checkout."""
-    root = Path(root)
-    target_dir = Path(target_dir)
-    if not (root / ".git").exists():
-        return None
-    try:
-        target_rel = target_dir.relative_to(root).as_posix()
-    except ValueError:
-        return None
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "--", target_rel],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    prefix = target_rel.rstrip("/") + "/"
-    tracked = set()
-    for line in result.stdout.splitlines():
-        item = line.strip().replace("\\", "/")
-        if item.startswith(prefix):
-            tracked.add(item[len(prefix):])
-    return tracked
+    from repository_projection import _projection_target_tracked_files as run
+    return run(root, target_dir)
 
 
 def _target_fixture_file_is_checkable(rel_path, target_tracked):
-    if target_tracked is None:
-        return True
-    return rel_path.replace("\\", "/") in target_tracked
+    from repository_projection import _target_fixture_file_is_checkable as run
+    return run(rel_path, target_tracked)
 
 
 def check_projection_sync(root=None, target_dir=None, patterns=None):
@@ -3189,90 +2023,13 @@ def check_projection_sync(root=None, target_dir=None, patterns=None):
 
 
 def check_injection_contract(root=None):
-    """FIX-253 / REQ-112 (design §6.5): injection-surface anchor existence check.
-
-    Asserts that each deterministic injection surface (DSH persona template /
-    entry SKILL / DSH thin pointer) carries its anchor keyword set from
-    INJECTION_CONTRACT_ANCHORS. Boundary (design §6.5): existence only —
-    never full-text equality, and no behavior detection (that boundary stays
-    with REQ-107/108/113 per DEC-143).
-
-    FIX-272 / FEAT-010 R0 F1: ``VERSION_LINE_ANCHOR`` entries are DYNAMIC —
-    resolved at check time to the persona version line
-    ``治理工作流（v<authority>）`` from the SKILL.md frontmatter version, so
-    the shipped preset can never silently drift from the release authority
-    (FIX-250 precedent). Unresolvable authority → explicit FAIL (fail-closed:
-    useless to report a missing keyword when the version source is broken).
-    """
-    root = Path(root) if root is not None else ROOT
-    issues = []
-    files_checked = 0
-    authority = _extract_skill_version(
-        root / "skills/software-project-governance/SKILL.md")
-    for relative, anchors in sorted(INJECTION_CONTRACT_ANCHORS.items()):
-        path = root / relative
-        if not path.is_file():
-            issues.append(f"{relative}: injection-surface file missing")
-            continue
-        files_checked += 1
-        text = path.read_text(encoding="utf-8")
-        for anchor in anchors:
-            if anchor == VERSION_LINE_ANCHOR:
-                if not authority:
-                    issues.append(
-                        f"{relative}: {VERSION_LINE_ANCHOR} unresolved — "
-                        "SKILL.md frontmatter version missing")
-                    continue
-                anchor = f"治理工作流（v{authority}）"
-            if anchor not in text:
-                issues.append(f"{relative}: anchor missing: {anchor}")
-    # FEAT-079 / DEC-290(4): staged anchor faces — activation-gated
-    # existence assertions (all-absent → inactive + disclosure; any-present
-    # → active, every staged anchor then fails closed when missing).
-    staged = {}
-    for stage, anchors_by_path in sorted(
-            INJECTION_CONTRACT_STAGED_ANCHORS.items()):
-        present = {}
-        for relative, anchors in sorted(anchors_by_path.items()):
-            path = root / relative
-            if not path.is_file():
-                present[relative] = {anchor: False for anchor in anchors}
-                continue
-            text = path.read_text(encoding="utf-8")
-            present[relative] = {anchor: anchor in text
-                                 for anchor in anchors}
-        active = any(any(hits.values()) for hits in present.values())
-        missing = []
-        if active:
-            for relative, hits in sorted(present.items()):
-                for anchor, hit in hits.items():
-                    if not hit:
-                        missing.append(
-                            f"{relative}: staged anchor missing "
-                            f"({stage}): {anchor}")
-        staged[stage] = {
-            "active": active,
-            "missing": missing,
-            "anchors_checked": sum(len(v) for v in anchors_by_path.values()),
-            "inactive_reason": (
-                None if active else
-                f"{stage}: no staged anchor present yet — B1a contract "
-                "text not landed (activation-gated; DEC-290(4) commit "
-                "order: text before registry)"),
-        }
-        issues.extend(missing)
-    staged_summary = "; ".join(
-        (f"staged {stage}: inactive (B1a text not landed; DEC-290(4))"
-         if not state["active"] else
-         f"staged {stage}: active, {state['anchors_checked']} anchors guarded")
-        for stage, state in sorted(staged.items()))
-    return {
-        "issues": issues,
-        "files_checked": files_checked,
-        "anchors_checked": sum(len(v) for v in INJECTION_CONTRACT_ANCHORS.values()),
-        "staged": staged,
-        "staged_summary": staged_summary,
-    }
+    from repository_projection import check_injection_contract as run
+    return run(
+        root, package_root=ROOT, injection_contract_anchors=_product_policy("INJECTION_CONTRACT_ANCHORS"),
+        injection_contract_staged_anchors=_product_policy("INJECTION_CONTRACT_STAGED_ANCHORS"),
+        version_line_anchor=_product_policy("VERSION_LINE_ANCHOR"),
+        extract_skill_version=_extract_skill_version,
+    )
 
 
 # ── FEAT-039 / AUDIT-154 slice A-8: injection-size budget gate ──────────────
@@ -3380,7 +2137,7 @@ def run_dsh_upgrade_regression_gates(smoke_runner=None):
     return run(
         smoke_runner, plugin_root=PLUGIN_ROOT,
         dsh_upgrade_regression_label=_host_policy('DSH_UPGRADE_REGRESSION_LABEL'),
-        release_gate_timeout_env=_RELEASE_GATE_TIMEOUT_ENV,
+        release_gate_timeout_env=_product_policy("_RELEASE_GATE_TIMEOUT_ENV"),
         resolve_release_gate_timeout=_resolve_release_gate_timeout,
         check_dsh_preset_smoke=check_dsh_preset_smoke,
     )
@@ -3395,75 +2152,21 @@ def run_dsh_upgrade_regression_gates(smoke_runner=None):
 # engine does I/O assembly and rendering only).
 
 def _provenance_rows_from_report(report):
-    """Map a task_priority.PriorityReport to provenance_domain row dicts.
-
-    Bucket vocabulary parity is the contract (module docstring of
-    provenance_domain): recommended_next → recommended, non_executable →
-    non_executable, blocked → blocked, completed → completed.
-    """
-    def _row(task, bucket):
-        return {
-            "task_id": task.task_id,
-            "demand_source": task.demand_source,
-            "bucket": bucket,
-            "priority": task.priority,
-            "target_version": task.target_version,
-        }
-
-    rows = []
-    for task in getattr(report, "recommended_next", None) or []:
-        rows.append(_row(task, "recommended"))
-    for task in getattr(report, "non_executable", None) or []:
-        rows.append(_row(task, "non_executable"))
-    for blocked in getattr(report, "blocked", None) or []:
-        task = getattr(blocked, "task", None) or blocked
-        rows.append(_row(task, "blocked"))
-    for task in getattr(report, "completed", None) or []:
-        rows.append(_row(task, "completed"))
-    return rows
+    from release_provenance import _provenance_rows_from_report as run
+    return run(report)
 
 
 def _provenance_rows_for_governance(tracker_path=None, governance_dir=None):
-    """Live provenance rows: parse → demand-source resolve → report → rows.
-
-    The same orchestration run_cli_analysis uses (L2514-2520): parse the
-    plan-tracker, resolve demand sources against the triage records +
-    revision streams, then compute the bucketed report.
-    """
-    import task_priority as tpa
-    path = Path(tracker_path) if tracker_path else SAMPLE_PATH
-    gov = Path(governance_dir) if governance_dir else GOVERNANCE_DIR
-    if not path.is_file():
-        return []
-    try:
-        resolved, _lag_warnings = tpa._resolve_row_demand_sources(
-            tpa.parse_task_dependencies(path), gov)
-        report = tpa.compute_unblocked_tasks(
-            resolved,
-            archive_completed_ids=tpa.read_archive_index_completed_ids(gov))
-    except Exception:
-        return []
-    return _provenance_rows_from_report(report)
+    from release_provenance import _provenance_rows_for_governance as run
+    return run(
+        tracker_path, governance_dir, read_governance_dir=GOVERNANCE_DIR, plan_path=SAMPLE_PATH,
+        provenance_rows_from_report=_provenance_rows_from_report,
+    )
 
 
 def _collect_session_closure_events(governance_dir=None, today=None):
-    """FEAT-083: thin delegation to the shared collection leaf.
-
-    The W(session) collection core (the evidence/risk row arms, the
-    deferred-ledger arm, the window note) lives in
-    ``checks.provenance_domain.collect_session_closure_events`` — engine
-    (Check 42) and bootstrap (the behavior.session_closure sub-face) both
-    consume that ONE source; the FEAT-082 bootstrap mirror is retired
-    (zero second implementation — review-FEAT-082-CODE-R0 §6.3). The
-    legacy signature is preserved (Check 42 + the FEAT-080/081 test call
-    sites unchanged), including the ``governance_dir=None →
-    GOVERNANCE_DIR`` default the leaf cannot own (it must stay
-    engine-global-free); the delegation import is FUNCTION-LOCAL so the
-    frozen cold-import face (ArchGuard R6) is untouched.
-    """
-    from checks.provenance_domain import collect_session_closure_events
-    return collect_session_closure_events(
-        governance_dir if governance_dir else GOVERNANCE_DIR, today=today)
+    from release_provenance import _collect_session_closure_events as run
+    return run(governance_dir, today, read_governance_dir=GOVERNANCE_DIR)
 
 
 def check_release_readiness(
@@ -3481,476 +2184,92 @@ def check_release_readiness(
     require_delivery_evidence=False,
 ):
     """FIX-072: aggregate release gate scripts behind the stage-release check-release command."""
+    import release_readiness as gate
+
     plugin_release = not _host_plugin_roots_divergent()
     replay_hint = _tagged_release_replay_hint(version) if plugin_release else None
     if replay_hint:
-        return {
-            "pass": False,
-            "issues": [replay_hint],
-            "details": {"release_replay": {"pass": False, "issues": [replay_hint]}},
-        }
+        return {"pass": False, "issues": [replay_hint],
+                "details": {"release_replay": {"pass": False, "issues": [replay_hint]}}}
 
-    issues = []
     details = {}
-
+    issues = []
     if plugin_release:
-        version_issues = check_version_consistency()
-        version_failures = [issue for issue in version_issues if not issue.startswith("[WARN]")]
-        details["version_consistency"] = {
-            "pass": not version_failures,
-            "issues": version_failures,
-            "warnings": [issue for issue in version_issues if issue.startswith("[WARN]")],
-        }
-        issues.extend(f"version consistency: {issue}" for issue in version_failures)
-
-        pack_status_issues = check_governance_pack_status()
-        details["governance_pack_status"] = {
-            "pass": not pack_status_issues,
-            "issues": pack_status_issues,
-            "boundary": (
-                "packs are capability modules; profiles are intensity presets; "
-                "pack enabled or membership is not task evidence, independent review, "
-                "quality gate, release gate, official approval, marketplace approval, "
-                "universal/full runtime support, or 1.0.0 production-ready proof"
-            ),
-        }
-        issues.extend(f"governance pack status: {issue}" for issue in pack_status_issues)
-
-    # FEAT-080 / ADR-021 §2.2.4: provenance release gate (DEC-290(5) wiring;
-    # NF-2 semantics — 排期/改期豁免 rides the task row's target_version,
-    # never a revision event). A release version carrying OPEN
-    # machine-signal work while user-named items stay open → FAIL; payload
-    # rows with undeclared provenance → FAIL (未申报 fail-closed — the
-    # release gate is the last line); no parseable version → SKIP face
-    # inside the sub-check itself (never a silent PASS).
+        gate.version_consistency(details, issues, check_version_consistency())
+        gate.pack_status(details, issues, check_governance_pack_status())
     if version:
-        from checks import provenance_domain as _provenance_gate_mod
-        provenance_rows = _provenance_rows_for_governance()
-        admission = _provenance_gate_mod.check_release_admission(
-            provenance_rows, {"version": str(version)})
-        details["provenance_release_gate"] = {
-            "pass": admission["status"] != "FAIL",
-            "status": admission["status"],
-            "issues": admission["issues"],
-            "warnings": admission["warnings"],
-            "machine_signal_payload": admission["machine_signal_payload"],
-            "open_user_named": admission["open_user_named"],
-            "deferred_user_named": admission["deferred_user_named"],
-            "undeclared_payload": admission["undeclared_payload"],
-        }
-        issues.extend(f"provenance release gate: {issue}"
-                      for issue in admission["issues"])
-        for warning in admission["warnings"]:
-            details.setdefault("release_warnings", []).append(
-                f"provenance release gate: {warning}")
-
-    # A Git lookup failure is distinct from denied access to a resolved hook.
-    from checks.sd_integrity import release_face_paths, scan_sd_readability
-    _sd_face = release_face_paths(HOST_PROJECT_ROOT, PLUGIN_ROOT if plugin_release else None)
-    _sd_face_error = _sd_face.get("error")
-    if _sd_face_error:
-        issues.append(f"sd integrity: {_sd_face_error}")
-    sd_scan = scan_sd_readability(_sd_face["paths"])
-    if _sd_face_error:
-        sd_scan["pass"] = False
-    sd_issues = [f"{path} unreadable — remediate: {cmd}"
-                 for path, cmd in zip(sd_scan["unreadable"], sd_scan["remediation"])]
-    details["sd_integrity"] = {**sd_scan, "face_error": _sd_face_error, "issues": sd_issues}
-    issues.extend(f"sd integrity: {issue}" for issue in sd_issues)
-
+        gate.admission(details, issues, version, _provenance_rows_for_governance())
+    gate.security_descriptors(details, issues, HOST_PROJECT_ROOT, PLUGIN_ROOT if plugin_release else None)
     if plugin_release:
-        adapter_issues = check_agent_adapter_contract(run_runtime=run_runtime_adapters)
-        details["agent_adapters"] = {
-            "pass": not adapter_issues,
-            "issues": adapter_issues,
-            "runtime": run_runtime_adapters,
-        }
-        issues.extend(f"agent adapters: {issue}" for issue in adapter_issues)
-
-        projection_result = check_projection_sync()
-        details["projection_sync"] = {
-            "pass": projection_result["pass"],
-            "issues": projection_result["issues"],
-            "mirrors_checked": projection_result["mirrors_checked"],
-            "mirrors_discovered": projection_result["mirrors_discovered"],
-            "mirrors_skipped_untracked": projection_result["mirrors_skipped_untracked"],
-            "source_version": projection_result["source_version"],
-        }
-        issues.extend(f"projection sync: {issue}" for issue in projection_result["issues"])
-
-        cross_ref_result = check_cross_references()
-        cross_ref_issues = (
-            [f"dangling reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["dangling"]]
-            + [f"deprecated reference: {item['source']}:{item['line']} -> {item['target']}" for item in cross_ref_result["deprecated"]]
-            + [f"circular reference: {' -> '.join(cycle)}" for cycle in cross_ref_result["cycles"]]
-            # FIX-432 (F-4/F-A2) / FIX-436 F-8 wording: quote-sync issues ride
-            # the same gate; the current check_cross_references() always emits
-            # the key — .get only tolerates pre-FIX-432/partial dict shapes
-            # (e.g. fixtures or older cached results) that lack it.
-            + [f"quote sync: {issue}" for issue in cross_ref_result.get("quote_sync", [])]
-        )
-        details["cross_references"] = {
-            "pass": not cross_ref_issues,
-            "issues": cross_ref_issues,
-        }
-        issues.extend(cross_ref_issues)
-
-    archive_result = check_archive_integrity()
-    archive_issues = archive_result.get("issues", [])
-    details["archive_integrity"] = {
-        "pass": not archive_issues,
-        "issues": archive_issues,
-        "pending_archive_tasks": archive_result.get("pending_archive_tasks", 0),
-    }
-    issues.extend(f"archive integrity: {issue}" for issue in archive_issues)
-
+        gate.agent_adapters(details, issues, check_agent_adapter_contract(run_runtime=run_runtime_adapters),
+                            run_runtime_adapters)
+        gate.projection_sync(details, issues, check_projection_sync())
+        gate.cross_references(details, issues, check_cross_references())
+    gate.archive_integrity(details, issues, check_archive_integrity())
     if plugin_release:
-        release_docs_issues = check_release_docs_coverage(version)
-        details["release_docs"] = {
-            "pass": not release_docs_issues,
-            "issues": release_docs_issues,
-            "version": version,
-        }
-        issues.extend(f"release docs: {issue}" for issue in release_docs_issues)
+        gate.release_docs(details, issues, version, check_release_docs_coverage(version))
 
-    lineage_result = check_release_lineage(
-        version=version,
-        mode=lineage_mode,
-        release_commit=release_commit,
-        remote=lineage_remote,
-    )
-    details["release_lineage"] = lineage_result
-    issues.extend(f"release lineage: {issue}" for issue in lineage_result["issues"])
-
-    # Release certification belongs to the candidate/version being shipped.
-    if lineage_mode == "candidate":
-        from loop_workflow import release_issues
-        scoped_issues = release_issues(HOST_PROJECT_ROOT, release_unit, version)
-        details["release_loop"] = {"pass": not scoped_issues, "unit": release_unit, "issues": scoped_issues}
-        issues.extend(scoped_issues)
-
-    # Delivery acceptance also applies when broader execution gates are disabled.
-    from delivery_acceptance import evaluate_delivery_acceptance
-
-    delivery_acceptance = evaluate_delivery_acceptance(
-        HOST_PROJECT_ROOT,
-        release_version=version,
-        required=require_delivery_evidence,
-        released_history=lineage_mode == "released")
-    details["delivery_acceptance"] = delivery_acceptance
-    issues.extend(f"delivery acceptance: {issue}" for issue in delivery_acceptance["issues"])
-
-    one_dot_zero_blocker_issues = []
-    if plugin_release and version == "1.0.0":
-        one_dot_zero_blocker_issues = check_one_dot_zero_release_blockers()
-        issues.extend(f"1.0.0 blocker: {issue}" for issue in one_dot_zero_blocker_issues)
+    lineage = check_release_lineage(version=version, mode=lineage_mode, release_commit=release_commit,
+                                  remote=lineage_remote)
+    details["release_lineage"] = lineage
+    issues.extend(f"release lineage: {issue}" for issue in lineage["issues"])
+    gate.release_delivery(details, issues, lambda: HOST_PROJECT_ROOT, release_unit, version,
+                          lineage_mode, require_delivery_evidence)
     if plugin_release:
-        details["one_dot_zero_blockers"] = {
-            "pass": not one_dot_zero_blocker_issues,
-            "issues": one_dot_zero_blocker_issues,
-            "required": plugin_release and version == "1.0.0",
-            "version": version,
-        }
-
-    execution_gate_results = []
-    execution_gate_issues = []
-    if run_execution_gates and plugin_release:
-        execution_gate_results = run_release_execution_gates(runner=execution_gate_runner)
-        execution_gate_issues = [result["issue"] for result in execution_gate_results if result.get("issue")]
-        issues.extend(f"execution gate: {issue}" for issue in execution_gate_issues)
-    if plugin_release:
-        details["execution_gates"] = {
-            "pass": not execution_gate_issues,
-            "issues": execution_gate_issues,
-            "required": run_execution_gates and plugin_release,
-            "results": execution_gate_results,
-        }
-
-    if not plugin_release:
-        ci = check_ci_evidence(repo_root=HOST_PROJECT_ROOT)
-        ci_issues = [item["reason"] for item in ci["violations"]]
-        details["project_ci_evidence"] = {
-            **ci, "pass": not ci_issues, "issues": ci_issues,
-            "skipped": ci["verdict"] == "no-verdict", "skip_reason": ci["reason"],
-        }
-        issues.extend(f"project CI: {issue}" for issue in ci_issues)
-
-    # ── FEAT-016 / RISK-049 ③: dsh upgrade regression gate component ──
-    # The isolated dsh upgrade re-verification command set (reuses the
-    # FEAT-015 preset smoke: temp DSH_HOME redirection, real ~/.dsh
-    # zero-write, M7.7 (a)) actually runs whenever execution gates run for
-    # a CANDIDATE release and blocks the release on FAIL. Skip paths stay
-    # explicit (WARN disclosure — never a silent absence, never a new FAIL
-    # for history queries): --skip-execution-gates, and BR-4
-    # released-history checks (effective lineage or gate-sequence mode
-    # "released", DEC-153 ②) — a working-tree regression proves nothing
-    # about an already-published version.
-    dsh_regression_skipped_reason = None
-    dsh_regression_results = []
-    dsh_regression_issues = []
-    dsh_regression_isolation = None
-    if not plugin_release:
-        dsh_regression_skipped_reason = "DSH preset regression applies to the governance plugin release."
-    elif not run_execution_gates:
-        dsh_regression_skipped_reason = (
-            "execution gates skipped (--skip-execution-gates); the dsh "
-            "upgrade regression command set was not run — WARN disclosure, "
-            "not a release verdict")
-    elif lineage_mode == "released":
-        dsh_regression_skipped_reason = (
-            "released-history check (BR-4 / DEC-153 ②); the dsh upgrade "
-            "regression targets the candidate working tree and is not run "
-            "for already-published version queries — WARN disclosure")
+        gate.release_blockers(details, issues, version, check_one_dot_zero_release_blockers() if version == "1.0.0" else [])
+        gate.execution_gates(details, issues, run_execution_gates,
+                             run_release_execution_gates(runner=execution_gate_runner) if run_execution_gates else [])
     else:
-        dsh_regression = (dsh_upgrade_regression_runner
-                          or run_dsh_upgrade_regression_gates)()
-        dsh_regression_results = dsh_regression["results"]
-        dsh_regression_issues = dsh_regression["issues"]
-        dsh_regression_isolation = dsh_regression.get("isolation")
-        issues.extend(f"dsh upgrade regression: {issue}"
-                      for issue in dsh_regression_issues)
-    details["dsh_upgrade_regression"] = {
-        "pass": not dsh_regression_issues,
-        "skipped": dsh_regression_skipped_reason is not None,
-        "skip_reason": dsh_regression_skipped_reason,
-        "required": dsh_regression_skipped_reason is None,
-        "results": dsh_regression_results,
-        "issues": dsh_regression_issues,
-        "isolation": dsh_regression_isolation,
-        "boundary": (
-            "isolated temp-DSH_HOME preset install/load smoke; proves the "
-            "packaged preset session boots in a redirected home with zero "
-            "real-home writes — not a live marketplace upgrade"),
-    }
-
-    changelog_path = changelog_path or (ROOT / "project/CHANGELOG.md" if plugin_release else HOST_PROJECT_ROOT / "CHANGELOG.md")
-    changelog_issues = []
-    if version:
-        if not re.fullmatch(r"\d+\.\d+\.\d+", version):
-            changelog_issues.append(f"release version `{version}` is not semver X.Y.Z")
-        if require_changelog:
-            if not changelog_path.exists():
-                changelog_issues.append(f"{_display_path(changelog_path)}: missing changelog")
-            else:
-                changelog_content = changelog_path.read_text(encoding="utf-8")
-                if f"## [{version}]" not in changelog_content:
-                    changelog_issues.append(f"{_display_path(changelog_path)}: missing changelog entry ## [{version}]")
-    elif require_changelog:
-        changelog_issues.append("--require-changelog requires --version")
-
-    details["changelog"] = {
-        "pass": not changelog_issues,
-        "issues": changelog_issues,
-        "required": require_changelog,
-        "version": version,
-    }
-    issues.extend(changelog_issues)
-
-    # ── FEAT-075 (DEC-278 单元二 item 4 / M-0 prerequisite 4 of 5): the
-    # exception-acceptance disclosure. Annotation-only — the block NEVER
-    # touches ``issues`` (a release verdict can't be flipped by an
-    # exception), and it is ABSENT when no .governance/exceptions.json
-    # exists (backward compatibility; the Coordinator registers the real
-    # exceptions after M-0, tests use synthetic fixtures).
-    exceptions_detail = _release_exception_block()
-    if exceptions_detail is not None:
-        details["governance_exceptions"] = exceptions_detail
-
-    return {
-        "pass": not issues,
-        "issues": issues,
-        "details": details,
-    }
-
-
-GIT_LINEAGE_TIMEOUT_SECONDS = 15
-GIT_REMOTE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\Z")
+        gate.project_ci(details, issues, check_ci_evidence(repo_root=HOST_PROJECT_ROOT))
+    gate.dsh_upgrade(details, issues, plugin_release, run_execution_gates, lineage_mode,
+                     lambda: (dsh_upgrade_regression_runner or run_dsh_upgrade_regression_gates)())
+    path = changelog_path or (ROOT / "project/CHANGELOG.md" if plugin_release else HOST_PROJECT_ROOT / "CHANGELOG.md")
+    gate.changelog(details, issues, version, require_changelog, path, _display_path)
+    exceptions = _release_exception_block()
+    if exceptions is not None:
+        details["governance_exceptions"] = exceptions
+    return {"pass": not issues, "issues": issues, "details": details}
 
 
 def _run_git_lineage(args, root=None):
-    root = Path(root or HOST_PROJECT_ROOT)
-    env = os.environ.copy()
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    try:
-        result = subprocess.run(
-            ["git", *args],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            timeout=GIT_LINEAGE_TIMEOUT_SECONDS,
-            env=env,
-        )
-    except subprocess.TimeoutExpired:
-        return 124, "", f"git command timed out after {GIT_LINEAGE_TIMEOUT_SECONDS}s"
-    except OSError as exc:
-        return 125, "", f"git command could not be started ({type(exc).__name__})"
-    return result.returncode, result.stdout.strip(), result.stderr.strip()
+    from release_provenance import _run_git_lineage as run
+    return run(
+        args, root, host_project_root=HOST_PROJECT_ROOT,
+        git_lineage_timeout_seconds=_product_policy("GIT_LINEAGE_TIMEOUT_SECONDS"),
+    )
 
 
 def _validated_git_remote_name(remote):
-    """Return a safe Git remote name; URLs, options, and control/whitespace input are rejected."""
-    if not isinstance(remote, str) or not GIT_REMOTE_NAME_RE.fullmatch(remote):
-        return None
-    if ".." in remote or "//" in remote:
-        return None
-    return remote
+    from release_provenance import _validated_git_remote_name as run
+    return run(remote, git_remote_name_re=_product_policy("GIT_REMOTE_NAME_RE"))
 
 
-def check_release_lineage(version, mode="candidate", release_commit=None, remote="origin", root=None):
-    """Delegate release lineage checks while preserving the 0.65.3 API."""
-    return commit_checks.check_release_lineage(
-        version,
-        mode=mode,
-        release_commit=release_commit,
-        remote=remote,
-        root=Path(root or HOST_PROJECT_ROOT),
-        git=lambda args, git_root, _timeout: _run_git_lineage(args, git_root),
-        timeout=GIT_LINEAGE_TIMEOUT_SECONDS,
+def check_release_lineage(version, mode='candidate', release_commit=None, remote='origin', root=None):
+    from release_provenance import check_release_lineage as run
+    return run(
+        version, mode, release_commit, remote, root, host_project_root=HOST_PROJECT_ROOT,
+        git_lineage_timeout_seconds=_product_policy("GIT_LINEAGE_TIMEOUT_SECONDS"),
+        run_git_lineage=_run_git_lineage, inspect_lineage=commit_checks.check_release_lineage,
     )
 
 
 
 def _specialist_skill_owner_issues(root, router):
-    """Check the same role files and skill-table binding that a dispatched agent reads."""
-    roles = {path.stem: path for path in (root / "agents").glob("*.md")}
-    expected = {role.lower().replace(" ", "-") for role in _host_policy('ACTIVE_AGENT_ROLES')}
-    issues = [f"active role files differ: {sorted(set(roles) ^ expected)}"] if set(roles) != expected else []
-    specialists = {path.parent.name for path in (root / "skills").glob("*/SKILL.md")}
-    specialists -= {"software-project-governance", "main-workflow"}
-    owners = {}
-    for role, path in roles.items():
-        if f"agents/{role}.md" not in router:
-            issues.append(f"dispatch route missing role {role}")
-        for name in re.findall(r"^\|\s*`?([a-z][a-z0-9-]*)`?\s*\|", path.read_text(encoding="utf-8"), re.M):
-            if name not in specialists:
-                issues.append(f"{role}: unknown bound skill {name}")
-            owners.setdefault(name, set()).add(role)
-    issues.extend(f"no dispatched role consumes {name}" for name in sorted(specialists - owners.keys()))
-    if owners.get("stage-operations") != {"release"}:
-        issues.append("operational feedback requires Release as the responsible role")
-    return issues
+    from product_evidence import _specialist_skill_owner_issues as run
+    return run(root, router, active_agent_roles=_host_policy("ACTIVE_AGENT_ROLES"))
 
 
-def check_architecture_fact_source(
-    skill_path=None,
-    skill_index_path=None,
-    architecture_path=None,
-    governance_command_path=None,
-    agent_protocol_path=None,
-    governance_developer_prompt_path=None,
-):
-    """FIX-065: keep Agent/team architecture facts synchronized."""
-    navigation_root = ROOT if architecture_path is None else None
-    skill_path = skill_path or ROOT / "skills/software-project-governance/SKILL.md"
-    skill_index_path = skill_index_path or ROOT / "skills/software-project-governance/references/skill-index.md"
-    architecture_path = architecture_path or ROOT / "project/references/architecture.md"
-    governance_command_path = governance_command_path or ROOT / "commands/governance.md"
-    agent_protocol_path = agent_protocol_path or ROOT / "skills/software-project-governance/references/agent-communication-protocol.md"
-    governance_developer_prompt_path = governance_developer_prompt_path or ROOT / "agents/governance-developer.md"
-
-    documents = (
-        skill_path, skill_index_path, architecture_path, governance_command_path,
-        agent_protocol_path, governance_developer_prompt_path,
+def check_architecture_fact_source(skill_path=None, skill_index_path=None, architecture_path=None, governance_command_path=None, agent_protocol_path=None, governance_developer_prompt_path=None):
+    from product_evidence import check_architecture_fact_source as run
+    return run(
+        skill_path, skill_index_path, architecture_path, governance_command_path, agent_protocol_path,
+        governance_developer_prompt_path, package_root=ROOT, active_agent_roles=_host_policy("ACTIVE_AGENT_ROLES"),
+        loop_role_skill_contracts=_host_policy("LOOP_ROLE_SKILL_CONTRACTS"), named_reviewer_roles=_host_policy("NAMED_REVIEWER_ROLES"),
+        display_path=_display_path, generic_reviewer_cells=_generic_reviewer_cells,
+        markdown_has_heading=_markdown_has_heading, markdown_section=_markdown_section,
+        specialist_skill_owner_issues=_specialist_skill_owner_issues,
+        check_repository_navigation=check_repository_navigation,
     )
-    contents = {path: path.read_text(encoding="utf-8") for path in documents}
-
-    current_navigation = _markdown_section(contents[architecture_path], "## 当前目录导航")
-    failures = check_repository_navigation(architecture_path, current_navigation, navigation_root)
-    forbidden_patterns = [
-        ("legacy 7 groups / 9 Agent narrative", r"7\s*组\s*9\s*Agent|7组9Agent"),
-        ("legacy 46-line SKILL.md entry narrative", r"46\s*行"),
-        ("legacy entry-layer no behavior rules narrative", r"不包含任何行为规则"),
-        ("legacy native-entry exclusion narrative", r"仓库不包含任何平台原生入口文件"),
-    ]
-    for path, content in contents.items():
-        rel = _display_path(path)
-        for label, pattern in forbidden_patterns:
-            if re.search(pattern, content):
-                failures.append(f"{rel}: forbidden {label}")
-
-    skill_index_content = contents[skill_index_path]
-    skill_content = contents[skill_path]
-    required_skill_phrases = [
-        "Coordinator 融入入口层",
-        "Coordinator 接管用户交互",
-        "Producer-Reviewer 分离",
-    ]
-    for phrase in required_skill_phrases:
-        if phrase not in skill_content:
-            failures.append(f"{_display_path(skill_path)}: missing architecture fact phrase: {phrase}")
-
-    if "skills/software-project-governance/SKILL.md" not in contents[governance_command_path]:
-        failures.append(f"{_display_path(governance_command_path)}: missing dispatch route to the main SKILL")
-    if "后置审查" not in _markdown_section(skill_content, "## Agent 分发路由"):
-        failures.append(f"{_display_path(skill_path)}: missing post-review routing for the review reader")
-    if navigation_root is not None:
-        failures.extend(_specialist_skill_owner_issues(navigation_root, skill_content))
-
-    rel_skill_index = _display_path(skill_index_path)
-    from governance_readers import markdown_table_cells
-    routes = [cells for line in skill_index_content.splitlines()
-              if len(cells := markdown_table_cells(line)) == 3 and "`" in cells[1]]
-    reviewed = set()
-    governance_route = False
-    for activity, producers, consumers in routes:
-        skill_ids = re.findall(r"`([a-z][a-z0-9-]*)`", producers + " " + consumers)
-        for skill_id in skill_ids:
-            if not (ROOT / "skills" / skill_id / "SKILL.md").is_file():
-                failures.append(f"{rel_skill_index}: {activity} references missing skill {skill_id}")
-        if not consumers.strip():
-            failures.append(f"{rel_skill_index}: {activity} has no artifact consumer")
-        local_reviewers = re.findall(r"`([a-z]+-review)`", consumers)
-        reviewed.update(local_reviewers)
-        if local_reviewers and not any(role in consumers for role in _host_policy('NAMED_REVIEWER_ROLES')):
-            failures.append(f"{rel_skill_index}: {activity} needs a named independent reviewer")
-        if "Governance Developer" in producers and "`code-review`" in consumers and "Code Reviewer" in consumers:
-            governance_route = True
-    if not governance_route:
-        failures.append(f"{rel_skill_index}: missing Governance Developer → independent Code Reviewer route")
-    for name in sorted(set(_host_policy('LOOP_ROLE_SKILL_CONTRACTS')) - reviewed):
-        failures.append(f"{rel_skill_index}: missing independent consumer for {name}")
-    agent_protocol_content = contents[agent_protocol_path]
-    rel_protocol = _display_path(agent_protocol_path)
-    for role in _host_policy('ACTIVE_AGENT_ROLES'):
-        if not _markdown_has_heading(agent_protocol_content, 3, role):
-            failures.append(f"{rel_protocol}: missing active role communication contract: {role}")
-    for reviewer_role in _host_policy('NAMED_REVIEWER_ROLES'):
-        if not _markdown_has_heading(agent_protocol_content, 3, reviewer_role):
-            failures.append(f"{rel_protocol}: missing named reviewer communication contract: {reviewer_role}")
-    if _markdown_has_heading(agent_protocol_content, 3, "Reviewer"):
-        failures.append(f"{rel_protocol}: generic Reviewer communication contract is forbidden")
-
-    governance_developer_protocol = _markdown_section(agent_protocol_content, "### Governance Developer")
-    required_governance_developer_protocol_phrases = [
-        "Proposed evidence-log entry",
-        "Proposed decision-log / risk-log entry",
-    ]
-    if not governance_developer_protocol:
-        failures.append(f"{rel_protocol}: missing Governance Developer communication contract")
-    else:
-        for phrase in required_governance_developer_protocol_phrases:
-            if phrase not in governance_developer_protocol:
-                failures.append(f"{rel_protocol}: Governance Developer contract missing {phrase}")
-
-    governance_developer_prompt_content = contents[governance_developer_prompt_path]
-    rel_governance_developer_prompt = _display_path(governance_developer_prompt_path)
-    if not re.search(r"治理记录由 Coordinator.{0,12}写回|Coordinator 负责最终写回", governance_developer_prompt_content):
-        failures.append(f"{rel_governance_developer_prompt}: missing coordinator governance writeback boundary")
-    if not re.search(r"(?:不|不得)直接写\s*`\.governance/`", governance_developer_prompt_content):
-        failures.append(f"{rel_governance_developer_prompt}: direct governance writes must be prohibited")
-    for path in (skill_path, skill_index_path, agent_protocol_path):
-        rel = _display_path(path)
-        for line_no in _generic_reviewer_cells(contents[path]):
-            failures.append(f"{rel}:{line_no}: generic Reviewer role is forbidden; use named reviewer roles")
-
-    for failure in failures:
-        print(f"[FAIL] architecture fact source: {failure}")
-    if not failures:
-        print("[OK] architecture fact source synchronized")
-    return failures
 
 
 # ── Markdown parsing helpers ─────────────────────────────────────
@@ -4179,7 +2498,7 @@ def _run_context_git(root, args):
 
 def _is_context_product_file(path):
     from project_context import _is_context_product_file as read
-    return read(path, entry_files=PLATFORM_ENTRY_FILES, product_patterns=PRODUCT_CODE_PATTERNS)
+    return read(path, entry_files=_product_policy("PLATFORM_ENTRY_FILES"), product_patterns=PRODUCT_CODE_PATTERNS)
 
 
 def _parse_git_status_context_tasks(root):
@@ -4346,6 +2665,8 @@ def _archive_reader_class():
 
     GovernanceDataSource.__qualname__ = "GovernanceDataSource"
     return globals().setdefault("GovernanceDataSource", GovernanceDataSource)
+
+
 
 
 def _archive_reader(*args, **kwargs):
@@ -4734,41 +3055,11 @@ def check_task_deadline():
 # ── CLI commands ─────────────────────────────────────────────────
 
 def cmd_verify(args):
-    """Run existing file + snippet verification."""
+    from plugin_assets import report_verification
     print("== Workflow Plugin Verification ==")
-    file_failures = check_files()
-    snippet_failures = check_snippets()
-    architecture_failures = check_architecture_fact_source()
-    agent_adapter_failures = check_agent_adapter_contract()
-    version_failures = check_version_consistency()
-    loop_role_result = check_loop_role_skill_consistency()
-    loop_role_failures = [f"[FAIL] loop-role SKILL consistency: {issue}"
-                          for issue in loop_role_result["issues"]]
-    all_items = (
-        file_failures
-        + snippet_failures
-        + architecture_failures
-        + agent_adapter_failures
-        + version_failures
-        + loop_role_failures
-    )
-
-    # Separate WARN (non-blocking drift) from FAIL (hard gate)
-    fail_items = [f for f in all_items if not f.startswith("[WARN]")]
-    warn_items = [f for f in all_items if f.startswith("[WARN]")]
-
-    if warn_items:
-        print("\n== Warnings (non-blocking) ==")
-        for w in warn_items:
-            print(f"  - {w}")
-
-    if fail_items:
-        print("\n== Verification Result: FAILED ==")
-        for failure in fail_items:
-            print(f"  - {failure}")
-        sys.exit(1)
-
-    print("\n== Verification Result: PASSED ==")
+    return report_verification(check_files(), check_snippets(), check_architecture_fact_source(),
+                               check_agent_adapter_contract(), check_version_consistency(),
+                               check_loop_role_skill_consistency())
 
 
 # ── FIX-270 交付 A: status 秒级状态快路径（Scenario F 结构化数据源）──────
@@ -6491,7 +4782,7 @@ def _check_snippet_in_file(relative_path, snippet, label):
 
 def _check_all_required_files_exist():
     from gate_judgment import _check_all_required_files_exist as run
-    return run(required_files=lambda: REQUIRED_FILES,
+    return run(required_files=lambda: _product_policy("REQUIRED_FILES"),
                build_required_files_from_manifest=build_required_files_from_manifest)
 
 
@@ -6799,7 +5090,7 @@ def check_untracked_files():
         # Heuristic classification
         for f in files:
             # ── Root platform-native entry files affect active agent behavior ──
-            if "/" not in f and f in PLATFORM_ENTRY_FILES:
+            if "/" not in f and f in _product_policy("PLATFORM_ENTRY_FILES"):
                 result["actionable_entry_files"].append(f)
                 continue
 
@@ -7465,22 +5756,14 @@ def _external_validation_canonical_hook_text(hook_name, root=None):
 # in the 0.59.0+ per-domain split. See docs/requirements/archguard-design-0.58.0.md
 # and its §7 design-review appendix for the G6/G7/G8/G9 constraints honored here.
 
-ARCHGUARD_SCHEMA_REL = "skills/software-project-governance/core/architecture-health.json"
-ARCHGUARD_LEDGER_REL = "skills/software-project-governance/core/technical-debt-ledger.md"
-ARCHGUARD_HOOKS_REL = "skills/software-project-governance/infra/hooks"
-ARCHGUARD_DEFAULT_ROOT_RESIDUE = ("_fix_*", "_tmp_*", "debug_*", "scratch_*")
 
 
 def _archguard_load_schema(root=None):
-    """Load architecture-health.json; return (schema_dict, error_str_or_None)."""
-    root = Path(root) if root is not None else ROOT
-    schema_path = root / ARCHGUARD_SCHEMA_REL
-    if not schema_path.is_file():
-        return None, f"missing schema: {_display_path(schema_path, root)}"
-    try:
-        return json.loads(schema_path.read_text(encoding="utf-8")), None
-    except (ValueError, OSError) as exc:
-        return None, f"invalid schema {schema_path}: {exc}"
+    from architecture_diagnostics import _archguard_load_schema as run
+    return run(
+        root, package_root=ROOT, archguard_schema_rel=_product_policy("ARCHGUARD_SCHEMA_REL"),
+        display_path=_display_path,
+    )
 
 
 from checks.architecture_health import (
@@ -7489,283 +5772,49 @@ from checks.architecture_health import (
 
 
 def check_architecture_health(root=None, schema=None):
-    """Check the plugin (or a supplied fixture root) with its original policy."""
-    from checks.architecture_health import scan_architecture
-
-    root = Path(root) if root is not None else ROOT
-    if schema is None:
-        schema, err = _archguard_load_schema(root)
-        if schema is None:
-            return {"error": err, "findings": [], "summary": {"errors": 0, "warnings": 0}}
-    return scan_architecture(root, schema)
+    from architecture_diagnostics import check_architecture_health as run
+    return run(root, schema, package_root=ROOT, archguard_load_schema=_archguard_load_schema)
 
 
 def _archguard_normalized_lines(text, normalize_le=True, ignore_ws=True):
-    """Normalize text to a list of content lines (the CRLF/whitespace-safe comparator)."""
-    if normalize_le:
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
-    out = []
-    for ln in text.split("\n"):
-        if ignore_ws:
-            compact = re.sub(r"\s+", "", ln)
-            if not compact:
-                continue
-            out.append(compact)
-        else:
-            if not ln.strip():
-                continue
-            out.append(ln)
-    return out
+    from architecture_diagnostics import _archguard_normalized_lines as run
+    return run(text, normalize_le, ignore_ws)
 
 
 def _archguard_source_projection_pairs(root):
-    """Return [(source_rel, source_abs, projection_abs), ...] for source/projection dup check.
-
-    Derives pairs from the e2e-test-project projection tree: for each infra/*.py under
-    the source skills tree, look for the mirrored file under the projection copy.
-    """
-    root = Path(root)
-    src_base = root / "skills/software-project-governance/infra"
-    proj_base = root / "project/e2e-test-project/skills/software-project-governance/infra"
-    pairs = []
-    if not src_base.is_dir() or not proj_base.is_dir():
-        return pairs
-    for py in sorted(src_base.glob("*.py")):
-        candidate = proj_base / py.name
-        if candidate.is_file():
-            pairs.append((py.relative_to(root), py, candidate))
-    return pairs
+    from architecture_diagnostics import _archguard_source_projection_pairs as run
+    return run(root)
 
 
 def check_duplicate_code(root=None, schema=None):
-    """REQ-101 ArchGuard check 2: source/projection semantic duplicate.
-
-    MUST normalize line endings + ignore whitespace, otherwise CRLF(source) vs
-    LF(projection) yields a false ~100% diff.
-    """
-    root = Path(root) if root is not None else ROOT
-    if schema is None:
-        schema, err = _archguard_load_schema(root)
-        if schema is None:
-            return {"error": err, "findings": [], "pairs_checked": 0,
-                    "summary": {"errors": 0, "warnings": 0}}
-    dc = schema.get("duplicate_code", {})
-    warn_pct = dc.get("warn_pct", 60)
-    error_pct = dc.get("error_pct", 80)
-    normalize_le = bool(dc.get("normalize_line_endings", True))
-    ignore_ws = bool(dc.get("ignore_whitespace", True))
-    # FIX-350: schema-driven pair exemptions ([{path, reason}] on the SOURCE
-    # rel path, same caliber as module_size.exclusions). An exempt pair still
-    # counts toward pairs_checked and is disclosed — never silently dropped.
-    dc_exclusions = dc.get("exclusions", [])
-
-    findings = []
-    exemptions = []
-    pairs = _archguard_source_projection_pairs(root)
-    for rel, src_abs, proj_abs in pairs:
-        match = _archguard_exclusion_match(rel, dc_exclusions)
-        if match is not None:
-            reason = match.get("reason", "") if isinstance(match, dict) else ""
-            # posix form for the disclosure — same caliber as the schema glob.
-            exemptions.append({"path": str(rel).replace("\\", "/"),
-                               "reason": reason})
-            continue
-        try:
-            src_text = src_abs.read_text(encoding="utf-8", errors="replace")
-            proj_text = proj_abs.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        src_lines = set(_archguard_normalized_lines(src_text, normalize_le, ignore_ws))
-        proj_lines = set(_archguard_normalized_lines(proj_text, normalize_le, ignore_ws))
-        denom = max(len(src_lines), len(proj_lines)) or 1
-        diff_count = len(src_lines.symmetric_difference(proj_lines))
-        duplicate_pct = round((1 - diff_count / denom) * 100, 1)
-        sev = None
-        if duplicate_pct >= error_pct:
-            sev = "ERROR"
-        elif duplicate_pct >= warn_pct:
-            sev = "WARN"
-        if sev:
-            findings.append({
-                "check": "duplicate_code", "severity": sev, "path": str(rel),
-                "source_lines": len(src_lines), "projection_lines": len(proj_lines),
-                "duplicate_pct": duplicate_pct,
-            })
-    errors = sum(1 for f in findings if f["severity"] == "ERROR")
-    warnings = sum(1 for f in findings if f["severity"] == "WARN")
-    return {
-        "findings": findings, "pairs_checked": len(pairs),
-        "exemptions": exemptions,
-        "summary": {"errors": errors, "warnings": warnings},
-    }
+    from architecture_diagnostics import check_duplicate_code as run
+    return run(
+        root, schema, package_root=ROOT, archguard_exclusion_match=_archguard_exclusion_match,
+        archguard_load_schema=_archguard_load_schema, archguard_normalized_lines=_archguard_normalized_lines,
+        archguard_source_projection_pairs=_archguard_source_projection_pairs,
+    )
 
 
 def check_technical_debt(root=None, schema=None):
-    """REQ-101 ArchGuard check 3: root residue / release docs / hooks drift / ledger cross-validate.
-
-    G9: hooks-drift MUST reuse ``_external_validation_read_text`` and
-    ``_external_validation_canonical_hook_text`` — do not reimplement.
-    """
-    root = Path(root) if root is not None else ROOT
-    if schema is None:
-        schema, err = _archguard_load_schema(root)
-        if schema is None:
-            return {"error": err, "findings": [],
-                    "summary": {"errors": 0, "warnings": 0,
-                                "open_items": 0, "deferred_items": 0}}
-    td = schema.get("technical_debt", {})
-    findings = []
-
-    # 1. root-directory residue scripts
-    patterns = td.get("root_residue_patterns") or list(ARCHGUARD_DEFAULT_ROOT_RESIDUE)
-    for entry in sorted(os.listdir(root)) if os.path.isdir(root) else []:
-        for pat in patterns:
-            if fnmatch.fnmatch(entry, pat):
-                findings.append({
-                    "check": "root_residue", "severity": "WARN",
-                    "path": entry, "pattern": pat,
-                })
-                break
-
-    # 2. historical release docs version count
-    threshold = td.get("release_docs_archive_threshold_versions", 30)
-    release_dir = root / "docs/release"
-    versions = set()
-    if release_dir.is_dir():
-        for child in release_dir.iterdir():
-            # collect version-like tokens from filenames (e.g. 0.57.0)
-            m = re.search(r"(\d+\.\d+\.\d+)", child.name)
-            if m:
-                versions.add(m.group(1))
-    if len(versions) >= threshold:
-        findings.append({
-            "check": "release_docs_versions", "severity": "WARN",
-            "path": str(release_dir.relative_to(root)) if release_dir.is_dir() else "docs/release",
-            "versions": len(versions), "threshold": threshold,
-        })
-
-    # 3. hooks content drift (G9: reuse existing helpers)
-    if td.get("hooks_drift_detection", True):
-        hooks_src_dir = root / ARCHGUARD_HOOKS_REL
-        git_hooks_dir = root / ".git/hooks"
-        if hooks_src_dir.is_dir():
-            for hook_name in sorted(p.name for p in hooks_src_dir.iterdir() if p.is_file()):
-                installed = git_hooks_dir / hook_name
-                if not installed.is_file():
-                    findings.append({
-                        "check": "hooks_drift", "severity": "WARN",
-                        "hook": hook_name, "reason": "not installed in .git/hooks",
-                    })
-                    continue
-                installed_text, read_err = _external_validation_read_text(installed)
-                if installed_text is None:
-                    findings.append({
-                        "check": "hooks_drift", "severity": "WARN",
-                        "hook": hook_name, "reason": f"cannot read installed: {read_err}",
-                    })
-                    continue
-                installed_text = installed_text.replace("\r\n", "\n")
-                source_text = _external_validation_canonical_hook_text(hook_name, root=root)
-                if source_text is None:
-                    findings.append({
-                        "check": "hooks_drift", "severity": "WARN",
-                        "hook": hook_name, "reason": "canonical source missing",
-                    })
-                elif source_text != installed_text:
-                    findings.append({
-                        "check": "hooks_drift", "severity": "WARN",
-                        "hook": hook_name, "reason": "source != installed content",
-                    })
-
-    # 4. technical-debt ledger cross-validation
-    open_items = deferred_items = 0
-    if td.get("ledger_cross_validate", True):
-        ledger_path = root / ARCHGUARD_LEDGER_REL
-        if ledger_path.is_file():
-            try:
-                ledger_text = ledger_path.read_text(encoding="utf-8")
-                # Restrict to the 登记项 section so other tables are not parsed.
-                rows = _parse_markdown_table_rows(ledger_text, section_title="登记项")
-            except OSError:
-                rows = []
-            # _parse_markdown_table_rows returns list-of-cell-lists. The first surviving
-            # row is the header (e.g. 债务 ID | ... | 承载版本 | 状态 | ...).
-            header = rows[0] if rows else []
-            norm_header = [h.strip().replace(" ", "") for h in header]
-            idx_status = norm_header.index("状态") if "状态" in norm_header else None
-            idx_carry = norm_header.index("承载版本") if "承载版本" in norm_header else None
-            idx_id = norm_header.index("债务ID") if "债务ID" in norm_header else 0
-            for cells in rows[1:]:
-                def _cell(i):
-                    return cells[i].strip() if (i is not None and i < len(cells)) else ""
-                status = _cell(idx_status)
-                carrying = _cell(idx_carry)
-                tid = _cell(idx_id) or "?"
-                if status in ("OPEN", "IN_PROGRESS"):
-                    open_items += 1
-                    if not carrying or carrying in ("待评估", "TBD", "N/A"):
-                        findings.append({
-                            "check": "ledger_no_carrying_version", "severity": "WARN",
-                            "ledger_id": tid, "status": status,
-                            "reason": "OPEN/IN_PROGRESS without 承载版本",
-                        })
-                elif status == "DEFERRED":
-                    deferred_items += 1
-
-    errors = sum(1 for f in findings if f["severity"] == "ERROR")
-    warnings = sum(1 for f in findings if f["severity"] == "WARN")
-    return {
-        "findings": findings,
-        "summary": {"errors": errors, "warnings": warnings,
-                    "open_items": open_items, "deferred_items": deferred_items},
-    }
+    from architecture_diagnostics import check_technical_debt as run
+    return run(
+        root, schema, package_root=ROOT,
+        archguard_default_root_residue=_product_policy("ARCHGUARD_DEFAULT_ROOT_RESIDUE"),
+        archguard_hooks_rel=_product_policy("ARCHGUARD_HOOKS_REL"),
+        archguard_ledger_rel=_product_policy("ARCHGUARD_LEDGER_REL"),
+        archguard_load_schema=_archguard_load_schema,
+        external_validation_canonical_hook_text=_external_validation_canonical_hook_text,
+        external_validation_read_text=_external_validation_read_text,
+        parse_markdown_table_rows=_parse_markdown_table_rows,
+    )
 
 
 def check_complexity(root=None, schema=None):
-    """REQ-101 ArchGuard check 4: complexity. 0.58.0 uses a line-based proxy.
-
-    AST cyclomatic complexity is deferred to 0.59.0+ (complexity.enabled=false).
-    The line-based proxy reuses function-length data from architecture-health.
-    """
-    root = Path(root) if root is not None else ROOT
-    if schema is None:
-        schema, err = _archguard_load_schema(root)
-        if schema is None:
-            return {"error": err, "findings": [],
-                    "summary": {"errors": 0, "warnings": 0},
-                    "enabled": False}
-    cx = schema.get("complexity", {})
-    enabled = bool(cx.get("enabled", False))
-    if not enabled:
-        return {
-            "enabled": False,
-            "findings": [],
-            "summary": {"errors": 0, "warnings": 0},
-            "note": cx.get("note") or "AST complexity deferred; 0.58.0 uses line-based proxy — see check-architecture-health",
-        }
-    # When enabled (future 0.59.0+), repurpose the architecture-health function-size
-    # data as a line-based proxy for cyclomatic complexity.
-    arch = check_architecture_health(root=root, schema=schema)
-    warn_n = cx.get("warn_cyclomatic", 15)
-    error_n = cx.get("error_cyclomatic", 30)
-    findings = []
-    for f in arch.get("findings", []):
-        if f.get("check") != "function_size":
-            continue
-        n = f.get("lines", 0)
-        sev = _archguard_severity(n, warn_n, error_n)
-        if sev:
-            findings.append({
-                "check": "complexity_proxy", "severity": sev,
-                "path": f.get("path"), "name": f.get("name"),
-                "lines": n, "lineno": f.get("lineno"),
-            })
-    errors = sum(1 for f in findings if f["severity"] == "ERROR")
-    warnings = sum(1 for f in findings if f["severity"] == "WARN")
-    return {
-        "enabled": True, "findings": findings,
-        "summary": {"errors": errors, "warnings": warnings},
-    }
+    from architecture_diagnostics import check_complexity as run
+    return run(
+        root, schema, package_root=ROOT, archguard_load_schema=_archguard_load_schema,
+        archguard_severity=_archguard_severity, check_architecture_health=check_architecture_health,
+    )
 
 
 # ── FEAT-014 / RISK-049 ①: adapter claim→evidence level mapping ──────
@@ -7803,99 +5852,12 @@ def check_readme_claim_evidence_levels(readme_path=None):
 
 
 def check_governance_data_size(root=None, schema=None):
-    """FIX-160: ArchGuard check 5 — governance data volume threshold.
-
-    Guards RISK-039 (governance data bloat) directly. Scans the governance
-    hot files (plan-tracker / evidence-log / decision-log / risk-log) declared
-    in architecture-health.json `governance_data_size.files` and emits a
-    WARN/ERROR finding when a file exceeds warn_bytes / error_bytes. The
-    error threshold (250KB) is set just below the 256KB agent single-read
-    limit so the warning fires before a governance file becomes unreadable.
-
-    FIX-270 (mixed-root): the *schema* (thresholds / file list) is a plugin
-    asset and is loaded from the plugin package; the *facts* to measure are
-    the governed project's hot files, so when ``root`` is not explicit the
-    file paths resolve against HOST_PROJECT_ROOT (never the plugin package
-    root). An explicit ``root`` keeps the legacy fixture semantics (schema +
-    facts from the same root).
-
-    Advisory by default (inherits gate_integration.fatal_on_error=false).
-    """
-    if root is not None:
-        schema_root = fact_root = Path(root)
-    else:
-        schema_root = ROOT
-        fact_root = HOST_PROJECT_ROOT
-    if schema is None:
-        schema, err = _archguard_load_schema(schema_root)
-        if schema is None:
-            return {"error": err, "findings": [],
-                    "summary": {"errors": 0, "warnings": 0},
-                    "enabled": False}
-    gds = schema.get("governance_data_size", {})
-    enabled = bool(gds.get("enabled", True))
-    if not enabled:
-        return {
-            "enabled": False, "findings": [],
-            "summary": {"errors": 0, "warnings": 0},
-            "note": gds.get("note") or "governance_data_size disabled",
-        }
-    # DEC-295(1) track-1 recalibration (user ruling, 2026-09-29): the
-    # evidence-log face carries a PER-FILE override — warn 400000 /
-    # error 650000. Calibration basis: the typed hot-table steady state =
-    # 199 permanently-hot registered-ID rows (~280-300KB) + the working
-    # set (0.92 closeout + 0.93 in flight); measured 515KB + migration
-    # wobble headroom. All OTHER faces keep the global 200000/250000
-    # lines (the 256KB single-read guard rationale stays intact for
-    # them; decision-log's EXC-003 exception remains meaningful).
-    warn_bytes = gds.get("warn_bytes", 200000)
-    error_bytes = gds.get("error_bytes", 250000)
-    file_overrides = gds.get("file_overrides", {})
-    files = gds.get("files", [])
-    findings = []
-    for rel in files:
-        path = fact_root / rel
-        if not path.exists():
-            continue
-        size = path.stat().st_size
-        override = file_overrides.get(rel, {})
-        face_warn = override.get("warn_bytes", warn_bytes)
-        face_error = override.get("error_bytes", error_bytes)
-        sev = _archguard_severity(size, face_warn, face_error)
-        if sev:
-            findings.append({
-                "check": "governance_data_size", "severity": sev,
-                "path": rel, "bytes": size,
-                "reason": f"{size} bytes ({size/1024:.1f} KB) exceeds {sev.lower()}_bytes={face_warn if sev=='WARN' else face_error}",
-            })
-    errors = sum(1 for f in findings if f["severity"] == "ERROR")
-    warnings = sum(1 for f in findings if f["severity"] == "WARN")
-    result = {
-        "enabled": True, "findings": findings,
-        "summary": {"errors": errors, "warnings": warnings},
-    }
-    # FEAT-076 (DEC-278 Q5 three-track semantics, 0.93 switch): track 1 =
-    # the hot working-set capacity gate above (unchanged schema-driven
-    # severity); track 2 = full-library integrity (check-archive-integrity,
-    # separate check); track 3 = total-volume growth monitoring — reported
-    # here as informational layer facts (hot/cold/total), no new finding
-    # severity. Growth-rate alerting rides the weekly metric duty (EXC
-    # family terms) instead of a second threshold.
-    try:
-        if root is not None:
-            _gov = Path(root) / ".governance"
-            ds = _archive_reader(
-                sample_path=_gov / "plan-tracker.md",
-                evidence_path=_gov / "evidence-log.md",
-            )
-        else:
-            ds = _archive_reader()
-        _stats = ds.layer_stats()
-        result["layers"] = _stats["layers"]
-        result["family_stats"] = _stats["families"]
-    except Exception:  # noqa: BLE001 — informational track, never fatal
-        result["layers"] = None
-    return result
+    from architecture_diagnostics import check_governance_data_size as run
+    return run(
+        root, schema, host_project_root=HOST_PROJECT_ROOT, package_root=ROOT,
+        archguard_load_schema=_archguard_load_schema, archguard_severity=_archguard_severity,
+        archive_reader=_archive_reader,
+    )
 
 
 def _external_validation_plan_tracker(version):
@@ -7972,67 +5934,8 @@ def cmd_check_agent_adapters(args):
 
 
 def cmd_check_release(args):
-    """Run release readiness checks used by the stage-release workflow."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
-    skip_execution_gates = getattr(args, "skip_execution_gates", False)
-    lineage_mode = getattr(args, "lineage_mode", None) or "candidate"
-    result = check_release_readiness(
-        version=getattr(args, "version", None),
-        require_changelog=getattr(args, "require_changelog", False),
-        run_runtime_adapters=getattr(args, "runtime_adapters", False),
-        run_execution_gates=not skip_execution_gates,
-        lineage_mode=lineage_mode,
-        release_commit=getattr(args, "release_commit", None),
-        lineage_remote=getattr(args, "lineage_remote", "origin"),
-        release_unit=getattr(args, "unit", None),
-        require_delivery_evidence=getattr(args, "require_delivery_evidence", False),
-    )
-    if getattr(args, "json", False):
-        write_cli_json(result, indent=2)
-        if not result["pass"]:
-            sys.exit(1)
-        return
-    if "release_replay" in result["details"]:
-        sys.exit(result["issues"][0])
-
-
-    print()
-    print("=== Release Readiness Check ===")
-    if getattr(args, "version", None):
-        print(f"  Version: {args.version}")
-    print(f"  Runtime adapters: {'enabled' if getattr(args, 'runtime_adapters', False) else 'static'}")
-    print(f"  Execution gates: {'skipped' if skip_execution_gates else 'enabled'}")
-    print(f"  Lineage mode: {lineage_mode}")
-    for label, detail in result["details"].items():
-        if detail.get("skipped"):
-            # FEAT-016 / RISK-049 ③: an intentionally not-run gate must be
-            # disclosed with its reason (WARN semantics) — never a silent
-            # absence, never a mis-FAIL of history queries
-            # (--skip-execution-gates / BR-4 released-history).
-            print(f"  [SKIP] {label.replace('_', ' ')} — "
-                  f"{detail.get('skip_reason')}")
-            continue
-        status = "PASS" if detail["pass"] else "FAIL"
-        print(f"  [{status}] {label.replace('_', ' ')}")
-        if detail.get("boundary"):
-            print(f"    boundary: {detail['boundary']}")
-        for gate_result in detail.get("results", []):
-            gate_status = "PASS" if gate_result["pass"] else "FAIL"
-            exit_code = gate_result["exit_code"]
-            print(f"    [{gate_status}] {gate_result['label']} (exit={exit_code})")
-        for issue in detail.get("issues", [])[:10]:
-            print(f"    - {issue}")
-        if len(detail.get("issues", [])) > 10:
-            print(f"    ... and {len(detail['issues']) - 10} more")
-    if result["pass"]:
-        print("\n  Result: PASSED - release readiness checks are green.")
-    else:
-        print(f"\n  Result: FAILED - {len(result['issues'])} issue(s).")
-        sys.exit(1)
+    from release_validation_cli import cmd_check_release as run
+    return run(args, check_release_readiness=check_release_readiness, write_cli_json=write_cli_json)
 
 
 # ── Standalone CLI wrappers for new checks ────────────────────────
@@ -8086,96 +5989,25 @@ def cmd_check_agent_team(args):
 
 
 def cmd_check_version_consistency(_args):
-    """Run version consistency check across all declaration locations."""
-    import sys
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-
-    issues = check_version_consistency()
-
-    print("\n=== Version Consistency Check ===")
-    print(f"  Source of truth: skills/software-project-governance/SKILL.md")
-    print(f"  Files checked: 12 (SKILL.md, manifest.json, marketplace.json, 3 plugin.json, CHANGELOG, plan-tracker, 4 hooks) + bootstrap markers (AGENTS.md, CLAUDE.md)")
-
-    fail_items = [i for i in issues if not i.startswith("[WARN]")]
-    warn_items = [i for i in issues if i.startswith("[WARN]")]
-
-    if warn_items:
-        print(f"\n  Warnings ({len(warn_items)}):")
-        for w in warn_items:
-            print(f"    {w}")
-
-    if fail_items:
-        print(f"\n  Failures ({len(fail_items)}):")
-        for f in fail_items:
-            print(f"    {f}")
-        print(f"\n  Result: FAILED — {len(fail_items)} mismatch(es)")
-        sys.exit(1)
-    else:
-        print(f"\n  Result: PASSED — all version declarations consistent")
-    print()
+    from repository_projection import cmd_check_version_consistency as run
+    return run(_args, check_version_consistency=check_version_consistency)
 
 
 def cmd_check_projection_sync(args):
-    """Run projection/fixture sync guard independently."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_projection_sync()
-    print("\n=== Projection Sync Check ===")
-    print(f"  Source version: {result['source_version'] or 'unknown'}")
-    print(f"  Mirrored files checked: {result['mirrors_checked']}")
-    if result.get("mirrors_skipped_untracked"):
-        print(f"  Untracked local projection copies skipped: {result['mirrors_skipped_untracked']}")
-    if result["version_checks"]:
-        print("  Version checks:")
-        for item in result["version_checks"]:
-            print(f"    - {item['label']}: {item['version'] or 'missing'} ({item['path']})")
-    if result["issues"]:
-        print(f"\n  Result: FAILED — {len(result['issues'])} issue(s)")
-        for issue in result["issues"][:20]:
-            print(f"    - {issue}")
-        if len(result["issues"]) > 20:
-            print(f"    ... and {len(result['issues']) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n  Result: PASSED — projection files and version declarations are synchronized")
-    print()
-    # FEAT-037: entry-file bootstrap projection rides the same guard (one command covers both surfaces).
-    entry_result = projection_checks.check_entry_bootstrap_sync()
-    entry_failed = not projection_checks.print_entry_bootstrap_report(entry_result)
-    if entry_failed or (getattr(args, "fail_on_issues", False) and not entry_result["pass"]):
-        sys.exit(1)
+    from repository_projection import cmd_check_projection_sync as run
+    return run(
+        args, check_projection_sync=check_projection_sync,
+        check_entry_bootstrap_sync=lambda: projection_checks.check_entry_bootstrap_sync(),
+        print_entry_bootstrap_report=lambda report: projection_checks.print_entry_bootstrap_report(report),
+    )
 
 
 cmd_check_entry_bootstrap_sync = projection_checks.cmd_check_entry_bootstrap_sync
 
 
 def cmd_check_injection_contract(args):
-    """Run the injection-surface anchor check independently (FIX-253/REQ-112)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_injection_contract()
-    print("\n=== Injection Contract Check (FIX-253/REQ-112) ===")
-    print(f"  Files checked: {result['files_checked']}; anchors: {result['anchors_checked']}"
-          + (f"; {result['staged_summary']}" if result["staged_summary"] else ""))
-    if result["issues"]:
-        print(f"\n  Result: FAILED — {len(result['issues'])} issue(s)")
-        for issue in result["issues"][:20]:
-            print(f"    - {issue}")
-        if len(result["issues"]) > 20:
-            print(f"    ... and {len(result['issues']) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n  Result: PASSED — injection surfaces carry the behavior-contract anchors")
-    print()
+    from repository_projection import cmd_check_injection_contract as run
+    return run(args, check_injection_contract=check_injection_contract)
 
 
 def cmd_check_dsh_preset_smoke(args):
@@ -8199,62 +6031,18 @@ def cmd_dsh_doctor(args):
 
 
 def cmd_release_ledger(args):
-    """Validate declarative per-version release manifests and live Git facts."""
-    result = validate_release_ledger(
-        RepositoryContext(HOST_PROJECT_ROOT, timeout=getattr(args, "timeout", 15)),
-        manifests_dir=PLUGIN_ROOT / "skills/software-project-governance/core/releases",
-        version=getattr(args, "version", None),
-        remote=getattr(args, "remote", "origin"),
-        verify_remote=not getattr(args, "no_remote", False),
-    ).as_dict()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    if result["state"] != "PASS":
-        sys.exit({"FAIL": 1, "UNKNOWN": 2, "BLOCKED": 3}.get(result["state"], 1))
+    from release_validation_cli import cmd_release_ledger as run
+    return run(args)
 
 
 def cmd_release_projection(args):
-    """Check or atomically write declared artifact projections.
-
-    FIX-405 / RISK-061: the --write face appends an ``sd_integrity`` scan
-    over the just-written projection targets (os.access R_OK + takeown/
-    icacls remediation template) — restricted-token SD damage surfaces at
-    the write moment; a damaged face FAILs the command (exit 1) instead
-    of biting the next random access.
-    """
-    config = Path(args.config).resolve() if getattr(args, "config", None) else None
-    if getattr(args, "write", False):
-        result = write_projections(PLUGIN_ROOT, config).as_dict()
-        from checks.sd_integrity import projection_face_paths, scan_sd_readability
-        # FIX-406 F-1: lift the face error instead of silently scanning an
-        # empty path set behind .get("paths", []).
-        _face = projection_face_paths(PLUGIN_ROOT, config)
-        _face_error = _face.get("error")
-        sd_scan = scan_sd_readability(_face.get("paths", []))
-        result["sd_integrity"] = {**sd_scan, "face_error": _face_error}
-        if _face_error:
-            result["state"] = "FAIL"
-            result["issues"] = list(result.get("issues", [])) + [
-                f"sd integrity: {_face_error}"]
-        elif not sd_scan["pass"]:
-            result["state"] = "FAIL"
-            result["issues"] = list(result.get("issues", [])) + [
-                "sd integrity: {0} unreadable — remediate: {1}".format(
-                    path, cmd)
-                for path, cmd in zip(sd_scan["unreadable"],
-                                      sd_scan["remediation"])]
-    else:
-        result = check_projections(PLUGIN_ROOT, config).as_dict()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    if result["state"] != "PASS":
-        sys.exit({"FAIL": 1, "UNKNOWN": 2, "BLOCKED": 3}.get(result["state"], 1))
+    from release_validation_cli import cmd_release_projection as run
+    return run(args)
 
 
 def cmd_quality_tools(_args):
-    """Report optional ruff/mypy availability without overclaiming PASS."""
-    result = probe_quality_tools()
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    if result["state"] == "FAIL":
-        sys.exit(1)
+    from release_validation_cli import cmd_quality_tools as run
+    return run(_args)
 
 
 def cmd_check_hot_fact_source(args):
@@ -8340,47 +6128,22 @@ def cmd_check_mainstream_agent_loading(args):
 # command (exit 0) unless gate_integration.fatal_on_error is true AND there are
 # ERROR-level findings.
 
-def _archguard_print_findings(title, result, hint_key="check"):
-    """Render a 3-level ArchGuard result; return (errors, warnings).
-
-    FEAT-075: findings matched by an EFFECTIVE governance exception carry an
-    ``exception accepted (ref, expires)`` suffix — annotation only; the
-    severity, bytes, and summary counts above stay exactly as the check
-    produced them (no registry → byte-identical pre-FEAT-075 output).
-    """
-    s = result.get("summary", {}) or {}
-    errors = int(s.get("errors", 0))
-    warnings = int(s.get("warnings", 0))
-    # FEAT-075 R0 F-2: file-level registry errors disclosed once (first
-    # finding line); "" when clean — output unchanged.
-    reg_err = _exception_registry_error_note()
-    err_shown = not reg_err
-    for f in result.get("findings", [])[:25]:
-        sev = f.get("severity", "?")
-        extra = ""
-        for k in ("lines", "count", "duplicate_pct", "versions", "bytes"):
-            if k in f:
-                extra = f" {k}={f[k]}"
-                break
-        loc = f.get("path") or f.get("hook") or f.get("ledger_id") or ""
-        detail = f.get("name") or f.get("reason") or f.get("pattern") or ""
-        note = _exception_note(f.get(hint_key), loc, f.get("severity"),
-                               bytes_value=f.get("bytes"))
-        if not err_shown:
-            note += ("  " if note else "") + reg_err
-            err_shown = True
-        print(f"  [{sev}] {f.get(hint_key, '?')}: {loc} {detail}{extra}{note}".rstrip())
-    more = len(result.get("findings", [])) - 25
-    if more > 0:
-        print(f"    ... and {more} more")
-    return errors, warnings
+def _archguard_print_findings(title, result, hint_key='check'):
+    from architecture_diagnostics import _archguard_print_findings as run
+    return run(
+        title, result, hint_key, exception_note=_exception_note,
+        exception_registry_error_note=_exception_registry_error_note,
+    )
 
 
 def cmd_check_architecture_health(args):
-    from checks.architecture_health import run_architecture_health
-
-    run_architecture_health(args, HOST_PROJECT_ROOT, PLUGIN_ROOT, PLUGIN_ROOT / ARCHGUARD_SCHEMA_REL,
-                            check_architecture_health, _archguard_print_findings)
+    from architecture_diagnostics import cmd_check_architecture_health as run
+    return run(
+        args, host_project_root=HOST_PROJECT_ROOT, plugin_root=PLUGIN_ROOT,
+        archguard_schema_rel=_product_policy("ARCHGUARD_SCHEMA_REL"),
+        archguard_print_findings=_archguard_print_findings,
+        check_architecture_health=check_architecture_health,
+    )
 
 
 def cmd_check_loop_health(args):
@@ -9116,106 +6879,26 @@ def cmd_write_guard_bootstrap(args):
 
 
 def cmd_check_duplicate_code(args):
-    """Run REQ-101 ArchGuard source/projection duplicate-code guard (advisory in 0.58.0)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_duplicate_code()
-    print("\n=== Duplicate Code Check (ArchGuard) ===")
-    if result.get("error"):
-        print(f"  [ERROR] {result['error']}")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-        print()
-        return
-    errors, warnings = _archguard_print_findings("Duplicate Code", result)
-    print(f"\n  Pairs checked: {result.get('pairs_checked', 0)}")
-    for x in result.get("exemptions", []):
-        reason = x.get("reason", "")
-        print(f"  [EXEMPT] {x.get('path', '')}"
-              + (f" — {reason}" if reason else ""))
-    print(f"  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
-    if getattr(args, "fail_on_issues", False) and errors > 0:
-        sys.exit(1)
-    print()
+    from architecture_diagnostics import cmd_check_duplicate_code as run
+    return run(args, archguard_print_findings=_archguard_print_findings, check_duplicate_code=check_duplicate_code)
 
 
 def cmd_check_technical_debt(args):
-    """Run REQ-101 ArchGuard technical-debt guard (residue/docs/hooks-drift/ledger; advisory)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_technical_debt()
-    print("\n=== Technical Debt Check (ArchGuard) ===")
-    if result.get("error"):
-        print(f"  [ERROR] {result['error']}")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-        print()
-        return
-    errors, warnings = _archguard_print_findings("Technical Debt", result)
-    s = result.get("summary", {}) or {}
-    print(f"\n  Ledger: {s.get('open_items', 0)} OPEN/IN_PROGRESS, {s.get('deferred_items', 0)} DEFERRED")
-    print(f"  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
-    if getattr(args, "fail_on_issues", False) and errors > 0:
-        sys.exit(1)
-    print()
+    from architecture_diagnostics import cmd_check_technical_debt as run
+    return run(args, archguard_print_findings=_archguard_print_findings, check_technical_debt=check_technical_debt)
 
 
 def cmd_check_complexity(args):
-    """Run REQ-101 ArchGuard complexity guard (line-based proxy in 0.58.0; advisory)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_complexity()
-    print("\n=== Complexity Check (ArchGuard) ===")
-    if result.get("error"):
-        print(f"  [ERROR] {result['error']}")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-        print()
-        return
-    if not result.get("enabled", False):
-        print(f"  [INFO] complexity disabled — {result.get('note', 'line-based proxy; see check-architecture-health')}")
-        print()
-        return
-    errors, warnings = _archguard_print_findings("Complexity", result)
-    print(f"\n  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
-    if getattr(args, "fail_on_issues", False) and errors > 0:
-        sys.exit(1)
-    print()
+    from architecture_diagnostics import cmd_check_complexity as run
+    return run(args, archguard_print_findings=_archguard_print_findings, check_complexity=check_complexity)
 
 
 def cmd_check_governance_data_size(args):
-    """FIX-160: Run governance data volume threshold guard (advisory)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_governance_data_size()
-    print("\n=== Governance Data Size Check (ArchGuard/FIX-160) ===")
-    if result.get("error"):
-        print(f"  [ERROR] {result['error']}")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-        print()
-        return
-    if not result.get("enabled", False):
-        print(f"  [INFO] governance_data_size disabled — {result.get('note', '')}")
-        print()
-        return
-    errors, warnings = _archguard_print_findings("GovernanceDataSize", result)
-    if errors or warnings:
-        print(f"\n  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN")
-        print("  (advisory — fatal_on_error=false; see architecture-health.json governance_data_size)")
-    else:
-        print("\n  Result: PASSED — all governance files within size budget")
-    if getattr(args, "fail_on_issues", False) and errors > 0:
-        sys.exit(1)
-    print()
+    from architecture_diagnostics import cmd_check_governance_data_size as run
+    return run(
+        args, archguard_print_findings=_archguard_print_findings,
+        check_governance_data_size=check_governance_data_size,
+    )
 
 
 def cmd_check_readme_pack_guidance(args):
@@ -9722,6 +7405,23 @@ if __name__ in ("verify_workflow", "__main__"):
         _bind_gate_command(_effective_engine_command)
 
 
+_RELEASE_COMMAND_BINDINGS = {
+    cmd_release_ledger.__name__: cmd_release_ledger,
+    cmd_release_projection.__name__: cmd_release_projection,
+    cmd_quality_tools.__name__: cmd_quality_tools,
+}
+
+
+def _effective_release_command(name, native):
+    if name in _RELEASE_COMMAND_BINDINGS:
+        if name not in globals():
+            raise AttributeError(name)
+        current = globals()[name]
+        if current is not _RELEASE_COMMAND_BINDINGS[name]:
+            return current
+    return native
+
+
 try:
     from host_loader_probes import bind_workflow_dsh as _bind_workflow_dsh
 except ModuleNotFoundError as error:
@@ -9758,9 +7458,24 @@ risk_domain._context_readers = lambda: (_context_file, _context_task)
 risk_domain._legacy_aliases = lambda: (RISK_PATH, SAMPLE_PATH, _context_file, _context_task, _TASK_ID_IN_REF_RE)
 
 
-__all__ = sorted({name for name in globals() if not name.startswith("_")}
-                 | {name for name in _HOST_POLICY_OWNERS if not name.startswith("_")}
-                 | {"GovernanceDataSource"})
+try:
+    from release_validation_cli import bind_release_commands as _bind_release_commands
+except ModuleNotFoundError as error:
+    if error.name != "release_validation_cli":
+        raise
+else:
+    if __name__ in ("verify_workflow", "__main__"):
+        _bind_release_commands(ledger=lambda: (HOST_PROJECT_ROOT, lambda: PLUGIN_ROOT, RepositoryContext, validate_release_ledger),
+                               projection=lambda: (lambda: PLUGIN_ROOT, check_projections, write_projections),
+                               quality=lambda: _product_policy("probe_quality_tools")(),
+                               command=_effective_release_command)
+
+
+if __name__ in sys.modules and sys.modules[__name__].__dict__ is globals():
+    sys.modules[__name__].__class__ = _WorkflowModule
+
+
+__all__ = [name for name in __dir__() if not name.startswith("_")]
 
 
 if __name__ == "__main__":

@@ -204,6 +204,7 @@ LOADER_WHITELIST: Tuple[str, ...] = (
     # dispatch and the Check 33 sub-report only (ArchGuard R1/R4 discipline).
     "checks.injection_budget",
     "checks.manifest",
+    "release_validation_cli",
     # FEAT-080 (0.93.0 B3, DEC-290(5)): the provenance judgement leaves —
     # pure predicates for the Check 41/42 sections; the engine wires the
     # I/O assembly + rendering only (ArchGuard R1 discipline).
@@ -405,9 +406,9 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_opencode_provider_preflight"),
     ("pins", "pin_ledger.cmd_pins"),
     ("premise", "premise_tracker.cmd_premise"),
-    ("quality-tools", "verify_workflow.cmd_quality_tools"),
-    ("release-ledger", "verify_workflow.cmd_release_ledger"),
-    ("release-projection", "verify_workflow.cmd_release_projection"),
+    ("quality-tools", "release_validation_cli.cmd_quality_tools"),
+    ("release-ledger", "release_validation_cli.cmd_release_ledger"),
+    ("release-projection", "release_validation_cli.cmd_release_projection"),
     ("resolve-entry", "verify_workflow.cmd_resolve_entry"),
     ("review-record", "verify_workflow.cmd_review_record"),
     ("stage", "verify_workflow.cmd_stage"),
@@ -602,17 +603,21 @@ def resolve_loader(loader_path: str) -> Callable:
             binding = probes.effective_command
     elif loader_path == "governance_fact_cli.cmd_gate_check":
         binding = getattr(module, "effective_gate_command", None)
-    if binding is not None:
-        try:
+    try:
+        if module_name == "release_validation_cli":
+            effective = module.effective_command(attr, target)
+        elif binding is not None:
             effective = binding(attr, target)
-        except AttributeError as exc:
-            legacy_path = f"{ENGINE_MODULE}.{attr}"
-            raise LoaderResolutionError(
-                f"module {ENGINE_MODULE!r} does not define {attr!r} "
-                f"(declared loader {legacy_path!r}) — registration drift") from exc
-        if effective is not target:
-            target = effective
-            loader_path = f"{ENGINE_MODULE}.{attr}"
+        else:
+            effective = target
+    except AttributeError as exc:
+        legacy_path = f"{ENGINE_MODULE}.{attr}"
+        raise LoaderResolutionError(
+            f"module {ENGINE_MODULE!r} does not define {attr!r} "
+            f"(declared loader {legacy_path!r}) — registration drift") from exc
+    if effective is not target:
+        target = effective
+        loader_path = f"{ENGINE_MODULE}.{attr}"
     if not callable(target):
         raise LoaderResolutionError(
             f"{loader_path!r} resolves to {type(target).__name__}, not a "

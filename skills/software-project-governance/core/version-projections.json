@@ -7,12 +7,12 @@
   "validation_inventories": [
     {
       "id": "required-snippets",
-      "source": "skills/software-project-governance/infra/verify_workflow.py",
+      "source": "skills/software-project-governance/infra/plugin_assets.py",
       "symbol": "REQUIRED_SNIPPETS"
     },
     {
       "id": "fixture-mirror-patterns",
-      "source": "skills/software-project-governance/infra/verify_workflow.py",
+      "source": "skills/software-project-governance/infra/repository_projection.py",
       "symbol": "PROJECTION_SYNC_PATTERNS"
     }
   ],

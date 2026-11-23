@@ -47,12 +47,7 @@ Judgement (verdict ∈ PASS / WARN / FAIL / no-verdict; never raises):
 Facts root: ``repo_root`` defaults to ``HOST_PROJECT_ROOT`` (FIX-270
 mixed-root semantics — the git facts root, never the plugin ROOT).
 
-This module owns the CI check domain. Shared helpers and constants still
-defined in verify_workflow.py (``HOST_PROJECT_ROOT``, ``SAMPLE_PATH``) are
-reached through a deferred module reference rather than a top-level
-import, so verify_workflow.py can import this module at module load time
-without an import cycle — the same deferred ``_vw()`` pattern as
-checks.risk_domain / checks.snapshot_domain / checks.gate_domain.
+The CLI supplies the current host and plan path. Standalone checks resolve the host through the same project root policy.
 
 Orthogonality: this check does NOT replace Check 30/30c/34 (review-record
 validity), Check 28 family (CI-file syntax / manifest), or the G-gate
@@ -66,40 +61,16 @@ import re
 import subprocess
 from pathlib import Path
 
-# ── Shared-helper access (deferred to avoid import cycle) ──────────
-# Same deferred-_vw() pattern as checks.risk_domain (Phase 5b). The shared
-# names are resolved lazily on the first call into this module (after
-# verify_workflow has finished loading) and cached in this module's globals,
-# so moved function bodies can reference them by bare name unchanged.
-
-_VW_CACHE = None
+def _ci_facts():
+    from project_paths import default_host_root
+    root = default_host_root()
+    return root, root / ".governance/plan-tracker.md"
 
 
-def _vw():
-    """Return the verify_workflow module (imported lazily, cached)."""
-    global _VW_CACHE
-    if _VW_CACHE is None:
-        import verify_workflow  # noqa: WPS433 (deferred import on purpose)
-        _VW_CACHE = verify_workflow
-    return _VW_CACHE
-
-
-# Shared names this domain reaches back into verify_workflow for. Refreshed
-# on every call into `_resolve_shared()` (NOT cached) so test-time monkey-
-# patching of verify_workflow attributes propagates (and the --project-root
-# override rebinding is captured).
-_SHARED_NAMES = (
-    "HOST_PROJECT_ROOT",  # git facts root (FIX-270 mixed-root fix — never ROOT)
-    "SAMPLE_PATH",        # plan-tracker (live declaration source)
-)
-
-
-def _resolve_shared():
-    """Refresh this module's globals with shared names from verify_workflow."""
-    vw = _vw()
-    g = globals()
-    for _name in _SHARED_NAMES:
-        g[_name] = getattr(vw, _name)
+def bind_ci_facts(reader):
+    """Get the current host and its explicitly configurable plan path at check time."""
+    global _ci_facts
+    _ci_facts = reader
 
 
 # ── Domain constants ────────────────────────────────────────────────
@@ -368,18 +339,18 @@ def check_ci_evidence(plan_content=None, repo_root=None):
             "violation_count": 0,
         },
     }
-    _resolve_shared()
+    host_root, plan_path = _ci_facts()
 
     # ── Plan text (live read guarded — never raise) ──
     text = plan_content
     if text is None:
-        if not SAMPLE_PATH.is_file():
+        if not plan_path.is_file():
             return _set_verdict(
                 result, "no-verdict",
                 "plan-tracker.md not found — no CI declaration source to "
                 "judge (fail-safe no-verdict)")
         try:
-            text = SAMPLE_PATH.read_text(encoding="utf-8", errors="replace")
+            text = plan_path.read_text(encoding="utf-8", errors="replace")
         except (IOError, OSError, UnicodeError):
             return _set_verdict(
                 result, "no-verdict",
@@ -409,7 +380,7 @@ def check_ci_evidence(plan_content=None, repo_root=None):
             "(fail-safe no-verdict, P0-1)")
     root = repo_root
     if root is None:
-        root = HOST_PROJECT_ROOT  # FIX-270: never ROOT (plugin root)
+        root = host_root  # FIX-270: never ROOT (plugin root)
     found, gitlab, jenkins = _probe_workflow_carriers(root)
     remote = _git_remote_state(root)
     carrier = bool(found) or gitlab or jenkins

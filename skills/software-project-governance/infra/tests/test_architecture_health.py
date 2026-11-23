@@ -486,7 +486,8 @@ class GovernanceDataSizeTest(unittest.TestCase):
         comment (the user ruling's stated basis)."""
         import inspect
         import json as _json
-        source = inspect.getsource(vw.check_governance_data_size)
+        from architecture_diagnostics import check_governance_data_size
+        source = inspect.getsource(check_governance_data_size)
         self.assertIn("DEC-295", source)
         live, _err = vw._archguard_load_schema(vw.ROOT)
         self.assertIsNotNone(live)

@@ -91,6 +91,37 @@ def _crlf_tolerant_subn(text: str, pattern: str, replacement: str,
     return "".join(spliced)
 
 
+def declared_inventory_binding(root: Path, inventory_id: str) -> tuple[Path, Optional[str]]:
+    """Return the target source and its explicit symbol, or the pre-registry engine."""
+    legacy = root / "skills/software-project-governance/infra/verify_workflow.py"
+    manifest = root / "skills/software-project-governance/core/manifest.json"
+    if not manifest.is_file():
+        return legacy, None
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("manifest must be an object")
+    contract = data.get("release_projection_contract", {})
+    if not isinstance(contract, dict):
+        raise ValueError("manifest release_projection_contract must be an object")
+    if "validation_inventories" not in contract:
+        return legacy, None
+    rows = contract["validation_inventories"]
+    if not isinstance(rows, list):
+        raise ValueError("manifest validation_inventories must be a list")
+    matches = [row for row in rows if isinstance(row, dict) and row.get("id") == inventory_id]
+    if len(matches) != 1:
+        raise ValueError(f"expected a single declared validation inventory: {inventory_id}")
+    source = _safe_repo_path(root, matches[0].get("source"), must_exist=True)
+    symbol = matches[0].get("symbol")
+    if not isinstance(symbol, str) or not symbol.isidentifier():
+        raise ValueError(f"validation inventory {inventory_id} must declare a symbol")
+    return source, symbol
+
+
+def declared_inventory_source(root: Path, inventory_id: str) -> Path:
+    return declared_inventory_binding(root, inventory_id)[0]
+
+
 def _inventory_value(source: Path, symbol: str) -> tuple[str, int, set[str]]:
     try:
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
@@ -564,22 +595,23 @@ def _legacy_census(root: Path, config: dict, declared: list,
 def _mirror_inventory(root: Path) -> list:
     """The fixture-mirror source inventory (``PROJECTION_SYNC_PATTERNS``).
 
-    Resolved by AST from ``verify_workflow.py`` — the same authority the
+    Resolved by AST from the target repository — the same authority the
     manifest's ``fixture-mirror-patterns`` inventory names — without importing
     the engine (ArchGuard R2: no new reverse edges from ``release/``).
     """
     import ast
-    engine = root / "skills/software-project-governance/infra/verify_workflow.py"
+    engine, symbol = declared_inventory_binding(root, "fixture-mirror-patterns")
+    symbol = symbol or "PROJECTION_SYNC_PATTERNS"
     tree = ast.parse(engine.read_text(encoding="utf-8"), filename=str(engine))
     values = None
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
                 isinstance(target, ast.Name)
-                and target.id == "PROJECTION_SYNC_PATTERNS"
+                and target.id == symbol
                 for target in node.targets):
             values = node.value
     if not isinstance(values, ast.Tuple):
-        raise ValueError("PROJECTION_SYNC_PATTERNS is not a literal tuple")
+        raise ValueError(f"{symbol} is not a literal tuple")
     patterns = [element.value for element in values.elts
                 if isinstance(element, ast.Constant)
                 and isinstance(element.value, str)]

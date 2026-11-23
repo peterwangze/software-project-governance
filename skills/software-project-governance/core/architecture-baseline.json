@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "50c6b18c37b5f43f75a5f47cc835d00328e0258c",
+    "git_head": "16de078df42a918c27f5c49a62b7043d2eb56cd1",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 9767,
+    "anchor_loc": 7482,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -48,63 +48,6 @@
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/capability_registry.py"
-      },
-      {
-        "count": 1,
-        "kind": "import_vw",
-        "lines": [
-          82
-        ],
-        "owner_task": "REFACTOR-domains-batch1",
-        "path": "checks/ci_domain.py"
-      },
-      {
-        "count": 1,
-        "kind": "vw_call",
-        "lines": [
-          99
-        ],
-        "owner_task": "REFACTOR-domains-batch1",
-        "path": "checks/ci_domain.py"
-      },
-      {
-        "count": 1,
-        "kind": "vw_def",
-        "lines": [
-          78
-        ],
-        "owner_task": "REFACTOR-domains-batch1",
-        "path": "checks/ci_domain.py"
-      },
-      {
-        "count": 1,
-        "kind": "import_vw",
-        "lines": [
-          42
-        ],
-        "owner_task": "REFACTOR-domains-batch1",
-        "path": "checks/manifest.py"
-      },
-      {
-        "count": 4,
-        "kind": "vw_call",
-        "lines": [
-          48,
-          52,
-          56,
-          355
-        ],
-        "owner_task": "REFACTOR-domains-batch1",
-        "path": "checks/manifest.py"
-      },
-      {
-        "count": 1,
-        "kind": "vw_def",
-        "lines": [
-          34
-        ],
-        "owner_task": "REFACTOR-domains-batch1",
-        "path": "checks/manifest.py"
       },
       {
         "count": 1,
@@ -241,39 +184,24 @@
     "path": "infra/verify_workflow.py",
     "per_function": {
       "_apply_project_root_override": 1,
-      "_archguard_print_findings": 2,
       "_format_rollup": 1,
       "_format_telemetry": 4,
       "_print_check_summary": 9,
       "_print_product_gate_skipped": 3,
-      "check_architecture_fact_source": 2,
-      "check_files": 4,
-      "check_snippets": 3,
       "cmd_check_agent_locks": 7,
-      "cmd_check_complexity": 7,
-      "cmd_check_duplicate_code": 7,
       "cmd_check_flow_unit_runtime": 1,
       "cmd_check_governance": 1,
-      "cmd_check_governance_data_size": 9,
-      "cmd_check_injection_contract": 7,
       "cmd_check_lifecycle_registry": 8,
       "cmd_check_loop_health": 4,
       "cmd_check_plugin_freshness": 8,
-      "cmd_check_projection_sync": 11,
-      "cmd_check_release": 14,
-      "cmd_check_technical_debt": 6,
-      "cmd_check_version_consistency": 10,
       "cmd_next_candidates": 1,
-      "cmd_quality_tools": 1,
-      "cmd_release_ledger": 1,
-      "cmd_release_projection": 1,
       "cmd_resolve_entry": 6,
       "cmd_review_record": 1,
-      "cmd_verify": 6,
+      "cmd_verify": 1,
       "cmd_web_console": 61,
       "main": 1
     },
-    "total": 208
+    "total": 118
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",
@@ -286,7 +214,7 @@
   },
   "r6_startup_budget": {
     "import_count": 212,
-    "import_set_sha256": "7f76242e14c53224bd4685baac1ec088e436fef0c5afd23af55658d690abbe6e",
+    "import_set_sha256": "7cb40b32801efbc0a82d5043b369c89d496150b7c010e6e9102e736ee60864bf",
     "note": "collection + comparison frame only; FEAT-018's tolerance table fills threshold, then the face tightens — advisory until then, never fatal in v1",
     "probe": "python -I -B -c 'import verify_workflow' (isolated)",
     "threshold": null

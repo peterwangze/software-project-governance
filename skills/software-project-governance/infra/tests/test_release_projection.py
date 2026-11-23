@@ -418,5 +418,67 @@ class WriteThenProbeTests(unittest.TestCase):
                       (root / "mirror.bin").read_bytes())
 
 
+class DeclaredInventorySourceTests(unittest.TestCase):
+    def test_version_check_and_mirror_census_follow_the_target_manifest(self):
+        from checks.version import check_version_consistency
+        from release.projection import _mirror_inventory
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            skill = root / "skills/software-project-governance"
+            (skill / "core").mkdir(parents=True)
+            (skill / "infra").mkdir()
+            (skill / "SKILL.md").write_text("---\nversion: 8.7.6\n---\n", encoding="utf-8")
+            manifest = skill / "core/manifest.json"
+            old = skill / "infra/verify_workflow.py"
+            old.write_text('REQUIRED_SNIPPETS = {\n    "example": ["8.7.6"],\n}\n\n\n'
+                           '# ── Manifest\nPROJECTION_SYNC_PATTERNS = ("old.txt",)\n', encoding="utf-8")
+            (root / "old.txt").write_text("old", encoding="utf-8")
+            (root / "new.txt").write_text("new", encoding="utf-8")
+            manifest.write_text(json.dumps({"version": "8.7.6"}), encoding="utf-8")
+
+            def snippet_issues():
+                return [item for item in check_version_consistency(root) if "snippet" in item]
+
+            self.assertEqual(snippet_issues(), [])
+            self.assertEqual(_mirror_inventory(root), ["old.txt"])
+            rows = [{"id": "required-snippets", "source": "inventory.py", "symbol": "REQUIRED_SNIPPETS"},
+                    {"id": "fixture-mirror-patterns", "source": "inventory.py", "symbol": "PROJECTION_SYNC_PATTERNS"}]
+            manifest.write_text(json.dumps({"version": "8.7.6", "release_projection_contract": {
+                "validation_inventories": rows}}), encoding="utf-8")
+            self.assertTrue(snippet_issues())
+            with self.assertRaisesRegex(ValueError, "projection source is missing"):
+                _mirror_inventory(root)
+            inventory = root / "inventory.py"
+            inventory.write_text('REQUIRED_SNIPPETS = {"example": ["8.7.5"]}\n'
+                                 'PROJECTION_SYNC_PATTERNS = ("new.txt",)\n', encoding="utf-8")
+            self.assertEqual(snippet_issues(), ["[FAIL] inventory.py snippet: hardcoded version mismatch"])
+            self.assertEqual(_mirror_inventory(root), ["new.txt"])
+            inventory.write_text(inventory.read_text(encoding="utf-8").replace("8.7.5", "8.7.6"), encoding="utf-8")
+            self.assertEqual(snippet_issues(), [])
+
+            # Old literals remain as decoys when the actual declaration is renamed.
+            rows[0]["symbol"] = "NEW_SNIPPETS"
+            rows[1]["symbol"] = "NEW_PATTERNS"
+            manifest.write_text(json.dumps({"version": "8.7.6", "release_projection_contract": {
+                "validation_inventories": rows}}), encoding="utf-8")
+            self.assertTrue(snippet_issues())
+            with self.assertRaisesRegex(ValueError, "NEW_PATTERNS"):
+                _mirror_inventory(root)
+            inventory.write_text('REQUIRED_SNIPPETS = {"decoy": ["9.8.7"]}\n'
+                                 'PROJECTION_SYNC_PATTERNS = ("old.txt",)\n'
+                                 'NEW_SNIPPETS = {"chosen": ["8.7.6"]}\n'
+                                 'NEW_PATTERNS = ("new.txt",)\n', encoding="utf-8")
+            self.assertEqual(snippet_issues(), [])
+            self.assertEqual(_mirror_inventory(root), ["new.txt"])
+            del rows[0]["symbol"]
+            rows[1]["symbol"] = []
+            manifest.write_text(json.dumps({"version": "8.7.6", "release_projection_contract": {
+                "validation_inventories": rows}}), encoding="utf-8")
+            self.assertIn("must declare a symbol", snippet_issues()[0])
+            with self.assertRaisesRegex(ValueError, "must declare a symbol"):
+                _mirror_inventory(root)
+
+
 if __name__ == "__main__":
     unittest.main()

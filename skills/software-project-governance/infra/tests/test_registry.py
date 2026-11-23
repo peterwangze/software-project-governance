@@ -449,8 +449,124 @@ class CommandRegistryTests(unittest.TestCase):
             "locks-amend", "locks-extend", "locks-release",
             "pins",
             "premise",
+            "quality-tools", "release-ledger", "release-projection",
             "task-row-update",
         ])
+
+    def test_release_commands_resolve_native_and_follow_live_overrides(self):
+        from unittest.mock import patch
+        import release_validation_cli
+        import verify_workflow
+
+        for key in ("quality-tools", "release-projection", "release-ledger"):
+            name = "cmd_" + key.replace("-", "_")
+            with self.subTest(key=key):
+                native = getattr(release_validation_cli, name)
+                self.assertIs(reg.load_handler(key), native)
+                marker = lambda args: args
+                with patch.object(verify_workflow, name, marker):
+                    self.assertIs(reg.load_handler(key), marker)
+                with patch.object(verify_workflow, name, None):
+                    with self.assertRaises(reg.LoaderResolutionError):
+                        reg.load_handler(key)
+                self.assertIs(reg.load_handler(key), native)
+
+    def test_release_registration_observes_the_target_owner_and_its_final_binding(self):
+        import shutil
+        import tempfile
+        from cli_registration import inspect_cli_registration
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            for name in ("verify_workflow.py", "registry.py", "workflow_cli.py", "workflow_cli_checks.py",
+                         "workflow_cli_operations.py", "release_validation_cli.py"):
+                shutil.copyfile(Path(reg.__file__).parent / name, target / name)
+            source = Path(reg.__file__).parent
+            shutil.copyfile(source / "project_paths.py", target / "project_paths.py")
+            shutil.copytree(source / "release", target / "release")
+            engine = target / "verify_workflow.py"
+            owner = target / "release_validation_cli.py"
+            original = owner.read_text(encoding="utf-8")
+            for key in ("release-projection", "release-ledger", "quality-tools"):
+                name = "cmd_" + key.replace("-", "_")
+                misbinding = {
+                    "release-ledger": ("host, plugin, context, validate =", "host, plugin, unused, validate ="),
+                    "release-projection": ("plugin, check, write =", "plugin, unused, write ="),
+                    "quality-tools": ("probe_quality_tools=_quality_probe", "probe_quality_tools=_unused"),
+                }[key]
+                for label, content, available in (
+                        ("healthy", original, True), ("missing", None, False),
+                        ("provider binding", original.replace(*misbinding), False),
+                        ("final binding", original + "\n" + name + " = None\n", False),
+                        ("extra required argument", original.replace("def " + name + "(",
+                                                                    "def " + name + "(policy, "), False),
+                        ("restored", original, True)):
+                    with self.subTest(key=key, state=label):
+                        if content is None:
+                            owner.unlink()
+                        else:
+                            ast.parse(content, filename=str(owner))
+                            owner.write_text(content, encoding="utf-8")
+                        self.assertEqual(inspect_cli_registration(engine, key, name),
+                                         {"main": True, "argparse": True, "handler": available,
+                                          "dispatch": available})
+
+            shipped = engine.read_text(encoding="utf-8")
+            selected = {
+                "release-ledger": ("lambda: PLUGIN_ROOT, RepositoryContext,",
+                                   "lambda: PLUGIN_ROOT, missing_context,",
+                                   "from release.context import RepositoryContext"),
+                "release-projection": ("lambda: PLUGIN_ROOT, check_projections,",
+                                       "lambda: PLUGIN_ROOT, missing_check,",
+                                       "from release.projection import check_projections, write_projections"),
+                "quality-tools": ('"probe_quality_tools": "release.quality"',
+                                  '"probe_quality_tools": "missing_quality"',
+                                  "from release.quality import probe_quality_tools"),
+            }
+            guard = 'if __name__ in ("verify_workflow", "__main__"):\n        _bind_release_commands('
+            for key, (live, broken, fallback) in selected.items():
+                handler = "cmd_" + key.replace("-", "_")
+                native_missing = original.replace(fallback, fallback.replace("from release.", "from unavailable."))
+                provider = {"release-ledger": "_ledger_inputs", "release-projection": "_projection_inputs",
+                            "quality-tools": "_quality_probe"}[key]
+                names = ["_ledger_inputs", "_projection_inputs", "_quality_probe", "effective_command"]
+                declaration = "    global " + ", ".join(names)
+                remaining = "    global " + ", ".join(name for name in names if name != provider)
+                self.assertEqual(original.count(declaration), 1)
+                local_only = original.replace(declaration, remaining)
+                self.assertIn(live, shipped)
+                self.assertIn(fallback, original)
+                self.assertIn(guard, shipped)
+                for state, engine_text, owner_text, available in (
+                        ("active input missing", shipped.replace(live, broken), original, False),
+                        ("unused fallback missing", shipped, native_missing, True),
+                        ("setter writes a local", shipped, local_only, True),
+                        ("unselected override missing", shipped.replace(live, broken), local_only, True),
+                        ("selected fallback missing", shipped, native_missing.replace(declaration, remaining), False),
+                        ("owner defaults selected", shipped.replace(guard, guard.replace('"__main__"', '"other"')),
+                         native_missing, False),
+                        ("restored", shipped, original, True)):
+                    with self.subTest(key=key, state=state):
+                        engine.write_text(engine_text, encoding="utf-8")
+                        owner.write_text(owner_text, encoding="utf-8")
+                        facts = inspect_cli_registration(engine, key, handler)
+                        self.assertEqual((facts["handler"], facts["dispatch"]), (available, available))
+
+            provider = target / "release/quality.py"
+            provider.unlink()
+            quality = inspect_cli_registration(engine, "quality-tools", "cmd_quality_tools")
+            self.assertFalse(quality["dispatch"])
+            self.assertFalse(quality["handler"])
+            shutil.copyfile(source / "release/quality.py", provider)
+            registry_source = target / "registry.py"
+            original_registry = registry_source.read_text(encoding="utf-8")
+            for suffix, available in (("\nLOADER_WHITELIST = ()\n", False), ("", True)):
+                registry_text = original_registry + suffix
+                ast.parse(registry_text, filename=str(registry_source))
+                registry_source.write_text(registry_text, encoding="utf-8")
+                for key in ("quality-tools", "release-ledger", "release-projection"):
+                    facts = inspect_cli_registration(engine, key, "cmd_" + key.replace("-", "_"))
+                    self.assertEqual(facts["dispatch"], available)
+                    self.assertTrue(facts["handler"])
 
     def test_foreign_checkout_wiring_reads_only_its_own_declarations(self):
         import tempfile

@@ -365,6 +365,135 @@ class CommandRegistryTests(unittest.TestCase):
                     self.assertTrue(facts["argparse"])
                     self.assertFalse(facts["dispatch"])
 
+    def test_foreign_family_must_be_called_on_the_returned_parser_group(self):
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "verify_workflow.py"
+            engine.write_text(
+                "def cmd_status(args): pass\n"
+                "def _build_cli_parser(argv):\n"
+                "    from workflow_cli import build_cli_parser\n"
+                "    return build_cli_parser(argv)\n"
+                "def main():\n"
+                "    parser, _ = _build_cli_parser([])\n"
+                "    args = parser.parse_args()\n"
+                "    return registry.load_handler(args.command or 'verify', parsed_args=True)(args)\n",
+                encoding="utf-8")
+            engine.with_name("registry.py").write_text(
+                "_COMMANDS: tuple = (('status', 'verify_workflow.cmd_status'),)", encoding="utf-8")
+            family = engine.with_name("workflow_cli_checks.py")
+            family.write_text("from pathlib import Path\nPath(__file__).with_suffix('.imported').touch()\n"
+                              "def register_status(subparsers, argv):\n"
+                              "    subparsers.add_parser('status')\n", encoding="utf-8")
+            schema = engine.with_name("workflow_cli.py")
+
+            def write_builder(call, extra_import=""):
+                schema.write_text(
+                    "import argparse\nimport workflow_cli_checks\n" + extra_import + "\n"
+                    "def build_cli_parser(argv):\n"
+                    "    parser = argparse.ArgumentParser()\n"
+                    "    subparsers = parser.add_subparsers()\n"
+                    f"    {call}\n    return parser, subparsers\n", encoding="utf-8")
+
+            for call, expected in (
+                    ("workflow_cli_checks.register_status(subparsers, argv)", True),
+                    ("pass", False),
+                    ("workflow_cli_checks.register_status(other, argv)", False),
+                    ("workflow_cli_checks.register_status(subparsers)", False),
+                    ("if False: workflow_cli_checks.register_status(subparsers, argv)", False),
+                    ("return parser, subparsers\n    workflow_cli_checks.register_status(subparsers, argv)", False)):
+                with self.subTest(call=call):
+                    write_builder(call)
+                    facts = inspect_cli_registration(engine, "status", "cmd_status")
+                    self.assertEqual(facts, {"main": True, "argparse": expected,
+                                             "handler": True, "dispatch": True})
+            # Even without a call into it, a required sibling import must load.
+            for statement, expected in (("import workflow_cli_operations", False),
+                                        ("if False: import workflow_cli_operations", True)):
+                write_builder("workflow_cli_checks.register_status(subparsers, argv)", statement)
+                self.assertEqual(inspect_cli_registration(engine, "status", "cmd_status")["argparse"], expected)
+            self.assertFalse(family.with_suffix(".imported").exists())
+
+    def test_early_command_requires_the_complete_shipped_schema(self):
+        import shutil
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            for name in ("verify_workflow", "registry", "workflow_cli", "workflow_cli_checks",
+                         "workflow_cli_operations"):
+                shutil.copyfile(_INFRA_DIR / (name + ".py"), target / (name + ".py"))
+            operations = target / "workflow_cli_operations.py"
+            original = operations.read_text(encoding="utf-8")
+
+            def assert_available(expected):
+                facts = inspect_cli_registration(target / "verify_workflow.py",
+                                                 "capability-context", "cmd_capability_context")
+                self.assertEqual(facts, {"main": True, "handler": True,
+                                         "argparse": expected, "dispatch": True})
+
+            assert_available(True)
+            operations.unlink()
+            assert_available(False)
+            operations.write_text(original, encoding="utf-8")
+            assert_available(True)
+            name = "register_authority_and_isolation"
+            for label, change in (
+                    ("missing definition", original.replace("def " + name + "(", "def retired_family(")),
+                    ("required argument", original.replace("def " + name + "(subparsers):",
+                                                            "def " + name + "(subparsers, extra):")),
+                    ("positional-only argument", original.replace(
+                        "def " + name + "(subparsers):", "def " + name + "(configuration, /, subparsers):")),
+                    ("rebound name", original + "\n" + name + " = None\n")):
+                with self.subTest(label=label):
+                    self.assertNotEqual(change, original)
+                    operations.write_text(change, encoding="utf-8")
+                    assert_available(False)
+            operations.write_text(original, encoding="utf-8")
+            assert_available(True)
+
+    def test_schema_witness_recognizes_only_its_supported_call_shapes(self):
+        from cli_registration import _binds_schema_call
+
+        def binds(signature, call, *, body="pass", prefix="", wrapper=False):
+            definition = ast.parse(prefix + f"def registrar({signature}):\n    " + body).body[0]
+            invocation = ast.parse(f"registrar({call})", mode="eval").body
+            return _binds_schema_call(invocation, definition, wrapper=wrapper)
+
+        self.assertTrue(binds("group, name, *, root", "group, root=root, name=name"))
+        self.assertTrue(binds("argv=()", "", wrapper=True))
+        self.assertTrue(binds("group", "group", body="def nested():\n        yield 1"))
+        for signature, call in (
+                ("configuration, /, group", "group"), ("group, /", "group"),
+                ("group, *rest", "group"), ("group, **kw", "group"),
+                ("group=()", "group"), ("group, *, root=None", "group, root=root"),
+                ("group, *, root", "group"), ("group, *, root", "group, root=root, extra=extra"),
+                ("group", "group, group=group"), ("group", "*items"), ("group", "**kwargs")):
+            with self.subTest(signature=signature, call=call):
+                self.assertFalse(binds(signature, call))
+        self.assertFalse(binds("group", "group", prefix="@decorate\n"))
+        self.assertFalse(binds("group", "group", prefix="async "))
+        self.assertFalse(binds("group", "group", body="if False:\n        yield 1"))
+        self.assertFalse(binds("group", "group", body="yield from ()"))
+
+    def test_cli_builder_reads_current_engine_root_and_choices(self):
+        from unittest.mock import patch
+        import verify_workflow as vw
+
+        with patch.multiple(vw, ROOT=Path("fixture"), AGENT_RUNTIME_E2E_PLATFORMS=("runtime",),
+                            DETERMINISTIC_SCAFFOLD_TYPES=("scaffold",), QUALITY_BUDGET_DIMENSIONS=("budget",)):
+            parser, commands = vw._build_cli_parser()
+        runtime = parser.parse_args(["agent-runtime-e2e", "--agent", "runtime"])
+        self.assertEqual(runtime.target, str(Path("fixture/project/e2e-test-project")))
+        self.assertEqual(runtime.agent, ["runtime"])
+        scaffold = parser.parse_args(["generate-deterministic-scaffold", "--type", "scaffold"])
+        self.assertEqual(scaffold.type, "scaffold")
+        dimension = commands.choices["execution-packet"]._option_string_actions["--quality-dimension"]
+        self.assertEqual(dimension.choices, ("budget",))
+
     def test_mutated_legacy_dispatch_table_is_not_proof_of_registration(self):
         import tempfile
         from cli_registration import inspect_cli_registration

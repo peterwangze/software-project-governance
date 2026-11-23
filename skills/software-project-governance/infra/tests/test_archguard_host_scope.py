@@ -71,10 +71,15 @@ class HostScopeTests(unittest.TestCase):
         args = ("--project-root", self.host, "check-architecture-health", "--fail-on-issues")
         implicit = self.cli(*args)
         explicit = self.cli(*args, "--scope", "plugin")
-        self.assertEqual((implicit.returncode, explicit.returncode), (0, 0))
+        installed = self.cli("check-architecture-health", "--fail-on-issues", cwd=PLUGIN)
+        host = self.cli(*args, "--scope", "host")
+        for run in (implicit, explicit, installed, host):
+            self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("Architecture Health Check (ArchGuard)", installed.stdout)
         self.assertEqual(implicit.stdout, explicit.stdout)
-        self.assertIn("verify_workflow.py", explicit.stdout)
+        self.assertEqual(explicit.stdout, installed.stdout)
         self.assertNotIn("source.ts", explicit.stdout)
+        self.assertIn("module_size: source.ts", host.stdout)
 
     def test_policy_and_empty_input_errors_are_not_advisory_success(self):
         command = ("check-architecture-health", "--scope", "host")

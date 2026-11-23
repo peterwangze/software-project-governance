@@ -920,24 +920,35 @@ class CommandRegistryTests(unittest.TestCase):
             check(original, True)
 
     def test_split_startup_uses_only_immediate_dependencies_of_the_selected_command(self):
+        import os
         import tempfile
         from cli_registration import inspect_cli_registration
 
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "skills/software-project-governance/infra"
+            empty_bin = Path(tmp) / "bin"
+            empty_bin.mkdir()
             _copy_installed_sources(root)
             entry = root / "verify_workflow.py"
 
-            def observe():
+            def observe(expected):
                 facts = inspect_cli_registration(entry, "quality-tools", "cmd_quality_tools")
-                result = subprocess.run([sys.executable, "-B", str(entry), "quality-tools"],
-                                        cwd=root, capture_output=True)
-                available = not result.stderr and bool(result.stdout)
-                if available:
-                    self.assertIsInstance(json.loads(result.stdout), dict)
-                return all(facts.values()), available
+                self.assertEqual(all(facts.values()), expected, facts)
+                result = subprocess.run([sys.executable, "-B", str(entry), "quality-tools"], cwd=root,
+                                        capture_output=True, env={**os.environ, "PATH": str(empty_bin)})
+                if expected:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stderr, b"")
+                    report = json.loads(result.stdout)
+                    self.assertEqual(report["state"], "NOT_RUN")
+                    self.assertFalse(report["runtime_dependency"])
+                    self.assertEqual({name: tool["state"] for name, tool in report["tools"].items()},
+                                     {"ruff": "NOT_RUN", "mypy": "NOT_RUN"})
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertTrue(result.stderr.strip())
 
-            self.assertEqual(observe(), (True, True))
+            observe(True)
             for module, before, after, expected in (
                 ("workflow_public_api", b"class PublicModule(", b"class DetachedModule(", False),
                 ("workflow_guard_bindings", b"class _LegacyReviewSources(", b"class DetachedSources(", False),
@@ -959,7 +970,7 @@ class CommandRegistryTests(unittest.TestCase):
                         else:
                             self.assertEqual(original.count(before), 1)
                             target.write_bytes(original.replace(before, after))
-                        self.assertEqual(observe(), (expected, expected))
+                        observe(expected)
                     finally:
                         target.write_bytes(original)
             # The source witness must not execute a target during inspection.
@@ -967,7 +978,7 @@ class CommandRegistryTests(unittest.TestCase):
             api.write_bytes(api.read_bytes() + b"\nfrom pathlib import Path\nPath(__file__).with_suffix('.ran').touch()\n")
             self.assertTrue(all(inspect_cli_registration(entry, "quality-tools", "cmd_quality_tools").values()))
             self.assertFalse(api.with_suffix(".ran").exists())
-            self.assertEqual(observe(), (True, True))
+            observe(True)
             self.assertTrue(api.with_suffix(".ran").exists())
 
     def test_split_source_reuse_observes_same_timestamp_changes_and_restoration(self):

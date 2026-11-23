@@ -1,10 +1,8 @@
 """Unit tests for ArchGuard architecture-health checks (REQ-101 / FIX-152 / 0.58.0).
 
-Covers the four check_* helpers in verify_workflow.py plus the G7 advisory
-contract (WARN/ERROR must not flip the gate). Tests use small synthetic
-fixtures under tmp_path so they are fast and independent of the real
-20,294-line God Module — except one integration test that confirms ArchGuard
-catches the real module-size violation.
+Covers the four check_* helpers exposed by verify_workflow plus the G7 advisory
+contract (WARN/ERROR must not flip the gate). Integration coverage checks
+the shipped entry and a size regression at the same product-relative path.
 
 Run:
     python -m pytest skills/software-project-governance/infra/tests/test_architecture_health.py -q
@@ -361,19 +359,30 @@ class AdvisoryGateContractTests(unittest.TestCase):
 
 
 class RealCodebaseIntegrationTest(unittest.TestCase):
-    """Confirm ArchGuard catches the real God Module violation (sanity)."""
+    def test_real_entry_and_oversized_copy_use_the_shipped_module_budget(self):
+        entry = _INFRA_DIR / "verify_workflow.py"
+        relative = entry.relative_to(_INFRA_DIR.parents[2])
+        schema = json.loads((_INFRA_DIR.parent / "core/architecture-health.json").read_text(encoding="utf-8"))
+        budget = schema["module_size"]
+        text = entry.read_text(encoding="utf-8")
+        lines = len(text.splitlines())
+        self.assertLess(lines, budget["warn_lines"])
 
-    def test_real_verify_workflow_triggers_module_size_error(self):
-        # ROOT points at the real repo root; verify_workflow.py is ~20k lines.
-        result = vw.check_architecture_health()
-        if result.get("error"):
-            self.skipTest(f"schema unavailable in this env: {result['error']}")
-        vw_finds = [f for f in result["findings"]
-                    if f.get("check") == "module_size"
-                    and "verify_workflow.py" in f.get("path", "")
-                    and "e2e-test-project" not in f.get("path", "")]
-        self.assertTrue(vw_finds, "ArchGuard must flag the real verify_workflow.py module size")
-        self.assertEqual(vw_finds[0]["severity"], "ERROR")
+        def entry_findings(result):
+            self.assertNotIn("error", result)
+            return [finding for finding in result["findings"] if finding["check"] == "module_size"
+                    and Path(finding["path"]) == relative]
+
+        self.assertEqual(entry_findings(vw.check_architecture_health()), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            copy = root / relative
+            copy.parent.mkdir(parents=True)
+            oversized = text.removesuffix("\n") + "\n" + "# padding\n" * (budget["error_lines"] - lines)
+            copy.write_text(oversized, encoding="utf-8")
+            findings = entry_findings(vw.check_architecture_health(root=root, schema=schema))
+            self.assertEqual([(f["severity"], f["lines"]) for f in findings],
+                             [("ERROR", budget["error_lines"])])
 
 
 class GovernanceDataSizeTest(unittest.TestCase):

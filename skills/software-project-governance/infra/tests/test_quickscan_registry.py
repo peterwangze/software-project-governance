@@ -36,6 +36,7 @@ import contextlib
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -256,14 +257,218 @@ class Acceptance1CoverageTests(unittest.TestCase):
         self.assertEqual(set(observed), set(_snapshot_ids()))
 
     def test_engine_discovery_ignores_non_segment_sections(self):
-        """Discovery is scoped to the engine function body, not the whole file."""
-        source = _engine_source()
-        whole_file_hits = len(
-            re.findall(r"^\s*#\s*\u2500\u2500\s*([0-9][A-Za-z0-9]*)\.\s", source, re.M)
-        )
-        in_body_hits = len(qr.discover_engine_segment_ids())
-        self.assertGreater(whole_file_hits, in_body_hits)  # scoping is load-bearing
-        self.assertEqual(in_body_hits, len(_snapshot_ids()))
+        """Only invoked reports count; an unused owner function cannot keep a deleted section live."""
+        from contract_matrix import generator
+        from unittest.mock import patch
+
+        with _sandbox_tmp() as tmp:
+            engine = Path(tmp) / ENGINE.name
+            shutil.copyfile(_INFRA_DIR / "full_check_runner.py", engine.with_name("full_check_runner.py"))
+            for owner in _INFRA_DIR.glob("health_*_sections.py"):
+                shutil.copyfile(owner, engine.with_name(owner.name))
+            source = _engine_source()
+            call = "    yield product.section_28w_dsh_boundary(product_gate_active, _print_product_gate_skipped)"
+            self.assertEqual(source.count(call), 1)
+            for replacement, error in ((call + "\n" + call, "duplicate"),
+                                       ("    return\n" + call, "sequence"),
+                                       (call.replace("dsh_boundary", "missing_report"), "missing report")):
+                engine.write_text(source.replace(call, replacement), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, error):
+                    qr.discover_engine_segment_ids(engine)
+            engine.write_text(source.replace(call, ""), encoding="utf-8")
+            self.assertNotIn("28w", qr.discover_engine_segment_ids(engine))
+            with patch.object(generator, "_ENGINE_PATH", engine):
+                self.assertNotIn("28w", generator.extract_check_segments()["ids"])
+
+
+    def test_quick_observes_fresh_source_when_its_accelerator_cannot_load(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from cli_registration import inspect_cli_registration
+        from quickscan_selector import run_quick_checks
+        from full_check_sources import parse_module_source
+
+        def run_checks(args):
+            for key, handler in (("capability-context", "cmd_capability_context"),
+                                 ("change-triage", "cmd_change_triage")):
+                self.assertTrue(all(inspect_cli_registration(ENGINE, key, handler).values()))
+            print("│  Result: PASSED — 0 issues found")
+            return 0
+
+        expected = run_quick_checks(SimpleNamespace(quick=True), run_checks)
+        with _sandbox_tmp() as directory:
+            module = Path(directory) / "engine_source.py"
+            broken_engine = Path(directory) / "bad_engine.py"
+            broken_engine.write_text("bad syntax!", encoding="utf-8")
+            for case, content in (("absent", None), ("syntax", "def broken(!"),
+                                  ("missing exports", "incomplete = True"),
+                                  ("incomplete bindings", "engine_source_scope = parse_engine_source = None")):
+                with self.subTest(case=case), mock.patch.dict(sys.modules), \
+                     mock.patch.object(sys, "path", [directory, *sys.path]):
+                    if content is None:
+                        sys.modules["engine_source"] = None
+                    else:
+                        sys.modules.pop("engine_source", None)
+                        module.write_text(content, encoding="utf-8")
+                    with mock.patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as reads, \
+                         mock.patch.object(ast, "parse", wraps=ast.parse) as parses:
+                        self.assertEqual(run_quick_checks(SimpleNamespace(quick=True), run_checks), expected)
+                    self.assertEqual(sum(call.args[0] == ENGINE for call in reads.call_args_list), 4)
+                    self.assertEqual(sum(call.kwargs.get("filename") == str(ENGINE)
+                                         for call in parses.call_args_list), 4)
+                    with self.assertRaises(SyntaxError):
+                        inspect_cli_registration(broken_engine, "unused", "unused")
+                    with self.assertRaises(ValueError) as error:
+                        parse_module_source(broken_engine, broken_engine.read_text(encoding="utf-8"))
+                    self.assertIsInstance(error.exception.__cause__, SyntaxError)
+
+    def test_runner_observers_follow_the_installed_reducer_and_its_return(self):
+        from contract_matrix import generator
+        from engine_source import engine_source_scope
+        from unittest.mock import patch
+
+        with _sandbox_tmp() as tmp:
+            folder = Path(tmp)
+            engine = folder / "verify_workflow.py"
+            engine_source = (
+                "def _full_check_results(args):\n"
+                "    import health_probe_sections as probe\n"
+                "    yield probe.section_1_first()\n"
+                "    yield probe.section_2_second()\n"
+                "def _run_full_engine_checks(args):\n"
+                "    from full_check_runner import run_full_checks\n"
+                "    return run_full_checks(_full_check_results(args))\n"
+            )
+            engine.write_text(engine_source, encoding="utf-8")
+            (folder / "health_probe_sections.py").write_text(
+                'def section_1_first():\n    print("┌─ Check 1: First ─┐")\n    return 2\n'
+                'def section_2_second():\n    print("┌─ Check 2: Second ─┐")\n    return 3\n',
+                encoding="utf-8",
+            )
+            runner = folder / "full_check_runner.py"
+            original = (_INFRA_DIR / runner.name).read_text(encoding="utf-8")
+
+            def run_installed():
+                # Isolated import paths prevent a missing runner from resolving to our own installation.
+                return subprocess.run(
+                    [sys.executable, "-I", "-B", "-X", "utf8", "-c",
+                     "import argparse, sys; sys.path.insert(0, sys.argv[1]); import verify_workflow as v; "
+                     "print(v._run_full_engine_checks(argparse.Namespace()))", str(folder)],
+                    capture_output=True, encoding="utf-8", check=False,
+                )
+
+            with engine_source_scope(), patch.object(generator, "_ENGINE_PATH", engine):
+                def reject():
+                    with self.assertRaises(ValueError):
+                        qr.guard_completeness(engine_path=engine)
+                    with self.assertRaises(ValueError):
+                        generator.extract_check_segments()
+
+                def complete():
+                    self.assertEqual(qr.discover_engine_segment_ids(engine), ("1", "2"))
+                    self.assertEqual(generator.extract_check_segments()["titles"], {"1": "First", "2": "Second"})
+                    result = run_installed()
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("Check 2: Second", result.stdout)
+                    self.assertEqual(result.stdout.splitlines()[-1], "5")
+
+                runner.write_text(original, encoding="utf-8")
+                complete()
+                runner.unlink()
+                reject()
+                result = run_installed()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ModuleNotFoundError", result.stderr)
+                self.assertEqual(result.stdout, "")
+
+                runner.write_text(original.replace("sum(section_results)", "next(iter(section_results))"),
+                                  encoding="utf-8")
+                reject()
+                result = run_installed()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Check 1: First", result.stdout)
+                self.assertNotIn("Check 2:", result.stdout)
+                self.assertEqual(result.stdout.splitlines()[-1], "2")
+
+                for replacement in ("return 0", "all_issues = 0\n    return all_issues",
+                                    "if all_issues:\n        return 1\n    return all_issues"):
+                    with self.subTest(replacement=replacement):
+                        runner.write_text(original.replace("return all_issues", replacement), encoding="utf-8")
+                        reject()
+                runner.write_text("sum = next\n" + original, encoding="utf-8")
+                reject()
+                runner.write_text(original, encoding="utf-8")
+                for binding in ("from .full_check_runner import run_full_checks",
+                                "from full_check_runner import run_full_checks as disconnected"):
+                    with self.subTest(binding=binding):
+                        engine.write_text(engine_source.replace("from full_check_runner import run_full_checks",
+                                                                binding), encoding="utf-8")
+                        reject()
+                for name, imports, decorator, error in (
+                    ("_full_check_results", "from contextlib import contextmanager", "@contextmanager\n",
+                     "_GeneratorContextManager"),
+                    ("_full_check_results", "import contextlib",
+                     "@(\n    contextlib.contextmanager\n)\n\n# selector\n", "_GeneratorContextManager"),
+                    ("_run_full_engine_checks", "from functools import lru_cache", "@lru_cache\n",
+                     "unhashable type"),
+                    ("_run_full_engine_checks", "import functools",
+                     "@functools.lru_cache(\n    maxsize=2,\n)\n# entry\n\n", "unhashable type"),
+                ):
+                    with self.subTest(function=name, decorator=decorator):
+                        marker = f"def {name}("
+                        changed = engine_source.replace(marker, decorator + marker)
+                        engine.write_text(imports + "\n" + changed, encoding="utf-8")
+                        reject()
+                        result = run_installed()
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, "")
+                        self.assertIn("TypeError:", result.stderr)
+                        self.assertIn(error, result.stderr)
+
+                for rebind in ("_run_full_engine_checks = lambda args: 0",
+                               "if True:\n    _full_check_results = lambda args: ()"):
+                    with self.subTest(rebind=rebind):
+                        engine.write_text(engine_source + "\n" + rebind + "\n", encoding="utf-8")
+                        reject()
+                regular = engine_source.replace("def _full_check_results", "def   _full_check_results")
+                engine.write_text(regular, encoding="utf-8")
+                complete()
+                engine.write_text(engine_source, encoding="utf-8")
+                complete()
+
+
+    def test_registering_commands_rereads_changed_missing_and_restored_targets(self):
+        import os
+        from cli_registration import inspect_cli_registration
+        from engine_source import engine_source_scope, parse_engine_source
+        from full_check_sources import parse_module_source
+
+        with _sandbox_tmp() as tmp, engine_source_scope():
+            root = Path(tmp)
+            (root / "other").mkdir()
+            engine = root / "verify_workflow.py"
+            other = root / "other" / engine.name
+            source = "def cmd_live(): pass\n"
+            other.write_text(source, encoding="utf-8")
+            engine.write_text(source, encoding="utf-8")
+            stamp = engine.stat()
+            tree = parse_engine_source(engine, source)
+            self.assertIsNot(parse_engine_source(other, source), tree)
+            self.assertTrue(inspect_cli_registration(engine, "live", "cmd_live")["handler"])
+
+            engine.write_text(source.replace("live", "dead"), encoding="utf-8")
+            os.utime(engine, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            self.assertFalse(inspect_cli_registration(engine, "live", "cmd_live")["handler"])
+            engine.unlink()
+            with self.assertRaises(FileNotFoundError):
+                inspect_cli_registration(engine, "live", "cmd_live")
+            engine.write_text("def broken(", encoding="utf-8")
+            with self.assertRaises(SyntaxError):
+                inspect_cli_registration(engine, "live", "cmd_live")
+            with self.assertRaises(ValueError):
+                parse_module_source(engine, engine.read_text(encoding="utf-8"))
+            engine.write_text(source, encoding="utf-8")
+            self.assertTrue(inspect_cli_registration(engine, "live", "cmd_live")["handler"])
 
 
 class Acceptance2CompletenessGuardTests(unittest.TestCase):
@@ -618,7 +823,7 @@ class CarrierDisciplineTests(unittest.TestCase):
         self.assertEqual(len(wiring), 1, wiring)
         self.assertEqual(
             wiring[0],
-            "        from quickscan_selector import prepare_quick_args, render_quick_output",
+            "        from quickscan_selector import run_quick_checks",
         )
         self.assertNotEqual(wiring[0], wiring[0].lstrip(),
                             "the selector wiring must stay an in-branch import")

@@ -803,25 +803,20 @@ _PRODUCT_GATE_RE = re.compile(r'"Check ([A-Za-z0-9]+)"')
 
 
 def discover_engine_segment_ids(engine_path=None):
-    """Live segment census: the ``# ── <id>. `` sections of the engine body.
+    """Read the reports invoked by the full engine, in execution (source order).
 
-    Scoped to ``_run_full_engine_checks`` because the engine prints banners for
-    only 69 of the 70 segments (30b has no ``┌─ Check 30b:`` banner line) and
-    the file also quotes the ``┌─ Check N:`` marker in prose — the section
-    comments are the only complete, unambiguous census.
-
-    口径（FIX-304 显式化，消费面 MUST 遵守）：
-
-    * **返回序 = 引擎源码顺序（engine source order）**，与 FEAT-020 快照 / 注册表
-      **位序（positional order）无关**——实测首个错位下标 = 55：census[55]="29"
-      vs 快照[55]="28u"。消费面 MUST 用集合运算或显式排序，禁止按位 positional
-      zip 两份清单；
-    * **唯一性零容忍**（``architecture-evolution-0.80.0`` §4.1 R5）：段落注释
-      重复出现即抛 ``ValueError``，与注册表侧导入期守卫（``_BY_ID`` 长度校验）
-      同构——重复段号会让 ``len(observed)`` 失真并传递给消费面。
+    The frozen registry has its own positional order. Historical installations
+    declare sections in the body of the monolithic engine. Both forms reject
+    duplicate IDs and exclude declarations outside the full execution path.
     """
+    from full_check_sources import bound_report_sources
+
     path = Path(engine_path) if engine_path is not None else _default_engine_path()
-    lines = path.read_text(encoding="utf-8").splitlines()
+    source = path.read_text(encoding="utf-8")
+    reports = bound_report_sources(path, source)
+    if reports is not None:
+        return tuple(segment for segment, _ in reports)
+    lines = source.splitlines()
     start = None
     for index, line in enumerate(lines):
         if line.startswith(_ENGINE_ENTRY):

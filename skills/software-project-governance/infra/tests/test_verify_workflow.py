@@ -19775,11 +19775,16 @@ class Fix294Check36ArchiveResolutionTests(unittest.TestCase):
         """The engine runs the archive-aware judge and uses its domain issue count."""
         from checks import risk_domain
         self.assertIs(vw.emit_risk_mitigation_closure, risk_domain.emit_risk_mitigation_closure)
-        src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
-        panel = src.split("┌─ Check 36: Risk Mitigation Closure (FIX-265)", 1)[1]
-        self.assertIn(
-            "all_issues += emit_risk_mitigation_closure(check_risk_mitigation_closure_with_archive())",
-            panel.split("┌─ Check 37:", 1)[0])
+        from health_governance_sections import section_36_risk_mitigation
+        archive_result = object()
+        with patch.object(vw, "check_risk_mitigation_closure_with_archive",
+                          return_value=archive_result) as archived, \
+             patch.object(vw, "emit_risk_mitigation_closure", return_value=3) as render, \
+             redirect_stdout(io.StringIO()) as panel:
+            self.assertEqual(section_36_risk_mitigation(render, archived), 3)
+        archived.assert_called_once_with()
+        render.assert_called_once_with(archive_result)
+        self.assertIn("┌─ Check 36: Risk Mitigation Closure (FIX-265)", panel.getvalue())
 
         content = self._content(self._risk_row(refs="PLAN-003"),
                                 self._risk_row(rid="RISK-002", refs="OTHER-999"))

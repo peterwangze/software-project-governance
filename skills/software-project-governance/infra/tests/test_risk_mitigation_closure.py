@@ -383,7 +383,10 @@ class Check36ContractTests(unittest.TestCase):
     def test_check35_and_check36_blocks_coexist(self):
         """F9: Check 35 (FIX-268) landed BEFORE Check 36 (FIX-265) — both
         blocks must exist in cmd_check_governance, consecutive, 35 → 36."""
-        src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
+        from full_check_sources import bound_report_sources
+        engine = _INFRA_DIR / "verify_workflow.py"
+        reports = bound_report_sources(engine, engine.read_text(encoding="utf-8"))
+        src = "\n".join(body for _, body in reports)
         check35 = "┌─ Check 35: Snapshot Freshness (FIX-268)"
         check36 = "┌─ Check 36: Risk Mitigation Closure (FIX-265)"
         self.assertIn(check35, src)

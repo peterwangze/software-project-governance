@@ -788,6 +788,55 @@ class DshAdapterTests(unittest.TestCase):
         self.assertIn("subagent", text)
         self.assertIn("关键行为契约", text)  # FIX-253 anchor (§6.6.2)
 
+    def test_generated_bootstrap_first_decision_order(self):
+        launch = _load_launch_module()
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(launch.write_bootstrap(project, force=False), 0)
+            entry = (project / "AGENTS.md").read_text(encoding="utf-8")
+
+        first_action = entry.split("## 第一动作（每会话）", 1)[1].split("\n## ", 1)[0]
+        steps = re.split(r"(?m)^\d+\. ", first_action)[1:]
+        self.assertIn("governance-bootstrap --format json", steps[0])
+        self.assertNotIn("`skill`", steps[0])
+        self.assertIn("MUST STOP", steps[1])
+        self.assertIn("旧 CLI 明报未知子命令", steps[1])
+        self.assertIn("取得回执后再选择下一工具", steps[0])
+        for field in ("`loops.units[]`", "`acceptance`", "`root_contract`"):
+            self.assertIn(field, steps[2])
+        self.assertIn("取舍未定", steps[2])
+        self.assertIn("下一工具动作即 `ask_user_question`", steps[2])
+        self.assertIn("已有授权且方向明确，直接推进", steps[2])
+        for field in ("`migration.plan_version`", "`migration.active_version`", "回退办法"):
+            self.assertIn(field, steps[2])
+        self.assertIn("需要共享规程且正文尚未载入时才用 `skill`", steps[3])
+        self.assertIn("上述原文已足以提问时，直接发问", steps[3])
+
+        self_check = entry.split("## SELF-CHECK", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("仅当摘要缺当前单元或裁决依据时", self_check)
+        self.assertIn("loop status --unit <id> --json", self_check)
+        self.assertIn("推进类写入前 MUST 完成 full 深检与交叉验证", self_check)
+        self.assertIn("确认前零写入", self_check)
+        self.assertIn("本项目、已解析安装根内定向查证一次", self_check)
+        # The host can deliver this skill in the very same tool batch as
+        # bootstrap. Its first visible instructions must use the same evidence.
+        skill = (_INFRA_DIR.parent / "SKILL.md").read_text(encoding="utf-8")
+        opening = skill.split("## 六层架构", 1)[0]
+        for branch in ("`loops.units[]`", "`acceptance`", "`root_contract`",
+                       "立即用 AskUserQuestion", "已有授权且方向明确", "定向读取"):
+            with self.subTest(skill_branch=branch):
+                self.assertIn(branch, opening)
+        self.assertIn("执行健康摘要前 MUST 先读", skill)
+        protocol = (_INFRA_DIR.parent / "references" / "behavior-protocol.md").read_text(
+            encoding="utf-8"
+        )
+        first_decision = protocol.split("### M5.5 ", 1)[1].split("\n## ", 1)[0]
+        for safeguard in ("`root_contract`", "`acceptance`", "下一工具动作即 AskUserQuestion",
+                          "仅当摘要缺当前单元或裁决依据时",
+                          "已授权且方向明确则直接工作", "--scope full", "time_to_work"):
+            with self.subTest(safeguard=safeguard):
+                self.assertIn(safeguard, first_decision)
+
     def test_dsh_version_projections_are_satisfied(self):
         """FIX-253 (§6.6.3): persona/AGENTS version strings track the SKILL frontmatter.
 

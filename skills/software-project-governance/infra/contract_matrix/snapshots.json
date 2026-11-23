@@ -428,7 +428,13 @@
           "stale": {
             "$seq": "list"
           },
-          "total_open": "int"
+          "total_open": "int",
+          "unknown_registration": {
+            "$seq": "list"
+          },
+          "unknown_status_ids": {
+            "$seq": "list"
+          }
         }
       }
     }

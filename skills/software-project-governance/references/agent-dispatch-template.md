@@ -45,4 +45,4 @@
 【配套规则 R4——真实环境命令逐条上报】你在用户真实环境执行的每条命令必须在结构化返回中逐条上报（命令、时间、退出码、影响路径），由 Coordinator 于收到当下机写 evidence 行留痕；无上报的真实环境操作按违规处理。仅当本派发 prompt 预授权 incidents 留痕文件（.governance/incidents/{task_id}-*.log）时，方可向该文件追加实时命令日志（仅限该路径、仅限追加）——这是「不修改 .governance/ 治理记录」禁令的例外之一（另一例外=Coordinator 自身的治理写回职责，不受本禁令约束）。
 ```
 
-真实环境任务同时在 `{hard_gates}` 传入隔离变量纪律：PowerShell 使用非保留的 `$tmpHome` 保存临时目录并显式设置 `$env:DSH_HOME`，禁止给 `$HOME` 或任意大小写变体赋值。R4 逐条上报同样适用于隔离命令。红线原文的变更须经决策记录，R1、R4 以[行为协议 M7.7](behavior-protocol.md) 为准。
+真实环境任务同时在 `{hard_gates}` 传入隔离变量纪律：PowerShell 使用非保留的 `$tmpHome` 保存临时目录并显式设置 `$env:DSH_HOME`，禁止给 `$HOME` 或任意大小写变体赋值。兼容探测使用 `check-dsh-preset-compat --isolated-home <本次分配的绝对临时目录> --fail-on-issues`；目录由派发者独立给定。R4 逐条上报同样适用于隔离命令。红线原文的变更须经决策记录，R1、R4 以[行为协议 M7.7](behavior-protocol.md) 为准。

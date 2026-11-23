@@ -70,7 +70,6 @@ import json
 import os
 import re
 import shutil
-import tempfile
 import sys
 import time
 from pathlib import Path
@@ -745,7 +744,8 @@ def install_preset(dry_run: bool = False) -> int:
 def _replace_preset(target, derived, version):
     # A sibling created exclusively for this attempt owns staging and backup.
     # Retain the backup if restoring it fails, including a concurrent install.
-    container = Path(tempfile.mkdtemp(prefix=f"{target.name}.stage-", dir=target.parent))
+    from dsh_temp import make_private_dir
+    container = make_private_dir(f"{target.name}.stage-", target.parent)
     staging = container / "new"
     backup = container / "old"
     from preset_transaction import journal_path, record_staging
@@ -1624,36 +1624,41 @@ def smoke_preset() -> int:
     # surface — it proves the tokens substitute to absolute paths that really
     # resolve, not just that an installed copy happens to work.
     preset_id = _fact("PRESET_ID")
-    payload_scratch = tempfile.TemporaryDirectory(prefix=".preset-payload-check-", dir=isolated)
-    payload_surface = Path(payload_scratch.name) / preset_id
-    if not write_rendered_preset(payload_surface):
-        issues.append(
-            f"shipped payload failed to render: {_composition_template()}")
-
-    # The render source is the half the mounted composition can no longer show:
-    # once tokens are substituted, `entry_form: ["token"]` is by definition no
-    # longer observable, so "the shipped template still uses the declared token
-    # form" has to be asserted on the template itself.
+    from dsh_temp import private_dir
     try:
-        _template_text = _read_text_with_newline_mode(_composition_template())
-    except (CompositionUnreadable, OSError) as exc:
-        issues.append(f"shipped render source unreadable: {exc}")
-    else:
-        issues.extend(
-            f"shipped render source customSkillDirs block shape drift: {violation}"
-            for violation in _shape_violations(_template_text, stage="template"))
+        with private_dir(".preset-payload-check-", isolated) as scratch:
+            payload_surface = scratch / preset_id
+            if not write_rendered_preset(payload_surface):
+                issues.append(
+                    f"shipped payload failed to render: {_composition_template()}")
 
-    surfaces = (
-        (f"installed preset (rendered into the isolated {home_var})",
-         isolated / _preset_dir_name() / preset_id),
-        (f"shipped in-package payload (rendered from {_fact('PACKAGE_PRESET')}/"
-         f"{_composition_template().name})",
-         payload_surface),
-    )
-    for label, directory in surfaces:
-        surface = verify_preset_loading(directory)
-        _print_surface_report(label, surface)
-        issues.extend(f"{label}: {issue}" for issue in surface["issues"])
+            # The render source is the half the mounted composition can no longer show:
+            # once tokens are substituted, `entry_form: ["token"]` is by definition no
+            # longer observable, so "the shipped template still uses the declared token
+            # form" has to be asserted on the template itself.
+            try:
+                _template_text = _read_text_with_newline_mode(_composition_template())
+            except (CompositionUnreadable, OSError) as exc:
+                issues.append(f"shipped render source unreadable: {exc}")
+            else:
+                issues.extend(
+                    f"shipped render source customSkillDirs block shape drift: {violation}"
+                    for violation in _shape_violations(_template_text, stage="template"))
+
+            surfaces = (
+                (f"installed preset (rendered into the isolated {home_var})",
+                 isolated / _preset_dir_name() / preset_id),
+                (f"shipped in-package payload (rendered from {_fact('PACKAGE_PRESET')}/"
+                 f"{_composition_template().name})",
+                 payload_surface),
+            )
+            for label, directory in surfaces:
+                surface = verify_preset_loading(directory)
+                _print_surface_report(label, surface)
+                issues.extend(f"{label}: {issue}" for issue in surface["issues"])
+
+    except OSError as exc:
+        issues.append(f"isolated payload validation failed: {exc}")
 
     # D-54 sampling definition (design §3.3 row 11): one post-sample, and — only
     # when a top-level delta is suspected — a second one taken immediately after
@@ -1662,7 +1667,6 @@ def smoke_preset() -> int:
     # adapter's own write face and a difference there is always a real write —
     # except the FIX-442 dual-factor concurrent-session attribution, which is
     # judged per entry against the window bracketing the two samples.
-    payload_scratch.cleanup()
     after = _real_home_witness(home)
     window_end_ns = time.time_ns()
     comparison = witness_verdict(

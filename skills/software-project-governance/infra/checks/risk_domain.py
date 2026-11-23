@@ -8,7 +8,7 @@ REQ-145.3 / FIX-265 mitigation-closure watchdog
 
 This module owns the risk check domain. Shared helpers and constants still
 defined in verify_workflow.py (`RISK_PATH`, `_context_file`, `_context_task`,
-`_governance_table_cells`) are reached through a deferred module reference
+and plan-tracker constants) are reached through a deferred module reference
 rather than a top-level import, so verify_workflow.py can import this module
 at module load time without an import cycle.
 
@@ -27,6 +27,7 @@ from pathlib import Path
 
 # Peer, pure module (stdlib only) — no import cycle: verify_workflow.py
 # imports this domain at module load, and task_priority never imports back.
+from risk_rows import display_cell, iso_day, iter_active_risks, status_bucket
 from task_priority import compute_unblocked_tasks, parse_task_dependencies
 
 # ── Shared-helper access (deferred to avoid import cycle) ──────────
@@ -61,7 +62,6 @@ _SHARED_NAMES = (
     "RISK_PATH",
     "_context_file",
     "_context_task",
-    "_governance_table_cells",
     "SAMPLE_PATH",  # REQ-145.3: plan-tracker (host facts), live map build
     "_TASK_ID_IN_REF_RE",  # REQ-145.3: task-id reference regex (prose scan)
 )
@@ -83,157 +83,139 @@ def _resolve_shared():
         g[_name] = getattr(vw, _name)
 
 
-# ── Domain constants and functions (moved verbatim from verify_workflow.py) ──
+# ── Shared non-closed risk inventory and time-based checks ───────────────────
 
-# Canonical "open risk" predicate for the risk domain (FIX-270 R0 F3).
-# The whole domain (parse_open_risks / check_risk_staleness / check_risk_escalation
-# — and the status fast path's parse_active_risks) shares ONE judgement: a risk
-# is active/open iff its 当前状态 cell is exactly ``打开``. Non-open states
-# (缓解完成 / 已关闭 / resolved / 降级 / 已接受…) are the risk state-machine's
-# closed or in-flight terminal states and MUST NOT be counted as open — no
-# parallel marker sets.
 def is_risk_status_open(status):
-    """Return True iff the risk status cell is the domain-canonical ``打开``."""
-    return (status or "").strip() == "打开"
+    """Unknown risk states stay active until explicitly resolved."""
+    return status_bucket(status) != "closed"
+
+
+def _logged_rows():
+    _resolve_shared()
+    content = RISK_PATH.read_text(encoding="utf-8") if RISK_PATH.is_file() else ""
+    return iter_active_risks(content)
 
 
 def _parse_context_open_risks(root):
     _resolve_shared()
-    risk_path = _context_file(root, ".governance/risk-log.md")
-    if not risk_path.is_file():
+    path = _context_file(root, ".governance/risk-log.md")
+    if not path.is_file():
         return []
-    risks = []
-    for line in risk_path.read_text(encoding="utf-8").split("\n"):
-        stripped = line.strip()
-        if not stripped.startswith("| RISK-"):
-            continue
-        cells = _governance_table_cells(stripped)
-        if len(cells) < 9:
-            continue
-        status = cells[8]
-        if not is_risk_status_open(status):
-            continue
-        risks.append(_context_task(
-            cells[0],
-            cells[2] if len(cells) > 2 else cells[0],
-            status,
-            ".governance/risk-log.md",
-            stripped,
-            kind="risk",
-        ))
-    return risks
+    return [_context_task(row.id, row.description or row.id, row.status,
+                          ".governance/risk-log.md", row.raw_line, kind="risk")
+            for row in iter_active_risks(path.read_text(encoding="utf-8"))]
 
 
 def parse_open_risks():
-    """Return list of (risk_id, date_str) for open risks."""
-    _resolve_shared()
-    if not RISK_PATH.is_file():
-        return []
-    content = RISK_PATH.read_text(encoding="utf-8")
-    risks = []
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line.startswith("| RISK-"):
-            continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 10:
-            risk_id = parts[1]
-            date_str = parts[2]
-            status = parts[9]
-            if is_risk_status_open(status):
-                risks.append((risk_id, date_str))
-    return risks
+    """Preserve the original list of (risk ID, opening date) pairs."""
+    return [(row.id, row.opened_date) for row in _logged_rows()]
+
+
+def parse_active_risks(risk_content=None):
+    """Read the status view, including legacy date fields and deadline signals."""
+    rows = _logged_rows() if risk_content is None else iter_active_risks(risk_content)
+
+    today = date.today()
+    result = []
+    for row in rows:
+        left = row.days_left(today)
+        result.append({
+            "id": row.id, "opened_date": display_cell(row.opened_date),
+            "description": display_cell(row.description)[:60],
+            "owner": display_cell(row.owner),
+            "severity": display_cell(row.severity),
+            "status": display_cell(row.status),
+            "status_bucket": row.bucket, "deadline": display_cell(row.deadline),
+            "deadline_date": row.deadline_date.isoformat() if row.deadline_date else None,
+            "deadline_kind": row.deadline_kind, "days_left": left,
+            "escalation_soon": left is not None and left <= 3,
+            "escalation_overdue": left is not None and left < 0,
+        })
+    return result
 
 
 def check_risk_staleness():
-    """Check for open risks older than 7 days."""
-    _resolve_shared()
-    risks = parse_open_risks()
+    """Measure age since registration, independently of the escalation deadline."""
     today = date.today()
-    stale = []
-    fresh = []
-    for risk_id, date_str in risks:
-        try:
-            risk_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            age = (today - risk_date).days
-            if age > 7:
-                stale.append((risk_id, date_str, age))
-            else:
-                fresh.append((risk_id, date_str, age))
-        except ValueError:
-            stale.append((risk_id, date_str, -1))
-    return {
-        "total_open": len(risks),
-        "stale": stale,
-        "fresh": fresh,
-    }
+    result = {"total_open": 0, "stale": [], "fresh": [],
+              "unknown_registration": [], "unknown_status_ids": []}
+    for row in _logged_rows():
+        result["total_open"] += 1
+        if row.bucket == "unknown":
+            result["unknown_status_ids"].append(row.id)
+        opened = iso_day(row.opened_date)
+        if opened is None:
+            result["unknown_registration"].append((row.id, row.opened_date))
+            continue
+        age = (today - opened).days
+        result["stale" if age > 7 else "fresh"].append((row.id, row.opened_date, age))
+    return result
 
 
 def check_risk_escalation():
-    """Check for open risks whose escalation deadline has passed.
-
-    Per AUDIT-045: risk-log defines Owner + escalation deadline + mitigation action,
-    but when the deadline passes, nothing enforces the escalation.
-    This function detects open risks with passed deadlines — the external validation
-    counterpart to the risk escalation MUST rule.
-
-    Returns: dict with escalated risks list and summary stats.
-    """
-    _resolve_shared()
-    if not RISK_PATH.is_file():
-        return {
-            "escalated": [],
-            "total_open": 0,
-        }
-
-    content = RISK_PATH.read_text(encoding="utf-8")
+    """Evaluate pure ISO deadlines and disclose absent or unjudgeable dates."""
     today = date.today()
-    escalated = []
-    all_open = []
+    result = {"total_open": 0, "escalation_count": 0, "escalated": [],
+              "no_deadline_ids": [], "invalid_deadline_ids": []}
+    for row in _logged_rows():
+        result["total_open"] += 1
+        if row.deadline_kind == "none":
+            result["no_deadline_ids"].append(row.id)
+        elif row.deadline_kind == "invalid":
+            result["invalid_deadline_ids"].append(row.id)
+        elif row.deadline_date < today:
+            result["escalated"].append({"risk_id": row.id, "created": row.opened_date,
+                                        "deadline": row.deadline,
+                                        "days_overdue": (today - row.deadline_date).days})
+    result["escalation_count"] = len(result["escalated"])
+    return result
 
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line.startswith("| RISK-"):
-            continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) < 13:
-            continue
 
-        risk_id = parts[1]
-        date_str = parts[2]          # 日期
-        status = parts[9]            # 当前状态
-        deadline_str = parts[11]     # 截止日期
+def emit_risk_staleness(result):
+    """Print Check 2's registration findings and return their issue count."""
+    print(f"│  Total open risks: {result['total_open']}")
+    stale = result["stale"]
+    fresh = result["fresh"]
+    unknown_dates = result["unknown_registration"]
+    unknown_statuses = result["unknown_status_ids"]
+    if stale:
+        print(f"│  [WARN] {len(stale)} risk(s) registered more than 7 days ago:")
+        for risk_id, date_str, age in stale:
+            print(f"│    - {risk_id} (registered {date_str}, {age}d ago)")
+    elif not unknown_dates:
+        print("│  [PASS] No risks registered more than 7 days ago.")
+    for risk_id, raw_date in unknown_dates:
+        print(f"│  [WARN] {risk_id}: registration date unavailable ({raw_date or 'empty'})")
+    for risk_id in unknown_statuses:
+        print(f"│  [WARN] {risk_id}: unrecognized status, counted as active")
+    if fresh:
+        print(f"│  Fresh open risks ({len(fresh)}):")
+        for risk_id, date_str, age in fresh:
+            print(f"│    - {risk_id} ({date_str}, {age}d ago)")
+    return len(stale) + len(unknown_dates) + len(unknown_statuses)
 
-        if not is_risk_status_open(status):
-            continue
 
-        all_open.append(risk_id)
-
-        if not deadline_str or deadline_str == "":
-            continue
-
-        try:
-            deadline = datetime.strptime(deadline_str, "%Y-%m-%d").date()
-            if today > deadline:
-                escalated.append({
-                    "risk_id": risk_id,
-                    "created": date_str,
-                    "deadline": deadline_str,
-                    "days_overdue": (today - deadline).days,
-                })
-        except ValueError:
-            continue
-
-    return {
-        "escalated": escalated,
-        "total_open": len(all_open),
-        "escalation_count": len(escalated),
-    }
+def emit_risk_escalation(result):
+    """Print Check 8's deadline findings and return their issue count."""
+    escalated = result["escalated"]
+    invalid_deadlines = result["invalid_deadline_ids"]
+    if escalated:
+        print(f"│  [WARN] {len(escalated)} open risk(s) with escalation deadline passed:")
+        for risk in escalated:
+            print(f"│    - {risk['risk_id']}: deadline {risk['deadline']} ({risk['days_overdue']}d overdue)")
+    elif not invalid_deadlines:
+        print("│  [PASS] No dated open risks with passed escalation deadlines.")
+    for risk_id in invalid_deadlines:
+        print(f"│  [WARN] {risk_id}: escalation deadline is not a valid ISO date")
+    if result["no_deadline_ids"]:
+        print("│  Open risks without a deadline: " + ", ".join(result["no_deadline_ids"]))
+    print(f"│  Total open risks: {result['total_open']}")
+    return len(escalated) + len(invalid_deadlines)
 
 
 # ── REQ-145.3 / FIX-265: risk mitigation closure (Check 36) ────────────────
 # Watchdog for the AUDIT-145 "write a mitigation action and call it done"
-# blind spot: the time-dimension checks (2/8) only see status == 打开, so
+# blind spot: time-based checks cannot verify that mitigation landed, so
 # router RISK-003 (缓解中) / tv RISK-001 (打开) passed even with mitigation
 # not landed. The closure watchdog is a CONTENT-dimension assertion: every
 # risk that is NOT 已关闭 must reference tasks in the plan-tracker, and
@@ -255,8 +237,8 @@ def is_risk_status_closed(status):
     REQ-145.3 owns its own closure predicate, deliberately SEPARATE from
     :func:`is_risk_status_open` (the canonical active set predicate for
     Check 2/8 and the FIX-270 status fast path). The closure watchdog must
-    catch intermediate states (缓解中 / 缓解完成 / …) that the open
-    predicate classifies as non-active, so it asks a different question:
+    catch intermediate states (缓解中 / 缓解完成 / …) that an operational
+    summary may have retired, so it asks a different question:
     "is the risk terminal-closed?" — only ``已关闭`` answers yes.
     """
     return (status or "").strip() == _RISK_CLOSED_STATUS
@@ -396,7 +378,7 @@ def check_risk_mitigation_closure(risk_content=None, task_status_map=None):
           missing status, or undecidable.
 
     Parser lock (F6): risk rows are read with raw ``line.split("|")``
-    parts indexes, identical to the domain's Check 2/8 (:177-189) —
+    parts indexes from the historical risk schema —
     parts[9]=当前状态, parts[10]=缓解动作, parts[11]=截止日期,
     parts[12]=关联任务. ``_governance_table_cells`` is deliberately NOT
     used (it strips the leading/trailing empty cells — off-by-one).
@@ -451,7 +433,7 @@ def check_risk_mitigation_closure(risk_content=None, task_status_map=None):
         if not line.startswith("| RISK-"):
             continue
         parts = [p.strip() for p in line.split("|")]
-        # Same minimum width the domain's Check 8 requires (:190-191):
+        # Check 36 needs both mitigation and task-reference columns:
         # missing columns → undecidable row (R5), never a false judgement.
         if len(parts) < 13:
             result["stats"]["ragged_skipped"] += 1

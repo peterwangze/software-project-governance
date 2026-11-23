@@ -1143,8 +1143,11 @@ from checks.risk_domain import (  # noqa: E402
     _parse_context_open_risks,
     is_risk_status_open,
     parse_open_risks,
+    parse_active_risks,
     check_risk_staleness,
     check_risk_escalation,
+    emit_risk_staleness,
+    emit_risk_escalation,
     check_risk_mitigation_closure,  # FIX-265 / REQ-145.3 (Check 36)
     _default_task_status_map,  # FIX-294: active map for the archive wrapper
     _resolve_shared,  # FIX-294: refresh deferred shared names before the
@@ -5416,15 +5419,9 @@ def check_dsh_preset_smoke(root=None, timeout=120):
 
     ``root`` overrides the package root (test seam); it defaults to
     PLUGIN_ROOT, where ``adapters/dsh/launch.py`` lives. Returns
-    ``{"verdict": "PASS"|"FAIL", "reason", "exit_code", "details",
-    "isolation": {"temp_home", "real_home_writes",
-    "attributed_concurrent_writes"}}``.
+    the verdict, reason, launcher exit code, output and isolation witness.
 
-    FIX-442: ``attributed_concurrent_writes`` carries the launcher's count
-    of write-face changes attributed to a concurrent active session
-    (dual factor: inside the smoke window AND off the adapter's own preset
-    face). The engine does not re-judge attribution — it only refuses a
-    PASS whose ``real-home writes`` count is non-zero, exactly as before.
+    FIX-442: keep launcher attribution separate from smoke-owned writes.
     """
     package_root = Path(root) if root is not None else PLUGIN_ROOT
     launcher = package_root / "adapters" / "dsh" / "launch.py"
@@ -5443,7 +5440,12 @@ def check_dsh_preset_smoke(root=None, timeout=120):
         result["reason"] = f"dsh launcher missing: {launcher.as_posix()}"
         return result
 
-    temp_home = Path(tempfile.mkdtemp(prefix="spg-dsh-smoke-"))
+    from dsh_temp import make_private_dir
+    try:
+        temp_home = make_private_dir("spg-dsh-smoke-")
+    except OSError as exc:
+        result["reason"] = f"could not create private DSH smoke directory: {exc}"
+        return result
     result["isolation"]["temp_home"] = temp_home.as_posix()
     env = os.environ.copy()
     env["DSH_HOME"] = str(temp_home)
@@ -9102,64 +9104,6 @@ def parse_recent_completed_tasks(rows, n=5):
         reverse=True,
     )
     return done[:n]
-
-
-def parse_active_risks(risk_content=None):
-    """Parse risk-log active rows with escalation-deadline markers.
-
-    Returns rows for risks whose status is OPEN — the risk domain's canonical
-    predicate :func:`is_risk_status_open` (the SAME judgement Check 2/8 and
-    ``parse_open_risks`` use; FIX-270 R0 F3 — no parallel marker sets). Each
-    row carries ``escalation_soon`` (deadline within 3 days, incl. overdue)
-    and ``escalation_overdue`` (deadline passed). No deadline → both False.
-    """
-    content = risk_content if risk_content is not None else (
-        RISK_PATH.read_text(encoding="utf-8") if RISK_PATH.is_file() else ""
-    )
-    today = date.today()
-    out = []
-    for header, rows in _status_table_stream(content):
-        idx = {}
-        for pos, name in enumerate(header):
-            key = _status_col_name(name)
-            if key in ("编号", "日期", "风险/阻塞描述", "当前状态", "截止日期", "严重级别", "owner"):
-                idx.setdefault(key, pos)
-        if "编号" not in idx or "当前状态" not in idx:
-            continue
-        for cells in rows:
-            if len(cells) <= max(idx.values()):
-                continue
-            def cell(key):
-                pos = idx.get(key)
-                return _status_clean_cell(cells[pos]) if pos is not None and pos < len(cells) else ""
-            status = cell("当前状态")
-            if not is_risk_status_open(status):
-                continue
-            rid = cell("编号")
-            if not rid:
-                continue
-            deadline_text = cell("截止日期")
-            deadline = _status_iso_date(deadline_text)
-            days_left = None
-            if deadline:
-                try:
-                    days_left = (date.fromisoformat(deadline) - today).days
-                except ValueError:
-                    days_left = None
-            out.append({
-                "id": rid,
-                "opened_date": cell("日期"),
-                "description": cell("风险/阻塞描述")[:60] or "",
-                "severity": cell("严重级别"),
-                "owner": cell("owner"),
-                "status": status,
-                "deadline": deadline_text,
-                "deadline_date": deadline,
-                "days_left": days_left,
-                "escalation_soon": days_left is not None and days_left <= 3,
-                "escalation_overdue": days_left is not None and days_left < 0,
-            })
-    return out
 
 
 def parse_recent_decisions(n=5, decision_content=None):
@@ -13408,22 +13352,7 @@ def _run_full_engine_checks(args):
 
     # ── 2. Risk staleness ──
     print("\n┌─ Check 2: Risk Staleness (>7 days) ──────────────────┐")
-    risk_result = check_risk_staleness()
-    print(f"│  Total open risks: {risk_result['total_open']}")
-    stale = risk_result["stale"]
-    fresh = risk_result["fresh"]
-    if stale:
-        all_issues += len(stale)
-        print(f"│  [WARN] {len(stale)} stale risk(s):")
-        for risk_id, date_str, age in stale:
-            age_label = f"{age}d ago" if age >= 0 else "invalid date"
-            print(f"│    - {risk_id} ({date_str}, {age_label})")
-    else:
-        print(f"│  [PASS] No stale risks.")
-    if fresh:
-        print(f"│  Fresh open risks ({len(fresh)}):")
-        for risk_id, date_str, age in fresh:
-            print(f"│    - {risk_id} ({date_str}, {age}d ago)")
+    all_issues += emit_risk_staleness(check_risk_staleness())
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 2b. Decision premise (FIX-463) ──
@@ -13609,16 +13538,7 @@ def _run_full_engine_checks(args):
 
     # ── 8. Risk escalation deadline ──
     print("\n┌─ Check 8: Risk Escalation Deadline ──────────────────┐")
-    re_result = check_risk_escalation()
-    escalated = re_result["escalated"]
-    if escalated:
-        all_issues += len(escalated)
-        print(f"│  [WARN] {len(escalated)} open risk(s) with escalation deadline passed:")
-        for r in escalated:
-            print(f"│    - {r['risk_id']}: deadline {r['deadline']} ({r['days_overdue']}d overdue)")
-    else:
-        print(f"│  [PASS] No open risks with passed escalation deadlines.")
-    print(f"│  Total open risks: {re_result['total_open']}")
+    all_issues += emit_risk_escalation(check_risk_escalation())
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 9. Task deadline enforcement ──
@@ -17970,156 +17890,21 @@ def _archguard_load_schema(root=None):
         return None, f"invalid schema {schema_path}: {exc}"
 
 
-def _archguard_severity(count, warn, error):
-    if error is not None and count >= error:
-        return "ERROR"
-    if warn is not None and count >= warn:
-        return "WARN"
-    return None
-
-
-def _archguard_exclusion_match(rel_path, exclusions):
-    """Return the first exclusion entry matching rel_path, or None.
-
-    Single matching implementation for every ArchGuard scan face (FIX-350):
-    fnmatch on the posix form, supports ``**`` segments. Callers that only
-    need the boolean verdict use :func:`_archguard_excluded`; callers that
-    must disclose WHICH rule fired (DEC-151: 豁免必披露) take the entry's
-    ``reason`` from here.
-    """
-    posix = str(rel_path).replace("\\", "/")
-    for entry in exclusions or []:
-        pat = entry.get("path") if isinstance(entry, dict) else entry
-        if not pat:
-            continue
-        # Support a leading **/ by also matching the basename segment.
-        if fnmatch.fnmatch(posix, pat):
-            return entry
-        if pat.startswith("**/"):
-            base = pat[3:]
-            if fnmatch.fnmatch(Path(posix).name, base):
-                return entry
-            if fnmatch.fnmatch(posix, base):
-                return entry
-        # segment-agnostic match: any path containing a segment matching the bare glob
-        bare = pat.replace("**/", "").replace("/**", "")
-        if bare and any(fnmatch.fnmatch(seg, bare) for seg in posix.split("/")):
-            return entry
-    return None
-
-
-def _archguard_excluded(rel_path, exclusions):
-    """True if rel_path matches any exclusion glob (fnmatch, supports ** segments)."""
-    return _archguard_exclusion_match(rel_path, exclusions) is not None
-
-
-def _archguard_iter_code_files(root, extensions=(".py", ".js", ".ts")):
-    """Yield (rel_path, abs_path) for code files under root, skipping noise dirs."""
-    root = Path(root)
-    skip_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".pytest_cache"}
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-        for name in filenames:
-            if name.endswith(extensions):
-                abs_path = Path(dirpath) / name
-                yield abs_path.relative_to(root), abs_path
+from checks.architecture_health import (
+    _archguard_excluded, _archguard_exclusion_match, _archguard_iter_code_files, _archguard_severity,
+)
 
 
 def check_architecture_health(root=None, schema=None):
-    """REQ-101 ArchGuard check 1: module/function/constant size + duplicate constants."""
+    """Check the plugin (or a supplied fixture root) with its original policy."""
+    from checks.architecture_health import scan_architecture
+
     root = Path(root) if root is not None else ROOT
     if schema is None:
         schema, err = _archguard_load_schema(root)
         if schema is None:
             return {"error": err, "findings": [], "summary": {"errors": 0, "warnings": 0}}
-    ms = schema.get("module_size", {})
-    fs = schema.get("function_size", {})
-    mc = schema.get("module_constants", {})
-    gate = schema.get("gate_integration", {})
-    exclusions = ms.get("exclusions", [])
-    ms_warn, ms_error = ms.get("warn_lines"), ms.get("error_lines")
-    fn_warn, fn_error = fs.get("warn_lines"), fs.get("error_lines")
-    c_warn, c_error = mc.get("warn_count"), mc.get("error_count")
-    detect_dup = bool(mc.get("detect_duplicates"))
-
-    findings = []
-    const_re = re.compile(r"^[A-Z][A-Z0-9_]+ *=")
-
-    for rel, abs_path in _archguard_iter_code_files(root):
-        try:
-            text = abs_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        lines = text.splitlines()
-        n_lines = len(lines)
-
-        # FIX-350: the exclusion gate covers every scan face, not only
-        # module_size — function_size / module_constants / duplicate_constant
-        # honor the same schema `module_size.exclusions` list (module_size
-        # semantics unchanged; a schema with no exclusions behaves as before).
-        excluded = _archguard_excluded(rel, exclusions)
-
-        # module size (only when not excluded)
-        if not excluded:
-            sev = _archguard_severity(n_lines, ms_warn, ms_error)
-            if sev:
-                findings.append({
-                    "check": "module_size", "severity": sev,
-                    "path": str(rel), "lines": n_lines,
-                })
-
-        # Python-only: function size via ast + module constants + duplicate constants
-        if str(rel).endswith(".py") and not excluded:
-            # function sizes
-            try:
-                tree = ast.parse(text)
-            except SyntaxError:
-                tree = None
-            if tree is not None:
-                for node in ast.walk(tree):
-                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.end_lineno:
-                        fn_lines = node.end_lineno - node.lineno + 1
-                        sev = _archguard_severity(fn_lines, fn_warn, fn_error)
-                        if sev:
-                            findings.append({
-                                "check": "function_size", "severity": sev,
-                                "path": str(rel), "name": node.name,
-                                "lines": fn_lines, "lineno": node.lineno,
-                            })
-            # module constants + duplicates
-            const_names = {}  # name -> first line
-            dup_names = {}    # name -> list of lines
-            for idx, line in enumerate(lines, start=1):
-                m = const_re.match(line)
-                if not m:
-                    continue
-                name = m.group(0).split("=")[0].strip()
-                if name not in const_names:
-                    const_names[name] = idx
-                else:
-                    dup_names.setdefault(name, [const_names[name]]).append(idx)
-            if const_names:
-                sev = _archguard_severity(len(const_names), c_warn, c_error)
-                if sev:
-                    findings.append({
-                        "check": "module_constants", "severity": sev,
-                        "path": str(rel), "count": len(const_names),
-                    })
-            if detect_dup:
-                for name, ln_list in dup_names.items():
-                    findings.append({
-                        "check": "duplicate_constant", "severity": "ERROR",
-                        "path": str(rel), "name": name, "lines": ln_list,
-                    })
-
-    errors = sum(1 for f in findings if f["severity"] == "ERROR")
-    warnings = sum(1 for f in findings if f["severity"] == "WARN")
-    return {
-        "findings": findings,
-        "summary": {"errors": errors, "warnings": warnings},
-        "schema_version": schema.get("version"),
-        "fatal_on_error": bool(gate.get("fatal_on_error", False)),
-    }
+    return scan_architecture(root, schema)
 
 
 def _archguard_normalized_lines(text, normalize_le=True, ignore_ws=True):
@@ -19707,7 +19492,9 @@ def cmd_check_dsh_preset_compat(args):
     """
     from dsh_compat import run_cli
 
-    return run_cli(fail_on_issues=getattr(args, "fail_on_issues", False))
+    return run_cli(fail_on_issues=getattr(args, "fail_on_issues", False),
+                   isolated_home=getattr(args, "isolated_home", None),
+                   use_host_profile=getattr(args, "use_host_profile", False))
 
 
 def cmd_check_dsh_boundary(args):
@@ -20027,26 +19814,10 @@ def _archguard_print_findings(title, result, hint_key="check"):
 
 
 def cmd_check_architecture_health(args):
-    """Run REQ-101 ArchGuard module/function/constant-size guard (advisory in 0.58.0)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_architecture_health()
-    print("\n=== Architecture Health Check (ArchGuard) ===")
-    if result.get("error"):
-        print(f"  [ERROR] {result['error']}")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-        print()
-        return
-    errors, warnings = _archguard_print_findings("Architecture Health", result)
-    fatal = bool(result.get("fatal_on_error"))
-    print(f"\n  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN"
-          + (" (advisory — does not block release)" if not fatal else ""))
-    if getattr(args, "fail_on_issues", False) and fatal and errors > 0:
-        sys.exit(1)
-    print()
+    from checks.architecture_health import run_architecture_health
+
+    run_architecture_health(args, HOST_PROJECT_ROOT, PLUGIN_ROOT, PLUGIN_ROOT / ARCHGUARD_SCHEMA_REL,
+                            check_architecture_health, _archguard_print_findings)
 
 
 def cmd_check_loop_health(args):
@@ -23502,6 +23273,11 @@ def _build_cli_parser(parser_argv=()):
              "dsh's own Config schemas (loader YAML dialect + loader evaluate "
              "+ cordis resolveConfig); NOT_RUN when no node / no dsh install",
     )
+    profiles = cdpc_p.add_mutually_exclusive_group()
+    profiles.add_argument("--isolated-home", metavar="DIR",
+                          help="use the temporary profile directory assigned to this run")
+    profiles.add_argument("--use-host-profile", action="store_true",
+                          help="deliberately read the configured host profile")
     cdpc_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if a row is rejected by the installed schemas")
 
@@ -23622,6 +23398,10 @@ def _build_cli_parser(parser_argv=()):
         "check-architecture-health",
         help="ArchGuard: module/function/constant-size + duplicate-constant guard (advisory in 0.58.0)",
     )
+    cah_p.add_argument("--scope", choices=("plugin", "host"), default="plugin",
+                       help="Scan the installed plugin (default), or host .py/.js/.ts source under --project-root or cwd")
+    cah_p.add_argument("--policy", metavar="JSON",
+                       help="Host scope only: explicitly override installed thresholds, exclusions or gating; relative paths start at the host root")
     cah_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
 

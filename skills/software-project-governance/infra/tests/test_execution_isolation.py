@@ -284,6 +284,275 @@ class WriteConcurrencyLimitTests(IsolationTestCase):
 # ── 2. 同文件域「被审/在写」互斥 ─────────────────────────────────────
 
 
+class WorkerAndRecoveryTests(IsolationTestCase):
+    def cli(self, cwd, project, command, *args):
+        return subprocess.run([sys.executable, str(MODULE_PATH), "--project-root", str(project),
+                               command, *args], cwd=cwd, capture_output=True,
+                              encoding="utf-8", timeout=15)
+
+    def test_two_workspaces_same_shared_slot_and_independent_copies(self):
+        target = self.seed_target_file()
+        shared = self.repo / target
+        shared_before = shared.read_bytes()
+        roots = [self.tmp / "workspace-a", self.tmp / "workspace-b"]
+        for workspace in roots:
+            (workspace / ".governance").mkdir(parents=True)
+            (workspace / target).parent.mkdir(parents=True)
+            (workspace / target).write_text(workspace.name, encoding="utf-8")
+
+        def args(action, session):
+            return ["isolation-write", "--action", action, "--task", "FIX-100",
+                    "--writer", "Dev", "--session", session, "--files", target]
+
+        procs = [subprocess.Popen([sys.executable, str(MODULE_PATH), "--project-root",
+                                   str(self.repo), *args("begin", "shared")], cwd=workspace,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                 for workspace in roots]
+        results = [json.loads(proc.communicate(timeout=15)[0]) for proc in procs]
+        self.assertEqual(sorted(p.returncode for p in procs), [0, 2])
+        winner = next(i for i, r in enumerate(results) if not r.get("error"))
+        owner, other = roots[winner], roots[1-winner]
+        self.assertEqual(results[1-winner]["refusals"][0]["holder_worker"],
+                         results[winner]["worker"])
+        for workspace, session, action in [(other, "shared", "end"), (owner, "different", "end"),
+                                           (owner, "different", "begin")]:
+            self.assertEqual(self.cli(workspace, self.repo, *args(action, session)).returncode, 2)
+        self.assertEqual(self.cli(owner, self.repo, *args("begin", "shared")).returncode, 0)
+        self.assertEqual(shared.read_bytes(), shared_before)
+        for workspace in roots:
+            self.assertEqual(self.cli(workspace, workspace, *args("begin", "shared")).returncode, 0)
+            (workspace / target).write_text("owned by " + workspace.name, encoding="utf-8")
+            self.assertEqual(self.cli(workspace, workspace, *args("end", "shared")).returncode, 0)
+        self.assertNotEqual((owner / target).read_bytes(), (other / target).read_bytes())
+        self.assertEqual(self.cli(owner, self.repo, *args("end", "shared")).returncode, 0)
+        self.assertEqual(shared.read_bytes(), shared_before)
+
+    def test_late_writer_cannot_end_successor_or_partially_release_batch(self):
+        a, b = self.seed_target_file("a"), self.seed_target_file("b")
+        self.begin("FIX-100", [a], writer="A", ttl_seconds=3)
+        self.begin("FIX-100", [b], writer="A")
+        later = self.now() + timedelta(seconds=4)
+        nxt = ei.begin_write("FIX-100", [a], writer="B", governance_dir=self.gov, now=later)
+        self.assertIn(a, nxt["granted"])
+        self.assertRefused(self.end("FIX-100", [b, a], writer="A"), ei.CODE_NOT_HOLDER)
+        self.assertEqual(self.load_state()["writers"][a]["writer"], "B")
+        self.assertEqual(self.load_state()["writers"][b]["writer"], "A")
+
+    def test_interrupted_reviewer_exact_expired_recovery_preserves_snapshot_and_successor(self):
+        domain = self.seed_target_file()
+        source = self.repo / domain
+        original = source.read_bytes()
+        receipt = self.repo / "created.json"
+        script = (
+            "import json,sys,time; from pathlib import Path; from datetime import datetime,timedelta; "
+            "sys.path.insert(0,sys.argv[1]); import execution_isolation as ei; "
+            "root=Path.cwd(); result=ei.create_review_snapshot('FIX-100',['docs/a.md'],"
+            "reviewer='Review',session_id='first',governance_dir=root/'.governance',"
+            "repo_root=root,ttl_seconds=60,now=datetime.now()-timedelta(minutes=5)); "
+            "Path('created.json').write_text(json.dumps(result),encoding='utf-8'); time.sleep(60)"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", script, str(_INFRA_DIR)], cwd=self.repo)
+        try:
+            limit = time.monotonic() + 10
+            while not receipt.exists() and proc.poll() is None and time.monotonic() < limit:
+                time.sleep(0.02)
+            self.assertTrue(receipt.exists())
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+        snap = json.loads(receipt.read_text(encoding="utf-8"))
+        sid = snap["snapshot_id"]
+        frozen = Path(snap["snapshot_root"]) / domain
+        manifest = Path(snap["snapshot_root"]) / ei.SNAPSHOT_MANIFEST_NAME
+        before = (frozen.read_bytes(), manifest.read_bytes())
+        self.assertEqual(before[0], original)
+        retry = dict(governance_dir=self.gov, reason="reviewer process ended", session_id="new")
+        start = datetime.fromisoformat(snap["created_at"])
+        self.assertRefused(ei.recover_review("FIX-100", sid, now=start, **retry),
+                           ei.CODE_UNDER_REVIEW)
+        self.assertRefused(ei.release_review("FIX-100", governance_dir=self.gov,
+                                           session_id="new"), ei.CODE_NOT_HOLDER)
+        after = start + timedelta(seconds=61)
+        self.assertFalse(ei.judge_write("FIX-100", [domain], governance_dir=self.gov,
+                                      now=after)["allowed"])
+        self.assertTrue(ei.isolation_status(governance_dir=self.gov,
+                                           now=after)["reviews"][domain]["recoverable"])
+        recovered = self.cli(self.repo, self.repo, "isolation-snapshot", "--action", "recover",
+                             "--task", "FIX-100", "--snapshot-id", sid, "--session", "new",
+                             "--reason", retry["reason"])
+        self.assertEqual(recovered.returncode, 0, recovered.stdout)
+        self.assertEqual(json.loads(recovered.stdout)["released"], [domain])
+        self.assertIn(domain, ei.create_review_snapshot("FIX-100", [domain], governance_dir=self.gov,
+                            repo_root=self.repo, session_id="new", now=after)["domains"])
+        cli = self.cli(self.repo, self.repo, "isolation-snapshot", "--action", "recover",
+                       "--task", "FIX-100", "--snapshot-id", sid, "--reason", "retry")
+        self.assertEqual(cli.returncode, 0, cli.stdout)
+        self.assertEqual(json.loads(cli.stdout)["released"], [])
+        self.assertIn(domain, self.load_state()["reviews"])
+        self.assertEqual(self.load_state()["snapshots"][sid]["recovery_reason"], retry["reason"])
+        self.assertEqual((frozen.read_bytes(), manifest.read_bytes()), before)
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_interrupted_state_mutation_releases_kernel_guard(self):
+        ready = self.repo / "locked"
+        script = (
+            "import sys,time; from pathlib import Path; sys.path.insert(0,sys.argv[1]); "
+            "import execution_isolation as ei; "
+            "guard=ei._StateLock(Path.cwd()/'.governance'); guard.__enter__(); "
+            "Path('locked').touch(); time.sleep(60)"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", script, str(_INFRA_DIR)], cwd=self.repo)
+        try:
+            limit = time.monotonic() + 10
+            while not ready.exists() and proc.poll() is None and time.monotonic() < limit:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists())
+            self.assertRefused(self.begin("FIX-100", ["a"], timeout_seconds=0.05),
+                               ei.CODE_LOCK_CONTENTION)
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+        self.assertEqual(self.begin("FIX-100", ["a"], timeout_seconds=1)["granted"], ["a"])
+
+    def test_old_bindings_and_unknown_expiry(self):
+        task, domain, sid = "FIX-100", "docs/a.md", "SNAP-OLD"
+        state = ei._new_state()
+        state["reviews"][domain] = {"snapshot_id": sid, "task_id": task}
+        state["writers"]["other"] = {"task_id": task, "writer": "",
+                                     "expires_at": ei._iso(self.now() + timedelta(seconds=5))}
+        path = self.gov / ei.STATE_FILE_NAME
+        _write_bytes(path, json.dumps(state))
+        self.assertRefused(self.begin(task, ["other"]), ei.CODE_WRITE_CONFLICT)
+        self.assertRefused(self.end(task, ["other"]), ei.CODE_NOT_HOLDER)
+        kwargs = dict(governance_dir=self.gov, reason="legacy reviewer ended", now=self.now())
+        self.assertRefused(ei.recover_review(task, sid, **kwargs), ei.CODE_UNDER_REVIEW)
+        state["reviews"][domain]["began_at"] = ei._iso(self.now() - timedelta(hours=2))
+        _write_bytes(path, json.dumps(state))
+        self.assertEqual(ei.recover_review(task, sid, **kwargs)["released"], [domain])
+        self.assertEqual(self.load_state()["snapshots"][sid]["files"], [domain])
+        self.assertIn("other", ei.begin_write(task, ["other"], governance_dir=self.gov,
+                                      now=self.now() + timedelta(seconds=6))["granted"])
+
+    def test_flattening_collision_allows_two_writers_and_keeps_separate_markers(self):
+        nested = self.seed_target_file("reports/report.md", "nested")
+        flat = self.seed_target_file("reports__report.md", "flat")
+        self.assertFalse((self.repo / nested).samefile(self.repo / flat))
+        children = [subprocess.Popen([sys.executable, str(MODULE_PATH), "--project-root",
+                    str(self.repo), "isolation-write", "--action", "begin", "--task", task,
+                    "--session", task, "--files", name], cwd=self.repo, stdout=subprocess.PIPE)
+                    for task, name in (("FIX-101", nested), ("FIX-102", flat))]
+        for child in children:
+            result = json.loads(child.communicate(timeout=15)[0])
+            self.assertEqual(child.returncode, 0, result)
+        status = ei.isolation_status(governance_dir=self.gov)
+        self.assertEqual(set(status["writers"]), {nested, flat})
+        self.assertNotEqual(ei._domain_lockfile(self.gov, nested), ei._domain_lockfile(self.gov, flat))
+        self.assertEqual(self.cli(self.repo, self.repo, "isolation-write", "--action", "end",
+                                  "--task", "FIX-102", "--session", "FIX-102",
+                                  "--files", flat).returncode, 0)
+        self.assertEqual(set(ei.isolation_status(governance_dir=self.gov)["writers"]), {nested})
+        self.assertEqual((self.repo / nested).read_bytes(), b"nested")
+        self.assertEqual((self.repo / flat).read_bytes(), b"flat")
+
+    def test_volume_case_lookup_applies_to_status_write_review_and_missing_files(self):
+        named, other = "Reports/Note.MD", "Reports/nOTE.md"
+        self.seed_target_file(named, "Original")
+        path = self.repo / named
+        alias = self.repo / other
+        insensitive = alias.exists() and path.samefile(alias)
+        self.begin("FIX-100", [named], writer="one")
+        if not insensitive:
+            self.seed_target_file(other, "Separate")
+            self.assertIn(other, self.begin("FIX-200", [other], writer="two")["granted"])
+            self.assertEqual(len(ei.isolation_status(governance_dir=self.gov)["writers"]), 2)
+            return
+        self.assertRefused(self.begin("FIX-200", [other], writer="two"), ei.CODE_WRITE_CONFLICT)
+        self.assertRefused(self.snapshot("FIX-200", [other]), ei.CODE_WRITE_IN_PROGRESS)
+        self.assertIn(other, self.begin("FIX-100", [other], writer="one")["granted"])
+        status = ei.isolation_status(governance_dir=self.gov)
+        self.assertEqual(list(status["writers"]), [named])
+        self.assertEqual(status["writers"][named]["domain_key"], ei._domain_key(self.gov, other))
+        self.assertIn(other, self.end("FIX-100", [other], writer="one")["released"])
+        snap = self.snapshot("FIX-100", [named, other])
+        self.assertEqual(snap["domains"], [named])
+        self.assertRefused(self.begin("FIX-200", [other]), ei.CODE_UNDER_REVIEW)
+        self.assertEqual(self.release_review("FIX-100", snapshot_id=snap["snapshot_id"])["released"], [named])
+        self.assertEqual(path.read_bytes(), b"Original")
+        pending = "Reports/Future.MD"
+        self.begin("FIX-100", [pending], writer="one")
+        self.assertRefused(self.begin("FIX-200", ["Reports/fUture.md"]), ei.CODE_WRITE_CONFLICT)
+        self.seed_target_file(pending, "new")
+        self.assertIn("Reports/future.md", self.end("FIX-100", ["Reports/future.md"],
+                                                    writer="one")["released"])
+
+    def test_old_flat_marker_handoff_keeps_unrelated_path_and_orphan_evidence(self):
+        named = self.seed_target_file("reports/report.md", "original")
+        other = self.seed_target_file("reports__report.md", "unrelated")
+        row = {"task_id": "FIX-100", "writer": "old", "began_at": ei._iso(self.now()),
+               "expires_at": ei._iso(self.now() + timedelta(minutes=1))}
+        state = ei._new_state()
+        state["writers"][named] = dict(row, purpose="original grant")
+        _write_bytes(self.gov / ei.STATE_FILE_NAME, json.dumps(state))
+        old = self.gov / ei.LOCK_DIR_NAME / "reports__report.md.write.lock"
+        old.parent.mkdir()
+        _write_bytes(old, json.dumps(dict(row, pid=123)))
+        old_bytes = old.read_bytes()
+        self.assertRefused(self.begin("FIX-200", [named]), ei.CODE_WRITE_CONFLICT)
+        self.assertEqual(self.begin("FIX-200", [other])["granted"], [other])
+        self.assertEqual(old.read_bytes(), old_bytes)
+        self.end("FIX-200", [other])
+        self.assertEqual(old.read_bytes(), old_bytes)
+        self.assertEqual(self.begin("FIX-100", [named], writer="old")["granted"], [named])
+        self.assertFalse(old.exists())
+        self.end("FIX-100", [named], writer="old")
+        # A marker left before the legacy state write has no path attribution.
+        old.write_bytes(old_bytes)
+        for name in (named, other):
+            self.assertRefused(self.begin("FIX-100", [name], writer="old"), ei.CODE_WRITE_CONFLICT)
+            self.assertRefused(self.end("FIX-100", [name], writer="old"), ei.CODE_NOT_HOLDER)
+        self.assertIn(old.name, ei.isolation_status(governance_dir=self.gov)["unattributed_markers"])
+        later = self.now() + timedelta(minutes=2)
+        self.assertIn(other, ei.begin_write("FIX-200", [other], governance_dir=self.gov,
+                                           now=later)["granted"])
+        self.assertIn(other, ei.end_write("FIX-200", [other], governance_dir=self.gov,
+                                         now=later)["released"])
+        self.assertEqual(old.read_bytes(), old_bytes)
+        self.assertEqual((self.repo / named).read_bytes(), b"original")
+        self.assertEqual((self.repo / other).read_bytes(), b"unrelated")
+
+    def test_orphan_marker_and_multifile_failure_preserve_existing_grants(self):
+        task = "FIX-100"
+        self.begin(task, ["a"], writer="A")
+        original = ei._domain_lockfile(self.gov, "a").read_bytes()
+        held = ei._domain_lockfile(self.gov, "b")
+        _write_bytes(held, json.dumps({"task_id": "FIX-200", "writer": "B",
+                                       "expires_at": ei._iso(self.now() + timedelta(hours=1))}))
+        self.seed_target_file("b")
+        self.assertRefused(self.snapshot(task, ["b"]), ei.CODE_WRITE_IN_PROGRESS)
+        self.assertRefused(self.begin(task, ["a", "b"], writer="A"), ei.CODE_WRITE_CONFLICT)
+        self.assertEqual(ei._domain_lockfile(self.gov, "a").read_bytes(), original)
+        with mock.patch.object(ei, "_create_domain_lockfile", side_effect=OSError("disk full")):
+            self.assertRefused(self.begin(task, ["a", "c"], writer="A", ttl_seconds=12),
+                               ei.CODE_MANUAL_INTERVENTION)
+        self.assertEqual(ei._domain_lockfile(self.gov, "a").read_bytes(), original)
+        self.assertNotIn("c", self.load_state()["writers"])
+
+    def test_corrupt_state_and_same_second_snapshot_refuse_without_overwrite(self):
+        domain = self.seed_target_file()
+        snap = self.snapshot("FIX-100", [domain])
+        manifest = Path(snap["snapshot_root"]) / ei.SNAPSHOT_MANIFEST_NAME
+        data = manifest.read_bytes()
+        self.release_review("FIX-100")
+        self.assertRefused(self.snapshot("FIX-100", [domain]), ei.CODE_SCHEMA_VIOLATION)
+        self.assertEqual(manifest.read_bytes(), data)
+        path = self.gov / ei.STATE_FILE_NAME
+        for corrupt in (b"{bad", b'{"writers":[]}'):
+            path.write_bytes(corrupt)
+            self.assertRefused(self.begin("FIX-100", [domain]), ei.CODE_MANUAL_INTERVENTION)
+            self.assertRefused(self.snapshot("FIX-100", [domain]), ei.CODE_MANUAL_INTERVENTION)
+            self.assertEqual(path.read_bytes(), corrupt)
+
+
 class ReviewWriteMutexTests(IsolationTestCase):
     def test_write_to_under_review_domain_refused_then_allowed_after_release(self):
         domain = self.seed_target_file(text="v1\n")

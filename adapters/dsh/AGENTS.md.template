@@ -6,11 +6,10 @@
 
 ## 第一动作（每会话）
 
-1. 会话 skill 目录有 `software-project-governance` → 调用 `skill` 工具加载（resourceBase 即 `<plugin_root>/skills/software-project-governance`）。
-2. 若本次当前工作区尚无聚合结果，用 `pwsh` 执行 `python "<plugin_root>/skills/software-project-governance/infra/verify_workflow.py" governance-bootstrap --format json`。
-3. 除下述旧版缺少子命令外，仅在退出成功、JSON 有效且 `resolve.resolved_root_ok == true` 时采用热数据；否则 MUST STOP，展示 diagnostic 或命令错误，不呈现治理状态。 仅旧 CLI 明确不支持该子命令时才运行 `python "<plugin_root>/skills/software-project-governance/infra/resolve_entry.py" --json`；成功且 `resolved_root_ok == true` 方可定位运行记录。
-4. 从同次 `loops` 恢复目标、工作单元、层级、轮次和最新回执，呈现需要执行或裁决的事项 + `ask_user_question` 首次交互；深检按需后置，推进类动作前 MUST 补齐。
-5. 无该 skill → 提示本会话未加载治理技能，按普通任务执行。恢复接入见本页末尾的适配器指南。
+1. 先单独判根，取得回执后再选择下一工具。复用同次启动、同一工作区已验证的结果，否则用 `pwsh` 执行 `python "<plugin_root>/skills/software-project-governance/infra/verify_workflow.py" governance-bootstrap --format json`。
+2. 仅在退出成功、JSON 有效且 `resolve.resolved_root_ok == true` 时采用结果。否则 MUST STOP，展示 diagnostic 或命令错误。仅旧 CLI 明报未知子命令时改用 `python "<plugin_root>/skills/software-project-governance/infra/resolve_entry.py" --json`，验证成功且 `resolved_root_ok == true` 后，按旧格式从 `.governance/plan-tracker.md` 的对应行定位运行记录。运行记录损坏则保留原件并停止。
+3. 在同次 `loops.units[]` 中找到用户请求对应的单元。先看它的 `acceptance` 和 `root_contract` 及已生效的裁决；`next_action` 中的通用循环提示不能替用户决定。若原文已说明两项要求会产生不同交付结果且取舍未定，或当前动作需要用户授权、接受风险，下一工具动作即 `ask_user_question`。用其中的事实给出选项及影响，等待裁决。若恢复或交付取决于版本选择，用 `migration.plan_version`、`migration.active_version` 和单元内已有的影响、写入目标、回退办法，请用户选择保留项目版本或升级。已有授权且方向明确，直接推进当前单元；只读查询直接答复。
+4. 上述原文已足以提问时，直接发问。技能加载、目录遍历、查热账或历史都无需插在判根和提问之间。执行所选动作需要共享规程且正文尚未载入时才用 `skill` 加载 `software-project-governance`。已加载则沿用同一次判根。所需技能缺失时说明，恢复接入见文末指南。
 
 ## 行为灰度开关（FEAT-040——legacy 回退通道）
 
@@ -18,8 +17,8 @@
 
 ## SELF-CHECK（任何输出之前自问）
 
-1. 从可信根核对目标、单元与证据。当前状态用 `loop status --json` 复读，任务范围查 `.governance/plan-tracker.md`。
-2. 即将输出问句？→ 改用 `ask_user_question`。到达交互边界？→ MUST `ask_user_question`（完整 SELF-CHECK：SKILL.md「Bootstrap 规程明细」§B0）。
+1. 仅当摘要缺当前单元或裁决依据时，补查会改变选择的一项依据。用 `loop status --unit <id> --json` 定位已知单元，或在本项目、已解析安装根内定向查证一次。仍缺则询问所缺事实；相邻项目不作为授权依据。首次使用且记录为空，按用户交付登记。
+2. `health.state="deferred"` 显示「待检查」。推进类写入前 MUST 完成 full 深检与交叉验证；升级确认前零写入。认证、真实环境、独立复审及成品验收沿原门执行。
 3. 子项退出时返回已授权父目标；交付后需转入新的未授权目标才推荐并请用户裁决。收到 NEEDS_CHANGE 时进入独立复审（关键行为契约：复审必达 / 完成必推荐 / 选项必带依据 / 推荐必标需求源 / 发现即闭环——加载 skill 后见 SKILL.md「关键行为契约」段）。
 
 ## 模式确认（每次会话一句，模式自适应）

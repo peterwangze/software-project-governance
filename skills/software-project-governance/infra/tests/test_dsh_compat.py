@@ -510,6 +510,56 @@ class CompositionDiscoveryTests(unittest.TestCase):
 
 
 # ── aggregation contract (probe injected) ───────────────────────────────────
+class IndependentInstallProfileTests(unittest.TestCase):
+    def test_explicit_install_cannot_override_a_mismatched_isolated_home(self):
+        with _scratch("spg-wrong-assigned-home-") as temp:
+            root = Path(temp)
+            assigned = root / "assigned"
+            assigned.mkdir()
+            env = {dsh_compat.DSH_HOME_ENV: str(root / "other-home"),
+                   dsh_compat.INSTALL_DIR_ENV: str(root / "chosen-install")}
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                dsh_compat, "locate_dsh_install"
+            ) as discover:
+                which = mock.Mock()
+                report = dsh_compat.check_dsh_preset_compat(
+                    root=root, compositions=[root / "agent.cordis.yml"],
+                    isolated_home=assigned, which=which)
+            self.assertEqual(report["verdict"], "FAIL")
+            self.assertIn("differs", report["reason"])
+            discover.assert_not_called()
+            which.assert_not_called()
+
+    def test_package_discovery_does_not_receive_either_inherited_profile_path(self):
+        home_key = dsh_compat.DSH_HOME_ENV
+        profile_key = dsh_contract.get("host.planes.env.profile_dir")
+        sources = (dsh_compat.INSTALL_DIR_ENV, dsh_compat.NODE_MODULES_ENV,
+                   dsh_contract.get("host.planes.env.desktop_app_dir"), "path")
+        with _scratch("spg-independent-install-") as temp:
+            root = Path(temp)
+            composition = root / "agent.cordis.yml"
+            composition.write_text("[]", encoding="utf-8")
+            for source in sources:
+                with self.subTest(source=source):
+                    env = {home_key: str(root / "unassigned-home"),
+                           profile_key: str(root / "unassigned-profile")}
+                    if source != "path":
+                        env[source] = str(root / "chosen-install")
+                    which = _which_map({"dsh": str(root / "bin" / "dsh")} if source == "path" else {})
+                    with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                        dsh_compat, "locate_dsh_install", return_value={"status": "NOT_RUN", "reason": "fixture"}
+                    ) as discover:
+                        report = dsh_compat.check_dsh_preset_compat(
+                            root=root, compositions=[composition], which=which)
+                    self.assertEqual(report["verdict"], "NOT_RUN")
+                    self.assertEqual(report["install"]["reason"], "fixture")
+                    selected = discover.call_args.kwargs["env"]
+                    self.assertNotIn(home_key, selected)
+                    self.assertNotIn(profile_key, selected)
+                    if source != "path":
+                        self.assertEqual(selected[source], env[source])
+
+
 class AggregationTests(unittest.TestCase):
     """Verdict/issue shaping, with the Node probe replaced by a fixture."""
 

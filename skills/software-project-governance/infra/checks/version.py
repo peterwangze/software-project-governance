@@ -166,10 +166,9 @@ def check_version_consistency(root: Path, host_root: Optional[Path] = None) -> L
 #
 # Exemptions (FIX-354-style auditable ledger): synthetic fixture data and
 # version-pair test inputs that legitimately mention the active version live
-# in STATIC_PIN_EXEMPTIONS as (line, token, reason) rows. The token anchors a
-# row to its line's content: an entry whose line no longer carries the token
-# (drift or removal) is reported as a stale-exemption warning, so the ledger
-# cannot rot into a blanket allow.
+# in STATIC_PIN_EXEMPTIONS. Legacy triples use their original line and token.
+# New rows also name a Python scope and the exact stripped source line.
+# Only a unique match can suppress a hit; the line number is a lookup hint.
 #
 # FIX-462 (DEC-220): the sanctioned write path for this ledger is the
 # machine writer — `verify_workflow.py pins register` / `pins re-anchor`
@@ -392,20 +391,20 @@ STATIC_PIN_EXEMPTIONS = {
         # (rot-guard caught the stale ledger at fb56415; CI never saw it —
         # the FIX-458 hook-pin integrity FAIL killed the run before the
         # unit-test step); re-anchored to the actual token lines.
-        # pins re-anchor op-7d5e889fe573498a8c81eba66ad57b14 (FIX-462): 18591->18606 via machine writer (token unchanged)
-        (18606, "0.93.0", _REASON_FUTURE_TARGET),
-        # pins re-anchor op-e782ec86440342dfa27fe09e2911cdde (FIX-462): 18621->18636 via machine writer (token unchanged)
-        (18636, "0.93.0", _REASON_FUTURE_TARGET),
+        # pins re-anchor op-723c77d82ce146bebaf2f6a6ab8bfce9 (FIX-462): 18606->18606 via machine writer (token unchanged)
+        (18606, "0.93.0", _REASON_FUTURE_TARGET, "SdIntegrityGateTests.test_release_readiness_carries_sd_integrity_face", "result = vw.check_release_readiness(version=\"0.93.0\")"),
+        # pins re-anchor op-30c944f4a1d64051a580a751dc1c7144 (FIX-462): 18636->18636 via machine writer (token unchanged)
+        (18636, "0.93.0", _REASON_FUTURE_TARGET, "SdIntegrityGateTests.test_release_readiness_surfaces_projection_plan_error", "result = vw.check_release_readiness(version=\"0.93.0\")"),
         # 0.94.0 bump-time rows (the FIX-361 designed double signal): the
         # FEAT-081 B4 M2 词集检测 fixtures (_TRACKER_SEED /
         # _TRACKER_DEFERRED_ROW) carry the then-future target 0.94.0 in the
         # 目标版本 column — scenario payload written while 0.93.1 was active,
         # surfacing exactly once at this bump; the word-set judgement
         # consumes the row text, never the version cell.
-        # pins re-anchor op-726f3c35ca684e1bb4b136d0e9b80ca5 (FIX-462): 18095->18110 via machine writer (token unchanged)
-        (18110, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
-        # pins re-anchor op-8324fee18b4542dda81bef26e3bf5268 (FIX-462): 18098->18113 via machine writer (token unchanged)
-        (18113, "0.94.0", _REASON_FIXTURE_ROW_TEXT),
+        # pins re-anchor op-30e8d561a7954fa3bd77f87d2f1e9a50 (FIX-462): 18110->18110 via machine writer (token unchanged)
+        (18110, "0.94.0", _REASON_FIXTURE_ROW_TEXT, "DeferredRegistrationFace5Tests", "\"| **P1** | FEAT-081 | 词集夹具票 | — | 0.94.0 | closure | \""),
+        # pins re-anchor op-b5bf500b1ff3452eb29db350fb5584b7 (FIX-462): 18113->18113 via machine writer (token unchanged)
+        (18113, "0.94.0", _REASON_FIXTURE_ROW_TEXT, "DeferredRegistrationFace5Tests", "\"| **P2** | FEAT-082 | 下版处理 票 | — | 0.94.0 | closure | \""),
     ],
     # 0.95.0 bump-time rows (the FIX-361 designed double signal): the
     # FEAT-076 Q6 date-window fallback fail-closed fixture (roadmap row
@@ -501,6 +500,73 @@ def _annotation_string_lines(tree):
     return docstring_lines, string_inner_lines
 
 
+def pin_scopes(tree):
+    """Index qualified definition ranges, including their decorators."""
+    if tree is None:
+        return None
+    spans = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        decorated = bool(node.decorator_list)
+        start = node.decorator_list[0].lineno if decorated else node.lineno
+        spans.append((start, node.end_lineno, node.name, decorated))
+
+    ranges, parents = [], []
+    seen, repeated = set(), set()
+    for start, end, name, decorated in sorted(spans):
+        while parents and parents[-1][0] < start:
+            parents.pop()
+        qualified = f"{parents[-1][1]}.{name}" if parents else name
+        ranges.append((start, end, qualified, decorated))
+        parents.append((end, qualified))
+        if qualified in seen:
+            repeated.add(qualified)
+        seen.add(qualified)
+    return ranges, repeated
+
+
+def pin_witness(lines, scopes, lineno):
+    ranges, _repeated = scopes
+    for start, end, owner, decorated in reversed(ranges):
+        if lineno > end:
+            continue
+        # In a parenthesized decorator the AST starts at the expression.
+        # Its opening @ and any leading continuation lines belong to this owner.
+        if decorated:
+            while start > lineno and not lines[start - 1].lstrip().startswith("@"):
+                start -= 1
+        if start <= lineno:
+            return owner, lines[lineno - 1].strip()
+    return "<module>", lines[lineno - 1].strip()
+
+
+def resolve_pin(entry, lines, scopes):
+    """Return the unique live line or a diagnostic; never guess by proximity."""
+    hint, token, _reason, *witness = entry
+    if not witness:
+        if 0 < hint <= len(lines) and token in _SEMVER_TOKEN_RE.findall(lines[hint - 1]):
+            return hint, None
+        return None, "line no longer carries the token"
+    if scopes is None:
+        return None, "cannot resolve witness in unparseable Python"
+    scope, text = witness
+    # Even one matching line cannot identify which repeated definition (or
+    # which repeated enclosing class/function) owned the registered witness.
+    _ranges, repeated = scopes
+    if any(scope == name or scope.startswith(name + ".") for name in repeated):
+        return None, f"ambiguous witness: repeated definition in scope {scope}"
+    if token not in _SEMVER_TOKEN_RE.findall(text):
+        return None, "witness does not carry its registered token"
+    matches = [i for i, line in enumerate(lines, 1)
+               if line.strip() == text and pin_witness(lines, scopes, i)[0] == scope]
+    if len(matches) == 1:
+        return matches[0], None
+    if matches:
+        return None, f"ambiguous witness in {scope} at lines {matches}"
+    return None, f"witness content or scope changed ({scope})"
+
+
 def scan_static_version_pins(root, active_version=None, tests_dir=None, exemptions=None):
     """DEC-213③ (FIX-361): report static pins of the active version in tests.
 
@@ -517,6 +583,7 @@ def scan_static_version_pins(root, active_version=None, tests_dir=None, exemptio
         return []
     registry = STATIC_PIN_EXEMPTIONS if exemptions is None else exemptions
     issues = []
+    audited = {}
     for path in sorted(base.rglob("*.py")):
         if "__pycache__" in path.parts:
             continue
@@ -532,8 +599,15 @@ def scan_static_version_pins(root, active_version=None, tests_dir=None, exemptio
             tree = None
             issues.append(f"[WARN] static-version-pin: cannot parse {rel} ({exc.msg}) — line scan skipped")
         doc_lines, string_inner = _annotation_string_lines(tree) if tree is not None else (set(), set())
-        allowed_lines = {entry[0] for entry in registry.get(rel, ()) if entry[1] == active_version}
-        for lineno, line in enumerate(source_text.splitlines(), start=1):
+        lines = source_text.splitlines()
+        entries = registry.get(rel, ())
+        scopes = pin_scopes(tree) if any(len(entry) > 3 for entry in entries) else None
+        resolved = [resolve_pin(entry, lines, scopes) for entry in entries]
+        if entries:
+            audited[rel] = resolved
+        allowed_lines = {lineno for entry, (lineno, error) in zip(entries, resolved)
+                         if not error and entry[1] == active_version}
+        for lineno, line in enumerate(lines, start=1):
             if lineno in doc_lines:
                 continue
             stripped = line.strip()
@@ -552,25 +626,28 @@ def scan_static_version_pins(root, active_version=None, tests_dir=None, exemptio
                 f"(resolve_entry.read_active_version() / @@ACTIVE_VERSION@@ token, the "
                 f"FIX-352/353 shape) or register a reasoned (line, token, reason) "
                 f"exemption in checks/version.py STATIC_PIN_EXEMPTIONS (DEC-213③)")
-    # Exemption ledger audit: an entry whose target line no longer carries its
-    # token has drifted — re-audit (prevents blanket-allow rot).
     for rel, entries in registry.items():
-        target = root / rel
-        if not target.is_file():
-            for lineno, token, _reason in entries:
+        resolved = audited.get(rel)
+        if resolved is None:
+            target = root / rel
+            if not target.is_file():
+                resolved = [(None, "target file missing")] * len(entries)
+            else:
+                # Explicit registries can also contain files outside tests_dir.
+                try:
+                    source = target.read_text(encoding="utf-8")
+                except (OSError, UnicodeError):
+                    continue
+                try:
+                    tree = ast.parse(source)
+                except SyntaxError:
+                    tree = None
+                lines = source.splitlines()
+                scopes = pin_scopes(tree)
+                resolved = [resolve_pin(entry, lines, scopes) for entry in entries]
+        for entry, (_actual, error) in zip(entries, resolved):
+            if error:
                 issues.append(
-                    f"[WARN] static-version-pin: stale exemption {rel}:{lineno} "
-                    f"(token \"{token}\") — target file missing; re-audit STATIC_PIN_EXEMPTIONS")
-            continue
-        try:
-            lines = target.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeError):
-            continue  # unreadable face already covered by the scan above
-        for lineno, token, _reason in entries:
-            line = lines[lineno - 1] if 0 < lineno <= len(lines) else ""
-            if token not in [m.group(1) for m in _SEMVER_TOKEN_RE.finditer(line)]:
-                issues.append(
-                    f"[WARN] static-version-pin: stale exemption {rel}:{lineno} "
-                    f"(token \"{token}\") — line no longer carries the token; "
-                    f"re-audit STATIC_PIN_EXEMPTIONS (DEC-213③)")
+                    f"[WARN] static-version-pin: stale exemption {rel}:{entry[0]} "
+                    f'(token "{entry[1]}") — {error}; re-audit STATIC_PIN_EXEMPTIONS (DEC-213③)')
     return issues

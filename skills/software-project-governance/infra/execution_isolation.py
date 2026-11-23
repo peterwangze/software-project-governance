@@ -46,19 +46,19 @@ U1 未证实不得声称已验证):
   lease→write identity binding (a leaseless retry is governed by the
   dispatch protocol, not by this gate — disclosed boundary).
 
-Disclosed crash windows (mirroring governance_store._TargetLock P3-2):
+Slot and review recovery (FIX-517):
 
-  * a writer crashing between lockfile creation and the state save
-    leaves a lockfile without a state record — the next conflicting
-    ``begin_write`` still meets the O_EXCL refusal and reads the holder
-    info from the lockfile payload;
-  * a lockfile older than ``_STALE_LOCKFILE_SECONDS`` (600s) is taken
-    over by the next acquirer (crash recovery, not scheduling) — a
-    stale holder that resumes still reports success on ``end_write``
-    but may unlink a successor's lockfile (transient mutual-exclusion
-    erosion, unreachable for healthy sub-second writes);
-  * an expired WRITER SLOT (state record past ``expires_at``) is
-    treated as stale and cleaned by the next ``begin_write``.
+  * New write grants bind a task and a worker (session, writer label and
+    workspace). The read-only judge, snapshot creator and release operation
+    inspect both state and marker; a writer interrupted before publishing
+    its state still blocks conflicting work. A stale worker cannot release
+    a successor's slot. Anonymous legacy grants remain reserved until expiry.
+  * New reviews have a lease. After interruption, an explicit recovery uses
+    the task, snapshot ID and reason to release only the expired binding.
+    Original bytes, digests and snapshot artifacts remain available. Legacy
+    reviews use their stored beginning plus the default review lease.
+  * The short-lived state mutation guard is kernel-held and released on
+    process exit. A legacy state.lock marker retains its prior grace period.
 
 Cross-process lock protocol (review R0 P1-1): the lease reclaim is the
 only ``agent-locks.json`` writer OUTSIDE governance_store, so it joins
@@ -108,7 +108,6 @@ import re
 import stat
 import sys
 import tempfile
-import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -147,6 +146,7 @@ __all__ = [
     "main",
     "reclaim_expired_leases",
     "release_review",
+    "recover_review",
     "render_status_text",
 ]
 
@@ -170,6 +170,7 @@ CAPABILITY_REPORT_REF = (
     "feat-095-harness-enforcement-capability-2026-10-10.md")
 
 DEFAULT_WRITE_SLOT_TTL_SECONDS = 600
+DEFAULT_REVIEW_TTL_SECONDS = 3600
 _STALE_LOCKFILE_SECONDS = 600
 _LOCK_POLL_SECONDS = 0.05
 _MAX_WAITERS = 50
@@ -203,8 +204,7 @@ ERROR_DISPOSITIONS = {
     CODE_LOCK_CONTENTION: "retryable",
 }
 
-_INPROC_GUARD = threading.Lock()
-_INPROC_LOCKS: dict = {}
+
 
 
 # ── small helpers ───────────────────────────────────────────────────────────
@@ -250,7 +250,71 @@ def _domain(file_path):
     return text
 
 
-def _domains_or_error(files):
+def _directory_case_sensitive(parent, inherited):
+    """Observe this directory's lookup rules without creating a probe file."""
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                variant = entry.name.swapcase()
+                if variant == entry.name:
+                    continue
+                try:
+                    return not os.path.samefile(entry.path, parent / variant)
+                except FileNotFoundError:
+                    if not entry.is_symlink():
+                        return True
+    except (FileNotFoundError, NotADirectoryError):
+        return inherited
+    if os.name == "nt":
+        # An empty NTFS directory can independently enable case sensitivity.
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_dir = kernel.CreateFileW
+        open_dir.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                             wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+        open_dir.restype = wintypes.HANDLE
+        handle = open_dir(str(parent), 0x80, 7, None, 3, 0x02000000, None)
+        if handle != ctypes.c_void_p(-1).value:
+            try:
+                flags = wintypes.DWORD()
+                if kernel.GetFileInformationByHandleEx(wintypes.HANDLE(handle), 23,
+                                                       ctypes.byref(flags), ctypes.sizeof(flags)):
+                    return bool(flags.value & 1)
+            finally:
+                kernel.CloseHandle(wintypes.HANDLE(handle))
+    return inherited
+
+
+def _domain_key(governance_dir, domain):
+    """Canonical directory-entry identity, stable across atomic file replacement."""
+    parent = Path(governance_dir).parent
+    sensitive = os.name != "nt"
+    parts = []
+    for name in domain.split("/"):
+        sensitive = _directory_case_sensitive(parent, sensitive)
+        if not sensitive:
+            folded = os.path.normcase(name) if os.name == "nt" else name.lower()
+        else:
+            folded = name
+        parts.append(folded)
+        parent = parent / name
+    return "/".join(parts)
+
+
+def _record_key(governance_dir, records, domain):
+    """Keep the original spelling of a stored slot, lease or review."""
+    if domain in records or not records:
+        return domain
+    identity = _domain_key(governance_dir, domain)
+    for name, record in records.items():
+        existing = record.get("domain_key") if isinstance(record, dict) else None
+        if (existing or _domain_key(governance_dir, name)) == identity:
+            return name
+    return domain
+
+
+def _domains_or_error(files, governance_dir):
     """Validate+normalize a file list → ``(domains, None)`` on success or
     ``(None, error_dict)`` fail-closed listing every offending input
     (P2-2: one bad domain refuses the WHOLE call — a partial grant on a
@@ -270,7 +334,10 @@ def _domains_or_error(files):
         return None, _error(
             CODE_SCHEMA_VIOLATION,
             "files is required and must be non-empty")
-    return domains, None
+    by_key = {}
+    for name in domains:
+        by_key.setdefault(_domain_key(governance_dir, name), name)
+    return list(by_key.values()), None
 
 
 def _snapshot_root_prefix() -> str:
@@ -375,7 +442,7 @@ def _new_state() -> dict:
     }
 
 
-def _load_state(path: Path):
+def _load_state(path: Path, governance_dir=None):
     """Load the isolation state; tolerant of absence, fail-closed on
     corruption (returns ``(state, None)`` / ``(None, error_dict)``)."""
     if not path.is_file():
@@ -395,12 +462,24 @@ def _load_state(path: Path):
     state = _new_state()
     for key in ("writers", "reviews", "snapshots"):
         value = loaded.get(key, {})
-        if isinstance(value, dict):
-            state[key] = value
+        if not isinstance(value, dict) or any(not isinstance(v, dict) for v in value.values()):
+            return None, _error(CODE_MANUAL_INTERVENTION,
+                                "{0}: invalid {1} inventory".format(path, key))
+        # Old ledgers could hold two spellings for one file. Never silently
+        # discard a historical owner's slot when writing the new state.
+        if key == "writers" and len(value) > 1:
+            keys = {row.get("domain_key") or _domain_key(governance_dir or path.parent, name)
+                    for name, row in value.items()}
+            if len(keys) != len(value):
+                return None, _error(CODE_MANUAL_INTERVENTION,
+                                    "multiple stored writers identify the same file; preserve and reconcile")
+        state[key] = value
     for key in ("waiters", "reclaim_log"):
         value = loaded.get(key, [])
-        if isinstance(value, list):
-            state[key] = value
+        if not isinstance(value, list) or any(not isinstance(v, dict) for v in value):
+            return None, _error(CODE_MANUAL_INTERVENTION,
+                                "{0}: invalid {1} history".format(path, key))
+        state[key] = value
     state["schema_version"] = loaded.get("schema_version", 1)
     return state, None
 
@@ -411,7 +490,7 @@ def _trim_state(state: dict) -> None:
     snapshots = state["snapshots"]
     if len(snapshots) > _MAX_SNAPSHOT_RECORDS:
         ordered = sorted(
-            snapshots.items(),
+            ((key, value) for key, value in snapshots.items() if value.get("released_at")),
             key=lambda kv: kv[1].get("released_at")
             or kv[1].get("created_at", ""))
         for key, _ in ordered[:len(snapshots) - _MAX_SNAPSHOT_RECORDS]:
@@ -421,73 +500,54 @@ def _trim_state(state: dict) -> None:
 # ── lockfiles (the cross-process primitive) ─────────────────────────────────
 
 
-def _inproc_mutex(key: str) -> threading.Lock:
-    with _INPROC_GUARD:
-        lock = _INPROC_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _INPROC_LOCKS[key] = lock
-        return lock
-
-
-def _lock_dir(governance_dir) -> Path:
-    path = Path(governance_dir) / LOCK_DIR_NAME
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 class _StateLock:
-    """Global O_EXCL mutex serializing every mutation of the isolation
-    state file AND of agent-locks.json reclaim (lock order: state lock
-    is always the OUTERMOST isolation lock; domain lockfiles nest inside
-    and outlive it across processes)."""
+    """Use a kernel lock for crash recovery and retain the old O_EXCL marker."""
 
     def __init__(self, governance_dir, timeout_seconds=10.0):
-        self.path = _lock_dir(governance_dir) / "state.lock"
+        self.path = Path(governance_dir) / LOCK_DIR_NAME / "state.lock"
         self.timeout_seconds = timeout_seconds
-        self._inproc = _inproc_mutex(str(self.path))
-        self._acquired = False
+        self._guard = None
+        self._marker = "kernel-guard:{0}".format(os.getpid())
 
     def __enter__(self):
-        self._inproc.acquire()
-        deadline = time.monotonic() + self.timeout_seconds
-        while True:
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL
-                             | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode("ascii"))
-                os.close(fd)
-                self._acquired = True
-                return self
-            except FileExistsError:
-                if self._stale():
-                    continue
-                if time.monotonic() >= deadline:
-                    self._inproc.release()
-                    raise IsolationLockTimeout(self.path)
-                time.sleep(_LOCK_POLL_SECONDS)
+        from closure_chain import LockContention, _RunLock
 
-    def _stale(self) -> bool:
+        deadline = time.monotonic() + self.timeout_seconds
+        self._guard = _RunLock(self.path.with_name("state.guard"), self.timeout_seconds)
         try:
-            age = time.time() - self.path.stat().st_mtime
-        except OSError:
-            return False
-        if age > _STALE_LOCKFILE_SECONDS:
-            try:
-                self.path.unlink()
-            except OSError:
-                pass
-            return True
-        return False
+            self._guard.__enter__()
+        except LockContention as exc:
+            raise IsolationLockTimeout(self.path) from exc
+        try:
+            while True:
+                try:
+                    with self.path.open("x", encoding="ascii") as marker:
+                        marker.write(self._marker)
+                    return self
+                except FileExistsError:
+                    try:
+                        value = self.path.read_text(encoding="ascii")
+                        old = time.time() - self.path.stat().st_mtime > _STALE_LOCKFILE_SECONDS
+                        if value.startswith("kernel-guard:") or old:
+                            # Holding state.guard proves the previous new-format
+                            # owner is gone. Old numeric markers retain their grace.
+                            self.path.unlink(missing_ok=True)
+                            continue
+                    except FileNotFoundError:
+                        continue
+                    if time.monotonic() >= deadline:
+                        raise IsolationLockTimeout(self.path)
+                    time.sleep(_LOCK_POLL_SECONDS)
+        except BaseException:
+            self._guard.__exit__(*sys.exc_info())
+            raise
 
     def __exit__(self, *exc_info):
-        if self._acquired:
-            try:
-                self.path.unlink()
-            except OSError:
-                pass
-        self._inproc.release()
-        return False
+        try:
+            if self.path.exists() and self.path.read_text(encoding="ascii") == self._marker:
+                self.path.unlink(missing_ok=True)
+        finally:
+            self._guard.__exit__(*exc_info)
 
 
 class IsolationLockTimeout(RuntimeError):
@@ -499,51 +559,106 @@ class IsolationLockTimeout(RuntimeError):
 
 
 def _domain_lockfile(governance_dir, domain: str) -> Path:
-    safe = domain.replace("/", "__").replace(":", "_")
-    return _lock_dir(governance_dir) / (safe + ".write.lock")
+    key = _domain_key(governance_dir, domain)
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    # A versioned directory keeps even a digest-shaped legacy filename distinct.
+    return Path(governance_dir) / LOCK_DIR_NAME / "domains-v2" / (digest + ".write.lock")
 
 
-def _create_domain_lockfile(path: Path, payload: dict, moment=None):
-    """O_EXCL-create a domain lockfile carrying holder info (so a crashed
-    writer that never reached the state save is still attributable).
+def _legacy_filename(domain):
+    return domain.replace("/", "__") + ".write.lock"
 
-    Takeover (crash recovery, disclosed): an existing lockfile is stale
-    — and therefore unlinked and retried — when its payload's recorded
-    ``expires_at`` has passed (slot-expiry contract) OR its mtime is
-    older than ``_STALE_LOCKFILE_SECONDS``.  Returns
-    ``(True, None)`` or ``(False, holder_payload_or_None)``."""
-    blob = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
-    reference = _now(moment)
+
+def _legacy_marker(governance_dir, state, domain):
+    """Identify an older flat marker without guessing which original path it held."""
+    folder = Path(governance_dir) / LOCK_DIR_NAME
+    stored = _record_key(governance_dir, state["writers"], domain)
+    marker = folder / _legacy_filename(stored)
+    if not marker.is_file():
+        return None, False
+    # The old filename is ambiguous. Match the marker and recorded writer
+    # using original fields before assigning it to either legal domain.
+    holder = _read_lockfile(marker)
+    matches = []
+    for name, slot in state["writers"].items():
+        old = folder / _legacy_filename(name)
+        if (not slot.get("domain_key") and isinstance(holder, dict) and
+                all(slot.get(k) == holder.get(k) for k in ("task_id", "writer", "began_at", "expires_at"))
+                and old.is_file() and old.samefile(marker)):
+            matches.append(name)
+    if len(matches) == 1:
+        if _domain_key(governance_dir, matches[0]) != _domain_key(governance_dir, domain):
+            return None, False
+        return marker, True
+    if not matches and "__" not in marker.name:
+        # Only a root-level spelling has an unambiguous reverse encoding.
+        actual = marker.resolve().name[:-len(".write.lock")]
+        if _domain_key(governance_dir, actual) != _domain_key(governance_dir, domain):
+            return None, False
+        return marker, True
+    return marker, False
+
+
+def _worker(writer="", session_id=None):
+    # CLI invocations inherit the shell/session; API calls default to this process.
+    session = (session_id or os.environ.get("GOVERNANCE_SESSION_ID")
+               or os.environ.get("CODEX_THREAD_ID") or "pid:{0}".format(os.getpid()))
+    cwd = Path.cwd().resolve()
+    workspace = next((p for p in (cwd, *cwd.parents)
+                      if (p / ".git").exists() or (p / GOVERNANCE_DIR_NAME).is_dir()), cwd)
+    return {"session": str(session), "writer": str(writer or ""),
+            "workspace": os.path.normcase(str(workspace))}
+
+
+def _owns(record, task, worker):
+    if record.get("ambiguous_legacy") or record.get("task_id") != task:
+        return False
+    if "worker" in record:
+        return record["worker"] == worker
+    # The old format only recorded a writer label (the marker also carried a
+    # PID). An anonymous legacy slot cannot safely be claimed by task ID alone.
+    return bool(record.get("writer") and record["writer"] == worker["writer"])
+
+
+def _claims(governance_dir, state, domain):
+    rows = []
+    slot = state["writers"].get(_record_key(governance_dir, state["writers"], domain))
+    if isinstance(slot, dict):
+        rows.append(slot)
+    legacy, identified = _legacy_marker(governance_dir, state, domain)
+    markers = [(_domain_lockfile(governance_dir, domain), True), (legacy, identified)]
+    for marker, identified in markers:
+        if marker is None or not marker.exists():
+            continue
+        holder = _read_lockfile(marker)
+        if not isinstance(holder, dict):
+            try:
+                modified = marker.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            expires = datetime.fromtimestamp(modified) + timedelta(seconds=_STALE_LOCKFILE_SECONDS)
+            holder = {"task_id": "unknown", "expires_at": _iso(expires)}
+        if not identified:
+            holder = dict(holder, ambiguous_legacy=True)
+        rows.append(holder)
+    return rows
+
+
+def _live(record, moment):
+    deadline = _parse_iso(record.get("expires_at"))
+    return deadline is None or deadline > moment
+
+
+def _create_domain_lockfile(path, payload):
+    blob = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("xb")
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        holder = _read_lockfile(path)
-        stale = False
-        if isinstance(holder, dict):
-            expires = _parse_iso(holder.get("expires_at"))
-            if expires is not None and expires <= reference:
-                stale = True
-        if not stale:
-            try:
-                age = time.time() - path.stat().st_mtime
-            except OSError:
-                age = 0.0
-            if age > _STALE_LOCKFILE_SECONDS:
-                stale = True
-        if stale:
-            try:
-                path.unlink()
-            except OSError:
-                pass
-            try:
-                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                return False, holder
-        else:
-            return False, holder
-    os.write(fd, blob)
-    os.close(fd)
-    return True, None
+        with handle:
+            handle.write(blob)
+    except OSError:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _read_lockfile(path: Path):
@@ -594,7 +709,7 @@ def _load_locks(governance_dir, locks_path=None):
 
 
 def judge_write(task_id, files, *, governance_dir, locks_path=None,
-                state_path=None, now=None) -> dict:
+                state_path=None, now=None, writer="", session_id=None) -> dict:
     """PURE judgment — no side effects, no lockfiles (≤10ms budget face).
 
     Refusal order per domain (first hit wins, all disclosed in result):
@@ -602,7 +717,7 @@ def judge_write(task_id, files, *, governance_dir, locks_path=None,
       2. ``lease_expired`` — the WRITER's own lease for the domain has
          expired (authority lost; reclaim candidate attached);
       3. ``under_review`` — an active review snapshot binds the domain;
-      4. ``write_conflict`` — another task holds a live write slot.
+      4. ``write_conflict`` — another worker holds a live write slot.
 
     A lease held by ANOTHER task is a disclosed NOTICE, never a refusal
     (dispatch-side blocking semantics are FEAT-095's scope — non_goal).
@@ -613,18 +728,19 @@ def judge_write(task_id, files, *, governance_dir, locks_path=None,
         return _error(CODE_SCHEMA_VIOLATION,
                       "task_id must match PREFIX-NNN (got {0!r})"
                       .format(task_id))
-    domains, err = _domains_or_error(files)
+    domains, err = _domains_or_error(files, governance_dir)
     if err is not None:
         return err
 
     spath = _state_path(governance_dir, state_path)
-    state, err = _load_state(spath)
+    state, err = _load_state(spath, governance_dir)
     if err is not None:
         return err
     locks, err = _load_locks(governance_dir, locks_path)
     if err is not None:
         return err
 
+    worker = _worker(writer, session_id)
     refusals = []
     warnings = []
     reclaim_candidates = []
@@ -635,7 +751,8 @@ def judge_write(task_id, files, *, governance_dir, locks_path=None,
     # root necessarily carries the prefix.
     snapshot_prefix = _snapshot_root_prefix()
     for domain in domains:
-        if domain.startswith(snapshot_prefix):
+        if _domain_key(governance_dir, domain).startswith(
+                _domain_key(governance_dir, snapshot_prefix.rstrip("/")) + "/"):
             refusals.append({
                 "file": domain,
                 "reason": CODE_SNAPSHOT_IMMUTABLE,
@@ -645,7 +762,8 @@ def judge_write(task_id, files, *, governance_dir, locks_path=None,
                           "源文件请对源域操作".format(domain, snapshot_prefix),
             })
             continue
-        entry = locks["file_locks"].get(domain)
+        lease_key = _record_key(governance_dir, locks["file_locks"], domain)
+        entry = locks["file_locks"].get(lease_key)
         expiry = _lease_expiry(entry) if entry else None
         if (entry and entry.get("locked_by") == task
                 and expiry is not None and expiry <= moment):
@@ -660,53 +778,44 @@ def judge_write(task_id, files, *, governance_dir, locks_path=None,
                           "重新取得租约（agent-locks-acquire）".format(
                               task, domain, _iso(expiry)),
             })
-            reclaim_candidates.append(domain)
+            reclaim_candidates.append(lease_key)
             continue
         if (entry and expiry is not None and expiry <= moment):
             # someone ELSE's expired lease — reclaim candidate, not a
             # refusal for this writer.
-            reclaim_candidates.append(domain)
-        review = state["reviews"].get(domain)
+            reclaim_candidates.append(lease_key)
+        review = state["reviews"].get(_record_key(governance_dir, state["reviews"], domain))
         if isinstance(review, dict) and review.get("task_id"):
+            review_deadline = _review_deadline(review)
             refusals.append({
                 "file": domain,
                 "reason": CODE_UNDER_REVIEW,
                 "holder": review.get("task_id"),
                 "snapshot_id": review.get("snapshot_id"),
+                "holder_worker": review.get("worker"),
+                "expires_at": _iso(review_deadline) if review_deadline else None,
+                "recoverable": bool(review_deadline and review_deadline <= moment),
                 "began_at": review.get("began_at"),
                 "detail": "同文件域被审互斥（FEAT-096 ②）：{0} 正被 "
                           "{1} 审查（快照 {2}，始于 {3}）——审查期间该域"
                           "禁止写入；预计释放：审查结束执行 "
-                          "isolation-snapshot --action release".format(
+                          "isolation-snapshot --action release；到期后可指定快照 ID 与原因执行 recover".format(
                               domain, review.get("task_id"),
                               review.get("snapshot_id"),
                               review.get("began_at")),
             })
             continue
-        slot = state["writers"].get(domain)
-        if isinstance(slot, dict) and slot.get("task_id"):
-            slot_expiry = _parse_iso(slot.get("expires_at"))
-            if slot.get("task_id") != task and (
-                    slot_expiry is None or slot_expiry > moment):
+        for claim in _claims(governance_dir, state, domain):
+            if _live(claim, moment) and not _owns(claim, task, worker):
                 refusals.append({
-                    "file": domain,
-                    "reason": CODE_WRITE_CONFLICT,
-                    "holder": slot.get("task_id"),
-                    "expires_at": slot.get("expires_at"),
-                    "detail": "写并发限制（FEAT-096 ①）：{0} 正被任务 "
-                              "{1} 写入（始于 {2}，预计释放 {3}）——同域"
-                              "同时仅一个写者；等待释放或改用隔离工作区"
-                              "（worktree）".format(
-                                  domain, slot.get("task_id"),
-                                  slot.get("began_at"),
-                                  slot.get("expires_at")),
+                    "file": domain, "reason": CODE_WRITE_CONFLICT,
+                    "holder": claim.get("task_id", "unknown"),
+                    "holder_worker": claim.get("worker"),
+                    "expires_at": claim.get("expires_at"),
+                    "detail": "{0} 正由 {1} 写入，预计释放 {2}".format(
+                        domain, claim.get("task_id"), claim.get("expires_at")),
                 })
-                continue
-            if slot.get("task_id") != task:
-                warnings.append(
-                    "{0}: 过期写槽（{1} 于 {2} 到期）将按陈旧清理"
-                    .format(domain, slot.get("task_id"),
-                            slot.get("expires_at")))
+                break
         if (entry and expiry is not None and expiry > moment
                 and entry.get("locked_by") not in (None, "", task)):
             warnings.append(
@@ -727,7 +836,7 @@ def judge_write(task_id, files, *, governance_dir, locks_path=None,
 # ── piece ①: begin / end exclusive write ──────────────────────────────────
 
 
-def begin_write(task_id, files, *, writer="", purpose="",
+def begin_write(task_id, files, *, writer="", session_id=None, purpose="",
                 ttl_seconds=DEFAULT_WRITE_SLOT_TTL_SECONDS,
                 governance_dir, locks_path=None, state_path=None,
                 now=None, timeout_seconds=10.0) -> dict:
@@ -749,7 +858,7 @@ def begin_write(task_id, files, *, writer="", purpose="",
         return _error(CODE_SCHEMA_VIOLATION,
                       "task_id must match PREFIX-NNN (got {0!r})"
                       .format(task_id))
-    domains, err = _domains_or_error(files)
+    domains, err = _domains_or_error(files, governance_dir)
     if err is not None:
         return err
     try:
@@ -761,20 +870,23 @@ def begin_write(task_id, files, *, writer="", purpose="",
                       "ttl_seconds must be positive (got {0})"
                       .format(ttl_seconds))
 
-    moment = _now(now)
     spath = _state_path(governance_dir, state_path)
     try:
         with _StateLock(governance_dir, timeout_seconds):
-            state, err = _load_state(spath)
+            moment = _now(now)
+            state, err = _load_state(spath, governance_dir)
             if err is not None:
                 return err
-            locks, err = _load_locks(governance_dir, locks_path)
+            # Keep the existing lease preflight; judgment and any reclaim
+            # re-read once their own synchronization boundary is in effect.
+            _, err = _load_locks(governance_dir, locks_path)
             if err is not None:
                 return err
 
             judgment = judge_write(
                 task, domains, governance_dir=governance_dir,
-                locks_path=locks_path, state_path=spath, now=moment)
+                locks_path=locks_path, state_path=spath, now=moment,
+                writer=writer, session_id=session_id)
             if judgment.get("error"):
                 return judgment
 
@@ -810,83 +922,40 @@ def begin_write(task_id, files, *, writer="", purpose="",
                     refusals=judgment["refusals"],
                     reclaim=reclaim_report)
 
-            # grant: clean stale slots, create lockfiles, record state
-            for domain in domains:
-                slot = state["writers"].get(domain)
-                if (isinstance(slot, dict)
-                        and slot.get("task_id") != task):
-                    slot_expiry = _parse_iso(slot.get("expires_at"))
-                    if slot_expiry is not None and slot_expiry <= moment:
-                        del state["writers"][domain]
-
-            granted = []
+            # StateLock serializes sanctioned marker mutations. A failed write
+            # restores prior markers, including an existing owner's renewal.
             expires_at = _iso(moment + timedelta(seconds=ttl_seconds))
-            lockfile_conflicts = []
-            for domain in domains:
-                lockfile = _domain_lockfile(governance_dir, domain)
-                # same-task re-entrancy = slot refresh (disclosed
-                # boundary: cross-session SAME-task concurrency is the
-                # dispatch discipline's face, M7.6a duplicate guard).
-                existing = _read_lockfile(lockfile)
-                if (isinstance(existing, dict)
-                        and existing.get("task_id") == task):
-                    try:
-                        lockfile.unlink()
-                    except OSError:
-                        pass
-                payload = {
-                    "task_id": task,
-                    "writer": str(writer or ""),
-                    "began_at": _iso(moment),
-                    "expires_at": expires_at,
-                    "pid": os.getpid(),
-                }
-                created, holder = _create_domain_lockfile(
-                    lockfile, payload, moment)
-                if not created:
-                    lockfile_conflicts.append((domain, holder))
-                    continue
-                granted.append(domain)
-                state["writers"][domain] = {
-                    "task_id": task,
-                    "writer": str(writer or ""),
-                    "purpose": str(purpose or ""),
-                    "began_at": payload["began_at"],
-                    "expires_at": expires_at,
-                }
-
-            if lockfile_conflicts:
-                # roll back the partial grant (all-or-nothing face)
-                for domain in granted:
-                    state["writers"].pop(domain, None)
-                    try:
-                        _domain_lockfile(
-                            governance_dir, domain).unlink()
-                    except OSError:
-                        pass
-                refusals = []
-                for domain, holder in lockfile_conflicts:
-                    info = holder if isinstance(holder, dict) else {}
-                    refusals.append({
-                        "file": domain,
-                        "reason": CODE_WRITE_CONFLICT,
-                        "holder": info.get("task_id", "unknown"),
-                        "expires_at": info.get("expires_at", ""),
-                        "detail": "写并发限制（FEAT-096 ①）：{0} 的域锁文件"
-                                  "被持有（task={1}，预计释放 {2}；state 记录"
-                                  "缺席=写者崩溃窗口，陈旧接管在 {3}s 后）"
-                                  .format(domain, info.get("task_id",
-                                                            "unknown"),
-                                          info.get("expires_at", "未知"),
-                                          _STALE_LOCKFILE_SECONDS),
-                    })
+            worker = _worker(writer, session_id)
+            payload = {"task_id": task, "writer": worker["writer"], "worker": worker,
+                       "began_at": _iso(moment), "expires_at": expires_at}
+            changed = {}
+            try:
+                for domain in domains:
+                    stored = _record_key(governance_dir, state["writers"], domain)
+                    legacy, identified = _legacy_marker(governance_dir, state, domain)
+                    marker = _domain_lockfile(governance_dir, domain)
+                    payload = dict(payload, domain=stored, domain_key=_domain_key(governance_dir, stored))
+                    previous = marker.read_bytes() if marker.exists() else None
+                    if previous is None:
+                        _create_domain_lockfile(marker, payload)
+                    else:
+                        _write_json(marker, payload)
+                    changed[marker] = previous
+                    if legacy and identified:
+                        before = legacy.read_bytes()
+                        legacy.unlink()
+                        changed[legacy] = before
+                    state["writers"][stored] = dict(payload, purpose=str(purpose or ""))
                 _trim_state(state)
                 _write_json(spath, state)
-                return _error(
-                    CODE_WRITE_CONFLICT,
-                    "；".join(r["detail"] for r in refusals),
-                    refusals=refusals)
-
+            except OSError as exc:
+                for marker, previous in reversed(list(changed.items())):
+                    if previous is None:
+                        marker.unlink(missing_ok=True)
+                    else:
+                        _atomic_write_bytes(marker, previous)
+                return _error(CODE_MANUAL_INTERVENTION,
+                              "write slot could not be recorded: {0}".format(exc))
             if judgment["reclaim_candidates"]:
                 _reclaim_locked(
                     governance_dir, state, spath,
@@ -894,11 +963,9 @@ def begin_write(task_id, files, *, writer="", purpose="",
                     moment=moment, trigger="begin-write",
                     locks_path=locks_path,
                     timeout_seconds=timeout_seconds)
-            _trim_state(state)
-            _write_json(spath, state)
             return {
                 "task_id": task,
-                "granted": granted,
+                "granted": domains, "worker": worker,
                 "expires_at": expires_at,
                 "warnings": judgment["warnings"],
                 "began_at": _iso(moment),
@@ -911,7 +978,7 @@ def begin_write(task_id, files, *, writer="", purpose="",
 
 
 def end_write(task_id, files, *, governance_dir, state_path=None,
-              now=None, timeout_seconds=10.0) -> dict:
+              now=None, timeout_seconds=10.0, writer="", session_id=None) -> dict:
     """Release the write slots held by ``task_id`` (fail-closed on a
     non-holder; idempotent no-op for already-free domains)."""
     if isolation_disabled():
@@ -922,51 +989,37 @@ def end_write(task_id, files, *, governance_dir, state_path=None,
         return _error(CODE_SCHEMA_VIOLATION,
                       "task_id must match PREFIX-NNN (got {0!r})"
                       .format(task_id))
-    domains, err = _domains_or_error(files)
+    domains, err = _domains_or_error(files, governance_dir)
     if err is not None:
         return err
 
-    moment = _now(now)
     spath = _state_path(governance_dir, state_path)
     try:
         with _StateLock(governance_dir, timeout_seconds):
-            state, err = _load_state(spath)
+            moment = _now(now)
+            state, err = _load_state(spath, governance_dir)
             if err is not None:
                 return err
             released = []
             absent = []
-            rogue = []
+            worker = _worker(writer, session_id)
             for domain in domains:
-                slot = state["writers"].get(domain)
-                if not (isinstance(slot, dict) and slot.get("task_id")):
+                claims = _claims(governance_dir, state, domain)
+                if not claims:
                     absent.append(domain)
-                    continue
-                if slot.get("task_id") != task:
-                    rogue.append(domain)
-                    continue
-                del state["writers"][domain]
-                lockfile = _domain_lockfile(governance_dir, domain)
-                holder = _read_lockfile(lockfile)
-                if (not isinstance(holder, dict)
-                        or holder.get("task_id") in (None, task)):
-                    try:
-                        lockfile.unlink()
-                    except OSError:
-                        pass
-                released.append(domain)
-            if rogue:
-                holders = "; ".join(
-                    "{0} (held by {1})".format(
-                        d, state["writers"].get(d, {})
-                        .get("task_id", "unknown"))
-                    for d in rogue)
-                _trim_state(state)
-                _write_json(spath, state)
-                return _error(
-                    CODE_NOT_HOLDER,
-                    "task {0} does not hold the write slot(s): {1} — "
-                    "only the holder may end the write".format(task,
-                                                               holders))
+                elif all(_owns(c, task, worker) or
+                         (c.get("ambiguous_legacy") and not _live(c, moment)) for c in claims):
+                    released.append(domain)
+                else:
+                    return _error(CODE_NOT_HOLDER, "only the owner may release {0}".format(domain),
+                                  holders=claims)
+            for domain in released:
+                legacy, identified = _legacy_marker(governance_dir, state, domain)
+                if legacy and identified:
+                    legacy.unlink(missing_ok=True)
+                _domain_lockfile(governance_dir, domain).unlink(missing_ok=True)
+                stored = _record_key(governance_dir, state["writers"], domain)
+                state["writers"].pop(stored, None)
             _trim_state(state)
             _write_json(spath, state)
             return {"task_id": task, "released": released,
@@ -982,6 +1035,7 @@ def end_write(task_id, files, *, governance_dir, state_path=None,
 
 
 def create_review_snapshot(task_id, files, *, review_round=0,
+                            reviewer="", session_id=None, ttl_seconds=DEFAULT_REVIEW_TTL_SECONDS,
                             governance_dir, repo_root=None,
                             state_path=None, now=None,
                             timeout_seconds=10.0) -> dict:
@@ -998,7 +1052,7 @@ def create_review_snapshot(task_id, files, *, review_round=0,
         return _error(CODE_SCHEMA_VIOLATION,
                       "task_id must match PREFIX-NNN (got {0!r})"
                       .format(task_id))
-    domains, err = _domains_or_error(files)
+    domains, err = _domains_or_error(files, governance_dir)
     if err is not None:
         return err
     try:
@@ -1009,13 +1063,20 @@ def create_review_snapshot(task_id, files, *, review_round=0,
         return _error(CODE_SCHEMA_VIOLATION,
                       "review_round must be >= 0 (got {0})"
                       .format(review_round))
+    try:
+        ttl = int(ttl_seconds)
+        if ttl <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        return _error(CODE_SCHEMA_VIOLATION, "review ttl_seconds must be a positive integer")
+    worker = _worker(reviewer, session_id)
     root = Path(repo_root) if repo_root is not None else Path.cwd()
 
-    moment = _now(now)
     spath = _state_path(governance_dir, state_path)
     try:
         with _StateLock(governance_dir, timeout_seconds):
-            state, err = _load_state(spath)
+            moment = _now(now)
+            state, err = _load_state(spath, governance_dir)
             if err is not None:
                 return err
 
@@ -1029,24 +1090,16 @@ def create_review_snapshot(task_id, files, *, review_round=0,
 
             refusals = []
             for domain in domains:
-                slot = state["writers"].get(domain)
-                if (isinstance(slot, dict) and slot.get("task_id")):
-                    slot_expiry = _parse_iso(slot.get("expires_at"))
-                    if slot_expiry is None or slot_expiry > moment:
-                        refusals.append({
-                            "file": domain,
-                            "reason": CODE_WRITE_IN_PROGRESS,
-                            "holder": slot.get("task_id"),
-                            "expires_at": slot.get("expires_at"),
-                            "detail": "同文件域在写互斥（FEAT-096 ②）："
-                                      "{0} 正被任务 {1} 写入（预计释放 "
-                                      "{2}）——审查快照不得捕获写入中的"
-                                      "文件；等待写结束再建快照".format(
-                                          domain, slot.get("task_id"),
-                                          slot.get("expires_at")),
-                        })
-                        continue
-                review = state["reviews"].get(domain)
+                claim = next((c for c in _claims(governance_dir, state, domain)
+                              if _live(c, moment)), None)
+                if claim is not None:
+                    refusals.append({"file": domain, "reason": CODE_WRITE_IN_PROGRESS,
+                                     "holder": claim.get("task_id"),
+                                     "holder_worker": claim.get("worker"),
+                                     "expires_at": claim.get("expires_at"),
+                                     "detail": "{0} 正在写入，待释放后创建快照".format(domain)})
+                    continue
+                review = state["reviews"].get(_record_key(governance_dir, state["reviews"], domain))
                 if isinstance(review, dict) and review.get("task_id"):
                     refusals.append({
                         "file": domain,
@@ -1117,10 +1170,11 @@ def create_review_snapshot(task_id, files, *, review_round=0,
                     "left on disk for inspection; fix and re-run with a "
                     "fresh id".format(snapshot_id, exc))
 
+            deadline = _iso(moment + timedelta(seconds=ttl))
             manifest = {
                 "schema_version": 1,
                 "snapshot_id": snapshot_id,
-                "task_id": task,
+                "task_id": task, "worker": worker, "expires_at": deadline,
                 "review_round": review_round,
                 "created_at": _iso(moment),
                 "files": records,
@@ -1133,13 +1187,13 @@ def create_review_snapshot(task_id, files, *, review_round=0,
 
             for domain in domains:
                 state["reviews"][domain] = {
-                    "task_id": task,
+                    "domain_key": _domain_key(governance_dir, domain), "task_id": task, "worker": worker, "expires_at": deadline,
                     "snapshot_id": snapshot_id,
                     "round": review_round,
                     "began_at": _iso(moment),
                 }
             state["snapshots"][snapshot_id] = {
-                "task_id": task,
+                "task_id": task, "worker": worker, "expires_at": deadline,
                 "review_round": review_round,
                 "created_at": _iso(moment),
                 "files": [r["source"] for r in records],
@@ -1148,7 +1202,7 @@ def create_review_snapshot(task_id, files, *, review_round=0,
             _trim_state(state)
             _write_json(spath, state)
             return {
-                "task_id": task,
+                "task_id": task, "worker": worker, "expires_at": deadline,
                 "snapshot_id": snapshot_id,
                 "snapshot_root": str(snapshot_root),
                 "files": records,
@@ -1162,47 +1216,95 @@ def create_review_snapshot(task_id, files, *, review_round=0,
             "(transient, disposition retryable)".format(exc.path))
 
 
-def release_review(task_id, *, governance_dir, state_path=None, now=None,
-                   timeout_seconds=10.0) -> dict:
-    """End the review binding: the domains become writable again.
+def _review_deadline(review):
+    if "expires_at" in review:
+        return _parse_iso(review["expires_at"])
+    # Old bindings recorded began_at but did not record a lease length.
+    started = _parse_iso(review.get("began_at"))
+    return started + timedelta(seconds=DEFAULT_REVIEW_TTL_SECONDS) if started else None
 
-    The on-disk snapshots STAY (immutable audit artifacts); only the
-    under-review binding is lifted.
-    """
+
+def recover_review(task_id, snapshot_id, *, governance_dir, reason, state_path=None,
+                   now=None, timeout_seconds=10.0, reviewer="", session_id=None):
+    """Release only an expired, explicitly named snapshot. Record the recovery."""
+    if not snapshot_id or not str(reason or "").strip():
+        return _error(CODE_SCHEMA_VIOLATION, "recovery requires a snapshot_id and reason")
+    return _finish_review(task_id, snapshot_id, governance_dir, state_path, now,
+                          timeout_seconds, _worker(reviewer, session_id), str(reason).strip())
+
+
+def release_review(task_id, *, governance_dir, state_path=None, now=None, snapshot_id=None,
+                   timeout_seconds=10.0, reviewer="", session_id=None) -> dict:
+    """Release the caller's review bindings and retain all snapshot artifacts."""
+    return _finish_review(task_id, snapshot_id, governance_dir, state_path, now,
+                          timeout_seconds, _worker(reviewer, session_id), None)
+
+
+def _finish_review(task_id, snapshot_id, governance_dir, state_path, now, timeout_seconds,
+                   worker, recovery_reason):
     task = _require_task(task_id)
     if task is None:
-        return _error(CODE_SCHEMA_VIOLATION,
-                      "task_id must match PREFIX-NNN (got {0!r})"
-                      .format(task_id))
-    moment = _now(now)
+        return _error(CODE_SCHEMA_VIOLATION, "task_id must match PREFIX-NNN")
     spath = _state_path(governance_dir, state_path)
     try:
         with _StateLock(governance_dir, timeout_seconds):
-            state, err = _load_state(spath)
+            moment = _now(now)
+            state, err = _load_state(spath, governance_dir)
             if err is not None:
                 return err
-            released = []
-            snapshots = []
-            for domain, review in list(state["reviews"].items()):
-                if not (isinstance(review, dict)
-                        and review.get("task_id") == task):
-                    continue
+            requested = {d: r for d, r in state["reviews"].items()
+                         if isinstance(r, dict) and r.get("task_id") == task
+                         and (not snapshot_id or r.get("snapshot_id") == snapshot_id)}
+            if recovery_reason:
+                for review in requested.values():
+                    expires = _review_deadline(review)
+                    if not expires or expires > moment:
+                        return _error(CODE_UNDER_REVIEW, "snapshot is still leased or its expiry "
+                                      "is unknown", snapshot_id=snapshot_id,
+                                      expires_at=_iso(expires) if expires else None)
+                if not requested:
+                    record = state["snapshots"].get(snapshot_id, {})
+                    if record.get("task_id") != task or not record.get("released_at"):
+                        return _error(CODE_NOT_HOLDER, "no matching review to recover")
+                selected = requested
+            else:
+                # Legacy snapshots were owned by task. New snapshots also bind
+                # a reviewer; other reviewers of the same task remain active.
+                selected = {d: r for d, r in requested.items()
+                            if "worker" not in r or r["worker"] == worker}
+                if requested and not selected:
+                    return _error(CODE_NOT_HOLDER, "only the reviewer may release this snapshot")
+
+            for review in selected.values():
+                record = state["snapshots"].get(review.get("snapshot_id"), {})
+                if record.get("task_id", task) != task:
+                    return _error(CODE_MANUAL_INTERVENTION,
+                                  "review binding and snapshot inventory disagree on ownership")
+            snapshots = set()
+            for domain, review in selected.items():
                 del state["reviews"][domain]
-                released.append(domain)
-                snapshot_id = review.get("snapshot_id")
-                record = state["snapshots"].get(snapshot_id)
-                if isinstance(record, dict):
-                    record["released_at"] = _iso(moment)
-                    snapshots.append(snapshot_id)
-            _trim_state(state)
-            _write_json(spath, state)
-            return {"task_id": task, "released": released,
-                    "snapshots": snapshots, "released_at": _iso(moment)}
+                sid = review.get("snapshot_id")
+                if sid:
+                    # Older retention could trim an active snapshot's catalogue
+                    # entry. Retain its binding and disposition in the audit trail.
+                    if sid not in state["snapshots"]:
+                        state["snapshots"][sid] = {
+                            "task_id": task, "created_at": review.get("began_at"),
+                            "review_round": review.get("round"),
+                            "files": [d for d, r in selected.items() if r.get("snapshot_id") == sid],
+                        }
+                    record = state["snapshots"][sid]
+                    record.update(released_at=_iso(moment), released_by=worker)
+                    if recovery_reason:
+                        record["recovery_reason"] = recovery_reason
+                    snapshots.add(sid)
+            if selected:
+                _trim_state(state)
+                _write_json(spath, state)
+            return {"task_id": task, "released": list(selected), "snapshots": sorted(snapshots),
+                    "released_at": _iso(moment), "recovery_reason": recovery_reason}
     except IsolationLockTimeout as exc:
-        return _error(
-            CODE_LOCK_CONTENTION,
-            "isolation state lock busy: {0} — retry the same operation "
-            "(transient, disposition retryable)".format(exc.path))
+        return _error(CODE_LOCK_CONTENTION, "isolation state lock busy: {0}".format(exc.path))
 
 
 # ── piece ④: lease reclaim with loss-of-authority verification ────────────
@@ -1257,14 +1359,21 @@ def _reclaim_locked(governance_dir, state, spath, *, domains,
                 # loss-of-authority verification: the expired lease AND
                 # any residual write slot of the same task are revoked
                 # together.
-                slot = state["writers"].get(domain)
+                stored = _record_key(governance_dir, state["writers"], domain)
+                slot = state["writers"].get(stored)
                 if (isinstance(slot, dict)
                         and slot.get("task_id") == task):
-                    del state["writers"][domain]
-                    try:
-                        _domain_lockfile(governance_dir, domain).unlink()
-                    except OSError:
-                        pass
+                    legacy, identified = _legacy_marker(governance_dir, state, domain)
+                    markers = [_domain_lockfile(governance_dir, domain)]
+                    if legacy and identified:
+                        markers.append(legacy)
+                    for marker in markers:
+                        holder = _read_lockfile(marker)
+                        if (isinstance(holder, dict) and holder.get("task_id") == task
+                                and holder.get("worker") == slot.get("worker")
+                                and holder.get("writer") == slot.get("writer")):
+                            marker.unlink(missing_ok=True)
+                    del state["writers"][stored]
                     revoked_slots.append(domain)
                 del locks["file_locks"][domain]
                 state["reclaim_log"].append({
@@ -1325,7 +1434,7 @@ def reclaim_expired_leases(*, governance_dir, locks_path=None,
             locks, err = _load_locks(governance_dir, locks_path)
             if err is not None:
                 return err
-            state, err = _load_state(spath)
+            state, err = _load_state(spath, governance_dir)
             if err is not None:
                 return err
             return _reclaim_locked(
@@ -1351,7 +1460,7 @@ def isolation_status(*, governance_dir, locks_path=None, state_path=None,
     :func:`render_status_text`)."""
     moment = _now(now)
     spath = _state_path(governance_dir, state_path)
-    state, err = _load_state(spath)
+    state, err = _load_state(spath, governance_dir)
     if err is not None:
         return err
     locks, err = _load_locks(governance_dir, locks_path)
@@ -1361,7 +1470,31 @@ def isolation_status(*, governance_dir, locks_path=None, state_path=None,
     writers = {}
     for domain, slot in state["writers"].items():
         if isinstance(slot, dict):
-            writers[domain] = dict(slot)
+            writers[domain] = dict(slot, domain_key=_domain_key(governance_dir, domain))
+    folder = Path(governance_dir) / LOCK_DIR_NAME
+    unidentified = []
+    for marker in (folder / "domains-v2").glob("*.write.lock"):
+        holder = _read_lockfile(marker)
+        domain = _domain(holder.get("domain")) if isinstance(holder, dict) else ""
+        if not domain or _domain_lockfile(governance_dir, domain) != marker:
+            unidentified.append(marker.name)
+            continue
+        stored = _record_key(governance_dir, writers, domain)
+        if stored not in writers:
+            writers[domain] = dict(holder, marker_only=True)
+    for marker in folder.glob("*.write.lock"):
+        if any(_legacy_marker(governance_dir, state, name) == (marker, True)
+               for name in state["writers"]):
+            continue
+        # A marker-only root name is reversible; flattened names are not.
+        name = marker.name[:-len(".write.lock")]
+        holder = _read_lockfile(marker)
+        if "__" not in name and isinstance(holder, dict) and _domain(name):
+            writers.setdefault(_record_key(governance_dir, writers, name),
+                               dict(holder, domain_key=_domain_key(governance_dir, name),
+                                    marker_only=True))
+        else:
+            unidentified.append(marker.name)
     leases = {}
     for domain, entry in locks["file_locks"].items():
         if not isinstance(entry, dict):
@@ -1377,11 +1510,15 @@ def isolation_status(*, governance_dir, locks_path=None, state_path=None,
     reviews = {}
     for domain, review in state["reviews"].items():
         if isinstance(review, dict):
-            reviews[domain] = dict(review)
+            deadline = _review_deadline(review)
+            reviews[domain] = dict(review, domain_key=_domain_key(governance_dir, domain),
+                                   expires_at=_iso(deadline) if deadline else None,
+                                   recoverable=bool(deadline and deadline <= moment))
     return {
         "generated_at": _iso(moment),
         "gate_disabled": isolation_disabled(),
         "writers": writers,
+        "unattributed_markers": sorted(unidentified),
         "leases": leases,
         "reviews": reviews,
         "waiters": state["waiters"][-20:],
@@ -1391,6 +1528,8 @@ def isolation_status(*, governance_dir, locks_path=None, state_path=None,
                   "review_round": rec.get("review_round"),
                   "created_at": rec.get("created_at"),
                   "released_at": rec.get("released_at"),
+                  "recovery_reason": rec.get("recovery_reason"),
+                  "released_by": rec.get("released_by"),
                   "files": rec.get("files", [])}
             for sid, rec in list(state["snapshots"].items())[-20:]
             if isinstance(rec, dict)},
@@ -1417,9 +1556,9 @@ def render_status_text(status: dict) -> str:
     for domain in sorted(status.get("writers", {})):
         slot = status["writers"][domain]
         lines.append(
-            "writer domain={0} task={1} began_at={2} expires_at={3}"
+            "writer domain={0} task={1} began_at={2} expires_at={3} worker={4}"
             .format(domain, slot.get("task_id"),
-                    slot.get("began_at"), slot.get("expires_at")))
+                    slot.get("began_at"), slot.get("expires_at"), slot.get("worker")))
     for domain in sorted(status.get("leases", {})):
         lease = status["leases"][domain]
         lines.append(
@@ -1430,9 +1569,10 @@ def render_status_text(status: dict) -> str:
     for domain in sorted(status.get("reviews", {})):
         review = status["reviews"][domain]
         lines.append(
-            "review domain={0} task={1} snapshot={2} round={3}".format(
+            "review domain={0} task={1} snapshot={2} round={3} worker={4} expires_at={5} recoverable={6}".format(
                 domain, review.get("task_id"),
-                review.get("snapshot_id"), review.get("round")))
+                review.get("snapshot_id"), review.get("round"), review.get("worker"),
+                review.get("expires_at"), review.get("recoverable")))
     for waiter in status.get("waiters", []):
         lines.append(
             "waiter domain={0} task={1} holder={2} at={3}".format(
@@ -1531,6 +1671,7 @@ def add_write_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--files", required=True,
                         help="comma/semicolon-separated repo-relative "
                              "file domains")
+    parser.add_argument("--session", help="stable session ID (default: environment / parent process)")
     parser.add_argument("--writer", default="",
                         help="writer identity (session/agent label)")
     parser.add_argument("--purpose", default="",
@@ -1547,13 +1688,18 @@ def add_write_arguments(parser: argparse.ArgumentParser) -> None:
 def add_snapshot_arguments(parser: argparse.ArgumentParser) -> None:
     """Option fact source for ``isolation-snapshot``."""
     parser.add_argument("--action", required=True,
-                        choices=("create", "release"))
+                        choices=("create", "release", "recover"))
     parser.add_argument("--task", required=True,
                         help="task id UNDER REVIEW (PREFIX-NNN)")
     parser.add_argument("--files", default="",
                         help="comma/semicolon-separated domains (create "
-                             "only; release frees every domain the task "
-                             "has under review)")
+                             "only; release frees the caller's matching domains)")
+    parser.add_argument("--reviewer", default="", help="reviewer identity")
+    parser.add_argument("--session", help="stable session ID (default: environment / parent process)")
+    parser.add_argument("--snapshot-id", help="exact snapshot for release or expired recovery")
+    parser.add_argument("--reason", help="recorded reason for recovery")
+    parser.add_argument("--ttl", type=int, default=DEFAULT_REVIEW_TTL_SECONDS,
+                        help="review lease in seconds before explicit recovery is allowed")
     parser.add_argument("--round", type=int, default=0,
                         help="review round stamped into the snapshot id")
     parser.add_argument("--timeout", type=float, default=10.0)
@@ -1576,25 +1722,31 @@ def add_capability_arguments(parser: argparse.ArgumentParser) -> None:
                         help="human-readable rendering instead of JSON")
 
 
+def _cli_session(args):
+    return (getattr(args, "session", None) or os.environ.get("GOVERNANCE_SESSION_ID")
+            or os.environ.get("CODEX_THREAD_ID") or "pid:{0}".format(os.getppid()))
+
+
 def cmd_isolation_write(args, *, governance_dir,
                         repo_root=None) -> int:
     """Engine dispatch face — ``isolation-write`` (begin/end/judge)."""
     _configure_stdio()
     files = _split_cli_list(getattr(args, "files", ""))
     action = getattr(args, "action", "begin")
+    owner = {"writer": getattr(args, "writer", ""), "session_id": _cli_session(args)}
     if action == "judge":
         payload = judge_write(
             getattr(args, "task", ""), files,
-            governance_dir=governance_dir)
+            governance_dir=governance_dir, **owner)
         return _emit(payload, refused=payload.get("allowed") is False)
     if action == "end":
         return _emit(end_write(
             getattr(args, "task", ""), files,
-            governance_dir=governance_dir,
+            governance_dir=governance_dir, **owner,
             timeout_seconds=getattr(args, "timeout", 10.0)))
     return _emit(begin_write(
         getattr(args, "task", ""), files,
-        writer=getattr(args, "writer", "") or "",
+        **owner,
         purpose=getattr(args, "purpose", "") or "",
         ttl_seconds=getattr(args, "ttl", DEFAULT_WRITE_SLOT_TTL_SECONDS),
         governance_dir=governance_dir,
@@ -1605,17 +1757,20 @@ def cmd_isolation_snapshot(args, *, governance_dir,
                            repo_root=None) -> int:
     """Engine dispatch face — ``isolation-snapshot`` (create/release)."""
     _configure_stdio()
-    if getattr(args, "action", "create") == "release":
-        return _emit(release_review(
-            getattr(args, "task", ""),
-            governance_dir=governance_dir,
-            timeout_seconds=getattr(args, "timeout", 10.0)))
+    owner = {"reviewer": getattr(args, "reviewer", ""), "session_id": _cli_session(args)}
+    common = dict(governance_dir=governance_dir, timeout_seconds=getattr(args, "timeout", 10.0),
+                  **owner)
+    task = getattr(args, "task", "")
+    action = getattr(args, "action", "create")
+    if action == "recover":
+        return _emit(recover_review(task, getattr(args, "snapshot_id", None),
+                                    reason=getattr(args, "reason", None), **common))
+    if action == "release":
+        return _emit(release_review(task, snapshot_id=getattr(args, "snapshot_id", None), **common))
     return _emit(create_review_snapshot(
-        getattr(args, "task", ""),
-        _split_cli_list(getattr(args, "files", "")),
-        review_round=getattr(args, "round", 0),
-        governance_dir=governance_dir, repo_root=repo_root,
-        timeout_seconds=getattr(args, "timeout", 10.0)))
+        task, _split_cli_list(getattr(args, "files", "")), repo_root=repo_root,
+        review_round=getattr(args, "round", 0), ttl_seconds=getattr(args, "ttl", DEFAULT_REVIEW_TTL_SECONDS),
+        **common))
 
 
 def cmd_isolation_lease_reclaim(args, *, governance_dir,

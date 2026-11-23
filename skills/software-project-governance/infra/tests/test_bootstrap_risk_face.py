@@ -46,6 +46,7 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
@@ -533,6 +534,245 @@ class EndToEndBootstrapFaceTests(unittest.TestCase):
         for key in ("open", "escalation_overdue", "escalation_soon",
                     "overdue_ids"):
             self.assertIn(key, risks)
+
+
+class RiskReaderAgreementTests(unittest.TestCase):
+    """Every public reader sees the same IDs, even without a usable date."""
+
+    def read_faces(self, content):
+        import authority_ledger as ledger
+        import verify_workflow as vw
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".governance/risk-log.md"
+            path.parent.mkdir()
+            if content is not None:
+                path.write_text(content, encoding="utf-8")
+            with patch.object(vw, "RISK_PATH", path):
+                summary = ba.parse_risk_summary(content, include_rows=True)
+                rows = vw.parse_active_risks()
+                opened = vw.parse_open_risks()
+                context = vw._parse_context_open_risks(root)
+                aging = vw.check_risk_staleness()
+                escalation = vw.check_risk_escalation()
+        ids = [row["id"] for row in summary["rows"]]
+        migration = ledger.parse_hot_zone("", content)
+        self.assertEqual(ids, [row["risk_id"] for row in migration["risk_rows"]
+                               if row["bucket"] != "closed"])
+        self.assertEqual(summary["unknown_count"], migration["counts"]["risks"]["unknown"])
+        self.assertEqual(ids, [row["id"] for row in rows])
+        self.assertEqual(ids, [risk_id for risk_id, _ in opened])
+        self.assertEqual(ids, [row["task_id"] for row in context])
+        self.assertEqual(len(ids), aging["total_open"])
+        self.assertEqual(len(ids), escalation["total_open"])
+        self.assertEqual(summary["invalid_deadline"], len(escalation["invalid_deadline_ids"]))
+        self.assertEqual(summary["no_deadline"], len(escalation["no_deadline_ids"]))
+        self.assertEqual(summary["escalation_overdue"], escalation["escalation_count"])
+        return rows, summary, aging, escalation
+
+    def test_unknown_data_and_registered_age_are_independent_of_escalation(self):
+        rows, summary, aging, escalation = self.read_faces(_risk_log([
+            _risk_row("RISK-101", "缓解中", "2000-01-02").replace("2026-09-01", "登记待核"),
+            _risk_row("RISK-102", "打开（条件观察）").replace("2026-09-01", "2000-01-01"),
+            # Even an unambiguous mention of closure in mitigation is not a status.
+            _risk_row("RISK-103", "待研判", "2000-03-01 复评", mitigation="已关闭旧单"),
+            _risk_row("RISK-104", "已接受", "2026-02-30"),
+            _risk_row("RISK-105", "resolved", "2000-01-01"),
+            _risk_row("RISK-106", "**已关闭**", "2000-01-01"),
+            _risk_row("RISK-107", "打开", "2099-01-01"),
+        ]))
+        by_id = {row["id"]: row for row in rows}
+        self.assertEqual(list(by_id), ["RISK-101", "RISK-102", "RISK-103", "RISK-104", "RISK-107"])
+        self.assertEqual(aging["unknown_registration"], [("RISK-101", "登记待核")])
+        self.assertEqual(aging["unknown_status_ids"], ["RISK-103", "RISK-104"])
+        self.assertIn("RISK-102", [item[0] for item in aging["stale"]])
+        self.assertEqual(summary["unknown_count"], 2)
+        self.assertEqual(escalation["no_deadline_ids"], ["RISK-102"])
+        self.assertEqual(escalation["invalid_deadline_ids"], ["RISK-103", "RISK-104"])
+        self.assertEqual([r["risk_id"] for r in escalation["escalated"]], ["RISK-101"])
+        self.assertIsNone(by_id["RISK-103"]["deadline_date"])
+        self.assertFalse(by_id["RISK-103"]["escalation_soon"])
+        self.assertFalse(by_id["RISK-107"]["escalation_overdue"])
+
+    def test_shifted_fields_reordered_headers_and_truncated_rows(self):
+        text = _risk_log([_shifted_risk_row("RISK-108"),
+                          _shifted_risk_row("RISK-109", "待研判")])
+        text += ("\n## 历史格式\n| 当前状态 | 编号 | 负责人 | 风险描述 | 截止日期 |\n"
+                 "|---|---|---|---|---|\n| 缓解中 | RISK-110 | QA | A\\|B | 2099-01-01 |\n"
+                 "| 未判定 | RISK-111 | QA |")
+        rows, _, aging, escalation = self.read_faces(text)
+        self.assertEqual([(r["id"], r["owner"]) for r in rows],
+                         [("RISK-108", "Claude"), ("RISK-109", "Claude"),
+                          ("RISK-110", "QA"), ("RISK-111", "QA")])
+        self.assertEqual(rows[0]["severity"], "高")
+        self.assertEqual(rows[1]["status"], "待研判")
+        self.assertEqual(rows[2]["description"], r"A\|B")
+        self.assertEqual(aging["unknown_status_ids"], ["RISK-109", "RISK-111"])
+        self.assertEqual(escalation["invalid_deadline_ids"], ["RISK-111"])
+
+    def test_adjacent_risk_tables_keep_their_headers_and_real_rows(self):
+        import authority_ledger as ledger
+        from risk_rows import iter_risk_rows
+
+        first = "| 编号 | 当前状态 | 截止日期 |\n|---|---|---|\n| RISK-101 | 打开 | — |"
+        for header, row in [
+            ("| 编号 | 当前状态 | 截止日期 |", "| RISK-102 | 已关闭 | 2000-01-01 |"),
+            ("| 当前状态 | 编号 | 截止日期 |", "| 已关闭 | RISK-102 | 2000-01-01 |"),
+        ]:
+            with self.subTest(header=header):
+                content = f"{first}\n\n{header}\n|---|---|---|\n{row}"
+                expected = [("RISK-101", "打开"), ("RISK-102", "已关闭")]
+                self.assertEqual([(r.id, r.status) for r in iter_risk_rows(content)], expected)
+                rows, summary, _, _ = self.read_faces(content)
+                self.assertEqual([(r["id"], r["status"]) for r in rows], expected[:1])
+                self.assertEqual((summary["open"], summary["unknown_count"]), (1, 0))
+                ml = ledger.parse_hot_zone("", content)
+                self.assertEqual([(r["risk_id"], r["status"]) for r in ml["risk_rows"]],
+                                 expected)
+                self.assertEqual(ml["counts"]["risks"],
+                                 {"rows": 2, "open": 1, "closed": 1, "unknown": 0})
+
+    def test_missing_deadline_column_and_short_row_are_unjudgeable(self):
+        content = ("| 编号 | 当前状态 |\n|---|---|\n| RISK-113 | 打开 |\n\n"
+                   "| 编号 | 当前状态 | 截止日期 |\n|---|---|---|\n"
+                   "| RISK-114 | 缓解中 |\n\n| RISK-115 | 打开 | |\n"
+                   "| RISK-116 | 打开（条件观察） | — |")
+        rows, summary, _, escalation = self.read_faces(content)
+        self.assertEqual([(r["id"], r["deadline_kind"]) for r in rows],
+                         [("RISK-113", "invalid"), ("RISK-114", "invalid"),
+                          ("RISK-115", "none"), ("RISK-116", "none")])
+        self.assertEqual(escalation["invalid_deadline_ids"], ["RISK-113", "RISK-114"])
+        self.assertEqual(escalation["no_deadline_ids"], ["RISK-115", "RISK-116"])
+        self.assertEqual((summary["escalation_soon"], summary["escalation_overdue"]), (0, 0))
+
+    def test_optional_border_pipes_independently_on_header_delimiter_and_body(self):
+        from itertools import product
+
+        header = "编号|日期|风险描述|阶段|触发|影响|严重级别|负责人|当前状态"
+        separator = "|".join([":--:"] * 9)
+        row = r"RISK-101|2026-01-01|C:\logs\a\|b\\|阶段|触发|影响|中|QA|打开"
+        borders = (("", ""), ("|", ""), ("", "|"), ("|", "|"))
+        for choices in product(borders, repeat=3):
+            text = "\n".join(left + middle + right for (left, right), middle
+                             in zip(choices, (header, separator, row)))
+            with self.subTest(borders=choices):
+                rows, summary, _, escalation = self.read_faces(text)
+                self.assertEqual([(r["id"], r["description"], r["status"]) for r in rows],
+                                 [("RISK-101", r"C:\logs\a\|b\\", "打开")])
+                self.assertEqual(summary["unknown_count"], 0)
+                self.assertEqual(escalation["invalid_deadline_ids"], ["RISK-101"])
+
+        for left, right in borders:
+            with self.subTest(headerless=(left, right)):
+                rows, _, _, _ = self.read_faces(left + row + right)
+                self.assertEqual([(r["id"], r["status"]) for r in rows], [("RISK-101", "打开")])
+
+    def test_terminal_escaped_pipe_and_explicit_empty_or_absent_deadline(self):
+        text = ("编号 | 当前状态 | 截止日期 | 风险描述\n"
+                ":-- | --: | --- | ---\n"
+                r"RISK-101 | 缓解中 | 2000-01-02 | A\|" "\n"
+                r"RISK-102 | 打开 | | literal\\" "\n"
+                "RISK-103 | 打开")
+        rows, _, _, escalation = self.read_faces(text)
+        self.assertEqual([(r["id"], r["description"], r["deadline_kind"]) for r in rows],
+                         [("RISK-101", r"A\|", "dated"), ("RISK-102", r"literal\\", "none"),
+                          ("RISK-103", "", "invalid")])
+        self.assertEqual(escalation["no_deadline_ids"], ["RISK-102"])
+        self.assertEqual(escalation["invalid_deadline_ids"], ["RISK-103"])
+
+    def test_headers_need_an_adjacent_delimiter_matching_every_column(self):
+        for broken in ("---|---", "---|---|oops", "---|---|", "---|---|---|---",
+                       "\n---|---|---"):
+            with self.subTest(broken=broken):
+                text = "编号|当前状态|截止日期\n" + broken + "\nRISK-101|打开|2000-01-01"
+                rows, _, _, _ = self.read_faces(text)
+                self.assertEqual(rows, [])
+
+    def test_adjacent_tables_without_blank_use_new_header_and_ignore_prose(self):
+        import authority_ledger as ledger
+
+        text = ("编号|当前状态|截止日期\n---|---|---\nRISK-101|打开|2000-01-01\n"
+                "当前状态|截止日期|编号\n:---|:---:|---:\n已关闭|—|RISK-102\n"
+                "这是一个有竖线的注释|x|y\n不是表格的另一个段落\nRISK-103|打开|—")
+        rows, _, _, _ = self.read_faces(text)
+        self.assertEqual([r["id"] for r in rows], ["RISK-101"])
+        self.assertEqual([(r["risk_id"], r["status"]) for r in ledger.parse_hot_zone("", text)["risk_rows"]],
+                         [("RISK-101", "打开"), ("RISK-102", "已关闭")])
+
+    def test_fenced_examples_and_paragraphs_do_not_register_risks(self):
+        example = "编号|当前状态\n---|---\nRISK-901|打开\n"
+        content = ("文字包含 \\| 和 |。\n````markdown\n" + example + "```\n" + example
+                   + "````\n\n" + "编号|当前状态\n---|---\nRISK-101|打开")
+        rows, _, _, _ = self.read_faces(content)
+        self.assertEqual([r["id"] for r in rows], ["RISK-101"])
+
+    def test_reordered_columns_do_not_apply_historical_shift_to_unknown_status(self):
+        content = ("编号|风险描述|日期|影响|触发条件|严重级别|所属阶段|Owner|当前状态\n"
+                   + "|".join(["---"] * 9)
+                   + "\nRISK-101|说明|2026-01-01|说明|事件|高|维护|已关闭|缓解：待另行判读")
+        rows, summary, _, _ = self.read_faces(content)
+        self.assertEqual([(r["owner"], r["status"]) for r in rows],
+                         [("已关闭", "缓解：待另行判读")])
+        self.assertEqual(summary["unknown_count"], 1)
+
+    def test_legacy_decorated_ids_and_blank_header_gap_keep_fields_and_original_row(self):
+        import authority_ledger as ledger
+        import risk_rows
+
+        header = "| **编号** | `当前状态` | 日期 | 严重级别 | **Owner** | 风险/阻塞描述 | 截止日期 |"
+        separator = "|---|---|---|---|---|---|---|"
+        for gap in ("\n", "\n\n", "\n  \n\n"):
+            for decorated_id in ("RISK-101", "**RISK-101**", "`RISK-101`"):
+                with self.subTest(gap=repr(gap), risk_id=decorated_id):
+                    line = (f"| {decorated_id} | **打开** | `2000-01-01` | **高** | `QA` "
+                            "| 需**核验** | **2000-01-04** |")
+                    content = header + gap + separator + "\n" + line
+                    rows, summary, aging, escalation = self.read_faces(content)
+                    status = rows[0]
+                    self.assertEqual((status["id"], status["opened_date"], status["severity"],
+                                      status["owner"], status["description"], status["status"],
+                                      status["deadline"], status["deadline_date"]),
+                                     ("RISK-101", "2000-01-01", "高", "QA", "需核验", "打开",
+                                      "2000-01-04", "2000-01-04"))
+                    self.assertEqual(aging["unknown_registration"], [])
+                    self.assertEqual(summary["overdue_ids"], ["RISK-101"])
+                    self.assertEqual([e["risk_id"] for e in escalation["escalated"]], ["RISK-101"])
+                    self.assertEqual(summary["rows"][0]["status"], "**打开**")
+                    self.assertEqual(ledger.parse_hot_zone("", content)["risk_rows"],
+                                     [{"risk_id": "RISK-101", "status": "**打开**", "bucket": "open"}])
+                    self.assertEqual(next(risk_rows.iter_risk_rows(content)).raw_line, line)
+                    self.assertEqual(next(risk_rows.iter_positional_tables(content))[0][0], "**编号**")
+
+    def test_mixed_date_remains_unjudgeable_even_with_markdown_decoration(self):
+        content = ("| 编号 | 日期 | 当前状态 | 截止日期 |\n|---|---|---|---|\n"
+                   "| `RISK-101` | **不可判** | `未判读` | **2000-01-04 至 2001-02-03** |\n"
+                   "| **RISK-102** | 2000-01-01 | 打开 | `—` |")
+        rows, summary, aging, escalation = self.read_faces(content)
+        self.assertIsNone(rows[0]["deadline_date"])
+        self.assertEqual(rows[0]["deadline"], "2000-01-04 至 2001-02-03")
+        self.assertEqual(summary["unknown_count"], 1)
+        self.assertEqual(aging["unknown_status_ids"], ["RISK-101"])
+        self.assertEqual(aging["unknown_registration"], [("RISK-101", "**不可判**")])
+        self.assertEqual(escalation["invalid_deadline_ids"], ["RISK-101"])
+        self.assertEqual(escalation["no_deadline_ids"], ["RISK-102"])
+
+    def test_legacy_leading_bordered_header_with_gap_keeps_last_field(self):
+        text = ("| 编号 | 当前状态 | 日期\n\n|---|---|---|\n"
+                "| `RISK-101` | 打开 | 2000-01-01")
+        rows, _, aging, _ = self.read_faces(text)
+        self.assertEqual([(r["id"], r["opened_date"]) for r in rows],
+                         [("RISK-101", "2000-01-01")])
+        self.assertEqual(aging["total_open"], 1)
+
+    def test_empty_and_headerless_legacy_files(self):
+        for content in (None, "", _risk_log([])):
+            with self.subTest(content=content):
+                rows, _, _, escalation = self.read_faces(content)
+                self.assertEqual(rows, [])
+                self.assertEqual(escalation["escalation_count"], 0)
+        rows, _, _, _ = self.read_faces(_risk_row("RISK-112", "打开"))
+        self.assertEqual([r["id"] for r in rows], ["RISK-112"])
 
 
 if __name__ == "__main__":

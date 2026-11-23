@@ -528,7 +528,7 @@ def review_binding(root, task, unit_id=None, gate=None, *, allowed_gates=None):
     return binding
 
 
-def _review_receipt(root, unit, gate, review_id, *, published=False, ledger=None):
+def _review_receipt(root, unit, gate, review_id, *, published=False, ledger=None, review_objects=None):
     """Match the machine record to its committed review transaction and pinned report."""
     from authority_ledger import LedgerWriter
     from review_record import verify_review_trust
@@ -567,7 +567,10 @@ def _review_receipt(root, unit, gate, review_id, *, published=False, ledger=None
     actual_pins = set(re.findall(r"^- snapshot_bind: (.+)=([^=\s]+)$", text, re.MULTILINE))
     if actual_pins != expected_pins:
         raise ValueError("review snapshot file bindings disagree with ledger")
-    trust = verify_review_trust(review, repo_root=root, current_worktree=not published)
+    if published and review_objects is not None:
+        trust = review_objects.verify(review, root)
+    else:
+        trust = verify_review_trust(review, repo_root=root, current_worktree=not published)
     if trust["verdict"] != "CLEAN":
         raise ValueError(f"review evidence {trust['verdict']}: {trust['reason']}")
     return name, binding, receipt

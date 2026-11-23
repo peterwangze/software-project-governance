@@ -49,9 +49,13 @@ also reports it.
 Isolation and access boundaries (M7.7 (a) precedent, FEAT-015/016)
 ------------------------------------------------------------------
 * The guard is **read-only static analysis over repo files plus module imports
-  from the resolved plugin plane**. It performs one narrow READ of
-  ``$DSH_HOME/profiles`` (and, when ``DSH_HOME`` is set, only then — it never
-  guesses ``~/.dsh``) to resolve the plugin set dsh would load. It writes
+  from the resolved plugin plane**. An isolated check takes its profile
+  directory from the assigning caller. Ordinary host checks can deliberately
+  select the configured profile with ``--use-host-profile`` or an explicit
+  environment mapping. Both read ``$DSH_HOME/profiles`` to resolve the plugin
+  set dsh would load. An explicit install, or a named composition checked
+  against the CLI on PATH, can use package schemas without reading either
+  inherited profile directory. No default user profile is inferred. The guard writes
   nothing to ``$DSH_HOME``, and the probe subprocess runs with ``DSH_HOME``
   redirected to a freshly created empty temp directory which is deleted
   afterwards.
@@ -1888,16 +1892,32 @@ def _load_preset_renderer():
     return module
 
 
-def _runner_environment(install: dict) -> dict:
+def _runner_environment(install: dict, home: Path) -> dict:
     import dsh_contract
 
     environment = os.environ.copy()
+    environment[_fact("_home_env")] = str(home)
+    environment.pop(dsh_contract.get("host.planes.env.profile_dir"), None)
     flag = dsh_contract.get("host.planes.asar.runner.flag")
     if (install.get("runner") or {}).get("electron_run_as_node"):
         environment[flag] = "1"
     else:
         environment.pop(flag, None)
     return environment
+
+
+def _node_version(node, install):
+    home = None
+    try:
+        home = _make_scratch_dir("spg-dsh-version-home-")
+        version = subprocess.run([node, "--version"], capture_output=True,
+                                 text=True, encoding="utf-8", errors="replace",
+                                 env=_runner_environment(install, home), timeout=30)
+        return (version.stdout or "").strip() or None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        _remove_scratch_dir(home)
 
 
 def _run_probe(node: str, install: dict, compositions: Sequence[Path],
@@ -1962,8 +1982,7 @@ def _run_probe(node: str, install: dict, compositions: Sequence[Path],
         _remove_scratch_dir(scratch)
         _remove_scratch_dir(home)
         return result
-    child_env = _runner_environment(install)
-    child_env[_fact("_home_env")] = str(home)
+    child_env = _runner_environment(install, home)
     try:
         completed = subprocess.run(
             [node, "--input-type=module", "--eval", script],
@@ -2315,6 +2334,53 @@ def _resolve_verdict(report: dict, failures: list, plane: str,
                 f"({_reason_histogram(coverage)}) — disclosed as [NOT_RUN]")
 
 
+def _profile_environment(env, isolated_home, use_host_profile, *, install, compositions, which):
+    """Resolve the caller's profile authority before doing any host discovery."""
+    import dsh_contract
+
+    environment = dict(os.environ if env is None else env)
+    home_key = _fact("_home_env")
+    profile_key = dsh_contract.get("host.planes.env.profile_dir")
+    ambient_home = _env_text(environment, home_key)
+    if isolated_home is None:
+        if env is None and not use_host_profile and (ambient_home or _env_text(environment, profile_key)):
+            # Choosing an installation or a preset does not authorize enumerating
+            # an inherited profile, even as a fallback plane for missing packages.
+            environment.pop(home_key, None)
+            environment.pop(profile_key, None)
+            install_keys = (_fact("_install_dir_env"), _fact("_node_modules_env"),
+                            dsh_contract.get("host.planes.env.desktop_app_dir"))
+            if install is not None or any(_env_text(environment, key) for key in install_keys):
+                return environment, None
+            if compositions is not None and which("dsh"):
+                return environment, None
+            reason = ("profile discovery needs an explicit --isolated-home DIR "
+                      "or --use-host-profile to read the configured host profile")
+            if compositions is not None or not _env_text(environment, "PATH"):
+                reason = f"installed dsh not available from the install settings or PATH. {reason}"
+            return None, reason
+        return environment, None
+
+    expected = Path(isolated_home)
+    if use_host_profile or not expected.is_absolute() or ".." in expected.parts:
+        return None, "isolated profile discovery requires one absolute temporary home"
+    if ambient_home and Path(ambient_home) != expected:
+        return None, f"{home_key} differs from the explicitly assigned isolated home"
+    try:
+        fallback = dsh_contract.get("host.env.write_side.fallback").split("/")[-1]
+        protected = Path.home() / fallback
+        if expected.is_relative_to(protected) or protected.is_relative_to(expected):
+            return None, "isolated home overlaps the user's profile"
+        actual = expected.resolve(strict=True)
+        if actual != expected or not actual.is_dir():
+            return None, "isolated home must name the assigned directory directly"
+    except (OSError, RuntimeError) as error:
+        return None, f"could not verify the assigned isolated home: {error}"
+    environment[home_key] = str(actual)
+    environment.pop(profile_key, None)
+    return environment, None
+
+
 def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
                             compositions: Optional[Iterable[os.PathLike]] = None,
                             env: Optional[dict] = None,
@@ -2322,12 +2388,15 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
                             node: Optional[str] = None,
                             timeout: int = DEFAULT_PROBE_TIMEOUT,
                             install: Optional[dict] = None,
-                            probe_runner=None) -> dict:
+                            probe_runner=None, *, isolated_home=None,
+                            use_host_profile=False) -> dict:
     """Validate every preset composition against the installed harness schemas.
 
     Parameters are test seams: ``which``/``node`` override the executable
     lookup, ``install`` injects a discovered install, ``env`` replaces the
-    process environment, ``probe_runner`` replaces the Node probe call.
+    process environment as an explicit host context, ``probe_runner`` replaces
+    the Node probe call. Isolated callers supply their independently assigned
+    temporary home; automatic checks require consent to use an inherited profile.
     Returns the aggregate report consumed by ``check-governance`` Check 28v
     and by the ``check-dsh-preset-compat`` subcommand.
     """
@@ -2339,7 +2408,6 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
     # roots. The distinction is made before `root` is normalized away.
     root_explicit = root is not None
     root = Path(root) if root is not None else Path(__file__).resolve().parents[3]
-    env = os.environ if env is None else env
     report = {
         "verdict": VERDICT_NOT_RUN,
         "reason": "",
@@ -2406,6 +2474,13 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
         # product FAIL even when compositions, the install or Node are absent.
         # Use the probe's own renderer so the preflight cannot drift from it.
         _render_probe_script()
+        env, refusal = _profile_environment(env, isolated_home, use_host_profile,
+                                            install=install, compositions=compositions, which=which)
+        if refusal:
+            report["reason"] = refusal
+            if isolated_home is not None:
+                report.update(verdict=VERDICT_FAIL, issues=[refusal])
+            return report
         scan: dict = {}
         if compositions is None:
             if root_explicit:
@@ -2476,13 +2551,7 @@ def check_dsh_preset_compat(root: Optional[os.PathLike] = None,
                 "YAML dialect and Config schemas cannot be reached without it")
             report["details"].append(report["reason"])
             return report
-        try:
-            version = subprocess.run([node_path, "--version"], capture_output=True,
-                                     text=True, encoding="utf-8", errors="replace",
-                                     env=_runner_environment(install_probe), timeout=30)
-            report["install"]["node_version"] = (version.stdout or "").strip() or None
-        except (OSError, subprocess.TimeoutExpired):
-            report["install"]["node_version"] = None
+        report["install"]["node_version"] = _node_version(node_path, install_probe)
 
         if render_shipped:
             renderer = _load_preset_renderer()
@@ -2715,14 +2784,16 @@ def emit_check_section(stream=None) -> int:
     return 0
 
 
-def run_cli(fail_on_issues: bool = False, stream=None) -> int:
+def run_cli(fail_on_issues: bool = False, stream=None, *, isolated_home=None,
+            use_host_profile=False) -> int:
     """Render the standalone report for `verify_workflow check-dsh-preset-compat`."""
     stream = sys.stdout if stream is None else stream
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    report = check_dsh_preset_compat()
+    report = check_dsh_preset_compat(isolated_home=isolated_home,
+                                     use_host_profile=use_host_profile)
     install = report["install"]
     isolation = report["isolation"]
     print("\n=== DSH Preset Schema Compat Check ===", file=stream)
@@ -2851,6 +2922,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                              "preset composition under --root")
     parser.add_argument("--root", type=Path, default=None,
                         help="package root (default: the repository this module ships in)")
+    profiles = parser.add_mutually_exclusive_group()
+    profiles.add_argument("--isolated-home", type=Path, metavar="DIR",
+                          help="use the temporary profile directory assigned to this run")
+    profiles.add_argument("--use-host-profile", action="store_true",
+                          help="deliberately read the configured host profile")
     parser.add_argument("--json", action="store_true",
                         help="emit the machine-readable report on stdout")
     parser.add_argument("--timeout", type=int, default=DEFAULT_PROBE_TIMEOUT,
@@ -2871,6 +2947,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         root=args.root,
         compositions=args.paths or None,
         timeout=args.timeout,
+        isolated_home=args.isolated_home,
+        use_host_profile=args.use_host_profile,
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

@@ -63,6 +63,37 @@ class FEAT076GovernanceDataSourceFamilySurfaceTests(unittest.TestCase):
             evidence_path=self.gov / "evidence-log.md",
         )
 
+    def test_archive_reader_type_and_sources_across_host_overrides(self):
+        from verify_workflow import GovernanceDataSource
+        from governance_archive_data import GovernanceDataSource as ArchiveReader
+
+        exports = {}
+        exec("from verify_workflow import *", exports)
+        self.assertIs(exports["GovernanceDataSource"], GovernanceDataSource)
+        self.assertIn("GovernanceDataSource", dir(vw))
+        self.assertTrue(issubclass(GovernanceDataSource, ArchiveReader))
+
+        class HostReader(GovernanceDataSource):
+            @property
+            def governance_dir(self):
+                return self.sample_path.parent
+
+        other = self.root / "second"
+        _write(other / ".governance" / "evidence-log.md", "| EVD-42 | FIX-942 | another host |")
+        previous = vw.HOST_PROJECT_ROOT
+        try:
+            vw._apply_project_root_override(self.root)
+            first = HostReader()
+            vw._apply_project_root_override(other)
+            second = HostReader()
+            self.assertEqual(first.get_all_family_row_ids("EVD"), {"EVD-1", "EVD-900"})
+            self.assertEqual(second.get_all_family_row_ids("EVD"), {"EVD-42"})
+            self.assertEqual(first.layer_stats(), ArchiveReader(self.gov).layer_stats())
+            self.assertIsInstance(second, GovernanceDataSource)
+            self.assertEqual(second.governance_dir, other / ".governance")
+        finally:
+            vw._apply_project_root_override(previous)
+
     def test_get_all_family_rows_aggregates_hot_and_cold(self):
         ds = self._ds()
         review = ds.get_all_family_rows("REVIEW")

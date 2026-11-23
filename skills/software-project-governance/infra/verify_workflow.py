@@ -95,6 +95,7 @@ if __name__ == "__main__" and "governance-bootstrap" in sys.argv[1:]:
 
 import io
 from contextlib import redirect_stdout
+from functools import cache as _cache
 # When this file is run directly (`python verify_workflow.py ...`), it loads as
 # the `__main__` module. The Phase 5 domain modules under checks/ (evidence,
 # risk, review — and the older manifest/capability_registry modules) reach back
@@ -6214,71 +6215,28 @@ STATUS_ICONS = {
 
 
 def _extract_section(content, heading, stop_headings=None):
-    """Extract lines between a ## heading and the next ## heading."""
-    lines = content.split("\n")
-    capture = False
-    result = []
-    for line in lines:
-        if line.strip() == heading or line.startswith(heading + "\n"):
-            capture = True
-            continue
-        if capture:
-            if stop_headings and any(line.startswith(sh) for sh in stop_headings):
-                break
-            if line.startswith("## ") and not line.strip() == heading:
-                break
-            result.append(line)
-    return "\n".join(result)
+    from plan_status import _extract_section as read
+    return read(content, heading, stop_headings)
 
 
 def parse_project_config(path=None):
-    from governance_readers import project_config
-    return project_config((Path(path) if path is not None else SAMPLE_PATH).read_text(encoding="utf-8"))
+    from plan_status import parse_project_config as read
+    return read(path, plan_path=SAMPLE_PATH)
 
 
 def parse_overview():
-    from governance_readers import overview
-    return overview(SAMPLE_PATH.read_text(encoding="utf-8"))
+    from plan_status import parse_overview as read
+    return read(plan_path=SAMPLE_PATH)
 
 
 def _normalize_task_status(status_text):
-    """Map decorated plan-tracker status text to canonical task statuses."""
-    status_text = (status_text or "").strip()
-    for status in ("已完成", "进行中", "未开始", "已终止"):
-        if status in status_text:
-            return status
-    return None
+    from plan_status import _normalize_task_status as read
+    return read(status_text)
 
 
 def parse_task_stats():
-    """Count task statuses from sample tracking table."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    stats = {"已完成": 0, "进行中": 0, "未开始": 0, "已终止": 0}
-    status_index = None
-    for line in content.split("\n"):
-        if not line.startswith("|"):
-            continue
-        parts = [p.strip() for p in line.split("|")[1:-1]]
-        if not parts:
-            continue
-        if "状态" in parts:
-            status_index = parts.index("状态")
-            continue
-        if all(set(p.strip()) <= {"-", " "} for p in parts):
-            continue
-        candidate_indices = []
-        if status_index is not None:
-            candidate_indices.append(status_index)
-        if len(parts) >= 10:
-            candidate_indices.append(9)
-        if len(parts) >= 7:
-            candidate_indices.append(6)
-        for candidate_index in candidate_indices:
-            status = _normalize_task_status(parts[candidate_index]) if candidate_index < len(parts) else None
-            if status in stats:
-                stats[status] += 1
-                break
-    return stats
+    from plan_status import parse_task_stats as read
+    return read(plan_path=SAMPLE_PATH)
 
 
 def _context_root(root=None):
@@ -6290,37 +6248,8 @@ def _context_file(root, relative_path):
 
 
 def _empty_governance_context(root=None):
-    root = _context_root(root)
-    checked = [
-        ".governance/plan-tracker.md",
-        ".governance/session-snapshot.md",
-        ".governance/evidence-log.md",
-        ".governance/risk-log.md",
-    ]
-    if _is_context_git_repo_root(root):
-        checked.extend([
-            "git status --short",
-            "git log --oneline -5",
-        ])
-    present = [
-        path for path in checked
-        if path.startswith("git ") or (root / path).is_file()
-    ]
-    source = (
-        "checked " + ", ".join(present)
-        if present
-        else "checked governance fact sources; no governance files found"
-    )
-    return {
-        "status": "NOT_FOUND",
-        "detected_item": "not found",
-        "source_facts": [f"{source}; no unfinished user work facts found"],
-        "blocker_state": "not found",
-        "next_action": "do not invent work; ask only at an interaction boundary or start from recorded plan",
-        "auto_continue": False,
-        "interrupt_boundary": "AskUserQuestion required before creating new work from assumptions",
-        "_items": [],
-    }
+    from project_context import _empty_governance_context as read
+    return read(_context_root(root))
 
 
 def _capability_context_path(root, relative_path):
@@ -6328,756 +6257,118 @@ def _capability_context_path(root, relative_path):
 
 
 def _capability_file_fact(root, relative_path, label):
-    path = _capability_context_path(root, relative_path)
-    if path.is_file():
-        return True, f"{relative_path.as_posix()}: {label} present"
-    return False, f"{relative_path.as_posix()}: {label} missing"
+    from capability_context import _capability_file_fact as read
+    return read(_context_root(root), relative_path, label)
 
 
 def _capability_text_contains(root, relative_path, token):
-    path = _capability_context_path(root, relative_path)
-    if not path.is_file():
-        return False
-    return token in path.read_text(encoding="utf-8")
+    from capability_context import _capability_text_contains as read
+    return read(_context_root(root), relative_path, token)
 
 
 def _capability_cli_registration_fact(root, relative_path):
-    path = _capability_context_path(root, relative_path)
-    if not path.is_file():
-        return False, f"{relative_path.as_posix()}: `capability-context` CLI registration missing (file not found)"
-    from cli_registration import inspect_cli_registration
-    try:
-        facts = inspect_cli_registration(path, "capability-context", "cmd_capability_context")
-    except (OSError, UnicodeError, SyntaxError) as exc:
-        return False, f"{relative_path.as_posix()}: `capability-context` CLI registration unreadable ({exc})"
-    has_handler, has_parser, has_dispatch = facts["handler"], facts["argparse"], facts["dispatch"]
-    registered = has_handler and has_parser and has_dispatch
-    detail = (
-        f"{relative_path.as_posix()}: `capability-context` CLI registration "
-        f"top_level_handler={'yes' if has_handler else 'no'}, "
-        f"main={'yes' if facts['main'] else 'no'}, "
-        f"main_subparser={'yes' if has_parser else 'no'}, "
-        f"main_dispatch={'yes' if has_dispatch else 'no'}"
-    )
-    return registered, detail
+    from capability_context import _capability_cli_registration_fact as read
+    return read(_context_root(root), relative_path)
 
 
 def _capability_host_id(root):
-    root = _context_root(root)
-    host_facts = []
-    if (root / ".codex-plugin/plugin.json").is_file():
-        host_facts.append(".codex-plugin/plugin.json")
-    if (root / ".claude-plugin/plugin.json").is_file():
-        host_facts.append(".claude-plugin/plugin.json")
-    if (root / "AGENTS.md").is_file():
-        host_facts.append("AGENTS.md")
-    if (root / "skills/software-project-governance/SKILL.md").is_file():
-        host_facts.append("software-project-governance skill")
-    if not host_facts:
-        return "local-fixture", ["no host package metadata found; treating target as local fixture"]
-    return "local-governance-repository", [f"host metadata: {', '.join(host_facts)}"]
+    from capability_context import _capability_host_id as read
+    return read(_context_root(root))
 
 
 def discover_capability_context(root=None):
-    """Build a fact-backed capability selection trace for the current host."""
-    root = _context_root(root)
-    host_id, host_facts = _capability_host_id(root)
-    verify_rel = Path("skills/software-project-governance/infra/verify_workflow.py")
-    req_rel = CAPABILITY_CONTEXT_DOC_PATH
-    tools_rel = CAPABILITY_CONTEXT_TOOLS_PATH
-    packs_rel = Path("skills/software-project-governance/core/governance-packs.json")
-    runtime_rel = Path("docs/requirements/runtime-readiness-matrix-0.43.0.md")
-    marketplace_rel = Path("docs/requirements/codex-desktop-marketplace-e2e-0.45.0.md")
-    future_registry_rel = Path("skills/software-project-governance/core/capability-registry.json")
-
-    verify_exists, verify_fact = _capability_file_fact(root, verify_rel, "local verification script")
-    req_exists, req_fact = _capability_file_fact(root, req_rel, "0.45.0 capability contract")
-    tools_exists, tools_fact = _capability_file_fact(root, tools_rel, "tool index")
-    packs_exists, packs_fact = _capability_file_fact(root, packs_rel, "internal governance pack registry")
-    runtime_exists, runtime_fact = _capability_file_fact(root, runtime_rel, "runtime/readiness fact matrix")
-    marketplace_exists, marketplace_fact = _capability_file_fact(root, marketplace_rel, "Codex Desktop marketplace-management E2E plan")
-    future_registry_exists, future_registry_fact = _capability_file_fact(root, future_registry_rel, "external capability registry")
-    command_registered, command_fact = _capability_cli_registration_fact(root, verify_rel)
-    tools_registered = _capability_text_contains(root, tools_rel, "TOOL-031")
-
-    source_facts = [
-        *host_facts,
-        verify_fact,
-        req_fact,
-        tools_fact,
-        packs_fact,
-        runtime_fact,
-        marketplace_fact,
-        future_registry_fact,
-    ]
-    source_facts.append(command_fact)
-    source_facts.append(
-        f"{tools_rel.as_posix()}: TOOL-031 {'registered' if tools_registered else 'not found'}"
+    from capability_context import discover_capability_context as read
+    return read(
+        _context_root(root),
+        requirements_path=CAPABILITY_CONTEXT_DOC_PATH,
+        tools_path=CAPABILITY_CONTEXT_TOOLS_PATH,
+        check_registry=check_capability_registry,
     )
-
-    available_capabilities = []
-    if verify_exists:
-        available_capabilities.append({
-            "capability_id": "local.capability-context.cli",
-            "kind": "script",
-            "host_surface": "local shell",
-            "scenario": "capability-context",
-            "status": "AVAILABLE" if command_registered else "DEGRADED",
-            "source_facts": [verify_fact, source_facts[-2]],
-            "selection_reason": "read-only diagnostic can emit the required selection trace from local project facts",
-            "side_effect_boundary": "read-only local files; no writes, network, package install, browser state, or external API calls",
-            "validation_command": "python skills/software-project-governance/infra/verify_workflow.py capability-context --fail-on-issues",
-        })
-    if packs_exists:
-        available_capabilities.append({
-            "capability_id": "internal.governance-packs.catalog",
-            "kind": "fallback",
-            "host_surface": "local repository",
-            "scenario": "governance-pack-boundary",
-            "status": "DEGRADED",
-            "availability_scope": "catalog-only internal governance capability facts; not runtime PASS",
-            "source_facts": [packs_fact],
-            "selection_reason": "useful as a boundary fact source, but not an external capability selector",
-            "side_effect_boundary": "read-only local registry inspection",
-            "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-governance-packs --fail-on-issues",
-        })
-    if runtime_exists:
-        available_capabilities.append({
-            "capability_id": "runtime.readiness-matrix.fact-source",
-            "kind": "fallback",
-            "host_surface": "local repository",
-            "scenario": "runtime-readiness-facts",
-            "status": "DEGRADED",
-            "availability_scope": "runtime status evidence only; not selected capability execution",
-            "source_facts": [runtime_fact],
-            "selection_reason": "useful for host status facts, but not proof that a tool was executed for this scenario",
-            "side_effect_boundary": "read-only public matrix inspection",
-            "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-runtime-readiness-matrix --fail-on-issues",
-        })
-
-    registry_issues = check_capability_registry(root) if future_registry_exists else []
-    preferred_status = "DEGRADED" if future_registry_exists else "NOT_FOUND"
-    registry_reason = (
-        "FIX-116 registry exists as a catalog fact source; catalog membership is not runtime PASS"
-        if future_registry_exists and not registry_issues
-        else (
-            "FIX-116 registry exists but validator found issues; cannot use it as a trusted catalog"
-            if future_registry_exists
-            else "preferred external capability registry is not implemented in FIX-115"
-        )
-    )
-    if future_registry_exists:
-        available_capabilities.append({
-            "capability_id": "external.capability-registry.catalog",
-            "kind": "tool",
-            "host_surface": "local repository",
-            "scenario": "capability-registry",
-            "status": "DEGRADED",
-            "availability_scope": "catalog-only external capability facts; not runtime PASS and not proof external capability is available",
-            "source_facts": [future_registry_fact],
-            "selection_reason": "registry can inform candidate discovery, but selection still requires runtime facts and no-overclaim boundary",
-            "side_effect_boundary": "read-only registry inspection; no plugin install, MCP call, browser action, sub-agent spawn, network call, or external execution",
-            "validation_command": "python skills/software-project-governance/infra/verify_workflow.py check-capability-registry --fail-on-issues",
-        })
-    rejected_alternatives = [
-        {
-            "capability_id": "external.capability-registry",
-            "kind": "tool",
-            "host_surface": "future 0.45.0 registry",
-            "status": preferred_status,
-            "source_facts": [future_registry_fact],
-            "rejection_reason": registry_reason,
-        },
-        {
-            "capability_id": "host.automatic-best-tool-selection",
-            "kind": "host_builtin",
-            "host_surface": "unspecified host",
-            "status": "NOT_SUPPORTED",
-            "source_facts": ["no source fact in this repository proves automatic global best-tool selection"],
-            "rejection_reason": "would overclaim beyond the diagnostic selection trace contract",
-        },
-        {
-            "capability_id": "codex-desktop.marketplace-management-e2e",
-            "kind": "plugin",
-            "host_surface": "Codex Desktop",
-            "status": "BLOCKED" if marketplace_exists else "NOT_FOUND",
-            "source_facts": [marketplace_fact],
-            "rejection_reason": "marketplace management E2E is planned separately and cannot be treated as available capability execution",
-        },
-    ]
-
-    if verify_exists and command_registered:
-        selected = {
-            "capability_id": "local.capability-context.cli",
-            "kind": "script",
-            "host_surface": "local shell",
-            "status": "DEGRADED" if preferred_status != "NOT_FOUND" else "DEGRADED",
-            "selection_reason": (
-                "selected as a read-only fallback; registry presence informs catalog facts but is not runtime PASS"
-                if preferred_status != "NOT_FOUND"
-                else "selected as a read-only fallback because the preferred external capability registry is unavailable"
-            ),
-            "source_facts": [verify_fact, source_facts[-2]],
-        }
-        degradation_status = "DEGRADED"
-        degradation_reason = (
-            "capability registry exists only as a catalog fact source; using local diagnostic fallback without runtime PASS"
-            if preferred_status != "NOT_FOUND"
-            else "preferred external capability registry is unavailable; using local diagnostic fallback"
-        )
-    elif verify_exists:
-        selected = {
-            "capability_id": "local.verify-workflow.script",
-            "kind": "script",
-            "host_surface": "local shell",
-            "status": "DEGRADED",
-            "selection_reason": "`verify_workflow.py` exists but this fixture lacks a registered `capability-context` command",
-            "source_facts": [verify_fact, source_facts[-2]],
-        }
-        degradation_status = "DEGRADED"
-        degradation_reason = "local verification script exists, but the preferred command is not registered"
-    else:
-        selected = {
-            "capability_id": "manual.blocked-fallback",
-            "kind": "fallback",
-            "host_surface": "manual inspection",
-            "status": "BLOCKED",
-            "selection_reason": "no local capability-context command or verification script was found in the target fixture",
-            "source_facts": [verify_fact],
-        }
-        degradation_status = "BLOCKED"
-        degradation_reason = "preferred and fallback diagnostic capabilities are unavailable"
-
-    return {
-        "scenario": "capability-context",
-        "host_id": host_id,
-        "available_capabilities": available_capabilities,
-        "selected_capability": selected,
-        "source_facts": source_facts,
-        "rejected_alternatives": rejected_alternatives,
-        "degradation": {
-            "status": degradation_status,
-            "reason": degradation_reason,
-            "fallback": selected["capability_id"],
-        },
-        "side_effect_boundary": "read-only diagnostic; reads local project files only and performs no writes, commits, network calls, package installs, browser actions, or API calls",
-        "validation_command": "python skills/software-project-governance/infra/verify_workflow.py capability-context --fail-on-issues",
-        "review_requirement": "FIX-115 product-code closure still requires independent Code Reviewer approval; this command output is not self-review",
-        "no_overclaim_boundary": [
-            "Do not claim automatic global best-tool selection.",
-            "Do not treat a catalog entry as runtime PASS.",
-            "Do not treat runtime readiness facts as selected capability execution.",
-            "Do not treat diagnostic selection trace as successful external execution.",
-            "Report BLOCKED, DEGRADED, NOT_SUPPORTED, or NOT_FOUND when preferred capability facts are unavailable.",
-        ],
-    }
 
 
 def _host_capability_source_fact(root, relative_path, present_label, missing_label):
-    path = _capability_context_path(root, Path(relative_path))
-    if path.is_file():
-        return True, f"{relative_path}: {present_label}"
-    return False, f"{relative_path}: {missing_label}"
+    from capability_context import _host_capability_source_fact as read
+    return read(_context_root(root), relative_path, present_label, missing_label)
 
 
 def _host_context_registry_capabilities(root):
-    registry_path = _capability_context_path(root, Path("skills/software-project-governance/core/capability-registry.json"))
-    if not registry_path.is_file():
-        return [], [f"{_display_path(registry_path, root)}: capability registry missing"]
-    try:
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return [], [f"{_display_path(registry_path, root)}: invalid JSON: {exc}"]
-    capabilities = registry.get("capabilities", [])
-    if not isinstance(capabilities, list):
-        return [], [f"{_display_path(registry_path, root)}: capabilities is not a list"]
-    return [cap for cap in capabilities if isinstance(cap, dict)], [
-        f"{_display_path(registry_path, root)}: capability registry loaded as catalog facts only"
-    ]
+    from capability_context import _host_context_registry_capabilities as read
+    return read(_context_root(root), display_path=_display_path)
 
 
 def _host_context_capability(capabilities, kind=None, capability_id=None):
-    for capability in capabilities:
-        if capability_id and capability.get("capability_id") == capability_id:
-            return capability
-        if kind and capability.get("kind") == kind:
-            return capability
-    return None
+    from capability_context import _host_context_capability as read
+    return read(capabilities, kind, capability_id)
 
 
 def _host_context_fact_contains(root, relative_path, tokens):
-    path = _capability_context_path(root, Path(relative_path))
-    if not path.is_file():
-        return False
-    text = path.read_text(encoding="utf-8").lower()
-    return all(token.lower() in text for token in tokens)
+    from capability_context import _host_context_fact_contains as read
+    return read(_context_root(root), relative_path, tokens)
 
 
-def _host_restricted_scenario(
-    scenario_id,
-    constraint,
-    preferred,
-    selected,
-    status,
-    reason,
-    source_facts,
-    validation_command,
-):
-    return {
-        "scenario_id": scenario_id,
-        "constraint": constraint,
-        "preferred_capability": preferred,
-        "selected_capability": selected,
-        "status": status,
-        "degradation_boundary": reason,
-        "validation_command": validation_command,
-        "source_facts": source_facts,
-        "no_overclaim_boundary": [
-            "blocked capability is not runtime PASS",
-            "catalog fact is not runtime PASS",
-            "diagnostic trace is not external execution",
-        ],
-    }
+def _host_restricted_scenario(scenario_id, constraint, preferred, selected, status, reason, source_facts, validation_command):
+    from capability_context import _host_restricted_scenario as read
+    return read(scenario_id, constraint, preferred, selected, status, reason, source_facts, validation_command)
 
 
 def discover_host_capability_context(root=None):
-    """FIX-117: build restricted-environment capability benchmark facts."""
-    root = _context_root(root)
-    host_id, host_facts = _capability_host_id(root)
-    capabilities, registry_facts = _host_context_registry_capabilities(root)
-    verify_exists, verify_fact = _host_capability_source_fact(
-        root,
-        "skills/software-project-governance/infra/verify_workflow.py",
-        "local validator present",
-        "local validator missing",
-    )
-    skill_exists, skill_fact = _host_capability_source_fact(
-        root,
-        "skills/software-project-governance/SKILL.md",
-        "local workflow skill present",
-        "local workflow skill missing",
-    )
-    tools_exists, tools_fact = _host_capability_source_fact(
-        root,
-        "skills/software-project-governance/infra/TOOLS.md",
-        "tool index present",
-        "tool index missing",
-    )
-    req_exists, req_fact = _host_capability_source_fact(
-        root,
-        "docs/requirements/capability-discovery-orchestration-0.45.0.md",
-        "FIX-117 contract doc present",
-        "FIX-117 contract doc missing",
-    )
-    codex_fact = "restricted benchmark scenario: Codex CLI blocked"
-    gemini_fact = "restricted benchmark scenario: Gemini auth blocked"
-
-    fallback = _host_context_capability(capabilities, capability_id="fallback.local-diagnostic-readonly")
-    local_skill = _host_context_capability(capabilities, capability_id="software-project-governance.skill-entry")
-    local_script = _host_context_capability(capabilities, capability_id="verify-workflow.capability-context-tool")
-    mcp = _host_context_capability(capabilities, kind="mcp")
-    browser = _host_context_capability(capabilities, kind="browser")
-    sub_agent = _host_context_capability(capabilities, kind="sub_agent")
-    plugin = _host_context_capability(capabilities, kind="plugin")
-
-    fallback_id = fallback.get("capability_id", "fallback.local-diagnostic-readonly") if fallback else "fallback.local-diagnostic-readonly"
-    script_id = local_script.get("capability_id", "verify-workflow.capability-context-tool") if local_script else "verify-workflow.capability-context-tool"
-    skill_id = local_skill.get("capability_id", "software-project-governance.skill-entry") if local_skill else "software-project-governance.skill-entry"
-
-    validation = "python skills/software-project-governance/infra/verify_workflow.py check-host-capability-context --fail-on-issues"
-    scenarios = [
-        _host_restricted_scenario(
-            "no_network",
-            "Network access is unavailable or not allowed for capability selection.",
-            "network.external-lookup",
-            fallback_id,
-            "DEGRADED",
-            "Use local registry/context facts only; do not call external APIs or treat missing network as PASS.",
-            [verify_fact, *registry_facts, "host constraint: no network"],
-            validation,
-        ),
-        _host_restricted_scenario(
-            "no_plugin_install",
-            "Plugin installation, enable, disable, upgrade, or uninstall is unavailable.",
-            plugin.get("capability_id", "codex.desktop.plugin-manifest") if plugin else "codex.desktop.plugin-manifest",
-            fallback_id,
-            "DEGRADED",
-            "Inspect manifest/catalog facts only; do not claim Desktop marketplace-management E2E PASS.",
-            [tools_fact, "host constraint: no plugin install"],
-            validation,
-        ),
-        _host_restricted_scenario(
-            "no_mcp",
-            "No MCP server is installed or reachable in the current host.",
-            mcp.get("capability_id", "host.mcp.connectors") if mcp else "host.mcp.connectors",
-            fallback_id,
-            "NOT_SUPPORTED",
-            "Report MCP as unavailable and use local diagnostic fallback.",
-            [*registry_facts, "host constraint: no MCP"],
-            validation,
-        ),
-        _host_restricted_scenario(
-            "no_browser",
-            "Browser automation is not available or not allowed.",
-            browser.get("capability_id", "browser.in-app-or-chrome-control") if browser else "browser.in-app-or-chrome-control",
-            fallback_id,
-            "NOT_SUPPORTED",
-            "Do not open browser state; use local text and registry facts.",
-            [*registry_facts, "host constraint: no browser"],
-            validation,
-        ),
-        _host_restricted_scenario(
-            "no_sub_agent",
-            "Host-native sub-agent separation is unavailable.",
-            sub_agent.get("capability_id", "agent-team.governance-developer") if sub_agent else "agent-team.governance-developer",
-            script_id,
-            "DEGRADED",
-            "Record degraded execution; do not count self-review as independent review.",
-            [*registry_facts, "host constraint: no sub-agent"],
-            validation,
-        ),
-        _host_restricted_scenario(
-            "local_skill_only",
-            "Only the local workflow skill and local validator are available.",
-            skill_id,
-            script_id if verify_exists else skill_id,
-            "PASS" if skill_exists and verify_exists else "DEGRADED",
-            "Local skill and script may be used for diagnostics, but this is not external capability execution.",
-            [skill_fact, verify_fact, "host constraint: local skill only"],
-            validation,
-        ),
-        _host_restricted_scenario(
-            "codex_cli_blocked",
-            "Codex CLI headless target-cwd runtime is blocked.",
-            "codex.cli.headless-runtime",
-            fallback_id,
-            "BLOCKED",
-            "Codex App/session or plugin metadata cannot substitute for Codex CLI runtime PASS.",
-            [codex_fact],
-            validation,
-        ),
-        _host_restricted_scenario(
-            "gemini_auth_blocked",
-            "Gemini CLI authentication is missing or blocked.",
-            "gemini.cli.runtime",
-            fallback_id,
-            "BLOCKED",
-            "Gemini version or thin projection cannot substitute for authenticated runtime PASS.",
-            [gemini_fact],
-            validation,
-        ),
-    ]
-
-    return {
-        "scenario": "restricted-environment-capability-selection",
-        "host_id": host_id,
-        "benchmark_kind": "benchmark/diagnostic fixture; not external execution",
-        "source_facts": [
-            *host_facts,
-            *registry_facts,
-            verify_fact,
-            skill_fact,
-            tools_fact,
-            req_fact,
-            codex_fact,
-            gemini_fact,
-        ],
-        "restricted_scenarios": scenarios,
-        "side_effect_boundary": "read-only benchmark/diagnostic; no network, plugin install, MCP call, browser action, sub-agent spawn, Codex CLI execution, Gemini auth flow, commits, pushes, or external APIs",
-        "validation_command": validation,
-        "review_requirement": "FIX-117 closure still requires independent Code Reviewer approval; benchmark output is not self-review",
-        "no_overclaim_boundary": [
-            "FIX-117 fixture is benchmark/diagnostic, not external execution.",
-            "FIX-117 fixture is not Desktop marketplace E2E PASS.",
-            "blocked capability is not runtime PASS.",
-            "catalog fact is not runtime PASS.",
-            "Do not claim automatic best-tool selection.",
-            "Do not claim universal plugin availability.",
-        ],
-    }
+    from capability_context import discover_host_capability_context as read
+    return read(_context_root(root), registry_capabilities=_host_context_registry_capabilities)
 
 
 def _host_context_values(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _host_context_values(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _host_context_values(item)
+    from capability_context import _host_context_values as read
+    return read(value)
 
 
 def check_host_capability_context(root=None, *, sampled_context=None):
-    """FIX-117: restricted host benchmark must degrade honestly."""
+    from capability_context import RestrictedHostPolicy, check_host_capability_context as validate
     root = _context_root(root)
     context = discover_host_capability_context(root) if sampled_context is None else sampled_context
-    failures = []
-    for field in HOST_CAPABILITY_CONTEXT_REQUIRED_FIELDS:
-        if field not in context:
-            failures.append(f"host capability context: missing `{field}`")
-
-    source_facts = context.get("source_facts", [])
-    if not _is_valid_string_list(source_facts):
-        failures.append("host capability context: source_facts must be a non-empty string list")
-
-    scenarios = context.get("restricted_scenarios", [])
-    if not isinstance(scenarios, list) or not scenarios:
-        failures.append("host capability context: restricted_scenarios must be a non-empty list")
-        scenarios = []
-
-    seen = set()
-    for scenario in scenarios:
-        if not isinstance(scenario, dict):
-            failures.append("host capability context: restricted_scenarios entries must be objects")
-            continue
-        scenario_id = scenario.get("scenario_id", "<missing>")
-        seen.add(scenario_id)
-        label = f"host capability context: scenario {scenario_id}"
-        for field in HOST_CAPABILITY_CONTEXT_REQUIRED_SCENARIO_FIELDS:
-            if field not in scenario:
-                failures.append(f"{label}: missing `{field}`")
-        status = scenario.get("status")
-        if status not in HOST_CAPABILITY_CONTEXT_ALLOWED_STATUSES:
-            failures.append(f"{label}: unknown status `{status}`")
-        if scenario_id != "local_skill_only" and status not in HOST_CAPABILITY_CONTEXT_UNAVAILABLE_STATUSES:
-            failures.append(f"{label}: restricted scenario must be blocked/degraded/not-supported/not-found")
-        if scenario_id == "local_skill_only" and status not in {"PASS", "AVAILABLE", "DEGRADED"}:
-            failures.append(f"{label}: local_skill_only must remain local PASS/AVAILABLE or DEGRADED")
-        if scenario.get("selected_capability") == scenario.get("preferred_capability") and status in HOST_CAPABILITY_CONTEXT_UNAVAILABLE_STATUSES:
-            failures.append(f"{label}: unavailable preferred capability cannot be selected")
-        if not _is_valid_string_list(scenario.get("source_facts")):
-            failures.append(f"{label}: source_facts must be a non-empty string list")
-        if "check-host-capability-context" not in scenario.get("validation_command", ""):
-            failures.append(f"{label}: validation_command must name check-host-capability-context")
-        scenario_boundary = " ".join(scenario.get("no_overclaim_boundary", []))
-        if "runtime PASS" not in scenario_boundary and "external execution" not in scenario_boundary:
-            failures.append(f"{label}: no_overclaim_boundary must prevent runtime/external execution overclaim")
-        required_blocked_fact = HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS.get(scenario_id)
-        if required_blocked_fact and required_blocked_fact not in scenario.get("source_facts", []):
-            failures.append(f"{label}: missing direct blocked runtime source fact `{required_blocked_fact}`")
-
-    missing = sorted(HOST_CAPABILITY_CONTEXT_SCENARIOS - seen)
-    if missing:
-        failures.append(f"host capability context: missing restricted scenario(s): {', '.join(missing)}")
-
-    boundary_text = " ".join(context.get("no_overclaim_boundary", []))
-    for token in HOST_CAPABILITY_CONTEXT_BOUNDARY_TOKENS:
-        if token not in boundary_text:
-            failures.append(f"host capability context: no_overclaim_boundary missing `{token}`")
-    if "read-only" not in context.get("side_effect_boundary", "").lower():
-        failures.append("host capability context: side_effect_boundary must state read-only behavior")
-    for token in ("network", "plugin install", "MCP", "browser", "sub-agent"):
-        if token.lower() not in context.get("side_effect_boundary", "").lower():
-            failures.append(f"host capability context: side_effect_boundary missing `{token}`")
-    if "check-host-capability-context" not in context.get("validation_command", ""):
-        failures.append("host capability context: validation_command must name check-host-capability-context")
-    if "independent Code Reviewer" not in context.get("review_requirement", ""):
-        failures.append("host capability context: review_requirement must preserve independent review")
-    if HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS["codex_cli_blocked"] not in source_facts:
-        failures.append("host capability context: missing Codex CLI blocked source fact")
-    if HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS["gemini_auth_blocked"] not in source_facts:
-        failures.append("host capability context: missing Gemini auth blocked source fact")
-
-    for text in _host_context_values(context):
-        lowered = text.lower()
-        for phrase in HOST_CAPABILITY_CONTEXT_FORBIDDEN_OVERCLAIMS:
-            if phrase in lowered and not _line_has_scoped_claim_negation(text, phrase):
-                failures.append(f"host capability context: forbidden overclaim `{phrase}`")
-
-    docs = [
-        root / CAPABILITY_CONTEXT_DOC_PATH,
-        root / CAPABILITY_CONTEXT_TOOLS_PATH,
-    ]
-    required_doc_tokens = [
-        "check-host-capability-context",
-        "TOOL-033",
-        "FIX-117",
-        "benchmark/diagnostic",
-        "not external execution",
-        "not Desktop marketplace E2E PASS",
-        "no network",
-        "no plugin install",
-        "no MCP",
-        "no browser",
-        "no sub-agent",
-        "local skill only",
-        "Codex CLI blocked",
-        "Gemini auth blocked",
-    ]
-    for path in docs:
-        if not path.is_file():
-            failures.append(f"{_display_path(path, root)}: missing FIX-117 host capability contract doc")
-            continue
-        text = path.read_text(encoding="utf-8")
-        for token in required_doc_tokens:
-            if token not in text:
-                failures.append(f"{_display_path(path, root)}: missing FIX-117 token `{token}`")
-    return failures
+    policy = RestrictedHostPolicy(
+        required_fields=HOST_CAPABILITY_CONTEXT_REQUIRED_FIELDS,
+        allowed_statuses=HOST_CAPABILITY_CONTEXT_ALLOWED_STATUSES,
+        scenario_fields=HOST_CAPABILITY_CONTEXT_REQUIRED_SCENARIO_FIELDS,
+        scenarios=HOST_CAPABILITY_CONTEXT_SCENARIOS,
+        unavailable_statuses=HOST_CAPABILITY_CONTEXT_UNAVAILABLE_STATUSES,
+        boundary_tokens=HOST_CAPABILITY_CONTEXT_BOUNDARY_TOKENS,
+        forbidden_claims=HOST_CAPABILITY_CONTEXT_FORBIDDEN_OVERCLAIMS,
+        blocked_facts=HOST_CAPABILITY_CONTEXT_REQUIRED_BLOCKED_FACTS,
+    )
+    return validate(
+        root, context, policy=policy, requirements_path=CAPABILITY_CONTEXT_DOC_PATH,
+        tools_path=CAPABILITY_CONTEXT_TOOLS_PATH, display_path=_display_path,
+        valid_string_list=_is_valid_string_list,
+        has_scoped_negation=_line_has_scoped_claim_negation,
+    )
 
 
-def _context_task(item_id, title, status, source, raw_line, priority="", kind="task"):
-    title = re.sub(r"\s+", " ", (title or "").strip())
-    raw_line = re.sub(r"\s+", " ", (raw_line or "").strip())
-    return {
-        "task_id": item_id,
-        "priority": priority,
-        "title": title,
-        "status": status or "unfinished",
-        "source": source,
-        "raw_line": raw_line,
-        "kind": kind,
-    }
+def _context_task(item_id, title, status, source, raw_line, priority='', kind='task'):
+    from project_context import _context_task as read
+    return read(item_id, title, status, source, raw_line, priority, kind)
 
 
 def _extract_task_title_from_line(line, task_id):
-    cleaned = re.sub(r"^[\s\-\d.、]+", "", line or "")
-    cleaned = cleaned.replace("**", "").replace("`", "")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    if task_id in cleaned:
-        return cleaned
-    return task_id
+    from project_context import _extract_task_title_from_line as read
+    return read(line, task_id)
 
 
 def _parse_plan_context_tasks(root):
-    plan_path = _context_file(root, ".governance/plan-tracker.md")
-    if not plan_path.is_file():
-        return []
-    tasks = []
-    content = plan_path.read_text(encoding="utf-8")
-    in_active_section = False
-    in_roadmap = False
-    for line in content.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("## 当前活跃事项"):
-            in_active_section = True
-            in_roadmap = False
-            continue
-        if stripped.startswith("### 版本路线图"):
-            in_roadmap = True
-            in_active_section = False
-            continue
-        if in_active_section and stripped.startswith("### 最近完成"):
-            in_active_section = False
-        if in_roadmap and stripped.startswith("### ") and not stripped.startswith("### 版本路线图"):
-            in_roadmap = False
-
-        if in_active_section and stripped.startswith("|") and "---" not in stripped:
-            cells = _governance_table_cells(stripped)
-            if not cells or cells[0] in {"优先级", "任务ID"}:
-                continue
-            task_idx = next(
-                (idx for idx, cell in enumerate(cells)
-                 if re.match(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$", cell.strip())),
-                None,
-            )
-            if task_idx is None:
-                continue
-            status = cells[-1].strip() if cells else ""
-            if not _is_incomplete_task_status(status):
-                continue
-            task_id = cells[task_idx].strip().strip("*")
-            priority = next((_normalize_priority(cell) for cell in cells if _normalize_priority(cell)), "")
-            title = cells[task_idx + 1].strip() if task_idx + 1 < len(cells) else task_id
-            tasks.append(_context_task(
-                task_id,
-                title,
-                status,
-                ".governance/plan-tracker.md ## 当前活跃事项",
-                stripped,
-                priority=priority,
-            ))
-            continue
-
-        if in_roadmap and stripped.startswith("|") and "---" not in stripped:
-            cells = _governance_table_cells(stripped)
-            if len(cells) < 5 or cells[0] in {"版本", "Version"}:
-                continue
-            row_status = cells[1]
-            if not _is_incomplete_task_status(row_status):
-                continue
-            task_cell = cells[4]
-            for match in re.finditer(r"\b([A-Z]+-\d+)(?:\([^)]*\))?(✅)?", task_cell):
-                if match.group(2):
-                    continue
-                task_id = match.group(1)
-                tasks.append(_context_task(
-                    task_id,
-                    f"{task_id} from active version {cells[0]} roadmap",
-                    row_status,
-                    ".governance/plan-tracker.md ### 版本路线图",
-                    stripped,
-                    priority="",
-                ))
-    return tasks
+    from project_context import _parse_plan_context_tasks as read
+    return read(
+        _context_root(root), is_incomplete=_is_incomplete_task_status,
+        normalize_priority=_normalize_priority,
+    )
 
 
 def _parse_snapshot_context_tasks(root):
-    snapshot_path = _context_file(root, ".governance/session-snapshot.md")
-    if not snapshot_path.is_file():
-        return []
-    tasks = []
-    content = snapshot_path.read_text(encoding="utf-8")
-    current_section = ""
-    header = []
-    for line in content.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            current_section = stripped.lstrip("#").strip()
-            header = []
-            continue
-        if current_section not in GOVERNANCE_CONTEXT_SNAPSHOT_SECTIONS:
-            continue
-        if not stripped or stripped.lower() == "none":
-            continue
-        if stripped.startswith("|") and "---" not in stripped:
-            cells = _governance_table_cells(stripped)
-            if not cells:
-                continue
-            if any("任务" in cell or "Task" in cell or "优先级" in cell for cell in cells):
-                header = cells
-                continue
-            task_idx = next(
-                (idx for idx, cell in enumerate(cells) if re.search(r"\b[A-Z]+-\d+\b", cell)),
-                None,
-            )
-            if task_idx is None:
-                continue
-            task_id = re.search(r"\b[A-Z]+-\d+\b", cells[task_idx]).group(0)
-            status = "carry-over"
-            if header:
-                status_idx = next(
-                    (idx for idx, cell in enumerate(header)
-                     if "状态" in cell or "status" in cell.lower() or "阻塞" in cell),
-                    None,
-                )
-                if status_idx is not None and status_idx < len(cells):
-                    status = cells[status_idx]
-            if not _is_incomplete_task_status(status):
-                continue
-            priority = next((_normalize_priority(cell) for cell in cells if _normalize_priority(cell)), "")
-            title = cells[task_idx + 1].strip() if task_idx + 1 < len(cells) else task_id
-            tasks.append(_context_task(
-                task_id,
-                title,
-                status,
-                f".governance/session-snapshot.md ## {current_section}",
-                stripped,
-                priority=priority,
-            ))
-            continue
-        task_match = re.search(r"\b([A-Z]+-\d+)\b", stripped)
-        if task_match:
-            task_id = task_match.group(1)
-            tasks.append(_context_task(
-                task_id,
-                _extract_task_title_from_line(stripped, task_id),
-                "carry-over",
-                f".governance/session-snapshot.md ## {current_section}",
-                stripped,
-                priority=_normalize_priority(stripped),
-            ))
-    return tasks
+    from project_context import _parse_snapshot_context_tasks as read
+    return read(
+        _context_root(root),
+        is_incomplete=_is_incomplete_task_status,
+        normalize_priority=_normalize_priority,
+        sections=GOVERNANCE_CONTEXT_SNAPSHOT_SECTIONS,
+    )
 
 
 GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS = (
@@ -7126,368 +6417,80 @@ GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS = (
 
 
 def _context_git_toplevel(root):
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return None
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip()
+    from project_context import _context_git_toplevel as read
+    return read(root)
 
 
 def _is_context_git_repo_root(root):
-    toplevel = _context_git_toplevel(root)
-    if not toplevel:
-        return False
-    try:
-        return Path(toplevel).resolve() == Path(root).resolve()
-    except OSError:
-        return False
+    from project_context import _is_context_git_repo_root as read
+    return read(root)
 
 
 def _run_context_git(root, args):
-    if not _is_context_git_repo_root(root):
-        return None
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root)] + args,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return None
-    if result.returncode != 0:
-        return None
-    return result.stdout
+    from project_context import _run_context_git as read
+    return read(root, args)
 
 
 def _is_context_product_file(path):
-    normalized = (path or "").strip().replace("\\", "/")
-    if not normalized or normalized.startswith(".governance/"):
-        return False
-    if "/" not in normalized and normalized in PLATFORM_ENTRY_FILES:
-        return True
-    return any(normalized == pattern.rstrip("/") or normalized.startswith(pattern) for pattern in PRODUCT_CODE_PATTERNS)
+    from project_context import _is_context_product_file as read
+    return read(path, entry_files=PLATFORM_ENTRY_FILES, product_patterns=PRODUCT_CODE_PATTERNS)
 
 
 def _parse_git_status_context_tasks(root):
-    stdout = _run_context_git(root, ["status", "--short", "--untracked-files=all"])
-    if stdout is None:
-        return []
-    product_lines = []
-    for raw_line in stdout.splitlines():
-        line = raw_line.rstrip()
-        if not line:
-            continue
-        path_part = line[3:] if len(line) > 3 else line
-        if " -> " in path_part:
-            path_part = path_part.split(" -> ", 1)[1]
-        path_part = path_part.strip().strip('"').replace("\\", "/")
-        if _is_context_product_file(path_part):
-            product_lines.append(line.strip())
-    if not product_lines:
-        return []
-    raw_summary = "; ".join(product_lines[:5])
-    return [_context_task(
-        "GIT-WORKTREE",
-        f"uncommitted product file changes ({len(product_lines)} file(s))",
-        "uncommitted product work",
-        "git status --short",
-        raw_summary,
-        kind="git",
-    )]
+    from project_context import _parse_git_status_context_tasks as read
+    return read(root, is_product_file=_is_context_product_file)
 
 
 def _parse_recent_commit_context_facts(root, limit=5):
-    stdout = _run_context_git(root, ["log", "--oneline", f"-{limit}"])
-    if stdout is None:
-        return []
-    facts = []
-    for line in stdout.splitlines():
-        stripped = line.strip()
-        if stripped:
-            facts.append(stripped)
-    return facts
+    from project_context import _parse_recent_commit_context_facts as read
+    return read(root, limit)
 
 
 def _dedupe_context_items(items):
-    seen = set()
-    deduped = []
-    for item in items:
-        key = (item.get("kind"), item.get("task_id"), item.get("source"))
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
+    from project_context import _dedupe_context_items as read
+    return read(items)
 
 
 def discover_governance_context(root=None, skip_evidence_log=False):
-    """Return the same durable work units used by status and bootstrap."""
-    from governance_readers import loop_state
-    return loop_state(_context_root(root))
+    from project_context import discover_governance_context as read
+    return read(_context_root(root), skip_evidence_log)
 
 
 def check_governance_context(root=None):
-    """Validate the recorded state and the route that resumes it."""
-    root = _context_root(root)
-    view = discover_governance_context(root)
-    failures = [view["message"]] if view["state"] == "invalid" else []
-    scenario = root / "commands/governance/scenario-f.md"
-    status = root / "commands/governance-status.md"
-    if not scenario.is_file() or not any(
-        (scenario.parent / target).resolve() == status.resolve()
-        for target in re.findall(r"\[[^\]]+\]\(([^)]+)\)", _read_text_normalized(scenario))
-    ):
-        failures.append(f"{_display_path(scenario, root)}: missing reference to the status command")
-    content = _read_text_normalized(status) if status.is_file() else ""
-    for command in ("governance-bootstrap --format json", "loop status --unit"):
-        if command not in content:
-            failures.append(f"{_display_path(status, root)}: missing work-unit reader {command}")
-    return failures
+    from project_context import check_governance_context as read
+    return read(
+        _context_root(root),
+        discover=discover_governance_context,
+        display_path=_display_path,
+        read_text=_read_text_normalized,
+    )
+
+
 def check_capability_context(root=None, *, sampled_context=None):
-    """FIX-115: capability selection trace must be fact-backed and no-overclaim safe."""
+    from capability_context import SelectionPolicy, check_capability_context as validate
     root = _context_root(root)
     context = discover_capability_context(root) if sampled_context is None else sampled_context
-    failures = []
-    for field in CAPABILITY_CONTEXT_REQUIRED_FIELDS:
-        if field not in context:
-            failures.append(f"capability context: missing `{field}`")
-
-    source_facts = context.get("source_facts", [])
-    if not isinstance(source_facts, list) or not source_facts:
-        failures.append("capability context: source_facts must be a non-empty list")
-
-    selected = context.get("selected_capability", {})
-    if not isinstance(selected, dict):
-        failures.append("capability context: selected_capability must be an object")
-        selected = {}
-    selected_status = selected.get("status")
-    if selected_status not in CAPABILITY_CONTEXT_ALLOWED_STATUSES:
-        failures.append("capability context: selected_capability.status must be a known capability status")
-    if not selected.get("source_facts"):
-        failures.append("capability context: selected_capability requires source_facts")
-    selected_id = selected.get("capability_id", "")
-    selected_text = json.dumps(selected, ensure_ascii=False).lower()
-    if (
-        selected_status == "AVAILABLE"
-        and any(token in selected_id for token in ("catalog", "registry", "readiness-matrix"))
-    ):
-        failures.append("capability context: catalog or runtime fact-source cannot be selected as AVAILABLE runtime PASS")
-    if selected_status == "AVAILABLE" and (
-        "catalog-only" in selected_text or "not runtime pass" in selected_text
-    ):
-        failures.append("capability context: catalog-only fact cannot be treated as AVAILABLE")
-
-    available = context.get("available_capabilities", [])
-    if not isinstance(available, list):
-        failures.append("capability context: available_capabilities must be a list")
-        available = []
-    if not available and selected_status not in CAPABILITY_CONTEXT_DEGRADED_STATUSES:
-        failures.append("capability context: no available capabilities requires blocked/degraded selected status")
-    for index, capability in enumerate(available, start=1):
-        if not isinstance(capability, dict):
-            failures.append(f"capability context: available_capabilities[{index}] must be an object")
-            continue
-        status = capability.get("status")
-        if status not in CAPABILITY_CONTEXT_ALLOWED_STATUSES:
-            failures.append(f"capability context: {capability.get('capability_id', index)} has unknown status `{status}`")
-        if not capability.get("source_facts"):
-            failures.append(f"capability context: {capability.get('capability_id', index)} missing source_facts")
-        capability_text = json.dumps(capability, ensure_ascii=False).lower()
-        if status == "AVAILABLE" and (
-            "catalog-only" in capability_text
-            or "not runtime pass" in capability_text
-            or "runtime status evidence only" in capability_text
-        ):
-            failures.append(f"capability context: {capability.get('capability_id', index)} treats catalog/runtime facts as AVAILABLE")
-
-    rejected = context.get("rejected_alternatives", [])
-    if not isinstance(rejected, list) or not rejected:
-        failures.append("capability context: rejected_alternatives must be a non-empty list")
-        rejected = []
-    if not any(item.get("status") in CAPABILITY_CONTEXT_DEGRADED_STATUSES for item in rejected if isinstance(item, dict)):
-        failures.append("capability context: rejected_alternatives must include blocked/degraded/unavailable alternatives")
-    if not any("automatic" in json.dumps(item, ensure_ascii=False).lower() for item in rejected if isinstance(item, dict)):
-        failures.append("capability context: rejected_alternatives must reject automatic best-tool selection overclaim")
-
-    degradation = context.get("degradation", {})
-    if not isinstance(degradation, dict):
-        failures.append("capability context: degradation must be an object")
-        degradation = {}
-    degradation_status = degradation.get("status")
-    if degradation_status not in CAPABILITY_CONTEXT_ALLOWED_STATUSES:
-        failures.append("capability context: degradation.status must be a known capability status")
-    preferred_unavailable = any(
-        isinstance(item, dict)
-        and item.get("capability_id") == "external.capability-registry"
-        and item.get("status") in CAPABILITY_CONTEXT_DEGRADED_STATUSES
-        for item in rejected
+    policy = SelectionPolicy(
+        required_fields=CAPABILITY_CONTEXT_REQUIRED_FIELDS,
+        allowed_statuses=CAPABILITY_CONTEXT_ALLOWED_STATUSES,
+        degraded_statuses=CAPABILITY_CONTEXT_DEGRADED_STATUSES,
+        boundary_tokens=CAPABILITY_CONTEXT_NO_OVERCLAIM_TOKENS,
     )
-    if preferred_unavailable and degradation_status not in CAPABILITY_CONTEXT_DEGRADED_STATUSES:
-        failures.append("capability context: unavailable preferred capability must produce degraded or blocked status")
-
-    boundary_text = " ".join(context.get("no_overclaim_boundary", []))
-    for token in CAPABILITY_CONTEXT_NO_OVERCLAIM_TOKENS:
-        if token not in boundary_text:
-            failures.append(f"capability context: no_overclaim_boundary missing `{token}`")
-    if not any(
-        "`capability-context` CLI registration" in fact
-        and "top_level_handler=yes" in fact
-        and "main=yes" in fact
-        and "main_subparser=yes" in fact
-        and "main_dispatch=yes" in fact
-        for fact in source_facts
-    ):
-        failures.append("capability context: missing actual capability-context CLI registration facts")
-    if "read-only" not in context.get("side_effect_boundary", "").lower():
-        failures.append("capability context: side_effect_boundary must state read-only behavior")
-    if "capability-context" not in context.get("validation_command", ""):
-        failures.append("capability context: validation_command must name capability-context")
-    if "independent Code Reviewer" not in context.get("review_requirement", ""):
-        failures.append("capability context: review_requirement must preserve independent review")
-
-    docs = [
-        root / CAPABILITY_CONTEXT_DOC_PATH,
-        root / CAPABILITY_CONTEXT_TOOLS_PATH,
-    ]
-    required_doc_tokens = [
-        "capability-context",
-        "source_facts",
-        "rejected_alternatives",
-        "degradation",
-        "side_effect_boundary",
-        "validation_command",
-        "review_requirement",
-        "no_overclaim_boundary",
-    ]
-    for path in docs:
-        if not path.is_file():
-            failures.append(f"{_display_path(path, root)}: missing capability context contract doc")
-            continue
-        text = path.read_text(encoding="utf-8")
-        for token in required_doc_tokens:
-            if token not in text:
-                failures.append(f"{_display_path(path, root)}: missing capability context token `{token}`")
-    return failures
+    return validate(
+        root, context, policy=policy, requirements_path=CAPABILITY_CONTEXT_DOC_PATH,
+        tools_path=CAPABILITY_CONTEXT_TOOLS_PATH, display_path=_display_path,
+    )
 
 
 def parse_session_snapshot_carry_over_tasks(snapshot_path=None):
-    """Parse carry-over tasks from session-snapshot when active plan rows are absent."""
-    snapshot_path = Path(snapshot_path) if snapshot_path is not None else SESSION_SNAPSHOT_PATH
-    if not snapshot_path.is_file():
-        return []
-
-    content = snapshot_path.read_text(encoding="utf-8")
-    tasks = []
-    in_carry_section = False
-    header = []
-    for line in content.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("## "):
-            section_title = stripped.lstrip("#").strip()
-            in_carry_section = section_title in {
-                "遗留任务",
-                "Carry-over tasks",
-                "Carry over tasks",
-                "Unfinished / deferred",
-                "未完成 / 已延期",
-            }
-            header = []
-            continue
-        if not in_carry_section:
-            continue
-        if stripped.startswith("|") and "---" not in stripped:
-            cells = _governance_table_cells(stripped)
-            if not cells:
-                continue
-            if any("任务" in cell or "Task" in cell for cell in cells):
-                header = cells
-                continue
-            task_idx = next(
-                (idx for idx, cell in enumerate(cells)
-                 if re.search(r"\b[A-Z]+-\d+\b", cell.strip("* "))),
-                None,
-            )
-            if task_idx is None:
-                continue
-            task_id = re.search(r"\b[A-Z]+-\d+\b", cells[task_idx]).group(0)
-            status = ""
-            if header:
-                status_idx = next(
-                    (idx for idx, cell in enumerate(header)
-                     if "状态" in cell or "status" in cell.lower()),
-                    None,
-                )
-                if status_idx is not None and status_idx < len(cells):
-                    status = cells[status_idx]
-            elif len(cells) > task_idx + 2:
-                status = cells[-1]
-            if not _is_incomplete_task_status(status):
-                continue
-            priority = ""
-            for cell in cells:
-                normalized = _normalize_priority(cell)
-                if normalized:
-                    priority = normalized
-                    break
-            title = cells[task_idx + 1].strip() if task_idx + 1 < len(cells) else ""
-            tasks.append({
-                "task_id": task_id,
-                "priority": priority,
-                "title": title,
-                "dependency": "",
-                "target_version": "",
-                "closure_path": "session-snapshot.md",
-                "status": status or "carry-over",
-                "raw_line": stripped,
-            })
-            continue
-        if stripped.startswith("-"):
-            task_match = re.search(r"\b([A-Z]+-\d+)\b", stripped)
-            if task_match and _is_incomplete_task_status(stripped):
-                tasks.append({
-                    "task_id": task_match.group(1),
-                    "priority": _normalize_priority(stripped) or "",
-                    "title": stripped.lstrip("- ").strip(),
-                    "dependency": "",
-                    "target_version": "",
-                    "closure_path": "session-snapshot.md",
-                    "status": "carry-over",
-                    "raw_line": stripped,
-                })
-    return tasks
+    from governance_views import parse_session_snapshot_carry_over_tasks as read
+    path = Path(snapshot_path) if snapshot_path is not None else SESSION_SNAPSHOT_PATH
+    return read(path, is_incomplete=_is_incomplete_task_status, normalize_priority=_normalize_priority)
 
 
 def build_delivery_trust_snapshot(project_root=None, unit_id=None):
-    """Project only the actual work units and evidence present in the requested host."""
-    from governance_readers import loop_state
-
-    view = loop_state(Path(project_root) if project_root is not None else GOVERNANCE_DIR.parent)
-    if view["state"] == "invalid":
-        raise ValueError(view["message"])
-    units = [unit for unit in view["units"] if unit_id is None or unit["flow_unit_id"] == unit_id]
-    if unit_id and not units:
-        raise ValueError(f"Unknown work unit: {unit_id}")
-    return {
-        "Work units": [{key: unit.get(key) for key in
-                        ("flow_unit_id", "parent_unit_id", "goal", "acceptance", "active_loop_tier",
-                         "gate_id", "gate_status", "evidence_refs", "blockers", "next_action")}
-                       for unit in units],
-        "State": view["state"],
-        "Next action": units[0]["next_action"] if len(units) == 1 else (
-            "Resume the relevant unit by its ID." if units else "Record the first goal and its acceptance condition."),
-    }
+    from governance_views import build_delivery_trust_snapshot as read
+    return read(project_root if project_root is not None else GOVERNANCE_DIR.parent, unit_id)
 
 
 FIRST_RUN_DEMO_REQUIRED_FIELDS = ["Work units", "State", "Next action"]
@@ -7496,149 +6499,56 @@ FIRST_RUN_DEMO_REQUIRED_MARKERS = ["Delivery Trust Snapshot", "demo-delivery", "
 
 
 def render_delivery_trust_snapshot(snapshot):
-    lines = ["Delivery Trust Snapshot", f"State: {snapshot.get('State', '')}", "Work units:"]
-    for unit in snapshot.get("Work units", []):
-        parent = f" (child of {unit['parent_unit_id']})" if unit["parent_unit_id"] else ""
-        lines.extend([
-            f"- {unit['flow_unit_id']}{parent}: {unit['goal']}",
-            f"  Acceptance: {unit['acceptance']}",
-            f"  {unit['active_loop_tier']} loop | {unit['gate_id']} {unit['gate_status']} | {unit['next_action']}",
-        ])
-        if unit["evidence_refs"]:
-            lines.append("  Evidence: " + ", ".join(unit["evidence_refs"]))
-        if unit["blockers"]:
-            lines.append("  Blockers: " + ", ".join(unit["blockers"]))
-    lines.append("Next action: " + snapshot.get("Next action", ""))
-    if "Verification" in snapshot:
-        lines.append("Verification: " + snapshot["Verification"])
-    return "\n".join(lines)
+    from governance_views import render_delivery_trust_snapshot as read
+    return read(snapshot)
 
 def build_first_run_demo_snapshot():
-    """Exercise a disposable delivery and a bounded, locally verified child."""
-    import tempfile
-    import loop_workflow
-
-    with tempfile.TemporaryDirectory() as demo:
-        root = Path(demo)
-        (root / ".governance").mkdir()
-        loop_workflow.start(root, unit_id="demo-delivery", goal="Deliver a ledger export",
-                            acceptance="Exported amounts match the ledger", tier="middle", gate=None)
-        (root / "ledger.csv").write_text("amount\n3\n4\n", encoding="utf-8")
-        check = [sys.executable, "-c", "import csv; from pathlib import Path; "
-                 "total=sum(int(r['amount']) for r in csv.DictReader(Path('ledger.csv').read_text().splitlines())); "
-                 "print('totals match' if total == 7 else 'mismatch')"]
-        loop_workflow.start(root, unit_id="demo-export", parent="demo-delivery", goal="Check the exported amounts",
-                            acceptance="CSV rows total seven", tier="inner", gate=None,
-                            check_command=check, expect_output="totals match")
-        outcome = loop_workflow.verify_command(root, "demo-export")
-        if outcome["decision"] != "exit":
-            raise ValueError(f"demo-export failed its declared acceptance: {outcome['decision']}")
-        snapshot = build_delivery_trust_snapshot(root)
-        child = next(unit for unit in snapshot["Work units"] if unit["flow_unit_id"] == "demo-export")
-        receipt = json.loads((root / ".governance" / child["evidence_refs"][-1]).read_bytes())
-        snapshot["Verification"] = "local/demo-only: " + receipt["stdout"].strip()
-        return snapshot
+    from governance_views import build_first_run_demo_snapshot as read
+    return read(build_delivery_trust_snapshot)
 
 
 def assert_first_run_demo_snapshot(snapshot, rendered_text=None):
-    """Return missing field/marker diagnostics for the local first-run demo."""
-    rendered_text = rendered_text if rendered_text is not None else render_delivery_trust_snapshot(snapshot)
-    missing_fields = [field for field in FIRST_RUN_DEMO_REQUIRED_FIELDS if not snapshot.get(field)]
-    missing_markers = [marker for marker in FIRST_RUN_DEMO_REQUIRED_MARKERS if marker not in rendered_text]
-    return missing_fields + missing_markers
+    from governance_views import assert_first_run_demo_snapshot as read
+    return read(
+        snapshot, rendered_text,
+        required_fields=FIRST_RUN_DEMO_REQUIRED_FIELDS,
+        required_markers=FIRST_RUN_DEMO_REQUIRED_MARKERS,
+        render=render_delivery_trust_snapshot,
+    )
 
 
 def parse_gate_detail(gate_id):
-    """Parse a specific Gate's details from stage-gates.md."""
-    gate_id = gate_id.upper()
-    if not gate_id.startswith("G"):
-        gate_id = "G" + gate_id
-
-    content = GATES_PATH.read_text(encoding="utf-8")
-
-    pattern = re.compile(
-        rf"## ({re.escape(gate_id)} .+?)\n\n(.*?)(?=\n## G\d|\n## Gate 执行原则|\Z)",
-        re.DOTALL,
-    )
-    m = pattern.search(content)
-    if not m:
-        return None
-
-    title = m.group(1).strip()
-    body = m.group(2).strip()
-
-    detail = {"title": title, "raw": body}
-
-    # Extract transition
-    tm = re.search(r"\*\*阶段转换\*\*[：:]\s*(.+)", body)
-    detail["transition"] = tm.group(1).strip() if tm else ""
-
-    # Extract required materials
-    mm = re.search(r"\*\*必审材料\*\*[：:]\s*(.+)", body)
-    detail["materials"] = mm.group(1).strip() if mm else ""
-
-    # Extract check items
-    checks = re.findall(r"^\s+\d+\.\s+(.+)$", body, re.MULTILINE)
-    detail["checks"] = checks
-
-    # Extract pass criteria
-    pm = re.search(r"\*\*通过标准\*\*[：:]\s*(.+)", body)
-    detail["pass_criteria"] = pm.group(1).strip() if pm else ""
-
-    # Extract auto-judgment criteria
-    auto_checks = re.findall(r"^\s+- 检查项\d+[：:]\s*(.+)$", body, re.MULTILINE)
-    detail["auto_criteria"] = auto_checks
-
-    # Extract conditional pass info
-    cm = re.search(r"\*\*有条件通过\*\*[：:]\s*(.+?)(?:\n\n|\n- \*\*|$)", body, re.DOTALL)
-    detail["conditional"] = cm.group(1).strip() if cm else ""
-
-    return detail
+    from governance_views import parse_gate_detail as read
+    return read(gate_id, gates_path=GATES_PATH)
 
 
 def normalize_stage_name(stage_name):
-    """Normalize CLI stage names to lifecycle stage identifiers."""
-    normalized = stage_name.strip().lower()
-    if normalized.startswith("stage-"):
-        normalized = normalized[len("stage-"):]
-    return STAGE_SKILL_ALIASES.get(normalized, normalized)
+    from governance_views import normalize_stage_name as read
+    return read(stage_name, aliases=STAGE_SKILL_ALIASES)
 
 
 def stage_skill_dir_name(stage_name):
-    """Return the canonical skill directory name for a lifecycle stage."""
-    stage = normalize_stage_name(stage_name)
-    return STAGE_SKILL_DIR_NAMES.get(stage, f"stage-{stage}")
+    from governance_views import stage_skill_dir_name as read
+    return read(stage_name, directories=STAGE_SKILL_DIR_NAMES, normalize=normalize_stage_name)
 
 
 def stage_skill_path(stage_name):
-    """Return the canonical stage workflow SKILL.md path."""
-    return STAGE_SKILLS_ROOT / stage_skill_dir_name(stage_name) / "SKILL.md"
+    from governance_views import stage_skill_path as read
+    return read(stage_name, stages_root=STAGE_SKILLS_ROOT, directory_name=stage_skill_dir_name)
 
 
 def _stage_name_from_skill_dir(dirname):
-    """Map a stage skill directory back to the lifecycle stage identifier."""
-    for stage, mapped_dir in STAGE_SKILL_DIR_NAMES.items():
-        if dirname == mapped_dir:
-            return stage
-    if dirname.startswith("stage-"):
-        return normalize_stage_name(dirname[len("stage-"):])
-    return dirname
+    from governance_views import _stage_name_from_skill_dir as read
+    return read(dirname, directories=STAGE_SKILL_DIR_NAMES, normalize=normalize_stage_name)
 
 
 def list_available_stages():
-    """List all available lifecycle stages backed by stage SKILL.md files."""
-    if not STAGE_SKILLS_ROOT.is_dir():
-        return []
-    stages = {
-        stage for stage in STAGE_ORDER
-        if stage_skill_path(stage).is_file()
-    }
-    for skill_md in STAGE_SKILLS_ROOT.glob("stage-*/SKILL.md"):
-        stages.add(_stage_name_from_skill_dir(skill_md.parent.name))
-    return sorted(
-        stages,
-        key=lambda x: STAGE_ORDER.index(x) if x in STAGE_ORDER else 99,
-    )
+    from governance_views import list_available_stages as read
+    return read(
+        stage_order=STAGE_ORDER,
+        stages_root=STAGE_SKILLS_ROOT,
+        skill_path=stage_skill_path,
+        stage_name=_stage_name_from_skill_dir)
 
 
 # ── Governance health check parsers ─────────────────────────────
@@ -7658,513 +6568,70 @@ ARCHIVE_RISKS_DIR = SAMPLE_PATH.parent / "archive" / "risks"
 
 
 def _load_archive_module():
-    archive_path = ROOT / "skills/software-project-governance/infra/archive.py"
-    if not archive_path.is_file():
-        return None
-    spec = importlib.util.spec_from_file_location("governance_archive_runtime", archive_path)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    # archive.py reads governance FACTS (.governance/...) — point it at the
-    # host project, not the plugin cache (FIX-187 / DEC-080 dual-root).
-    # HOST_PROJECT_ROOT is rebound together with ROOT (FIX-242 P3-3): the
-    # attribute defaults to archive.py's own cwd-derived resolve, which can
-    # drift from the host root resolved/validated here (e.g. after an
-    # explicit --project-root override). archive.py's own --project-root
-    # path is unaffected — it is only applied inside archive.main(), which
-    # this loader never invokes.
-    module.ROOT = HOST_PROJECT_ROOT
-    module.HOST_PROJECT_ROOT = HOST_PROJECT_ROOT
-    return module
+    from governance_archive_data import _load_archive_module as read
+    return read(plugin_root=ROOT, host_root=HOST_PROJECT_ROOT)
 
 
 # ── SYSGAP-030: GovernanceDataSource (archive-aware data source) ──
 
-class GovernanceDataSource:
-    """Unified governance data source — transparently aggregates hot files
-    + archive files. Backward compatible: falls back to single-file mode
-    when archive/ directory does not exist."""
+@_cache
+def __getattr__(name):
+    """Resolve the historical public class on first access, including wildcard imports."""
+    if name != "GovernanceDataSource":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from governance_archive_data import GovernanceDataSource as ArchiveReader
 
-    def __init__(self, sample_path=None, evidence_path=None, archive_index_path=None,
-                 archive_root=None, decision_path=None, risk_path=None):
-        self.sample_path = Path(sample_path) if sample_path is not None else SAMPLE_PATH
-        self.evidence_path = Path(evidence_path) if evidence_path is not None else EVIDENCE_PATH
-        self.decision_path = Path(decision_path) if decision_path is not None else GOVERNANCE_DIR / "decision-log.md"
-        self.risk_path = Path(risk_path) if risk_path is not None else GOVERNANCE_DIR / "risk-log.md"
+    class GovernanceDataSource(ArchiveReader):
+        """Archive reader using the current host and the CLI's configurable fact paths."""
 
-        if archive_root is not None:
-            self.archive_root = Path(archive_root)
-        elif archive_index_path is not None:
-            self.archive_root = Path(archive_index_path).parent
-        else:
-            self.archive_root = self._infer_governance_dir() / "archive"
+        def __init__(self, sample_path=None, evidence_path=None, archive_index_path=None,
+                     archive_root=None, decision_path=None, risk_path=None):
+            super().__init__(
+                GOVERNANCE_DIR, SAMPLE_PATH if sample_path is None else sample_path,
+                EVIDENCE_PATH if evidence_path is None else evidence_path,
+                archive_index_path, archive_root, decision_path, risk_path,
+            )
 
-        self.archive_index_path = (
-            Path(archive_index_path)
-            if archive_index_path is not None
-            else self.archive_root / "index.md"
-        )
-        self.archive_tasks_dir = self.archive_root / "tasks"
-        self.archive_evidence_dir = self.archive_root / "evidence"
-        self.archive_decisions_dir = self.archive_root / "decisions"
-        self.archive_risks_dir = self.archive_root / "risks"
+        @staticmethod
+        def _table_cells(line):
+            return _split_markdown_table_row(line)
 
-    def _infer_governance_dir(self):
-        for path in (self.sample_path, self.evidence_path):
-            if path.name in {"plan-tracker.md", "evidence-log.md"}:
-                return path.parent
-        return GOVERNANCE_DIR
+        @staticmethod
+        def _expand_task_ids(text):
+            return expand_task_ids(text)
 
-    def _has_archive(self):
-        """Check if archive directory exists and has content."""
-        return self.archive_index_path.exists()
+    GovernanceDataSource.__qualname__ = name
+    return globals().setdefault(name, GovernanceDataSource)
 
-    def _scan_archive_files(self, dir_path, extract_func):
-        """Scan all .md files in archive directory (excluding .gitkeep),
-        applying extract_func to each, returning aggregated results."""
-        results = []
-        if not self._has_archive():
-            return results
-        if not dir_path.exists():
-            return results
-        for f in sorted(dir_path.glob("*.md")):
-            if f.name == ".gitkeep":
-                continue
-            results.extend(extract_func(f))
-        return results
 
-    # ── Task data ──
+def __dir__():
+    return sorted(set(globals()) | {"GovernanceDataSource"})
 
-    def get_all_completed_task_ids(self):
-        """Return set of completed task IDs from plan-tracker + archive/tasks/*."""
-        return {
-            entry["id"]
-            for entry in self.get_all_completed_task_entries()
-        }
 
-    def get_all_completed_task_entries(self):
-        """Return completed task entries with source metadata.
-
-        FIX-480: the hot face reads through the SINGLE parse source —
-        ``task_priority.parse_task_dependencies`` — so the 0.99 compact
-        shape and the 0.54-era id-first 20-column host shape converge on
-        one TaskDep model (no second semantic source; the pre-fix
-        profile-column channel mis-located the status cell on the 20-col
-        shape and reported ``Completed tasks: 0`` — the python_game false
-        PASS). Completion keeps BOTH historical wordings: the ✅ semantics
-        (``TaskDep.is_completed``) and the exact ``已完成`` cell (the
-        lightweight/profile-column channel's word, kept so trackers using
-        the bare word stay counted).
-        """
-        completed = []
-        if self.sample_path.is_file():
-            content = self.sample_path.read_text(encoding="utf-8")
-            try:
-                from task_priority import parse_task_dependencies  # noqa: WPS433 (deferred, matches the module's TPA call style)
-                tasks = parse_task_dependencies(content)
-            except Exception:  # unreadable/unparsable → empty, never crash
-                tasks = []
-            for dep in tasks:
-                if dep.is_completed() or dep.status.strip() == "已完成":
-                    completed.append(
-                        {"id": dep.task_id, "status": dep.status,
-                         "source": "hot"})
-        for entry in self._scan_archive_files(self.archive_tasks_dir, self._extract_task_ids):
-            if entry.get("status") == "已完成":
-                completed.append({**entry, "source": "archive"})
-        return completed
-
-    def _extract_task_ids(self, file_path):
-        """Extract task IDs and statuses from an archive task file."""
-        results = []
-        content = file_path.read_text(encoding="utf-8")
-        current_version = None
-        for line in content.split("\n"):
-            stripped = line.strip()
-            # Detect version headers
-            m_ver = re.match(r"^#{1,6}\s+(?:v)?(\d+\.\d+\.\d+)\s*[—\-]", stripped)
-            if m_ver:
-                current_version = m_ver.group(1)
-                continue
-            # Parse task rows
-            m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
-            if m:
-                task_id = m.group(1)
-                parts = _split_markdown_table_row(line)
-                status = parts[9] if len(parts) >= 10 else "?"
-                results.append({"id": task_id, "status": status, "version": current_version})
-        return results
-
-    def get_all_task_ids(self):
-        """Return set of all task IDs (any status) from hot + archive."""
-        task_ids = set()
-        # Hot file
-        if self.sample_path.is_file():
-            content = self.sample_path.read_text(encoding="utf-8")
-            for line in content.split("\n"):
-                stripped = line.strip()
-                if not stripped.startswith("| "):
-                    continue
-                m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
-                if m:
-                    task_ids.add(m.group(1))
-        # Archive files
-        for entry in self._scan_archive_files(self.archive_tasks_dir, self._extract_task_ids):
-            task_ids.add(entry["id"])
-        return task_ids
-
-    # ── Evidence data ──
-
-    def get_all_evidence_task_ids(self):
-        """Return set of task IDs that have evidence entries (hot + archive)."""
-        task_ids = set()
-        # Hot file
-        if self.evidence_path.is_file():
-            content = self.evidence_path.read_text(encoding="utf-8")
-            for line in content.split("\n"):
-                stripped = line.strip()
-                if not stripped.startswith("| EVD-"):
-                    continue
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 3:
-                    raw_ids = parts[2]
-                    if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
-                        task_ids |= expand_task_ids(raw_ids)
-        # Archive files
-        for entry in self._scan_archive_files(self.archive_evidence_dir, self._extract_evidence_entries):
-            raw_ids = entry.get("task_ids", "")
-            if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
-                task_ids |= expand_task_ids(raw_ids)
-        return task_ids
-
-    def get_all_evidence_task_map(self):
-        """Return task_id -> evidence IDs from hot evidence-log + archive evidence files."""
-        task_map = {}
-
-        def add_entry(evd_id, raw_ids):
-            if raw_ids and re.search(r"[A-Z]+-\d+", raw_ids):
-                for task_id in expand_task_ids(raw_ids):
-                    task_map.setdefault(task_id, []).append(evd_id)
-
-        if self.evidence_path.is_file():
-            content = self.evidence_path.read_text(encoding="utf-8")
-            for line in content.split("\n"):
-                line = line.strip()
-                if not line.startswith("| EVD-"):
-                    continue
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 3:
-                    add_entry(parts[1], parts[2])
-
-        for entry in self._scan_archive_files(self.archive_evidence_dir, self._extract_evidence_entries):
-            add_entry(entry.get("evd_id", ""), entry.get("task_ids", ""))
-
-        return task_map
-
-    def _extract_evidence_entries(self, file_path):
-        """Extract evidence entries from an archive evidence file."""
-        results = []
-        content = file_path.read_text(encoding="utf-8")
-        for line in content.split("\n"):
-            stripped = line.strip()
-            if not stripped.startswith("| EVD-"):
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 3:
-                results.append({
-                    "evd_id": parts[1],
-                    "task_ids": parts[2],
-                })
-        return results
-
-    # ── Row-family layer surface (FEAT-076: the unified read entry) ──
-    #
-    # The evidence-log's four row families (EVD/REVIEW/TRIAGE/RECO) now live
-    # across TWO layers: the hot working set (evidence-log.md) and the cold
-    # archive (archive/evidence/*.md). This surface is the single read entry
-    # layering-aware consumers use (DEC-282 C-1(b) condition 3: 统一入口或
-    # 过渡适配) — direct hot-file reads stay valid ONLY for write targets
-    # and current-ticket semantics (this-session rows are always hot).
-
-    #: Row-id line prefixes per family (mirror of archive._ROW_FAMILY_LINE_
-    #: PREFIXES — kept literal to avoid an import cycle; the archive module
-    #: is the write-side authority, this is the read-side mirror).
-    FAMILY_ROW_PREFIXES = {
-        "EVD": "| EVD-",
-        "REVIEW": "| REVIEW-",
-        "TRIAGE": "| TRIAGE-",
-        "RECO": "| RECO-",
-    }
-
-    def _hot_family_lines(self, family):
-        """Family-prefixed table rows from the hot evidence-log."""
-        prefix = self.FAMILY_ROW_PREFIXES[family]
-        if not self.evidence_path.is_file():
-            return []
-        return [
-            line for line in self.evidence_path.read_text(
-                encoding="utf-8").split("\n")
-            if line.strip().startswith(prefix)
-        ]
-
-    def _cold_family_lines(self, family):
-        """Family-prefixed table rows from ALL archive evidence files
-        (sorted by filename → deterministic order)."""
-        prefix = self.FAMILY_ROW_PREFIXES[family]
-        rows = []
-        for f in self._cold_evidence_files():
-            for line in f.read_text(encoding="utf-8").split("\n"):
-                if line.strip().startswith(prefix):
-                    rows.append({"line": line, "file": f"archive/evidence/{f.name}"})
-        return rows
-
-    def _cold_evidence_files(self):
-        from archive_indexing import evidence_archive_files
-        yield from evidence_archive_files(self.archive_evidence_dir)
-
-    def get_all_family_rows(self, family):
-        """FEAT-076: ALL rows of one family across BOTH layers.
-
-        Returns a list of {"row_id", "task_ids", "line", "source", "file"}
-        dicts — hot rows carry source="hot" / file=".governance/
-        evidence-log.md", cold rows carry source="cold" / their archive
-        file. Row id + task ids come from the first two cells (same
-        convention every family parser uses).
-        """
-        if family not in self.FAMILY_ROW_PREFIXES:
-            raise ValueError(f"unknown row family {family!r}")
-        from archive_indexing import iter_evidence_family_rows
-        return list(iter_evidence_family_rows(
-            self.evidence_path, self._cold_evidence_files(), self.FAMILY_ROW_PREFIXES[family]))
-
-    def get_all_family_row_ids(self, family):
-        """FEAT-076: set of row ids for one family across both layers."""
-        return {r["row_id"] for r in self.get_all_family_rows(family)}
-
-    def find_row(self, row_id):
-        """FEAT-076: locate ONE row by id across both layers (hot first —
-        the working set wins any id collision by design: new rows are
-        always written hot). Returns the get_all_family_rows record or
-        None."""
-        prefix = row_id.split("-", 1)[0] + "-"
-        for family, fam_prefix in self.FAMILY_ROW_PREFIXES.items():
-            if fam_prefix.lstrip("| ").startswith(prefix):
-                for r in self.get_all_family_rows(family):
-                    if r["row_id"] == row_id:
-                        return r
-        return None
-
-    def layer_stats(self):
-        """FEAT-076: per-family hot/cold row counts + the three-track size
-        basis (DEC-278 Q5: 热工作集容量 / 全库完整性 / 总量增长监测).
-
-        Hot bytes = the hot file's on-disk size (Check 28s basis). Cold
-        bytes = the summed sizes of every archive evidence file. Total =
-        hot + cold (the full-library volume the growth track monitors).
-        """
-        stats = {"families": {}, "layers": {}}
-        for family in self.FAMILY_ROW_PREFIXES:
-            hot_rows = self._hot_family_lines(family)
-            cold = self._cold_family_lines(family)
-            stats["families"][family] = {
-                "hot_rows": len(hot_rows),
-                "cold_rows": len(cold),
-                "total_rows": len(hot_rows) + len(cold),
-            }
-        hot_bytes = (self.evidence_path.stat().st_size
-                     if self.evidence_path.is_file() else 0)
-        cold_bytes = sum(f.stat().st_size for f in self._cold_evidence_files())
-        stats["layers"] = {
-            "hot_bytes": hot_bytes,
-            "cold_bytes": cold_bytes,
-            "total_bytes": hot_bytes + cold_bytes,
-        }
-        return stats
-
-    # ── Decision data ──
-
-    def get_all_decision_ids(self):
-        """Return sorted set of decision integers from hot + archive."""
-        ids = set()
-        # Hot file
-        if self.decision_path.is_file():
-            content = self.decision_path.read_text(encoding="utf-8")
-            for m in re.finditer(r"\bDEC-(\d+)\b", content):
-                ids.add(int(m.group(1)))
-        # Archive files
-        for f in sorted((self.archive_decisions_dir).glob("*.md")):
-            if f.name == ".gitkeep":
-                continue
-            content = f.read_text(encoding="utf-8")
-            for m in re.finditer(r"\bDEC-(\d+)\b", content):
-                ids.add(int(m.group(1)))
-        return sorted(ids)
-
-    # ── Risk data ──
-
-    def get_all_risk_ids(self):
-        """Return sorted set of risk integers from hot + archive."""
-        ids = set()
-        # Hot file
-        if self.risk_path.is_file():
-            content = self.risk_path.read_text(encoding="utf-8")
-            for m in re.finditer(r"\bRISK-(\d+)\b", content):
-                ids.add(int(m.group(1)))
-        # Archive files
-        for f in sorted((self.archive_risks_dir).glob("*.md")):
-            if f.name == ".gitkeep":
-                continue
-            content = f.read_text(encoding="utf-8")
-            for m in re.finditer(r"\bRISK-(\d+)\b", content):
-                ids.add(int(m.group(1)))
-        return sorted(ids)
-
-    # ── Lookup ──
-
-    def find_entry_by_id(self, entry_id):
-        """Find an entry by ID: check hot files first, then archive index,
-        then archive files. Returns dict with 'source' and 'content' keys,
-        or None if not found.
-
-        Supports: EVD-, DEC-, RISK-, and generic Task ID (e.g. FIX-001)
-        prefixes.  Uses \b word-boundary matching to avoid false matches
-        (EVD-10 will not match EVD-100).
-        """
-        boundary_pattern = re.compile(
-            rf"\b{re.escape(entry_id)}\b"
-        )
-
-        # ── Task ID (e.g. FIX-001, AUDIT-082) ──
-        if re.match(r"[A-Z]+-\d+", entry_id) and not entry_id.startswith(
-            ("EVD-", "DEC-", "RISK-")
-        ):
-            # 1) plan-tracker (hot)
-            if self.sample_path.is_file():
-                for line in self.sample_path.read_text(encoding="utf-8").split("\n"):
-                    if boundary_pattern.search(line):
-                        return {
-                            "source": "plan-tracker.md (hot)",
-                            "line": line.strip(),
-                        }
-            # 2) archive index
-            if self.archive_index_path.is_file():
-                for line in self.archive_index_path.read_text(encoding="utf-8").split("\n"):
-                    if boundary_pattern.search(line):
-                        return {
-                            "source": "archive/index.md",
-                            "line": line.strip(),
-                        }
-            # 3) archive task files
-            for f in sorted((self.archive_tasks_dir).glob("*.md")):
-                if f.name == ".gitkeep":
-                    continue
-                for line in f.read_text(encoding="utf-8").split("\n"):
-                    if boundary_pattern.search(line):
-                        return {
-                            "source": f"archive/tasks/{f.name}",
-                            "line": line.strip(),
-                        }
-            return None
-
-        # ── Evidence IDs ──
-        if re.match(r"EVD-\d+", entry_id):
-            content = self.evidence_path.read_text(encoding="utf-8") if self.evidence_path.is_file() else ""
-            for line in content.split("\n"):
-                if boundary_pattern.search(line):
-                    return {"source": "evidence-log.md (hot)", "line": line.strip()}
-            # Search archive
-            for f in sorted((self.archive_evidence_dir).glob("*.md")):
-                if f.name == ".gitkeep":
-                    continue
-                fc = f.read_text(encoding="utf-8")
-                for line in fc.split("\n"):
-                    if boundary_pattern.search(line):
-                        return {"source": f"archive/evidence/{f.name}", "line": line.strip()}
-
-        # ── Decision IDs ──
-        if re.match(r"DEC-\d+", entry_id):
-            if self.decision_path.is_file():
-                for line in self.decision_path.read_text(encoding="utf-8").split("\n"):
-                    if boundary_pattern.search(line):
-                        return {"source": "decision-log.md (hot)", "line": line.strip()}
-            # Search archive decisions
-            for f in sorted((self.archive_decisions_dir).glob("*.md")):
-                if f.name == ".gitkeep":
-                    continue
-                for line in f.read_text(encoding="utf-8").split("\n"):
-                    if boundary_pattern.search(line):
-                        return {"source": f"archive/decisions/{f.name}", "line": line.strip()}
-
-        # ── Risk IDs ──
-        if re.match(r"RISK-\d+", entry_id):
-            if self.risk_path.is_file():
-                for line in self.risk_path.read_text(encoding="utf-8").split("\n"):
-                    if boundary_pattern.search(line):
-                        return {"source": "risk-log.md (hot)", "line": line.strip()}
-            # Search archive risks
-            for f in sorted((self.archive_risks_dir).glob("*.md")):
-                if f.name == ".gitkeep":
-                    continue
-                for line in f.read_text(encoding="utf-8").split("\n"):
-                    if boundary_pattern.search(line):
-                        return {"source": f"archive/risks/{f.name}", "line": line.strip()}
-
-        return None
+def _archive_reader(*args, **kwargs):
+    # Module-global lookup does not run PEP 562. Honor an installed reader override.
+    try:
+        reader = GovernanceDataSource
+    except NameError:
+        reader = __getattr__("GovernanceDataSource")
+    return reader(*args, **kwargs)
 
 
 def parse_completed_task_ids():
-    """Return set of completed task IDs from plan-tracker."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    completed = set()
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line.startswith("| ") or "---" in line:
-            continue
-        m = re.search(r"\|\s*(?:\*\*)?([A-Z]+-\d+)(?:\*\*)?\s*\|", line)
-        if not m:
-            continue
-        task_id = m.group(1)
-        parts = [p.strip() for p in line.split("|")]
-        if any("已完成" in part for part in parts):
-            completed.add(task_id)
-    return completed
+    from governance_archive_data import parse_completed_task_ids as read
+    return read(plan_path=SAMPLE_PATH)
 
 
 def expand_task_ids(raw_text):
-    """Expand range notations and comma-separated task IDs into individual IDs.
-
-    Supported formats:
-      - Single: AUDIT-021
-      - Comma-separated: AUDIT-045, AUDIT-048
-      - Range: AUDIT-015~020  (expands to AUDIT-015 through AUDIT-020)
-      - Mixed comma + range: RISK-021, RISK-022, MAINT-002
-    Returns a set of individual task IDs.
-    """
-    result = set()
-    # Split by comma first
-    for chunk in raw_text.split(","):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        # Check for range notation: PREFIX-NUM1~NUM2
-        range_match = re.match(r"^([A-Z]+-)(\d+)\s*~\s*(\d+)$", chunk)
-        if range_match:
-            prefix = range_match.group(1)
-            start_num = int(range_match.group(2))
-            end_num = int(range_match.group(3))
-            for num in range(start_num, end_num + 1):
-                result.add(f"{prefix}{num:03d}")
-        elif re.match(r"[A-Z]+-\d+", chunk):
-            result.add(chunk)
-    return result
+    from governance_archive_data import expand_task_ids as read
+    return read(raw_text)
 
 
 def check_gate_consistency():
     """Check the evidence actually consumed by each unit, plus task closure references."""
     from checks.loop_receipts import receipt_issues
 
-    ds = GovernanceDataSource()
+    ds = _archive_reader()
     evidenced = ds.get_all_evidence_task_map()
     issues = [{"type": "loop_receipt", "detail": issue} for issue in receipt_issues(GOVERNANCE_DIR.parent)]
 
@@ -8721,20 +7188,18 @@ def cmd_verify(args):
 
 
 def _status_col_name(raw):
-    """Normalize a header cell into a stable column key."""
-    name = str(raw or "").strip().strip("`").strip("*").strip()
-    return name.lower()
+    from plan_status import _status_col_name as read
+    return read(raw)
 
 
 def _status_clean_cell(value):
-    """Strip markdown/backtick decoration from a cell value."""
-    return str(value or "").strip().strip("`").replace("**", "").strip()
+    from plan_status import _status_clean_cell as read
+    return read(value)
 
 
 def _status_iso_date(value):
-    """First ISO date (YYYY-MM-DD) inside a cell, or None."""
-    m = re.search(r"\d{4}-\d{2}-\d{2}", str(value or ""))
-    return m.group(0) if m else None
+    from plan_status import _status_iso_date as read
+    return read(value)
 
 
 # FIX-291 W-7/BC-7 (review-FIX-278-DESIGN-R1 §1.1 residual / §3 BC-7):
@@ -8771,72 +7236,13 @@ _W7_TERMINAL_DATE_RE = re.compile(r"^[（(]\s*\d{4}-\d{2}-\d{2}")
 
 
 def _last_marker_pos(text, markers):
-    """Last (rightmost) occurrence position of any marker in ``text``, or -1."""
-    best = -1
-    for marker in markers:
-        pos = text.rfind(marker)
-        if pos > best:
-            best = pos
-    return best
+    from plan_status import _last_marker_pos as read
+    return read(text, markers)
 
 
 def _w7_terminal_assertion_positions(text):
-    """Positions of terminal-state ASSERTIONS in a mixed status cell.
-
-    R1 (segment-scope tightening, CODE-R0 P2-1 / DESIGN-R0 P2-3): a
-    VOCABULARY marker (已发布/已关闭/…) is an assertion only when it is the
-    state word of a transition segment — segment-start (cell start / after
-    → / — / ——, with only whitespace, an optional ✅ qualification and/or
-    the perfective prefix 「已」 before it) AND immediately followed by a
-    date annotation （(YYYY-MM-DD…） or the cell end. Narrative mentions
-    (subject-prefixed 「方案A已撤回」, version contexts 「0.78.1 已发布」,
-    comma continuations without a date) are NOT assertions.
-
-    R2 (DESIGN-R1 P1-R1): the ✅ GLYPH is an unambiguous state glyph — not a
-    narrative word — so it keeps its assertion status under the looser
-    segment rule: ✅ at a segment start + a date annotation ANYWHERE in the
-    same segment (up to the next transition boundary or cell end) asserts
-    the terminal state. This restores the pre-existing completed
-    classification of 「⏳ 审计中 (…) → ✅ 分析完成+规划落地 (…)——…」
-    (live AUDIT-143, P0) that the R1 tightening regressed to ACTIVE; the
-    position comparison in ``_status_is_completed_cell`` still keeps any
-    later active marker (reopened) ACTIVE.
-    """
-    positions = []
-    for marker in _W7_TERMINAL_MARKERS:
-        start = 0
-        while True:
-            pos = text.find(marker, start)
-            if pos < 0:
-                break
-            start = pos + len(marker)
-            # (a) segment start: nothing but whitespace / an optional ✅
-            # qualification / the perfective 「已」 prefix between the
-            # transition boundary (or cell start) and the marker.
-            head = text[:pos].rstrip()
-            while head.endswith(("✅", "已")):
-                head = head[:-1].rstrip()
-            if head and not head.endswith(("→", "—")):
-                continue  # narrative mention (subject/version prefix precedes)
-            if marker == "✅":
-                # R2: ✅ state glyph — a date annotation anywhere in the SAME
-                # segment (before the next transition boundary) asserts.
-                seg_end = len(text)
-                for boundary in ("→", "—"):
-                    bpos = text.find(boundary, pos + len(marker))
-                    if bpos != -1 and bpos < seg_end:
-                        seg_end = bpos
-                segment = text[pos:seg_end]
-                if re.search(r"[（(]\s*\d{4}-\d{2}-\d{2}", segment):
-                    positions.append(pos)
-                continue
-            # (b) vocabulary marker: terminal date annotation (or cell end)
-            # immediately after the marker.
-            rest = text[pos + len(marker):].lstrip()
-            if rest and not _W7_TERMINAL_DATE_RE.match(rest):
-                continue  # comma continuation / trailing prose, not a state
-            positions.append(pos)
-    return positions
+    from plan_status import _w7_terminal_assertion_positions as read
+    return read(text, markers=_W7_TERMINAL_MARKERS, terminal_date=_W7_TERMINAL_DATE_RE)
 
 
 # FIX-393 — writer-terminal recognition (0.89.0). verify_workflow already
@@ -8854,69 +7260,18 @@ _WRITER_OP_ANCHOR_RE = re.compile(r"〔op-[0-9a-f]{32}〕")
 
 
 def _status_is_writer_committed_cell(text):
-    """True when an already-cleaned status cell is a writer-committed
-    TERMINAL row (FIX-393): the writer chain's first hit is ``committed``
-    AND the ops receipt anchor 〔op-<32hex>〕 is present. The anchor is the
-    writer's machine provenance mark; a cell that merely displays the word
-    「committed」 without it was not written by the governed writer (the
-    B-1 hand-edit class) and is never guessed terminal.
-    """
-    if not _WRITER_OP_ANCHOR_RE.search(text):
-        return False
-    for state, pattern in _WRITER_STATE_MARKER_CHAIN:
-        if pattern.search(text):
-            return state == "committed"
-    return False
+    from plan_status import _status_is_writer_committed_cell as read
+    return read(text, operation_anchor=_WRITER_OP_ANCHOR_RE, state_chain=_WRITER_STATE_MARKER_CHAIN)
 
 
 def _status_is_completed_cell(cell):
-    """Completed status test for task rows (dogfood ✅ conventions + host text-only).
-
-    - Any cell with "未完成"/"待完成" is NOT completed.
-    - "已完成" → completed (host text-only style).
-    - FIX-393: a writer-committed terminal cell (:func:
-      `_status_is_writer_committed_cell` — ops receipt anchor + the writer
-      chain's committed token, never the display prefix) → completed. The
-      未完成/待完成 veto below outranks it (conservative narrative guard).
-    - Leading ``✅`` (dogfood) → completed unless the cell carries an explicit
-      active marker (未完成/待完成/进行中/待执行, plus the ⏳/🔄 emoji per
-      FIX-291 W-7 — a mixed chain is judged by its trailing state below).
-    - Bare ``完成`` followed by a bracket or end-of-cell (e.g. "✅ 完成 (…)"
-      / "完成（…)") → completed.
-    - W-7/BC-7 (FIX-291, R1 assertion scope + R2 ✅ glyph rule): a terminal
-      ASSERTION (:func:`_w7_terminal_assertion_positions` — the state word
-      of a transition segment with a terminal date; for the ✅ glyph the
-      date may appear anywhere in the same segment, R2/DESIGN-R1 P1-R1)
-      that appears after the last active marker makes the cell's trailing
-      (true) state terminal → completed. Narrative terminal-word mentions,
-      version contexts and active-trailing cells (e.g.
-      「✅ 已发布 → 🔄 reopened」) keep the ACTIVE verdict (conservative: no
-      aggressive downgrade).
-    """
-    text = _status_clean_cell(cell)
-    if "未完成" in text or "待完成" in text:
-        return False
-    if "已完成" in text:
-        return True
-    # FIX-393: writer-committed terminal rows — governed-writer authority
-    # (the ops receipt anchor + the writer's own marker chain by identity),
-    # never the display-prefix text.
-    if _status_is_writer_committed_cell(text):
-        return True
-    # Dogfood cells may carry a transition chain ("⏳ 等待 → ✅ 完成"): any ✅
-    # in the status cell marks a delivered endpoint — UNLESS an active marker
-    # (text wording or the ⏳/🔄 emoji, FIX-291 W-7) makes the cell a mixed
-    # chain, in which case the trailing-state rule below decides.
-    if "✅" in text and not any(m in text for m in (
-            "未完成", "待完成", "进行中", "待执行", "⏳", "🔄")):
-        return True
-    # W-7/BC-7 (R1): trailing terminal ASSERTION wins in a mixed chain.
-    assertions = _w7_terminal_assertion_positions(text)
-    if assertions:
-        active_pos = _last_marker_pos(text, _W7_ACTIVE_MARKERS)
-        if max(assertions) > active_pos:
-            return True
-    return bool(re.search(r"完成\s*(?:[（(]|$)", text))
+    from plan_status import _status_is_completed_cell as read
+    return read(
+        cell,
+        active_markers=_W7_ACTIVE_MARKERS,
+        writer_committed=_status_is_writer_committed_cell,
+        terminal_positions=_w7_terminal_assertion_positions,
+    )
 
 
 # ── FIX-479 — shared TERMINAL-status predicate for plan-table task rows ────
@@ -8938,463 +7293,96 @@ _TERMINAL_CELL_DECORATIONS = ("⏳", "🔄", "📋", "🆕", "⏸")
 
 
 def _status_is_terminal_cell(cell):
-    """True when a plan-table status cell is a TERMINAL state (FIX-479).
-
-    Terminal ⟺ the canonical completed predicate
-    (:func:`_status_is_completed_cell`) fires on the cell AS WRITTEN or
-    after stripping a leading decoration-emoji run (「⏳ ✅ committed」:
-    the leading ⏳/🔄/📋/🆕/⏸ is a display decoration, not a state).
-    Genuine active cells stay non-terminal — stripping their decoration
-    leaves an active cell (「🔄 进行中」→「进行中」,「📋 规划中」→「规划中」)
-    and the completed predicate keeps returning False, so the overdue
-    and DRI semantics for active rows are unchanged.
-    """
-    text = _status_clean_cell(cell)
-    if _status_is_completed_cell(text):
-        return True
-    stripped = text
-    while stripped[:1] in _TERMINAL_CELL_DECORATIONS:
-        stripped = stripped[1:].lstrip()
-    if stripped != text:
-        return _status_is_completed_cell(stripped)
-    return False
+    from plan_status import _status_is_terminal_cell as read
+    return read(cell, decorations=_TERMINAL_CELL_DECORATIONS, is_completed=_status_is_completed_cell)
 
 
 def _status_table_stream(content):
-    """Yield (header_cells, rows) for every markdown table in ``content``.
-
-    Line-based: each table starts at a ``|`` row whose following non-blank
-    row is the ``---`` separator. Blank lines are tolerated inside tables
-    (live plan-tracker inserts them between sub-groups); a non-table line
-    ends the table. Returns normalized (unwrapped, no leading/trailing
-    empties) cell lists.
-    """
-    lines = content.split("\n")
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i].strip()
-        if not line.startswith("|"):
-            i += 1
-            continue
-        header = [c.strip() for c in line.split("|")[1:-1]]
-        j = i + 1
-        while j < n and not lines[j].strip():
-            j += 1
-        if j >= n or not re.match(r"^\|[\s:\-|]+\|$", lines[j].strip()):
-            i += 1
-            continue
-        k = j + 1
-        rows = []
-        while k < n:
-            r = lines[k].strip()
-            if not r:
-                k += 1
-                continue
-            if not r.startswith("|"):
-                break
-            if re.match(r"^\|[\s:\-|]+\|$", r):
-                k += 1
-                continue
-            rows.append([c.strip() for c in r.split("|")[1:-1]])
-            k += 1
-        yield header, rows
-        i = k
+    from plan_status import _status_table_stream as read
+    return read(content)
 
 
 def parse_task_table_rows(plan_content=None):
-    """Parse task-genre tables (header carries both ``ID`` and ``状态``).
-
-    Every table whose header contains ``ID`` + ``状态`` contributes rows;
-    a task ID appearing in several tables (active-items mirror + tracking
-    table) is de-duplicated keeping the RICHEST row (most columns), so
-    mirror duplicates never double-count statistics. Returns a list of
-    dicts (``id`` / ``priority`` / ``status`` / ``actual_completion`` /
-    ``_order`` / ``_width`` / ``_columns``).
-
-    Status/priority/title resolution is header-indexed on clean rows and
-    ID-anchored (dogfood convention) on over-split rows — prose containing
-    pipe characters (e.g. ``无 ``| RISK-`` 行``) inflates the middle cells and
-    the true status stays the LAST non-empty cell in that shape (the
-    task_priority precedent), while host-style wide tables stay
-    header-indexed (their status column is NOT the last cell).
-    """
-    content = plan_content if plan_content is not None else SAMPLE_PATH.read_text(encoding="utf-8")
-    by_id = {}
-    order = 0
-    for header, rows in _status_table_stream(content):
-        idx = {}
-        for pos, name in enumerate(header):
-            key = _status_col_name(name)
-            if key and key in ("id", "状态", "优先级", "任务项", "事项", "依赖",
-                               "目标版本", "实际完成", "gate", "证据", "任务名称"):
-                idx.setdefault(key, pos)
-        if "id" not in idx or "状态" not in idx:
-            continue
-        width = len(header)
-        for cells in rows:
-            if len(cells) <= max(idx.values()):
-                continue
-            # ID anchor (first bare-PREFIX-NNN cell) — invariant to duplicate
-            # leading priority cells.
-            id_pos = None
-            tid = ""
-            for pos, c in enumerate(cells):
-                cand = _status_clean_cell(c)
-                if re.match(r"^[A-Z]+-\d+$", cand):
-                    id_pos = pos
-                    tid = cand
-                    break
-            if not tid:
-                continue
-            clean = len(cells) == width
-
-            def cell(key):
-                pos = idx.get(key)
-                if pos is None or pos >= len(cells):
-                    return ""
-                return _status_clean_cell(cells[pos])
-
-            if clean:
-                status = cell("状态")
-                priority = cell("优先级")
-                title = cell("任务项") or cell("事项") or cell("任务名称")
-                deps = cell("依赖")
-                target_version = cell("目标版本")
-                actual_completion = _status_iso_date(cell("实际完成"))
-                gate = cell("gate")
-                evidence = cell("证据")
-            else:
-                # Over-split (prose pipes): dogfood shape — status is the LAST
-                # non-empty cell; priority/title are ID-anchored.
-                status = ""
-                for c in reversed(cells):
-                    if _status_clean_cell(c):
-                        status = _status_clean_cell(c)
-                        break
-                priority = _status_clean_cell(cells[id_pos - 1]) if id_pos >= 1 else ""
-                title = _status_clean_cell(cells[id_pos + 1]) if id_pos + 1 < len(cells) else ""
-                deps = _status_clean_cell(cells[id_pos + 2]) if id_pos + 2 < len(cells) else ""
-                target_version = _status_clean_cell(cells[id_pos + 3]) if id_pos + 3 < len(cells) else ""
-                actual_completion = _status_iso_date(cell("实际完成"))
-                gate = ""
-                evidence = ""
-            rec = {
-                "id": tid,
-                "priority": priority,
-                "title": title,
-                "status": status,
-                "deps": deps,
-                "target_version": target_version,
-                "actual_completion": actual_completion,
-                "gate": gate,
-                "evidence": evidence,
-                "_order": order,
-                "_width": width,
-                "_columns": cells,
-            }
-            order += 1
-            prev = by_id.get(tid)
-            if prev is None or rec["_width"] > prev["_width"]:
-                by_id[tid] = rec
-    return sorted(by_id.values(), key=lambda r: r["_order"])
+    from plan_status import parse_task_table_rows as read
+    return read(plan_content, plan_path=SAMPLE_PATH)
 
 
 def parse_recent_completed_tasks(rows, n=5):
-    """Last ``n`` completed tasks, by completion date desc (fallback: row order)."""
-    done = [r for r in rows if _status_is_completed_cell(r["status"])]
-
-    def _completion_date(rec):
-        d = rec.get("actual_completion") or _status_iso_date(rec["status"])
-        return d if d else "0000-00-00"
-
-    done.sort(
-        key=lambda r: (_completion_date(r), r["_order"]),
-        reverse=True,
-    )
-    return done[:n]
+    from plan_status import parse_recent_completed_tasks as read
+    return read(rows, n, is_completed=_status_is_completed_cell)
 
 
 def parse_recent_decisions(n=5, decision_content=None):
-    """Last ``n`` decision-log rows ordered by (date, id) descending.
-
-    FIX-270 R0 F2: live decision-log is a mixed-order file (newer entries
-    interleaved with older ones), so document order is NOT time order.
-    Rows are ranked by their ``日期`` cell (ISO date) and then by the
-    numeric ID suffix. A row whose date is missing/unparseable is treated as
-    the oldest (date.min + id -inf): it cannot masquerade as "recent" and is
-    only returned when the file holds fewer than ``n`` dated rows — an
-    honest fallback for legacy/ragged records, never a reordering.
-    """
-    content = decision_content if decision_content is not None else (
-        (GOVERNANCE_DIR / "decision-log.md").read_text(encoding="utf-8")
-        if (GOVERNANCE_DIR / "decision-log.md").is_file() else ""
-    )
-    rows = []
-    for header, table_rows in _status_table_stream(content):
-        idx = {}
-        for pos, name in enumerate(header):
-            key = _status_col_name(name)
-            if key in ("编号", "日期", "主题", "决策内容"):
-                idx.setdefault(key, pos)
-        if "编号" not in idx:
-            continue
-        for cells in table_rows:
-            if len(cells) <= max(idx.values()):
-                continue
-            def cell(key):
-                pos = idx.get(key)
-                return _status_clean_cell(cells[pos]) if pos is not None and pos < len(cells) else ""
-            rid = cell("编号")
-            if not re.match(r"^[A-Z]+-\d+$", rid):
-                continue
-            rows.append({
-                "id": rid,
-                "date": cell("日期"),
-                "topic": (cell("主题") or cell("决策内容"))[:60],
-            })
-
-    def _sort_key(rec):
-        parsed = None
-        if rec["date"] and rec["date"] != "—":
-            try:
-                parsed = date.fromisoformat(rec["date"][:10])
-            except ValueError:
-                parsed = None
-        id_num = 0
-        m = re.match(r"^[A-Z]+-(\d+)$", rec["id"])
-        if m:
-            id_num = int(m.group(1))
-        if parsed is None:
-            return (False, date.min, -1)   # 无日期 → 视为最旧（兜底，不可冒充"最近"）
-        return (True, parsed, id_num)
-
-    rows.sort(key=_sort_key, reverse=True)
-    return rows[:n]
+    from plan_status import parse_recent_decisions as read
+    return read(n, decision_content, governance_dir=GOVERNANCE_DIR)
 
 
 def _status_plugin_freshness(plan_content=None):
-    """Advisory freshness: resolve_entry active_version vs plan-tracker record.
-
-    NOT authoritative (DEC-096): the authoritative active version comes from
-    ``resolve_entry.py``; this is the host-side driver signal only. The
-    plan-tracker version is extracted permissively (``工作流版本: X.Y.Z`` in
-    both the ``**key**:`` and ``**key**: value**`` shapes used live).
-    """
-    plan_version = ""
-    if plan_content is None:
-        plan_content = SAMPLE_PATH.read_text(encoding="utf-8") if SAMPLE_PATH.is_file() else ""
-    m = re.search(r"工作流版本\s*[:：]?\s*([0-9]+\.[0-9]+\.[0-9]+)", plan_content) or \
-        re.search(r"\b([0-9]+\.[0-9]+\.[0-9]+)\b", plan_content[:2000])
-    if m:
-        plan_version = m.group(1)
-    active_version = ""
-    try:
-        from resolve_entry import read_active_version
-        active_version = read_active_version() or ""
-    except Exception:
-        active_version = ""
-    if not plan_version or not active_version:
-        return {
-            "status": "UNKNOWN", "active_version": active_version or "unknown",
-            "plan_version": plan_version or "unknown",
-        }
-    try:
-        active_tuple = tuple(int(part) for part in active_version.split("."))
-        plan_tuple = tuple(int(part) for part in plan_version.split("."))
-        is_ahead = active_tuple > plan_tuple
-    except (TypeError, ValueError):
-        is_ahead = False
-    if active_version == plan_version:
-        status = "UP TO DATE"
-    elif is_ahead:
-        status = "OUTDATED"
-    else:
-        status = "AHEAD"
-    return {
-        "status": status, "active_version": active_version,
-        "plan_version": plan_version,
-    }
+    from plan_status import _status_plugin_freshness as read
+    return read(plan_content, plan_path=SAMPLE_PATH)
 
 
 _STATUS_ID_TOKEN_RE = re.compile(r"(?<![-A-Z])([A-Z]+)-(\d+)\b")
 
 
 def _status_priority_rank(priority):
-    """P0 < P1 < P2; anything else sorts last."""
-    m = re.match(r"\s*P([012])\b", str(priority or ""))
-    return int(m.group(1)) if m else 9
+    from plan_status import _status_priority_rank as read
+    return read(priority)
 
 
 def _status_raw_dependency_ids(rec):
-    """Task-family IDs referenced by a task row (the 依赖 cell when present,
-    else a whole-row scan for host-style tables without a 依赖 column).
-    The row's own ID and cross-entity prefixes (RISK/DEC/…) are excluded at
-    the caller via the status map (unknown prefixes never block)."""
-    text = rec.get("deps") or ""
-    if not text and rec.get("_columns"):
-        text = " ".join(str(c) for c in rec["_columns"])
-    ids = set()
-    for m in _STATUS_ID_TOKEN_RE.finditer(str(text)):
-        tid = f"{m.group(1)}-{m.group(2)}"
-        if tid != rec.get("id"):
-            ids.add(tid)
-    return ids
+    from plan_status import _status_raw_dependency_ids as read
+    return read(rec, task_id_pattern=_STATUS_ID_TOKEN_RE)
 
 
 def _status_next_steps(plan_content, max_results=3):
-    """建议下一步线索：轻量派生（header-driven 任务行 + 依赖状态检查）。
-
-    只在 plan-tracker 文本上做确定性分析，绝不运行 check-governance。
-    完成判定用 ``_status_is_completed_cell``（同时识别 ✅ 前缀 dogfood 惯例与
-    宿主 text-only 状态），依赖引用未知 ID 不阻断（推荐线索非门禁；
-    权威 fail-closed 依赖分析仍由 task-priority-analysis 承载）。
-    fail-safe：任何异常返回 []。
-    """
-    try:
-        rows = parse_task_table_rows(plan_content)
-        status_map = {r["id"]: _status_is_completed_cell(r["status"]) for r in rows}
-        candidates = []
-        for r in rows:
-            if status_map.get(r["id"]):
-                continue
-            unresolved = [
-                d for d in _status_raw_dependency_ids(r)
-                if d in status_map and not status_map[d]
-            ]
-            if unresolved:
-                continue
-            candidates.append(r)
-        candidates.sort(
-            key=lambda r: (
-                _status_priority_rank(r["priority"]),
-                0 if "进行中" in r["status"] else 1,
-                r["_order"],
-            )
-        )
-        return [
-            {
-                "task_id": r["id"],
-                "priority": r["priority"],
-                "status": _status_clean_cell(r["status"]),
-                "target_version": r["target_version"],
-            }
-            for r in candidates[:max_results]
-        ]
-    except Exception:
-        return []
+    from plan_status import _status_next_steps as read
+    return read(
+        plan_content, max_results,
+        read_rows=parse_task_table_rows,
+        is_completed=_status_is_completed_cell,
+        dependency_ids=_status_raw_dependency_ids,
+    )
 
 
 def _status_task_stats(rows):
-    """Aggregate deduped task-table rows into per-status counts + P0 pending."""
-    stats = {"已完成": 0, "进行中": 0, "未开始": 0, "已终止": 0}
-    p0_pending = 0
-    for r in rows:
-        status = _normalize_task_status(r["status"] or "")
-        if status:
-            stats[status] += 1
-        if r["priority"].strip() == "P0" and not _status_is_completed_cell(r["status"]):
-            p0_pending += 1
-    return stats, p0_pending
+    from plan_status import _status_task_stats as read
+    return read(rows, is_completed=_status_is_completed_cell)
 
 
 def cmd_status(args):
-    """Use the same work-unit projection for ordinary status and startup."""
-    from bootstrap_aggregate import cmd_governance_bootstrap
-    args.format = "json" if getattr(args, "json", False) else "text"
-    args._status_fast_path = True
-    args._validated_host_root = HOST_PROJECT_ROOT
-    return cmd_governance_bootstrap(args)
+    from status_cli import cmd_status as read
+    return read(args, host_root=HOST_PROJECT_ROOT)
 
 def _status_project_name(config, overview):
-    name = config.get("项目名称", "") or overview.get("project", "")
-    return _status_clean_cell(name) if name else "N/A"
+    from plan_status import _status_project_name as read
+    return read(config, overview)
 
 
 def cmd_governance_context(args):
-    """Recover the unit's actual objective, last decision and next action."""
-    from governance_readers import loop_state
-    root = Path(getattr(args, "fixture", None) or HOST_PROJECT_ROOT)
-    report = loop_state(root)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    if report["state"] == "invalid":
-        sys.exit(2)
+    from status_cli import cmd_governance_context as read
+    return read(args, host_root=HOST_PROJECT_ROOT)
 
 def cmd_capability_context(args):
-    """Show fact-backed capability context and selection trace."""
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    fixture = getattr(args, "fixture", None)
-    root = ROOT
-    if fixture:
-        fixture_path = Path(fixture)
-        root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
-
-    context = discover_capability_context(root)
-    print("== Capability Context Selection Trace ==")
-    print(f"Root: {_display_path(root, ROOT)}")
-    print(f"scenario: {context['scenario']}")
-    print(f"host_id: {context['host_id']}")
-    print("available_capabilities:")
-    for capability in context["available_capabilities"]:
-        print(
-            f"  - {capability['capability_id']} "
-            f"({capability['kind']}, {capability['status']}): {capability['selection_reason']}"
-        )
-    selected = context["selected_capability"]
-    print("selected_capability:")
-    print(f"  capability_id: {selected['capability_id']}")
-    print(f"  kind: {selected['kind']}")
-    print(f"  host_surface: {selected['host_surface']}")
-    print(f"  status: {selected['status']}")
-    print(f"  selection_reason: {selected['selection_reason']}")
-    print("source_facts:")
-    for fact in context["source_facts"]:
-        print(f"  - {fact}")
-    print("rejected_alternatives:")
-    for alternative in context["rejected_alternatives"]:
-        print(
-            f"  - {alternative['capability_id']} "
-            f"({alternative['status']}): {alternative['rejection_reason']}"
-        )
-    print(f"degradation: {context['degradation']['status']} - {context['degradation']['reason']}")
-    print(f"side_effect_boundary: {context['side_effect_boundary']}")
-    print(f"validation_command: {context['validation_command']}")
-    print(f"review_requirement: {context['review_requirement']}")
-    print("no_overclaim_boundary:")
-    for boundary in context["no_overclaim_boundary"]:
-        print(f"  - {boundary}")
-
-    issues = check_capability_context(root, sampled_context=context)
-    if issues:
-        print("\n== Capability Context Result: FAILED ==")
-        for issue in issues:
-            print(f"  - {issue}")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n== Capability Context Result: PASSED ==")
+    from status_cli import cmd_capability_context as read
+    return read(
+        args,
+        plugin_root=ROOT,
+        discover=discover_capability_context,
+        validate=check_capability_context,
+        display_path=_display_path,
+    )
 
 
 def cmd_first_run_demo(args):
-    """Run the local first happy path demo harness."""
-    snapshot = build_first_run_demo_snapshot()
-    rendered = render_delivery_trust_snapshot(snapshot)
-
-    print("== First-Run Demo Harness ==")
-    print("Scope: local/demo-only; no external credentials; no network or agent runtime required.")
-    print()
-    print(rendered)
-
-    if args.assert_snapshot:
-        missing = assert_first_run_demo_snapshot(snapshot, rendered)
-        if missing:
-            print("\n== First-Run Demo Result: FAILED ==")
-            for item in missing:
-                print(f"  - missing required snapshot field/marker: {item}")
-            sys.exit(1)
-        print("\n== First-Run Demo Result: PASSED ==")
-        print("Checked fields: " + ", ".join(FIRST_RUN_DEMO_REQUIRED_FIELDS))
+    from status_cli import cmd_first_run_demo as read
+    return read(
+        args,
+        build_snapshot=build_first_run_demo_snapshot,
+        validate_snapshot=assert_first_run_demo_snapshot,
+        render=render_delivery_trust_snapshot,
+        required_fields=FIRST_RUN_DEMO_REQUIRED_FIELDS,
+    )
 
 
 def cmd_gate(args):
@@ -9403,27 +7391,18 @@ def cmd_gate(args):
 
 
 def cmd_gates(args):
-    from governance_readers import loop_state
-    unit_id = getattr(args, "unit", None)
-    gate = getattr(args, "gate_id", None)
-    report = loop_state(HOST_PROJECT_ROOT)
-    units = [unit for unit in report["units"] if (not unit_id or unit.get("flow_unit_id") == unit_id)
-             and (not gate or unit.get("gate_id") == gate.upper())]
-    print(json.dumps({"state": report["state"], "units": units, "message": report.get("message")}, ensure_ascii=False, indent=2))
-    if report["state"] == "invalid" or ((unit_id or gate) and not units):
-        sys.exit(2)
+    from status_cli import cmd_gates as read
+    return read(args, host_root=HOST_PROJECT_ROOT)
 
 
 def cmd_stage(args):
-    """Read a specialist playbook; the name selects a skill, never project state."""
-    path = stage_skill_path(normalize_stage_name(args.stage_name))
-    if not path.is_file():
-        sys.exit(f"Unknown playbook: {args.stage_name}")
-    print(path.read_text(encoding="utf-8"))
+    from status_cli import cmd_stage as read
+    return read(args, normalize=normalize_stage_name, skill_path=stage_skill_path)
 
 
 def cmd_stages(args):
-    print("Available playbooks: " + ", ".join(list_available_stages()))
+    from status_cli import cmd_stages as read
+    return read(args, stages=list_available_stages)
 
 # ── SYSGAP-008: Cross-Reference Checking ──────────────────────────
 
@@ -10129,7 +8108,7 @@ def check_sequential_ids():
 
     # Use GovernanceDataSource for archive-aware ID collection.
     # Falls back to hot-file-only when archive/index.md does not exist.
-    ds = GovernanceDataSource()
+    ds = _archive_reader()
 
     # DEC/RISK: via GovernanceDataSource (hot + archive)
     dec_ids = ds.get_all_decision_ids()
@@ -13197,7 +11176,7 @@ def _check_evidence_mentions(keyword, label):
 
 def _read_archive_aware_governance_text(include=()):
     """Read hot governance files plus selected archive directories."""
-    ds = GovernanceDataSource()
+    ds = _archive_reader()
     chunks = []
     hot_paths = []
     if "plan" in include:
@@ -13252,7 +11231,7 @@ def _has_line_with_all(text, keyword_groups):
 
 def _iter_archive_aware_evidence_units():
     """Yield hot/archive evidence rows; fallback to whole non-table archive docs."""
-    ds = GovernanceDataSource()
+    ds = _archive_reader()
     if ds.evidence_path.is_file():
         for line in ds.evidence_path.read_text(encoding="utf-8").splitlines():
             if line.strip().startswith("| EVD-"):
@@ -14110,248 +12089,17 @@ def check_agent_lock_consistency():
 # ── SYSGAP-030: Archive Integrity Check ────────────────────────────
 
 def _legacy_parse_index_refs(index_lines):
-    """FIX-184: preserved inline index-file-reference parser.
-
-    Used only as a fallback when archive.verify_archive_integrity() cannot
-    be invoked (archive module failed to load). Reproduces the original
-    Check 27 parser verbatim, including its known limitations (does not
-    reset `in_section` on a new `## ` header; matches any header
-    containing "索引"). Prefer archive.verify_archive_integrity() which
-    parses each section by exact name and correctly resets state.
-
-    Returns the set of `archive/...` references found in index rows.
-    """
-    indexed_files = set()
-    in_section = False
-    table_started = False
-    for line in index_lines:
-        stripped = line.strip()
-        if stripped.startswith("## ") and "索引" in stripped:
-            in_section = True
-            table_started = False
-            continue
-        if not in_section:
-            continue
-        if "|---" in stripped:
-            table_started = True
-            continue
-        if not table_started or not stripped.startswith("| "):
-            continue
-
-        parts = [p.strip() for p in line.split("|")]
-        for part in parts:
-            if part.startswith("archive/"):
-                indexed_files.add(part)
-    return indexed_files
+    from governance_archive_data import _legacy_parse_index_refs as read
+    return read(index_lines)
 
 
 def check_archive_integrity():
-    """Check 27: Verify archive integrity.
-
-    Checks:
-      1. archive/index.md referenced archive files all exist
-      2. Archive file entries have corresponding index entries
-      3. Task count conservation: hot + archive tasks == expected
-
-    Returns:
-        dict with keys: pass, issues, total_archived_tasks, index_entries,
-                        hot_tasks, total_expected
-    """
-    result = {
-        "pass": True,
-        "issues": [],
-        "total_archived_tasks": 0,
-        "index_entries": 0,
-        "hot_tasks": 0,
-        "total_expected": 0,
-        "pending_archive_tasks": 0,
-        "archive_triggers": [],
-    }
-
-    archive_index = _governance_dir() / "archive" / "index.md"
-    archive_tasks_dir = _governance_dir() / "archive" / "tasks"
-    archive_evidence_dir = _governance_dir() / "archive" / "evidence"
-
-    archive_module = _load_archive_module()
-    if archive_module is not None:
-        analysis = archive_module.analyze_auto_archive_candidates()
-        # FIX-416: the actionable face must count EVERY migratable family.
-        # The old tasks-only interpolation printed "0 hot completed
-        # task(s)" while the gap actually lived in the non-EVD row
-        # families (REVIEW/TRIAGE/RECO) — a misleading red whose hinted
-        # command (then an EVD-leg CLI default) could not even drain it.
-        families = analysis.get("row_families_archived", {}) or {}
-        actionable_total = (
-            analysis.get("tasks_archived", 0)
-            + analysis.get("evidence_archived", 0)
-            + analysis.get("decisions_archived", 0)
-            + analysis.get("risks_archived", 0)
-            # non-EVD families only — EVD is already counted in
-            # evidence_archived (no double counting).
-            + sum(v for k, v in families.items() if k != "EVD")
-        )
-        result["pending_archive_tasks"] = actionable_total
-        result["archive_triggers"] = analysis.get("triggers", [])
-        if analysis.get("should_archive"):
-            family_face = ", ".join(
-                f"{k}={v}" for k, v in sorted(families.items()) if v
-            )
-            breakdown = (
-                f"tasks={analysis.get('tasks_archived', 0)}, "
-                f"evidence={analysis.get('evidence_archived', 0)}, "
-                f"decisions={analysis.get('decisions_archived', 0)}, "
-                f"risks={analysis.get('risks_archived', 0)}"
-            )
-            if family_face:
-                breakdown += f", families={family_face}"
-            result["pass"] = False
-            result["issues"].append(
-                "Archive trigger gap: "
-                f"{actionable_total} archivable row(s) ({breakdown}) "
-                f"should be archived via {', '.join(analysis.get('triggers', []))} "
-                f"for v{analysis.get('versions_range', ('?', '?'))[0]}~"
-                f"v{analysis.get('versions_range', ('?', '?'))[1]}. "
-                "Run archive.py migrate --auto."
-            )
-
-    # If no archive index, integrity can still pass when no trigger gap exists.
-    if not archive_index.exists():
-        # But check if there are orphan archive files
-        has_archive_files = False
-        for d in [archive_tasks_dir, archive_evidence_dir]:
-            if d.exists():
-                for f in d.glob("*.md"):
-                    if f.name != ".gitkeep":
-                        has_archive_files = True
-                        break
-            if has_archive_files:
-                break
-        if has_archive_files:
-            result["pass"] = False
-            result["issues"].append(
-                "Archive files exist but index.md is missing. Run archive.build_index() to rebuild."
-            )
-        # Count hot tasks for the check output even before first archive.
-        if SAMPLE_PATH.is_file():
-            content = SAMPLE_PATH.read_text(encoding="utf-8")
-            for line in content.split("\n"):
-                stripped = line.strip()
-                if not stripped.startswith("| ") or "---" in stripped:
-                    continue
-                if re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped):
-                    result["hot_tasks"] += 1
-        result["total_expected"] = result["hot_tasks"]
-        return result
-
-    # ── FIX-184 (DEC-090/091 P2-1): delegate Check 1 + Check 2 ──
-    # The index↔archive-file consistency checks are now delegated to
-    # archive.py verify_archive_integrity(), whose _parse_index_section()
-    # correctly resets `in_section` on a new `## ` header and parses each
-    # section by exact name (including `## 非结构化归档`, which the legacy
-    # parser here matched only by accident). When the archive module is
-    # unavailable, fall back to the preserved inline parser
-    # _legacy_parse_index_refs() to avoid behavior loss.
-    index_content = archive_index.read_text(encoding="utf-8")
-    index_lines = index_content.split("\n")
-
-    archived_integrity = None
-    if archive_module is not None:
-        try:
-            archived_integrity = archive_module.verify_archive_integrity()
-        except Exception as exc:
-            result["issues"].append(
-                f"archive.verify_archive_integrity() raised; using legacy "
-                f"index parser fallback. Error: {exc}"
-            )
-            archived_integrity = None
-
-    if archived_integrity is not None:
-        # Check 1 + Check 2 (index↔file consistency) come from the archive
-        # module. Merge pass/issues into Check 27's result.
-        if not archived_integrity.get("pass", True):
-            result["pass"] = False
-            for issue in archived_integrity.get("issues", []):
-                if issue not in result["issues"]:
-                    result["issues"].append(issue)
-        # total_index_entries is the authoritative index-row count across
-        # all indexed sections (Task/Evidence/Decision/Risk 索引). Use it
-        # for Check 27's index_entries field.
-        result["index_entries"] = archived_integrity.get("total_index_entries", 0)
-    else:
-        # Legacy fallback: original inline parser (kept verbatim so behavior
-        # is preserved if archive.py fails to load). Known limitation — does
-        # not reset `in_section` and matches any `## ` header containing
-        # "索引"; `## 非结构化归档` is only matched incidentally.
-        indexed_files = _legacy_parse_index_refs(index_lines)
-
-        # Check 1: All indexed files exist
-        for ref in sorted(indexed_files):
-            filepath = GOVERNANCE_DIR / ref
-            if not filepath.exists():
-                result["pass"] = False
-                result["issues"].append(f"Index references non-existent file: {ref}")
-
-        # Check 2: All archive files are in the index
-        actual_archive_files = set()
-        gov_dir = _governance_dir()
-        for d in [archive_tasks_dir, archive_evidence_dir]:
-            if d.exists():
-                for f in d.glob("*.md"):
-                    if f.name == ".gitkeep":
-                        continue
-                    rel = str(f.relative_to(gov_dir)).replace("\\", "/")
-                    actual_archive_files.add(rel)
-
-        unindexed = actual_archive_files - indexed_files
-        if unindexed:
-            result["pass"] = False
-            for f in sorted(unindexed):
-                result["issues"].append(f"Archive file not in index: {f}")
-
-    # Check 3: Task count conservation
-    # Count hot file tasks
-    hot_tasks = 0
-    if SAMPLE_PATH.is_file():
-        content = SAMPLE_PATH.read_text(encoding="utf-8")
-        for line in content.split("\n"):
-            stripped = line.strip()
-            if not stripped.startswith("| ") or "---" in stripped:
-                continue
-            m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
-            if m:
-                hot_tasks += 1
-    result["hot_tasks"] = hot_tasks
-
-    # Count archived tasks
-    archived_count = 0
-    if archive_tasks_dir.exists():
-        for f in archive_tasks_dir.glob("*.md"):
-            if f.name == ".gitkeep":
-                continue
-            content = f.read_text(encoding="utf-8")
-            for line in content.split("\n"):
-                stripped = line.strip()
-                if not stripped.startswith("| "):
-                    continue
-                m = re.match(r"\|\s*([A-Z]+-\d+)\s*\|", stripped)
-                if m:
-                    archived_count += 1
-    result["total_archived_tasks"] = archived_count
-
-    # Count index entries — only in the legacy fallback path. When the
-    # archive module supplied archived_integrity, index_entries was already
-    # set from verify_archive_integrity()'s authoritative total_index_entries.
-    if archived_integrity is None:
-        index_entry_count = 0
-        for line in index_lines:
-            stripped = line.strip()
-            if stripped.startswith("| ") and re.match(r"\|\s*[A-Z]+-\d+", stripped):
-                index_entry_count += 1
-        result["index_entries"] = index_entry_count
-
-    result["total_expected"] = hot_tasks + archived_count
-
-    return result
+    from governance_archive_data import check_archive_integrity as read
+    return read(
+        plan_path=SAMPLE_PATH,
+        governance_dir=GOVERNANCE_DIR,
+        plan_directory=_governance_dir,
+        load_archive=_load_archive_module)
 
 
 def cmd_check_agent_locks(_args):
@@ -14379,33 +12127,8 @@ def cmd_check_agent_locks(_args):
 
 
 def cmd_check_archive_integrity(_args):
-    """Standalone subcommand: check-archive-integrity — Check 27."""
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-
-    result = check_archive_integrity()
-    print()
-    print("=== Archive Integrity Check (SYSGAP-030 Check 27) ===")
-    print(f"  Hot tasks (plan-tracker): {result['hot_tasks']}")
-    print(f"  Archived tasks: {result['total_archived_tasks']}")
-    print(f"  Index entries: {result['index_entries']}")
-    print(f"  Total tasks (hot + archive): {result['total_expected']}")
-    if result.get("pending_archive_tasks", 0):
-        print(f"  Pending archive tasks: {result['pending_archive_tasks']}")
-        print(f"  Archive triggers: {', '.join(result.get('archive_triggers', [])) or 'none'}")
-
-    if result["issues"]:
-        print(f"\n  Issues ({len(result['issues'])}):")
-        for issue in result["issues"]:
-            print(f"    - {issue}")
-        print(f"\n  [FAIL] Archive integrity issues detected.")
-        import sys
-        sys.exit(1)
-    else:
-        print(f"\n  [PASS] Archive integrity verified.")
-    print()
+    from status_cli import cmd_check_archive_integrity as read
+    return read(_args, check_integrity=check_archive_integrity)
 
 
 def cmd_check_plugin_freshness(_args):
@@ -16004,12 +13727,12 @@ def check_governance_data_size(root=None, schema=None):
     try:
         if root is not None:
             _gov = Path(root) / ".governance"
-            ds = GovernanceDataSource(
+            ds = _archive_reader(
                 sample_path=_gov / "plan-tracker.md",
                 evidence_path=_gov / "evidence-log.md",
             )
         else:
-            ds = GovernanceDataSource()
+            ds = _archive_reader()
         _stats = ds.layer_stats()
         result["layers"] = _stats["layers"]
         result["family_stats"] = _stats["families"]
@@ -16949,43 +14672,14 @@ def cmd_check_flow_unit_runtime(args):
 
 
 def cmd_check_host_capability_context(args):
-    """Run restricted host capability context benchmark guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    fixture = getattr(args, "fixture", None)
-    root = ROOT
-    if fixture:
-        fixture_path = Path(fixture)
-        root = fixture_path if fixture_path.is_absolute() else ROOT / fixture_path
-
-    context = discover_host_capability_context(root)
-    issues = check_host_capability_context(root, sampled_context=context)
-    print("\n=== Host Capability Context Check ===")
-    print(f"  Root: {_display_path(root, ROOT)}")
-    print(f"  Scenario: {context['scenario']}")
-    print(f"  Benchmark kind: {context['benchmark_kind']}")
-    print("  Restricted scenarios:")
-    for scenario in context["restricted_scenarios"]:
-        print(
-            f"    - {scenario['scenario_id']}: {scenario['status']} "
-            f"selected={scenario['selected_capability']} "
-            f"preferred={scenario['preferred_capability']}"
-        )
-    print(f"  Side-effect boundary: {context['side_effect_boundary']}")
-    print(f"  Validation command: {context['validation_command']}")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — restricted host capability context is benchmark/diagnostic and no-overclaim safe")
-    print()
+    from status_cli import cmd_check_host_capability_context as read
+    return read(
+        args,
+        plugin_root=ROOT,
+        discover=discover_host_capability_context,
+        validate=check_host_capability_context,
+        display_path=_display_path,
+    )
 
 
 def cmd_check_mainstream_agent_loading(args):
@@ -20010,6 +17704,10 @@ def main(argv=None):
 
     import registry
     return registry.load_handler(args.command or "verify", parsed_args=True)(args)
+
+
+# Preserve the original wildcard surface, including the lazily loaded archive reader.
+__all__ = [name for name in globals() if not name.startswith("_")] + ["GovernanceDataSource"]
 
 
 if __name__ == "__main__":

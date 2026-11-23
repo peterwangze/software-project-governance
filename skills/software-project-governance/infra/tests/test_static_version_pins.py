@@ -329,16 +329,43 @@ class RealTreeContractTests(unittest.TestCase):
     """The live tree: ledger rows live, face WARN-only, wiring intact."""
 
     def test_ledger_rows_are_live_on_current_tree(self):
+        import ast
         for rel, entries in version_checks.STATIC_PIN_EXEMPTIONS.items():
             path = _REPO_ROOT / rel
             self.assertTrue(path.is_file(), f"ledger target missing: {rel}")
-            lines = path.read_text(encoding="utf-8").splitlines()
-            for lineno, token, reason in entries:
-                self.assertTrue(reason.strip(), f"unreasoned exemption {rel}:{lineno}")
-                self.assertTrue(
-                    0 < lineno <= len(lines)
-                    and token in version_checks._SEMVER_TOKEN_RE.findall(lines[lineno - 1]),
-                    f"stale ledger row {rel}:{lineno} (token {token}) — re-audit")
+            source = path.read_text(encoding="utf-8")
+            lines = source.splitlines()
+            scopes = version_checks.pin_scopes(ast.parse(source)) if any(
+                len(row) > 3 for row in entries) else None
+            for row in entries:
+                hint, token, reason = row[:3]
+                self.assertTrue(reason.strip(), f"unreasoned exemption {rel}:{hint}")
+                actual, error = version_checks.resolve_pin(row, lines, scopes)
+                self.assertIsNone(error, f"stale ledger row {rel}:{hint}: {error}")
+                self.assertIn(token, version_checks._SEMVER_TOKEN_RE.findall(lines[actual - 1]))
+
+    def test_four_release_witnesses_follow_the_real_source_after_insertions(self):
+        import ast
+        rel = f"{version_checks.STATIC_PIN_SCAN_DIR}/test_verify_workflow.py"
+        source = (_REPO_ROOT / rel).read_text(encoding="utf-8")
+        # Reuse the actual release witnesses; the two identical readiness calls
+        # must be distinguished by their test methods, not by occurrence order.
+        rows = [row for row in version_checks.STATIC_PIN_EXEMPTIONS[rel]
+                if row[1] in {"0.93.0", "0.94.0"}]
+        self.assertCountEqual([row[1] for row in rows], ["0.93.0", "0.94.0"] * 2)
+        self.assertTrue(all(len(row) == 5 for row in rows))
+        original_lines = source.splitlines()
+        original_scopes = version_checks.pin_scopes(ast.parse(source))
+        shifted = "# unrelated local import moved the source down\n" + source
+        shifted_lines = shifted.splitlines()
+        shifted_scopes = version_checks.pin_scopes(ast.parse(shifted))
+        for row in rows:
+            with self.subTest(witness=row[3:]):
+                before, error = version_checks.resolve_pin(row, original_lines, original_scopes)
+                self.assertIsNone(error)
+                after, error = version_checks.resolve_pin(row, shifted_lines, shifted_scopes)
+                self.assertIsNone(error)
+                self.assertEqual(after, before + 1)
 
     def test_real_tree_scan_is_warn_only_and_clean(self):
         findings = version_checks.scan_static_version_pins(_REPO_ROOT)
@@ -450,8 +477,7 @@ class PinsLedgerWriterTests(unittest.TestCase):
         # Drift: two header lines land above the token (2 -> 4).
         self._write_target(root, head="# drifted header 1\n# drifted header 2\n")
         findings = pin_ledger._scan_hits(root)
-        self.assertTrue(any("stale exemption" in f and ":2 " in f
-                            for f in findings))
+        self.assertFalse(any(self._TARGET_REL in f for f in findings), findings)
         receipt, code = pin_ledger.reanchor_exemption(
             root, self._TARGET_REL, 2, 4)
         self.assertEqual(code, 0, receipt)
@@ -469,6 +495,131 @@ class PinsLedgerWriterTests(unittest.TestCase):
             root, self._TARGET_REL, 2, 4)
         self.assertEqual(code, 0)
         self.assertEqual(receipt["effect"], "idempotent_noop")
+
+    def test_writer_keeps_distinct_scopes_and_refuses_ambiguous_or_changed_witnesses(self):
+        import pin_ledger
+        root = self._mini_root()
+        target = root / self._TARGET_REL
+        statement = f'    return "{self._ACTIVE}"'
+        source = f"def historic():\n{statement}\n\ndef new_dependency():\n{statement}\n"
+        target.write_text(source, encoding="utf-8")
+        ledger = root / pin_ledger.LEDGER_REL
+
+        receipt, code = pin_ledger.register_exemption(
+            root, self._TARGET_REL, 2, self._ACTIVE, "historic fixture")
+        self.assertEqual(code, 0, receipt)
+        before = ledger.read_bytes()
+        for edit, diagnostics in [
+                (source, [":5 pins"]),
+                ("# inserted\n" + source, [":6 pins"]),
+                (source.replace(statement, statement + "  # changed", 1),
+                 ["stale exemption", ":2 pins", ":5 pins"]),
+                (source.replace("historic()", "renamed()"),
+                 ["stale exemption", ":2 pins", ":5 pins"]),
+                (source.replace(statement, statement + "\n" + statement, 1),
+                 ["ambiguous witness", ":2 pins", ":3 pins", ":6 pins"])]:
+            with self.subTest(edit=edit):
+                target.write_text(edit, encoding="utf-8")
+                findings = [f for f in pin_ledger._scan_hits(root) if self._TARGET_REL in f]
+                self.assertEqual(len(findings), len(diagnostics), findings)
+                for expected in diagnostics:
+                    self.assertTrue(any(expected in f for f in findings), findings)
+        for op in [lambda: pin_ledger.reanchor_exemption(root, self._TARGET_REL, 2, 3),
+                   lambda: pin_ledger.register_exemption(
+                       root, self._TARGET_REL, 3, self._ACTIVE, "duplicate")]:
+            receipt, code = op()
+            self.assertEqual(code, 2, receipt)
+            self.assertIn("ambiguous witness", receipt["detail"])
+            self.assertEqual(ledger.read_bytes(), before)
+        target.write_text(source, encoding="utf-8")
+        receipt, code = pin_ledger.reanchor_exemption(root, self._TARGET_REL, 2, 5)
+        self.assertEqual(code, 2, receipt)
+        self.assertEqual(ledger.read_bytes(), before)
+        # A second, independently registered exemption on the same file.
+        receipt, code = pin_ledger.register_exemption(
+            root, self._TARGET_REL, 5, self._ACTIVE, "second audited fixture")
+        self.assertEqual(code, 0, receipt)
+        self.assertFalse(any(self._TARGET_REL in f for f in pin_ledger._scan_hits(root)))
+
+    def test_redefined_owner_refuses_transfer_even_with_one_matching_line(self):
+        import pin_ledger
+        statement = f'return "{self._ACTIVE}"'
+        samples = [
+            (f"def rule():\n    {statement}\n",
+             f"def rule():\n    return None\n\ndef rule():\n    {statement}\n", 2, 5),
+            # The nested method name is unique, but its enclosing class is not.
+            (f"class Group:\n    def rule(self):\n        {statement}\n",
+             f"class Group:\n    pass\nclass Group:\n    def rule(self):\n        {statement}\n",
+             3, 5),
+        ]
+        for original, redefined, old, new in samples:
+            with self.subTest(original=original):
+                root = self._mini_root()
+                target = root / self._TARGET_REL
+                ledger = root / pin_ledger.LEDGER_REL
+                target.write_text(original, encoding="utf-8")
+                receipt, code = pin_ledger.register_exemption(
+                    root, self._TARGET_REL, old, self._ACTIVE, "audited owner")
+                self.assertEqual(code, 0, receipt)
+                snapshot = ledger.read_bytes()
+                target.write_text(redefined, encoding="utf-8")
+                issues = [f for f in pin_ledger._scan_hits(root) if self._TARGET_REL in f]
+                self.assertTrue(any("repeated definition" in f for f in issues), issues)
+                self.assertTrue(any(f":{new} pins" in f for f in issues), issues)
+                for receipt, code in [
+                    pin_ledger.register_exemption(
+                        root, self._TARGET_REL, new, self._ACTIVE, "ambiguous owner"),
+                    pin_ledger.reanchor_exemption(root, self._TARGET_REL, old, new),
+                ]:
+                    self.assertEqual(code, 2, receipt)
+                    self.assertIn("repeated definition", receipt["detail"])
+                self.assertEqual(snapshot, ledger.read_bytes())
+
+    def test_multiline_decorators_belong_to_the_nested_class_and_method(self):
+        import pin_ledger
+        root = self._mini_root()
+        target = root / self._TARGET_REL
+        ledger = root / pin_ledger.LEDGER_REL
+        # The AST of this parenthesized decorator begins at wrap, below @.
+        class_decorator = f'    @(  # {self._ACTIVE}\n        wrap\n    )\n'
+        method_decorator = f'        @pin(\n            "{self._ACTIVE}",\n        )\n'
+
+        def source(decorated_owner):
+            text = "def suite():\n"
+            for name in ("First", "Other"):
+                if name == decorated_owner:
+                    text += class_decorator
+                text += f"    class {name}:\n"
+                if name == decorated_owner:
+                    text += method_decorator
+                text += "        async def check(self): pass\n"
+            return text
+
+        original = source("First")
+        target.write_text(original, encoding="utf-8")
+        def locations(text):
+            return [i for i, line in enumerate(text.splitlines(), 1) if self._ACTIVE in line]
+        registered = locations(original)
+        for lineno in registered:
+            receipt, code = pin_ledger.register_exemption(
+                root, self._TARGET_REL, lineno, self._ACTIVE, "historical decorator")
+            self.assertEqual(code, 0, receipt)
+        rows = pin_ledger._shadow_module(ledger).STATIC_PIN_EXEMPTIONS[self._TARGET_REL]
+        self.assertEqual([r[3] for r in rows], ["suite.First", "suite.First.check"])
+
+        target.write_text("# harmless shift\n" + original, encoding="utf-8")
+        self.assertFalse(any(self._TARGET_REL in f for f in pin_ledger._scan_hits(root)))
+        transferred = source("Other")
+        target.write_text(transferred, encoding="utf-8")
+        issues = [f for f in pin_ledger._scan_hits(root) if self._TARGET_REL in f]
+        self.assertEqual(sum("stale exemption" in f for f in issues), 2, issues)
+        snapshot = ledger.read_bytes()
+        for old, new in zip(registered, locations(transferred)):
+            self.assertTrue(any(f":{new} pins" in f for f in issues), issues)
+            receipt, code = pin_ledger.reanchor_exemption(root, self._TARGET_REL, old, new)
+            self.assertEqual(code, 2, receipt)
+            self.assertIn("scope and content", receipt["detail"])
+        self.assertEqual(ledger.read_bytes(), snapshot)
 
     def test_hand_edit_without_provenance_warns_on_guard_face(self):
         import pin_ledger
@@ -706,7 +857,7 @@ class PinsLedgerRealTreeContractTests(unittest.TestCase):
         import pin_ledger
         live = {(rel, ln, tok)
                 for rel, entries in version_checks.STATIC_PIN_EXEMPTIONS.items()
-                for ln, tok, _reason in entries}
+                for ln, tok, _reason, *_witness in entries}
         amnesty = pin_ledger.DELIVERY_AMNESTY_ENTRIES
         ghosts = amnesty - live
         self.assertFalse(

@@ -98,6 +98,20 @@ def _parse_ledger(text: str):
     return None, "STATIC_PIN_EXEMPTIONS dict not found"
 
 
+def _valid_entry(elem):
+    return (isinstance(elem, ast.Tuple) and len(elem.elts) in (3, 5)
+            and isinstance(elem.elts[0], ast.Constant)
+            and type(elem.elts[0].value) is int
+            and isinstance(elem.elts[1], ast.Constant)
+            and isinstance(elem.elts[1].value, str)
+            and all(isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and node.value.strip() for node in elem.elts[3:]))
+
+
+def _recorded_witness(elem):
+    return tuple(node.value for node in elem.elts[3:])
+
+
 def _entry_tuples(dict_node: ast.Dict):
     """Yield (key, tuple_node, line_value, token_value) for every entry."""
     for key_node, value_node in zip(dict_node.keys, dict_node.values):
@@ -106,11 +120,7 @@ def _entry_tuples(dict_node: ast.Dict):
         if not isinstance(value_node, ast.List):
             continue
         for elem in value_node.elts:
-            if (isinstance(elem, ast.Tuple) and len(elem.elts) == 3
-                    and isinstance(elem.elts[0], ast.Constant)
-                    and isinstance(elem.elts[0].value, int)
-                    and isinstance(elem.elts[1], ast.Constant)
-                    and isinstance(elem.elts[1].value, str)):
+            if _valid_entry(elem):
                 yield key_node.value, elem, elem.elts[0].value, elem.elts[1].value
 
 
@@ -150,6 +160,24 @@ def _target_line_carries(root: Path, rel: str, line: int, token: str):
         return False, ("line {0} does not carry token \"{1}\" as a standalone "
                        "semver token".format(line, token))
     return True, None
+
+
+def _verified_witness(root, rel, lineno, token):
+    """Compute the same exact, unambiguous witness the scanner will consume."""
+    from checks.version import pin_scopes, pin_witness, resolve_pin
+
+    try:
+        source = (root / rel).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+    except (OSError, UnicodeError, SyntaxError) as exc:
+        return None, f"cannot read Python witness in {rel}: {exc}"
+    lines = source.splitlines()
+    if not 0 < lineno <= len(lines) or token not in _line_tokens(lines[lineno - 1]):
+        return None, f'line {lineno} does not carry token "{token}"'
+    scopes = pin_scopes(tree)
+    witness = pin_witness(lines, scopes, lineno)
+    _, error = resolve_pin((lineno, token, "", *witness), lines, scopes)
+    return witness, error
 
 
 def _shadow_module(path: Path):
@@ -340,8 +368,7 @@ def _ledger_entry_lineno(ledger_text: str, rel: str, line: int, token: str):
         if not (isinstance(key_node, ast.Constant) and key_node.value == rel):
             continue
         for elem in value_node.elts:
-            if (isinstance(elem, ast.Tuple) and len(elem.elts) == 3
-                    and elem.elts[0].value == line
+            if (_valid_entry(elem) and elem.elts[0].value == line
                     and elem.elts[1].value == token):
                 return elem.lineno
     return None
@@ -380,19 +407,22 @@ def register_exemption(root: Path, file: str, line: int, token: str,
         return refuse("ledger unreadable: {0}".format(err))
     _tree, dict_node = parsed
 
-    # Idempotency: an identical row already present = effect achieved.
-    existing = [(k, ln, tok) for k, _e, ln, tok in _entry_tuples(dict_node)]
-    if (rel, line, token) in existing:
-        receipt.update({"code": "ok", "error": False, "effect": "idempotent_noop",
-                        "detail": "identical exemption already registered"})
-        return receipt, 0
+    witness, error = _verified_witness(root, rel, line, token)
+    if error:
+        return refuse(error)
+    for key, elem, hint, registered_token in _entry_tuples(dict_node):
+        if key != rel or token != registered_token:
+            continue
+        stored = _recorded_witness(elem)
+        if stored == witness or (not stored and hint == line):
+            receipt.update({"code": "ok", "error": False, "effect": "idempotent_noop",
+                            "detail": "identical exemption already registered"})
+            return receipt, 0
+        if hint == line:
+            return refuse("another witness uses this line hint; re-anchor it first")
 
-    # The row must be needed: the scan flags this exact line today.
-    carries, cdetail = _target_line_carries(root, rel, line, token)
-    if not carries:
-        return refuse(cdetail)
     hits = _scan_hits(root)
-    hit_key = "static-version-pin: {0}:{1} ".format(rel, line)
+    hit_key = f'static-version-pin: {rel}:{line} pins the active version "{token}"'
     if not any(hit_key in f for f in hits):
         return refuse(("line {0} is not a live pin hit (annotation line, "
                        "token != active version, or already exempted)").format(line))
@@ -410,7 +440,8 @@ def register_exemption(root: Path, file: str, line: int, token: str,
     op_id = _new_op_id()
     comment = ("# pins register {0} (FIX-462): machine-written exemption "
                "for a live scan hit".format(op_id))
-    tuple_line = "        ({0}, {1}, {2}),".format(line, json.dumps(token), reason_literal)
+    scope, content = (json.dumps(part, ensure_ascii=False) for part in witness)
+    tuple_line = f"        ({line}, {json.dumps(token)}, {reason_literal}, {scope}, {content}),"
 
     lines = text.splitlines(keepends=True)
     insert_at = None
@@ -420,7 +451,8 @@ def register_exemption(root: Path, file: str, line: int, token: str,
             insert_at = value_node.end_lineno  # 1-based line of the closing "]"
             break
     if insert_at is not None:
-        new_lines = lines[:insert_at] + [indent + comment + "\n", tuple_line + "\n"] + lines[insert_at:]
+        new_lines = (lines[:insert_at - 1] + [indent + comment + "\n", tuple_line + "\n"]
+                     + lines[insert_at - 1:])
     else:
         # New file key: append a block just before the dict's closing "}".
         insert_at = dict_node.end_lineno
@@ -480,8 +512,6 @@ def reanchor_exemption(root: Path, file: str, line_from: int, line_to: int,
     rel = _normalized_rel(file)
     if line_from < 1 or line_to < 1:
         return refuse("line numbers must be >= 1")
-    if line_from == line_to:
-        return refuse("--from and --to are identical (nothing to re-anchor)")
 
     root = _repo_root(root)
     ledger_path = _ledger_path(root)
@@ -504,7 +534,14 @@ def reanchor_exemption(root: Path, file: str, line_from: int, line_to: int,
         already = [e for e in _entry_tuples(dict_node)
                    if e[0] == rel and e[2] == line_to
                    and (token is None or e[3] == token)]
+        if len(already) > 1:
+            return refuse("ambiguous entries at destination; pass --token")
         if already:
+            _, destination, _, destination_token = already[0]
+            witness, error = _verified_witness(root, rel, line_to, destination_token)
+            stored = _recorded_witness(destination)
+            if error or (stored and stored != witness):
+                return refuse(error or "destination witness has changed")
             receipt.update({"code": "ok", "error": False,
                             "effect": "idempotent_noop",
                             "detail": "entry already anchored at line {0}".format(line_to)})
@@ -525,26 +562,35 @@ def reanchor_exemption(root: Path, file: str, line_from: int, line_to: int,
             rel, line_from, ", ".join(sorted({e[3] for e in entries}))))
     _k, elem, _ln, entry_token = entries[0]
 
-    # Token-content search validation: the token now lives on --to, not --from.
-    carries_to, detail = _target_line_carries(root, rel, line_to, entry_token)
-    if not carries_to:
-        return refuse("--to invalid: {0}".format(detail))
-    from_lines = (_repo_root(root) / rel).read_text(encoding="utf-8").splitlines()
-    if line_from <= len(from_lines) and entry_token in _line_tokens(from_lines[line_from - 1]):
-        return refuse("--from line {0} still carries the token — nothing drifted; "
-                      "refusing to move a live anchor".format(line_from))
+    witness, error = _verified_witness(root, rel, line_to, entry_token)
+    if error:
+        return refuse(f"--to invalid: {error}")
+    stored = _recorded_witness(elem)
+    if stored and stored != witness:
+        return refuse("--to does not match the registered scope and content")
+    if line_from == line_to and stored:
+        receipt.update({"code": "ok", "error": False, "effect": "idempotent_noop",
+                        "detail": "witness already anchored"})
+        return receipt, 0
+    if line_from != line_to:
+        if any(k == rel and ln == line_to and tok == entry_token
+               for k, _, ln, tok in _entry_tuples(dict_node)):
+            return refuse("destination already has an exemption for this token")
+        if not stored and _target_line_carries(root, rel, line_from, entry_token)[0]:
+            return refuse("--from still carries the token; refusing to move a live legacy anchor")
 
-    first = elem.elts[0]
-    if first.lineno != elem.lineno:
-        return refuse("multi-line tuple entries are unsupported (found at ledger "
-                      "line {0})".format(elem.lineno))
+    if elem.lineno != elem.end_lineno:
+        return refuse("multi-line tuple entries are unsupported")
     lines = text.splitlines(keepends=True)
     idx = elem.lineno - 1
     raw = lines[idx]
-    replacement = (raw[:first.col_offset] + str(line_to)
-                   + raw[first.end_col_offset:])
-    if raw.endswith("\n") and not replacement.endswith("\n"):
-        replacement += "\n"
+    # AST offsets count UTF-8 bytes, even for a Unicode reason or witness.
+    data = raw.encode("utf-8")
+    reason = data[elem.elts[2].col_offset:elem.elts[2].end_col_offset].decode("utf-8")
+    scope, content = (json.dumps(part, ensure_ascii=False) for part in witness)
+    row = f"({line_to}, {json.dumps(entry_token)}, {reason}, {scope}, {content})"
+    replacement = (data[:elem.col_offset].decode("utf-8") + row
+                   + data[elem.end_col_offset:].decode("utf-8"))
 
     op_id = _new_op_id()
     comment = ("# pins re-anchor {0} (FIX-462): {1}->{2} via machine writer "
@@ -696,13 +742,9 @@ def exemption_face_issues(root: Path):
             status = "FAIL"
             continue
         for elem in value_node.elts:
-            if not (isinstance(elem, ast.Tuple) and len(elem.elts) == 3
-                    and isinstance(elem.elts[0], ast.Constant)
-                    and isinstance(elem.elts[0].value, int)
-                    and isinstance(elem.elts[1], ast.Constant)
-                    and isinstance(elem.elts[1].value, str)):
+            if not _valid_entry(elem):
                 issues.append({"type": "pin_ledger_malformed_entry", "line": elem.lineno,
-                               "detail": "entry is not (int, str, reason) at {0}".format(key)})
+                               "detail": "invalid exemption row or scope/content witness at {0}".format(key)})
                 status = "FAIL"
                 continue
             entry = (key, elem.elts[0].value, elem.elts[1].value)
@@ -750,7 +792,7 @@ def add_reanchor_arguments(parser):
     parser.add_argument("--from", dest="line_from", type=int, required=True,
                         help="the entry's current (drifted) line number in the ledger")
     parser.add_argument("--to", dest="line_to", type=int, required=True,
-                        help="the token's actual line number now")
+                        help="the token's actual line (use --from N --to N to upgrade a live legacy row)")
     parser.add_argument("--token", default=None,
                         help="disambiguate when the --from line held several entries")
     parser.add_argument("--dry-run", action="store_true",

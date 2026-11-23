@@ -171,6 +171,48 @@ def check_risk_escalation():
     return result
 
 
+def emit_risk_staleness(result):
+    """Print Check 2's registration findings and return their issue count."""
+    print(f"│  Total open risks: {result['total_open']}")
+    stale = result["stale"]
+    fresh = result["fresh"]
+    unknown_dates = result["unknown_registration"]
+    unknown_statuses = result["unknown_status_ids"]
+    if stale:
+        print(f"│  [WARN] {len(stale)} risk(s) registered more than 7 days ago:")
+        for risk_id, date_str, age in stale:
+            print(f"│    - {risk_id} (registered {date_str}, {age}d ago)")
+    elif not unknown_dates:
+        print("│  [PASS] No risks registered more than 7 days ago.")
+    for risk_id, raw_date in unknown_dates:
+        print(f"│  [WARN] {risk_id}: registration date unavailable ({raw_date or 'empty'})")
+    for risk_id in unknown_statuses:
+        print(f"│  [WARN] {risk_id}: unrecognized status, counted as active")
+    if fresh:
+        print(f"│  Fresh open risks ({len(fresh)}):")
+        for risk_id, date_str, age in fresh:
+            print(f"│    - {risk_id} ({date_str}, {age}d ago)")
+    return len(stale) + len(unknown_dates) + len(unknown_statuses)
+
+
+def emit_risk_escalation(result):
+    """Print Check 8's deadline findings and return their issue count."""
+    escalated = result["escalated"]
+    invalid_deadlines = result["invalid_deadline_ids"]
+    if escalated:
+        print(f"│  [WARN] {len(escalated)} open risk(s) with escalation deadline passed:")
+        for risk in escalated:
+            print(f"│    - {risk['risk_id']}: deadline {risk['deadline']} ({risk['days_overdue']}d overdue)")
+    elif not invalid_deadlines:
+        print("│  [PASS] No dated open risks with passed escalation deadlines.")
+    for risk_id in invalid_deadlines:
+        print(f"│  [WARN] {risk_id}: escalation deadline is not a valid ISO date")
+    if result["no_deadline_ids"]:
+        print("│  Open risks without a deadline: " + ", ".join(result["no_deadline_ids"]))
+    print(f"│  Total open risks: {result['total_open']}")
+    return len(escalated) + len(invalid_deadlines)
+
+
 # ── REQ-145.3 / FIX-265: risk mitigation closure (Check 36) ────────────────
 # Watchdog for the AUDIT-145 "write a mitigation action and call it done"
 # blind spot: time-based checks cannot verify that mitigation landed, so

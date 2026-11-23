@@ -10,11 +10,11 @@
     }
   ],
   "generated": {
-    "git_head": "d2148fdb35868b4c31cdc1195e0ef06fe43e5f76",
+    "git_head": "5aceac7d6d0d1d5e03701d6f78ab49f30ac68488",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 24322,
+    "anchor_loc": 24250,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
@@ -164,7 +164,7 @@
         "count": 1,
         "kind": "import_vw",
         "lines": [
-          50
+          51
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/risk_domain.py"
@@ -182,7 +182,7 @@
         "count": 1,
         "kind": "vw_def",
         "lines": [
-          42
+          43
         ],
         "owner_task": "REFACTOR-domains-batch1",
         "path": "checks/risk_domain.py"
@@ -404,7 +404,7 @@
       "_print_check_summary": 9,
       "_print_product_gate_skipped": 3,
       "_print_sequential_id_check": 13,
-      "_run_full_engine_checks": 597,
+      "_run_full_engine_checks": 587,
       "check_agent_adapter_contract": 3,
       "check_architecture_fact_source": 2,
       "check_files": 4,
@@ -479,7 +479,7 @@
       "cmd_write_guard_bootstrap": 2,
       "main": 1
     },
-    "total": 1200
+    "total": 1190
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",
@@ -491,8 +491,8 @@
     "snapshot_present_at_regen": true
   },
   "r6_startup_budget": {
-    "import_count": 209,
-    "import_set_sha256": "1a3147345229df94a997683d4bb6af07d80b4206d3f392e2f335a4bd2d2fc0e3",
+    "import_count": 210,
+    "import_set_sha256": "6b38b7cefdcb9bd99840572998be42ce691a7458c3ee6eebba180a58ee208a22",
     "note": "collection + comparison frame only; FEAT-018's tolerance table fills threshold, then the face tightens — advisory until then, never fatal in v1",
     "probe": "python -I -B -c 'import verify_workflow' (isolated)",
     "threshold": null

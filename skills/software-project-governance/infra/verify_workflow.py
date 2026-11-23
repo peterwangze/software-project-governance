@@ -1146,6 +1146,8 @@ from checks.risk_domain import (  # noqa: E402
     parse_active_risks,
     check_risk_staleness,
     check_risk_escalation,
+    emit_risk_staleness,
+    emit_risk_escalation,
     check_risk_mitigation_closure,  # FIX-265 / REQ-145.3 (Check 36)
     _default_task_status_map,  # FIX-294: active map for the archive wrapper
     _resolve_shared,  # FIX-294: refresh deferred shared names before the
@@ -13351,27 +13353,7 @@ def _run_full_engine_checks(args):
 
     # ── 2. Risk staleness ──
     print("\n┌─ Check 2: Risk Staleness (>7 days) ──────────────────┐")
-    risk_result = check_risk_staleness()
-    print(f"│  Total open risks: {risk_result['total_open']}")
-    stale = risk_result["stale"]
-    fresh = risk_result["fresh"]
-    if stale:
-        all_issues += len(stale)
-        print(f"│  [WARN] {len(stale)} risk(s) registered more than 7 days ago:")
-        for risk_id, date_str, age in stale:
-            print(f"│    - {risk_id} (registered {date_str}, {age}d ago)")
-    elif not risk_result["unknown_registration"]:
-        print("│  [PASS] No risks registered more than 7 days ago.")
-    for risk_id, raw_date in risk_result["unknown_registration"]:
-        all_issues += 1
-        print(f"│  [WARN] {risk_id}: registration date unavailable ({raw_date or 'empty'})")
-    for risk_id in risk_result["unknown_status_ids"]:
-        all_issues += 1
-        print(f"│  [WARN] {risk_id}: unrecognized status, counted as active")
-    if fresh:
-        print(f"│  Fresh open risks ({len(fresh)}):")
-        for risk_id, date_str, age in fresh:
-            print(f"│    - {risk_id} ({date_str}, {age}d ago)")
+    all_issues += emit_risk_staleness(check_risk_staleness())
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 2b. Decision premise (FIX-463) ──
@@ -13557,21 +13539,7 @@ def _run_full_engine_checks(args):
 
     # ── 8. Risk escalation deadline ──
     print("\n┌─ Check 8: Risk Escalation Deadline ──────────────────┐")
-    re_result = check_risk_escalation()
-    escalated = re_result["escalated"]
-    if escalated:
-        all_issues += len(escalated)
-        print(f"│  [WARN] {len(escalated)} open risk(s) with escalation deadline passed:")
-        for r in escalated:
-            print(f"│    - {r['risk_id']}: deadline {r['deadline']} ({r['days_overdue']}d overdue)")
-    elif not re_result["invalid_deadline_ids"]:
-        print("│  [PASS] No dated open risks with passed escalation deadlines.")
-    for risk_id in re_result["invalid_deadline_ids"]:
-        all_issues += 1
-        print(f"│  [WARN] {risk_id}: escalation deadline is not a valid ISO date")
-    if re_result["no_deadline_ids"]:
-        print("│  Open risks without a deadline: " + ", ".join(re_result["no_deadline_ids"]))
-    print(f"│  Total open risks: {re_result['total_open']}")
+    all_issues += emit_risk_escalation(check_risk_escalation())
     print("└──────────────────────────────────────────────────────┘")
 
     # ── 9. Task deadline enforcement ──

@@ -85,6 +85,7 @@ import hashlib
 import os
 import re
 import subprocess
+import sys
 from datetime import date, datetime
 from pathlib import Path
 
@@ -1279,3 +1280,35 @@ __all__ = [
     "snapshot_binding",
     "verify_review_trust",
 ]
+
+
+def cmd_review_record(args, *, host_root):
+    """Thin entry — review-record CLI (FIX-236.1 / ADR-017 §3.4 Wiring A).
+
+    Delegates to infra/review_record.py: the single machine-written
+    review-conclusion persistence path (review-{id}-R{n}.md + evidence-log
+    row) + best-effort process_gate_result wiring. Prints the JSON summary;
+    exits 2 on a fail-closed input error (the record was not written).
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    summary = write_review_record(
+        task_id=args.task,
+        round_n=args.round,
+        result=args.result,
+        report_path=args.report,
+        reviewer=args.reviewer,
+        unit_id=args.unit,
+        gate_id=args.gate,
+        scope=getattr(args, "scope", "full"),
+        delta_base=getattr(args, "delta_base", None),
+        bind_files=getattr(args, "bind_file", None) or (), bind_tree=getattr(args, "bind_tree", None),
+        abort_reason=getattr(args, "abort_reason", None),
+        root=host_root,
+        require_loop=True, record_only=getattr(args, "record_only", False),
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("error"):
+        sys.exit(2)

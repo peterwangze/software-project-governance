@@ -1770,3 +1770,158 @@ __all__ = [
     "is_prior_art_placeholder",
     "normalize_prior_art_entries",
 ]
+
+
+def cmd_change_triage(args, *, host_root, governance_dir, plan_path, read_task_rows, check_write, output_json):
+    """Thin entry — change-triage CLI (FIX-237.4 / ADR-017 §4.4).
+
+    Runs the mandatory five-step change-control triage for a new
+    product-code task (dependency analysis via task-priority-analysis with
+    snapshot / priority determination / same-file conflict check / version
+    adaptation / execution side-effect declaration — FIX-271 / AUDIT-146
+    §7.2 R2) and machine-writes the triage record
+    (``.governance/change-triage/{TASK_ID}.json`` + evidence row). All logic
+    lives in infra/change_triage.py; this entry is argparse glue + I/O
+    (RISK-039 thin-entry discipline). Exits non-zero (2) fail-closed on any
+    step error — without a triage record the task MUST NOT be created.
+    Step-e side-effect issues are WARN (advisory): they surface in the JSON
+    output and the record but do not change the exit code (WARN 起步，
+    不得静默).
+
+    FIX-278 G3 (write guard): on the success path the written artifacts are
+    re-validated at write time (``check_write`` — the
+    evidence-log row column contract + record JSON); a guard failure exits 2
+    so a structural breach cannot be introduced silently (AUDIT-148 §4.2
+    Check-14 无写时检测 gap).
+
+    FEAT-111 / DEC-377④ (prior-art intake gate): ``--prior-art`` carries
+    the external-input face — design/research family tasks
+    (FEAT/DESIGN/RESEARCH/AUDIT) without valid precedent/competitor/
+    external-evidence entries are rejected fail-closed inside
+    :func:`change_triage.run_triage` (exit 2, zero writes); execution/
+    repair families are exempt with ``prior_art_required=false`` on the
+    record.
+
+    FIX-288 ⑨ (version fact source): ``current_version`` is the PROJECT's
+    current version — the highest 「已发布」 row of the HOST plan-tracker
+    version roadmap (:func:`change_triage.derive_project_current_version`) —
+    never the WORKFLOW version (the plugin SKILL.md frontmatter this entry
+    read before FIX-288; that mismatch fail-closed-rejected legal target
+    versions on older or roadmap-less hosts — router REL-002 after
+    EVO-004/EV-038).
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from loop_workflow import start, _payload, runtime_path
+    plan_tracker_text = plan_path.read_text(encoding="utf-8") if plan_path.is_file() else ""
+    if not args.title:
+        args.title = next((r["title"] for r in read_task_rows(plan_tracker_text)
+                           if r["id"] == args.task and r.get("title")), "")
+    dependencies = list(split_dep_ids(args.depends_on))
+    declaration = dict(unit_id=args.task, goal=args.title, acceptance=args.acceptance,
+                       tier=getattr(args, "tier", "inner"), gate=getattr(args, "gate", None),
+                       parent=getattr(args, "parent", None), dependencies=dependencies)
+    record_path = governance_dir / "change-triage" / (args.task + ".json")
+    try:
+        start(host_root, **declaration, dry_run=True)
+        state = _payload(runtime_path(host_root))
+        statuses = {u["flow_unit_id"]: u["runtime_status"] for u in state["flow_units"]}
+        if record_path.is_file():
+            stored = json.loads(record_path.read_text(encoding="utf-8"))
+            if (stored.get("loop_intake") != declaration or stored.get("files") != split_cli_items(args.files)
+                    or stored.get("priority") != args.priority or stored.get("demand_source") != args.demand_source
+                    or stored.get("reason") != args.reason or stored.get("target_version") != args.version
+                    or stored.get("demand_basis") != args.demand_basis
+                    or stored.get("prior_art", []) != split_cli_items(args.prior_art)):
+                raise ValueError("an immutable intake record already exists with different scope")
+            issues = check_write(governance_dir / "evidence-log.md", record_path,
+                                                  record_id="TRIAGE-" + args.task)
+            if issues:
+                raise ValueError("; ".join(issues))
+            unit = start(host_root, **declaration)
+            output_json({"record_path": str(record_path), "unit": unit["flow_unit_id"], "replayed": True})
+            return
+    except (ValueError, OSError) as exc:
+        output_json({"error": str(exc)})
+        sys.exit(2)
+    # FIX-288 ⑨: project current version from the host roadmap — two-layer
+    # version semantics (workflow version ≠ project version).
+    current_version = derive_project_current_version(plan_tracker_text)
+    summary = run_triage(
+        task_id=args.task,
+        title=getattr(args, "title", "") or "",
+        priority=args.priority,
+        target_version=getattr(args, "version", "未规划版本") or "未规划版本",
+        depends_on=getattr(args, "depends_on", "") or "",
+        files=split_cli_items(args.files),
+        reason=getattr(args, "reason", "") or "",
+        acceptance=getattr(args, "acceptance", "") or "",
+        declared_side_effects=getattr(args, "side_effects", "") or "",
+        demand_source=getattr(args, "demand_source", "") or "",
+        demand_basis=getattr(args, "demand_basis", "") or "",
+        prior_art=split_cli_items(getattr(args, "prior_art", None)),
+        plan_tracker_text=plan_tracker_text,
+        current_version=current_version,
+        governance_dir=governance_dir, native_intake=declaration, native_status=statuses,
+    )
+    if summary.get("error"):
+        output_json(summary)
+        sys.exit(2)
+    # FIX-278 G3: write-time structural guard over the artifacts just written.
+    # ``record_id`` identifies the JUST-WRITTEN evidence row (append semantics:
+    # the written row is the LAST TRIAGE row — matching by id prevents both
+    # false-pass on an earlier row and false-fail behind an old-format row).
+    guard_issues = check_write(
+        governance_dir / "evidence-log.md",
+        summary.get("record_path", ""),
+        record_id=summary.get("record_id") or "")
+    if guard_issues:
+        for issue in guard_issues:
+            print("change-triage write guard: {0}".format(issue),
+                  file=sys.stderr)
+        print("change-triage write guard: remediation — 修复写入产物（证据行/"
+              "记录 JSON）后重新入账；记录已存在时先人工处置 "
+              "(change-triage/{0}.json + TRIAGE-{0} evidence row) 再重试；"
+              "列数标准来源=evidence-log 行族首行（首个非本次写入的 TRIAGE 行，"
+              "无行族时 EVD fallback——DEC-168 行族权威），历史异构库中该标准行"
+              "可能为旧行（列数漂移）——写入行符合当前格式时先核对标准行本身"
+              .format(summary.get("task_id", "?")), file=sys.stderr)
+        sys.exit(2)
+    try:
+        unit = start(host_root, **declaration)
+    except (OSError, ValueError) as exc:
+        output_json({**summary, "error": str(exc)})
+        sys.exit(2)
+    output_json({**summary, "unit": unit["flow_unit_id"]}, indent=2)
+
+
+def cmd_demand_source_revise(args, *, governance_dir):
+    """Thin entry — demand-source-revise CLI (FEAT-080 / ADR-021 §2.2.1).
+
+    B3 regularization of the revision channel: the window-era Coordinator
+    library-level API becomes a first-class CLI face. Appends ONE
+    demand_source revision event (``change-triage/{TASK_ID}.demand-
+    revisions.jsonl`` + machine evidence row); the immutable triage record
+    is never touched. All validation lives in
+    :func:`change_triage.append_demand_revision` (RISK-039 thin-entry
+    discipline; fail-closed → exit 2, zero writes): malformed task / no
+    triage record / non-enum ``to`` / empty basis / bad basis_kind.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    summary = append_demand_revision(
+        task_id=args.task,
+        to=args.to,
+        demand_basis=getattr(args, "basis", "") or "",
+        basis_kind=getattr(args, "basis_kind", "session-record")
+        or "session-record",
+        revised_by=getattr(args, "authorized_by", "") or "",
+        governance_dir=governance_dir,
+    )
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if summary.get("error"):
+        sys.exit(2)

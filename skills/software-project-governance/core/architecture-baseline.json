@@ -1,21 +1,12 @@
 {
-  "exemptions": [
-    {
-      "allowance_lines": 0,
-      "dec": "DEC-183 / DEC-184 (FEAT-019 packet; evolution §4 S5); renewal DEC-190 (0.81.0 M-0 O-8)",
-      "expire_version": "0.82.0",
-      "reason": "FEAT-019 self-bootstrap RECORD: the anchor was generated AFTER the ratchet's own dispatch wiring (18 lines: import + argparse registration + commands-dict entry), so the wiring is already inside the anchor and the allowance is deliberately ZERO — this entry is the DEC-tracked disclosure, not a growth license (any excess still fails)",
-      "rule": "R1",
-      "scope": "mainfile"
-    }
-  ],
+  "exemptions": [],
   "generated": {
-    "git_head": "9f903b944a744775300806d9782290d5efd3036d",
+    "git_head": "49efd631dd53997c4b258025eb6ae8cacc35bd98",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
     "anchor_loc": 42,
-    "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
+    "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). The only-down R1 anchor includes the dispatch wiring. Its zero-line allowance expired at 0.82.0 (DEC-190).",
     "path": "infra/verify_workflow.py"
   },
   "r2_reverse_dependency": {

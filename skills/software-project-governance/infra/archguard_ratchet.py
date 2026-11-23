@@ -8,9 +8,8 @@ the gate instead of merely being reported.
 
 Bootstrap discipline (design review S5/BR-1): the ratchet command and the
 baseline generator live HERE, in an independent module — never inside
-verify_workflow.py. The engine only wires the dispatch entry; R1's anchor is
-generated AFTER that wiring so the gate is born green (no day-one red CI),
-and the self-inclusion is registered as an expiring exemption.
+verify_workflow.py. R1's measured anchor includes the dispatch wiring.
+Its original zero-allowance disclosure expired at 0.82.0 (DEC-190).
 
 Machine-judged rules (each has a negative-control test):
 
@@ -747,33 +746,11 @@ R1_DESIGN_ANCHOR_NOTE = (
     "packet mandates 实测为准 at regen time (intervening engine deltas: "
     "FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356"
     "→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 "
-    "print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring "
-    "lines are registered as the R1 self-bootstrap exemption."
+    "print budget stayed at 1,311). The only-down R1 anchor includes the "
+    "dispatch wiring. Its zero-line allowance expired at 0.82.0 (DEC-190)."
 )
 
-DEFAULT_EXEMPTIONS: List[dict] = [
-    {
-        "rule": "R1",
-        "scope": "mainfile",
-        "allowance_lines": 0,
-        "reason": "FEAT-019 self-bootstrap RECORD: the anchor was generated "
-                  "AFTER the ratchet's own dispatch wiring (18 lines: import "
-                  "+ argparse registration + commands-dict entry), so the "
-                  "wiring is already inside the anchor and the allowance is "
-                  "deliberately ZERO — this entry is the DEC-tracked "
-                  "disclosure, not a growth license (any excess still fails)",
-        "dec": "DEC-183 / DEC-184 (FEAT-019 packet; evolution §4 S5)",
-        # DEC-190 ⑥ (0.81.0 M-0, O-8): renewed to 0.82.0. The renewal changes
-        # nothing about the exemption's substance — the allowance stays 0 and
-        # still grants no growth; what it carries is the DEC-tracked
-        # self-bootstrap disclosure, whose fact base this version's V8 wiring
-        # (Check 28w section + the two thin command wrappers) does not change.
-        # Letting it lapse silently at 0.81.0 was the one outcome the design
-        # forbade (§2.9.4 / O-8); `--regen` absorbs the wiring lines into the
-        # anchor, so the zero allowance remains honest.
-        "expire_version": "0.82.0",
-    },
-]
+DEFAULT_EXEMPTIONS: List[dict] = []
 
 
 def build_baseline(skill_root: Path,
@@ -865,7 +842,7 @@ def build_baseline(skill_root: Path,
                     "tolerance table fills threshold, then the face "
                     "tightens — advisory until then, never fatal in v1",
         },
-        "exemptions": list(existing.get("exemptions") or DEFAULT_EXEMPTIONS),
+        "exemptions": list(existing.get("exemptions", DEFAULT_EXEMPTIONS) or ()),
     }
 
 

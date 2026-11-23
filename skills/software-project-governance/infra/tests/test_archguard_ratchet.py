@@ -110,6 +110,14 @@ class R2ReverseDependencyTests(unittest.TestCase):
         violations = ar.check_r2({key: {"count": 1, "lines": [3]}}, expired, version=(0, 78, 1))
         self.assertTrue(any(v.get("path") == "example.py" for v in violations))
 
+    def test_r2_detects_a_new_import_from_a_source_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            infra = Path(tmp)
+            (infra / "consumer.py").write_text("import verify_workflow\n", encoding="utf-8")
+            current = ar.scan_reverse_dependencies(infra)
+        violations = ar.check_r2(current, [])
+        self.assertEqual([(v["rule"], v["path"]) for v in violations], [("R2", "consumer.py")])
+
 
 class R3LayerMatrixTests(unittest.TestCase):
     def test_r3_matrix_integrity_matches_evolution_doc(self):
@@ -373,14 +381,10 @@ class ExemptionMechanismTests(unittest.TestCase):
         self.assertEqual(len(effective), 1)
         self.assertIn("EXPIRED", effective[0]["exemption"])
 
-    def test_committed_bootstrap_exemption_is_registered(self):
-        """done_definition: 自举豁免显式登记 + 到期版本."""
-        exemptions = _committed_baseline()["exemptions"]
-        bootstrap = [e for e in exemptions
-                     if e.get("rule") == "R1" and e.get("scope") == "mainfile"]
-        self.assertEqual(len(bootstrap), 1)
-        self.assertIn("self-bootstrap", bootstrap[0]["reason"])
-        self.assertRegex(bootstrap[0]["expire_version"], r"^\d+\.\d+\.\d+$")
+    def test_committed_baseline_retired_the_feat019_bootstrap_disclosure(self):
+        for entry in _committed_baseline()["exemptions"]:
+            self.assertFalse(entry.get("rule") == "R1" and entry.get("scope") == "mainfile"
+                             and "FEAT-019 self-bootstrap RECORD" in entry.get("reason", ""), entry)
 
 
 class BaselineArtifactTests(unittest.TestCase):
@@ -396,15 +400,19 @@ class BaselineArtifactTests(unittest.TestCase):
 
     def test_authored_zone_survives_regen(self):
         existing = _committed_baseline()
-        existing["exemptions"].append({
-            "rule": "R2", "scope": "reverse-dep:checks/review_domain.py:vw_call",
-            "reason": "regen-carryover probe", "dec": "DEC-TEST",
-            "expire_version": "0.81.0"})
+        # A historical installation retains its own record until its author removes it.
+        history = {"rule": "R1", "scope": "mainfile", "allowance_lines": 0,
+                   "reason": "FEAT-019 self-bootstrap RECORD", "dec": "DEC-183 / DEC-184; renewal DEC-190",
+                   "expire_version": "0.82.0"}
+        custom = {"rule": "R1", "scope": "mainfile", "allowance_lines": 0,
+                  "reason": "local calibration", "dec": "DEC-TEST", "trace": {"review": "custom provenance"}}
+        other = {"rule": "R2", "scope": "reverse-dep:example.py:vw_call", "dec": "DEC-OTHER",
+                 "reason": "migration", "expire_version": "0.81.0"}
+        expected = [custom, history, other]
+        existing["exemptions"] = copy.deepcopy(expected)
         rebuilt = ar.build_baseline(_SKILL_ROOT, existing)
-        self.assertEqual(len(rebuilt["exemptions"]), 2)
-        self.assertEqual(
-            len(rebuilt["r3_layer_matrix"]["managed_modules"]),
-            len(ar.DEFAULT_MANAGED_MODULES))
+        self.assertEqual(rebuilt["exemptions"], expected)
+        self.assertEqual(rebuilt["r3_layer_matrix"]["managed_modules"], existing["r3_layer_matrix"]["managed_modules"])
 
 
 class CliGateTests(unittest.TestCase):
@@ -447,6 +455,7 @@ class CliGateTests(unittest.TestCase):
             first = self._run("--regen", "--baseline", str(target))
             self.assertEqual(first.returncode, 0, first.stdout)
             payload_a = target.read_bytes()
+            self.assertEqual(json.loads(payload_a)["exemptions"], [])
             second = self._run("--regen", "--baseline", str(target))
             self.assertEqual(second.returncode, 0, second.stdout)
             payload_b = target.read_bytes()

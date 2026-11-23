@@ -76,6 +76,293 @@ class PublishedObjectVerificationTests(unittest.TestCase):
     def git(self, *args):
         return subprocess.check_output(["git", "-C", str(self.root), *args], text=True).strip()
 
+    def write_tree_review(self, tree, files, *, round_n=0, **options):
+        self.report.write_text(f"Reviewed tree {tree}.\n**APPROVED**\n", encoding="utf-8")
+        return review_record.write_review_record(
+            root=self.root, task_id="FIX-523", round_n=round_n, result="APPROVED",
+            report_path=self.report.name, reviewer="Code Reviewer", bind_files=files,
+            bind_tree=tree, **options,
+        )
+
+    def test_conflicting_tree_and_file_refused_before_native_review_writes(self):
+        from loop_workflow import start
+
+        start(self.root, unit_id="FIX-523", tier="inner", goal="Check review assembly",
+              acceptance="The approved staged tree can be consumed")
+        (self.root / "subject.txt").write_bytes(b"staged revision\n")
+        self.git("add", "--", "subject.txt")
+        candidate = self.git("write-tree")
+        (self.root / "subject.txt").write_bytes(b"later work in the same file\n")
+        previous = self.write_tree_review(candidate, [], unit_id="FIX-523",
+                                          record_only=True, require_loop=True)
+        self.assertNotIn("error", previous)
+
+        def governance_bytes():
+            gov = self.root / ".governance"
+            return {p.relative_to(gov): p.read_bytes() for p in gov.rglob("*")
+                    if p.is_file() and not p.name.endswith(".lock")}
+
+        before = governance_bytes()
+        result = self.write_tree_review(candidate, ["subject.txt"], round_n=1, unit_id="FIX-523",
+                                        gate_id="G6", require_loop=True)
+        self.assertEqual(result.get("code"), "tree_binding", result)
+        self.assertIn("file pin disagrees with reviewed tree at subject.txt", result["error"])
+        self.assertEqual(governance_bytes(), before)
+        self.assertEqual(self.git("write-tree"), candidate)
+
+    def test_tree_and_matching_file_can_include_independent_evidence(self):
+        tracked = "交付 [v1].txt"
+        (self.root / tracked).write_bytes(b"reviewed\n")
+        self.git("add", "--", tracked)
+        candidate = self.git("write-tree")
+        private = ".governance/observation.md"
+        (self.root / private).write_bytes(b"private observation\n")
+        (self.root / "notes.md").write_bytes(b"untracked observation\n")
+        result = self.write_tree_review(candidate, [tracked, private, "notes.md"])
+        self.assertNotIn("error", result)
+        pins = {p["path"]: p["hash"] for p in result["trust"]["bindings"]}
+        for name in (tracked, private, "notes.md"):
+            self.assertEqual(pins[name], self.git("hash-object", "--", name))
+        consumed = review_record.derive_review_facts(self.root, "FIX-523", [result["review_id"]])
+        self.assertEqual(consumed["files_changed"], [tracked])
+        self.assertEqual(consumed["review"]["conclusion"], "APPROVED")
+
+    def test_conflicting_pins_leave_eligible_unit_dormant_then_valid_pins_admit_it(self):
+        from loop_workflow import runtime_path, start
+        from commit_review import check
+
+        dependency, task = "FIX-701", "FIX-523"
+        for unit, dependencies in ((dependency, []), (task, [dependency])):
+            start(self.root, unit_id=unit, tier="inner", goal="Review " + unit,
+                  acceptance="Reviewed code matches the candidate", dependencies=dependencies)
+        predecessor_report = self.root / "predecessor.md"
+        predecessor_report.write_text("Verified prerequisite. **APPROVED**", encoding="utf-8")
+        completed = review_record.write_review_record(
+            root=self.root, task_id=dependency, unit_id=dependency, gate_id="G6", round_n=0,
+            require_loop=True, result="APPROVED", report_path=predecessor_report.name,
+            reviewer="Code Reviewer",
+        )
+        self.assertNotIn("error", completed)
+        runtime = runtime_path(self.root)
+
+        def states():
+            units = json.loads(runtime.read_text(encoding="utf-8"))["flow_units"]
+            return {u["flow_unit_id"]: u["runtime_status"] for u in units}
+
+        def governance_bytes():
+            return {p.relative_to(runtime.parent): p.read_bytes() for p in runtime.parent.rglob("*")
+                    if p.is_file() and not p.name.endswith(".lock")}
+
+        self.assertEqual(states(), {dependency: "completed", task: "dormant"})
+        subject = self.root / "subject.txt"
+        subject.write_bytes(b"candidate\n")
+        self.git("add", "--", subject.name)
+        tree = self.git("write-tree")
+        subject.write_bytes(b"other working revision\n")
+        before = governance_bytes()
+        options = {"unit_id": task, "gate_id": "G6", "require_loop": True}
+        refused = self.write_tree_review(tree, [subject.name], **options)
+        self.assertEqual(refused.get("code"), "tree_binding", refused)
+        self.assertEqual(governance_bytes(), before)
+
+        subject.write_bytes(b"candidate\n")
+        aliases = [subject.name, subject.name, "./subject.txt", str(subject)]
+        admitted = self.write_tree_review(tree, aliases, **options)
+        self.assertNotIn("error", admitted)
+        self.assertEqual(states()[task], "completed")
+        self.assertEqual([pin["path"] for pin in admitted["trust"]["bindings"]], [subject.name])
+        self.assertTrue(check(self.root, task))
+
+    def test_file_only_duplicate_aliases_share_one_git_snapshot_and_receipt(self):
+        subject = self.root / "subject.txt"
+        subject.write_bytes(b"candidate\n")
+        self.git("add", "--", subject.name)
+        aliases = [subject.name, "./subject.txt", str(subject)]
+        with mock.patch.object(review_record, "_file_binding", wraps=review_record._file_binding) as pin:
+            result = review_record.write_review_record(
+                root=self.root, task_id="FIX-523", round_n=0, result="APPROVED",
+                report_path=self.report.name, reviewer="Code Reviewer", bind_files=aliases,
+            )
+        self.assertNotIn("error", result)
+        pin.assert_called_once_with(self.root.resolve(), subject.name)
+        facts = review_record.derive_review_facts(self.root, "FIX-523", [result["review_id"]])
+        self.assertEqual(facts["review"]["conclusion"], "APPROVED")
+
+    def test_existing_case_alias_uses_git_path_for_comparison_and_consumption(self):
+        name = "Gültig/Src/Ångström.txt"
+        alias = "GÜLTIG/SRC/ÅNGSTRÖM.TXT"
+        subject = self.root / name
+        subject.parent.mkdir(parents=True)
+        subject.write_bytes(b"reviewed\n")
+        if not (self.root / alias).exists():
+            self.skipTest("the temporary host uses case-sensitive lookup")
+        self.git("add", "--", name)
+        tree = self.git("write-tree")
+        # The working directory's preserved case can differ from Git's index.
+        renamed = subject.with_name("ÅNGSTRÖM.txt")
+        subject.rename(renamed)
+        subject.write_bytes(b"later work\n")
+        result = self.write_tree_review(tree, [alias])
+        self.assertEqual(result.get("code"), "tree_binding", result)
+        self.assertIn(name, result["error"])
+        subject.write_bytes(b"reviewed\n")
+        mixed = self.write_tree_review(tree, [name, alias])
+        self.assertNotIn("error", mixed)
+        self.assertEqual([p["path"] for p in mixed["trust"]["bindings"]], [name])
+        file_only = review_record.write_review_record(
+            root=self.root, task_id="FIX-523", round_n=1, result="APPROVED", reviewer="Code Reviewer",
+            report_path=self.report.name, bind_files=[alias],
+        )
+        self.assertNotIn("error", file_only)
+        for result in (mixed, file_only):
+            facts = review_record.derive_review_facts(self.root, "FIX-523", [result["review_id"]])
+            self.assertEqual(facts["files_changed"], [name])
+
+    def test_case_sensitive_entries_and_hardlinks_keep_distinct_git_names(self):
+        directory = self.root / "sensitive"
+        directory.mkdir()
+        first = directory / "Alpha.txt"
+        second = directory / "ALPHA.TXT"
+        first.write_bytes(b"first\n")
+        if second.exists() and os.name == "nt":
+            first.unlink()  # NTFS enables case-sensitive lookup on an empty directory.
+            subprocess.run(["fsutil", "file", "setCaseSensitiveInfo", str(directory), "enable"],
+                           capture_output=True, timeout=10)
+            first.write_bytes(b"first\n")
+        if second.exists():
+            self.skipTest("the temporary host cannot create case-distinct entries")
+        second.write_bytes(b"second\n")
+        linked = directory / "alpha.TXT"
+        os.link(first, linked)
+        private = directory / "aLPHA.txt"
+        os.link(first, private)
+        self.git("config", "core.ignorecase", "false")
+        names = [p.relative_to(self.root).as_posix() for p in (first, second, linked, private)]
+        self.git("add", "--", *names[:3])
+        tree = self.git("write-tree")
+        reviewed = self.write_tree_review(tree, names)
+        self.assertNotIn("error", reviewed)
+        pins = {p["path"]: p["hash"] for p in reviewed["trust"]["bindings"]}
+        self.assertEqual(list(pins), names)
+        self.assertEqual(pins[names[0]], pins[names[2]])
+        self.assertNotEqual(pins[names[0]], pins[names[1]])
+        self.assertEqual(pins[names[0]], pins[names[3]])
+        facts = review_record.derive_review_facts(self.root, "FIX-523", [reviewed["review_id"]])
+        self.assertEqual(set(facts["files_changed"]), set(names[:3]))
+        self.git("-c", "user.name=Review Fixture", "-c", "user.email=fixture@example.invalid",
+                 "-c", "core.hooksPath=" + str(self.root / ".fixture-hooks"), "commit", "-qm", "case-distinct files")
+        self.git("rm", "--cached", "--", names[0])
+        deleted = self.git("write-tree")
+        independent = self.write_tree_review(deleted, [names[3]], round_n=1)
+        self.assertNotIn("error", independent)
+        self.assertEqual(independent["trust"]["bindings"][0]["path"], names[3])
+        facts = review_record.derive_review_facts(self.root, "FIX-523", [independent["review_id"]])
+        self.assertEqual(facts["files_changed"], [names[0]])
+
+    def test_tree_file_mode_conflict_and_deletion_semantics(self):
+        self.git("config", "core.filemode", "false")
+        self.git("update-index", "--chmod=+x", "--", "subject.txt")
+        executable = self.git("write-tree")
+        self.git("update-index", "--chmod=-x", "--", "subject.txt")
+        mode_conflict = self.write_tree_review(executable, ["subject.txt"])
+        self.assertEqual(mode_conflict.get("code"), "tree_binding", mode_conflict)
+
+        self.git("rm", "--cached", "--", "subject.txt")
+        deleted = self.git("write-tree")
+        retained_bytes = self.write_tree_review(deleted, ["subject.txt"])
+        self.assertEqual(retained_bytes.get("code"), "tree_binding", retained_bytes)
+        (self.root / "subject.txt").unlink()
+        misspelled = self.write_tree_review(deleted, ["SUBJECT.TXT"])
+        self.assertEqual(misspelled.get("code"), "tree_binding", misspelled)
+        self.assertIn("exact Git path", misspelled["error"])
+        matched = self.write_tree_review(deleted, ["subject.txt"])
+        self.assertNotIn("error", matched)
+        self.assertEqual(matched["trust"]["bindings"], [
+            {"path": "subject.txt", "mode": "000000", "hash": "0" * len(deleted)},
+        ])
+
+    def test_retained_case_variant_of_deletion_and_candidate_case_rename(self):
+        tracked = self.root / "subject.txt"
+        renamed = self.root / "SUBJECT.TXT"
+        if not renamed.exists():
+            self.skipTest("the temporary host uses case-sensitive lookup")
+        self.git("config", "core.ignorecase", "false")
+        self.git("rm", "--cached", "--", tracked.name)
+        deleted = self.git("write-tree")
+        tracked.rename(renamed)
+        for spelling in (tracked.name, renamed.name):
+            result = self.write_tree_review(deleted, [spelling])
+            self.assertEqual(result.get("code"), "tree_binding", result)
+            self.assertIn("file pin disagrees with reviewed tree at subject.txt", result["error"])
+        self.git("add", "--", renamed.name)
+        # An index-only match must not displace the frozen tree's deletion.
+        self.assertIn("file pin disagrees", self.write_tree_review(deleted, [renamed.name])["error"])
+        # The new candidate actually contains the rename and takes precedence over HEAD.
+        new_tree = self.git("write-tree")
+        accepted = self.write_tree_review(new_tree, [tracked.name, renamed.name])
+        self.assertNotIn("error", accepted)
+        self.assertEqual([p["path"] for p in accepted["trust"]["bindings"]], [renamed.name])
+        facts = review_record.derive_review_facts(self.root, "FIX-523", [accepted["review_id"]])
+        self.assertEqual(facts["review"]["conclusion"], "APPROVED")
+
+    def test_ownership_read_errors_are_distinct_from_an_empty_lookup(self):
+        from loop_workflow import start
+
+        task = "FIX-523"
+        start(self.root, unit_id=task, tier="inner", goal="Verify receipt",
+              acceptance="Failed lookups do not change the receipt or gate")
+        subject = self.root / "subject.txt"
+        subject.write_bytes(b"candidate\n")
+        self.git("add", "--", subject.name)
+        tree = self.git("write-tree")
+        gov = self.root / ".governance"
+        index = self.root / ".git" / "index"
+        original_index = index.read_bytes()
+
+        def governance_bytes():
+            return {p.relative_to(gov): p.read_bytes() for p in gov.rglob("*")
+                    if p.is_file() and not p.name.endswith(".lock")}
+
+        before = governance_bytes()
+        options = {"unit_id": task, "gate_id": "G6", "require_loop": True}
+        damaged_index = b"invalid disposable test index"
+        index.write_bytes(damaged_index)
+        result = self.write_tree_review(tree, [subject.name], **options)
+        self.assertEqual(result.get("code"), "tree_binding", result)
+        self.assertIn("Git could not read binding names", result["error"])
+        self.assertEqual(index.read_bytes(), damaged_index)
+        self.assertEqual(governance_bytes(), before)
+
+        index.write_bytes(original_index)
+        real_listdir = os.listdir
+
+        def deny_enumeration(path):
+            if Path(path) == self.root:
+                raise PermissionError("directory listing denied")
+            return real_listdir(path)
+
+        with mock.patch.object(os, "listdir", side_effect=deny_enumeration):
+            result = self.write_tree_review(tree, [subject.name], **options)
+        self.assertEqual(result.get("code"), "tree_binding", result)
+        self.assertIn("directory listing denied", result["error"])
+        self.assertEqual(governance_bytes(), before)
+        self.assertEqual(index.read_bytes(), original_index)
+        untracked = self.root / "untracked-note.md"
+        untracked.write_bytes(b"independent evidence")
+        accepted = self.write_tree_review(tree, [subject.name, untracked.name], **options)
+        self.assertNotIn("error", accepted)
+        self.assertTrue(accepted["wiring"]["wired"])
+
+    def test_snapshot_outside_git_keeps_unavailable_revision_and_local_file_pin(self):
+        with tempfile.TemporaryDirectory() as folder:
+            host = Path(folder)
+            (host / "note.txt").write_bytes(b"local evidence")
+            snapshot = review_record.snapshot_binding(host, ["note.txt", "./note.txt"])
+            self.assertEqual(snapshot["commit"], "git:unavailable")
+            self.assertEqual(snapshot["worktree"], "unavailable")
+            self.assertEqual([v["path"] for v in snapshot["bindings"]], ["note.txt"])
+            self.assertEqual(snapshot["bindings"][0]["hash"], self.git("hash-object", str(host / "note.txt")))
+
     def record_pins(self, commit, tree, report_hash):
         lines = ["# Test review", "- report: report.md"]
         for key, value in (("report_sha256", report_hash), ("snapshot_commit", commit),

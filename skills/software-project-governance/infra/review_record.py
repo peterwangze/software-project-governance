@@ -242,13 +242,14 @@ def _git_output(repo_root, *argv, input_bytes=None):
     reference check."""
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo_root), *argv],
+            ["git", "--no-optional-locks", "-C", str(repo_root), *argv],
             capture_output=True, timeout=30, input=input_bytes)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
         return None
-    return proc.stdout.decode("utf-8", errors="replace").strip()
+    text = proc.stdout.decode("utf-8", errors="replace")
+    return text if "\0" in text else text.strip()
 
 
 def _file_binding(root, spec):
@@ -306,6 +307,118 @@ def derive_review_facts(root, task, review_ids, *, base=None, commit=None):
     return derive(root, task, review_ids, base=base, commit=commit)
 
 
+def _bound_tree_entries(root, tree, paths):
+    """Read the exact Git modes and object IDs for the requested literal paths."""
+    listing = _git_output(root, "--literal-pathspecs", "ls-tree", "-r", "-z", "--full-tree",
+                          tree, "--", *paths)
+    if listing is None:
+        raise ValueError("Git could not verify file bindings against " + tree)
+    entries = {}
+    for record in listing.split("\0"):
+        if record:
+            header, path = record.split("\t", 1)
+            if path in paths:
+                mode, _, oid = header.split()
+                entries[path] = (oid, mode)
+    return entries
+
+
+def _entry_spelling(root, relative, directories):
+    """Use names from the actual directory entries, preserving links as names."""
+    from delivery_acceptance import _plain_stat
+
+    parent = root
+    for index, part in enumerate(relative.parts):
+        try:
+            _plain_stat(parent)
+            key = str(parent)  # Path equality can fold case in a case-sensitive NTFS directory.
+            if key not in directories:
+                directories[key] = set(os.listdir(parent))
+            names = directories[key]
+            if part not in names:
+                info = (parent / part).lstat()
+                matches = [name for name in names if name.casefold() == part.casefold()
+                           and os.path.samestat(info, (parent / name).lstat())]
+                if len(matches) != 1:
+                    raise ValueError(f"could not identify directory entry {parent / part}")
+                part = matches[0]
+        except (FileNotFoundError, NotADirectoryError):
+            missing = parent.joinpath(*relative.parts[index:])
+            return missing.relative_to(root).as_posix(), False
+        except OSError as exc:
+            raise ValueError(f"could not read directory entry {parent / part}: {exc}") from exc
+        parent /= part
+    return parent.relative_to(root).as_posix(), True
+
+
+def _git_binding_names(root, spelling, treeish):
+    history = ["--with-tree=" + treeish] if treeish else []
+    pathspec = ":(icase,literal)" + spelling
+    if not spelling.isascii():
+        # Git's icase matches ASCII. Match non-ASCII runs within their component
+        # and let the actual directory entries distinguish possible spellings.
+        escaped = re.sub(r"([*?\[\\])", r"\\\1", spelling)
+        pathspec = ":(icase,glob)" + re.sub(r"[^\x00-\x7f]+", "*", escaped)
+    listing = _git_output(root, "ls-files", "-z", *history, "--", pathspec)
+    if listing is None:
+        raise ValueError("Git could not read binding names for " + spelling)
+    return {name for name in listing.split("\0") if name and name.casefold() == spelling.casefold()}
+
+
+def _binding_owner(root, spelling, exists, directories, reviewed_tree, commit):
+    """Resolve the candidate (or index) first, then a path removed since the captured commit."""
+    found_names = False
+    sources = [reviewed_tree]  # None selects the index for file-only reviews.
+    if commit:
+        sources.append(commit)
+    for source in sources:
+        names = _git_binding_names(root, spelling, source)
+        # --with-tree returns names from both the index and this Git object.
+        # Only the object's own entries establish its ownership.
+        entries = _bound_tree_entries(root, source, names) if source and names else dict.fromkeys(names)
+        found_names = found_names or bool(entries)
+        aliases = [name for name in entries if name == spelling or
+                   _entry_spelling(root, Path(name), directories)[0] == spelling]
+        if len(aliases) > 1:
+            raise ValueError("multiple Git paths resolve to the same directory entry: " + spelling)
+        if aliases:
+            name = aliases[0]
+            expected = None
+            if reviewed_tree:
+                expected = entries[name] if source == reviewed_tree else ("0" * len(reviewed_tree), "000000")
+            return name, expected
+    if not exists and found_names:
+        raise ValueError("missing file; use its exact Git path to bind a deletion: " + spelling)
+    return spelling, None
+
+
+def _canonical_bindings(root, bind_files, reviewed_tree, commit, in_repo):
+    directories = {}
+    owners = {}
+    specs = {}
+    for raw in bind_files or ():
+        path = root / str(raw).replace("\\", "/")
+        if not path.is_relative_to(root):
+            specs[path.as_posix()] = None
+            continue
+        relative = path.relative_to(root)
+        if not in_repo or not relative.parts or ".." in relative.parts:
+            specs[relative.as_posix()] = None
+            continue
+        spelling, exists = _entry_spelling(root, relative, directories)
+        if spelling not in owners:
+            owners[spelling] = _binding_owner(root, spelling, exists, directories, reviewed_tree, commit)
+        name, expected = owners[spelling]
+        specs[name] = expected
+    pins = []
+    for name, expected in specs.items():
+        pin = _file_binding(root, name)
+        if expected is not None and (pin["hash"], pin.get("mode")) != expected:
+            raise ValueError("file pin disagrees with reviewed tree at " + name)
+        pins.append(pin)
+    return pins
+
+
 def snapshot_binding(repo_root, bind_files=()):
     """FEAT-094 ① — the immutable snapshot of the reviewed object.
 
@@ -317,7 +430,11 @@ def snapshot_binding(repo_root, bind_files=()):
     review). git unavailable / not a repo → disclosed markers
     (``git:unavailable`` / ``unavailable``), never a fabricated hash.
     """
-    root = Path(repo_root) if repo_root is not None else Path.cwd()
+    return _snapshot_binding(repo_root, bind_files, None)
+
+
+def _snapshot_binding(repo_root, bind_files, reviewed_tree):
+    root = Path(repo_root).resolve() if repo_root is not None else Path.cwd()
     commit = _git_output(root, "rev-parse", "HEAD")
     unborn = False
     if not commit:
@@ -327,16 +444,16 @@ def snapshot_binding(repo_root, bind_files=()):
     worktree = "unavailable" if status is None else (
         "clean" if not status else "dirty({0})".format(
             len([ln for ln in status.splitlines() if ln.strip()])))
-    bindings = []
-    for raw in bind_files or ():
-        bindings.append(_file_binding(root, str(raw).replace("\\", "/")))
+    in_repo = reviewed_tree is not None or commit is not None or unborn or status is not None
+    if bind_files and in_repo and not commit and not unborn:
+        raise ValueError("Git could not identify the review's base commit")
     return {
         "commit": commit if commit and re.fullmatch(_GIT_OID, commit)
         else ("git:unborn" if unborn else "git:unavailable"),
         "commit_status": "resolved" if commit and re.fullmatch(_GIT_OID, commit)
         else ("unborn" if unborn else "unavailable"),
         "worktree": worktree,
-        "bindings": bindings,
+        "bindings": _canonical_bindings(root, bind_files, reviewed_tree, commit, in_repo),
     }
 
 
@@ -854,21 +971,6 @@ def write_review_record(
                              "cas_version": subject["loop_state"].get("cas_version")}
     except (ValueError, OSError) as exc:
         return {"error": str(exc), "code": "loop_binding"}
-    if not record_only and (unit_id or gate_id or assigned):
-        try:
-            if not reviewer:
-                raise ValueError("a scoped gate requires an identified reviewer")
-            from loop_engine import reviewer_gates
-            allowed = reviewer_gates(reviewer)
-            native_binding = review_binding(root or evidence_dir.parent, task_id, unit_id, gate_id,
-                                            allowed_gates=allowed)
-            if native_binding.get("release_reviewer") and reviewer != native_binding["release_reviewer"]:
-                raise ValueError("this version requires its designated release reviewer")
-            if force:
-                raise ValueError("a consumed gate review is immutable; use a new review round")
-        except (ValueError, OSError) as exc:
-            return {"error": str(exc), "code": "loop_binding"}
-
     # FIX-314 key-face resolution: the record key is (task, round, reviewer).
     # The canonical name stays the FIRST reviewer's slot — backward
     # compatible with every pre-FIX-314 record (a reviewer-less legacy file
@@ -934,6 +1036,34 @@ def write_review_record(
     report_resolved, report_bytes, report_text = report_face
     report_sha256 = hashlib.sha256(report_bytes).hexdigest()
 
+    repo_root = root if root is not None else evidence_dir.parent
+    if bind_tree is not None:
+        if (not re.fullmatch(_GIT_OID, bind_tree) or _git_output(repo_root, "cat-file", "-t", bind_tree) != "tree"
+                or not re.search(r"(?<![0-9a-f])" + re.escape(bind_tree) + r"(?![0-9a-f])", report_text)):
+            return {"error": "the review report must identify the existing immutable candidate tree", "code": "tree_binding"}
+    try:
+        binding = _snapshot_binding(repo_root, bind_files, bind_tree)
+        if bind_tree is not None:
+            binding["tree"] = bind_tree
+    except ValueError as exc:
+        return {"error": str(exc), "code": "tree_binding"}
+
+    # review_binding may activate a newly eligible dormant unit and append its event.
+    if not record_only and (unit_id or gate_id or assigned):
+        try:
+            if not reviewer:
+                raise ValueError("a scoped gate requires an identified reviewer")
+            from loop_engine import reviewer_gates
+            allowed = reviewer_gates(reviewer)
+            native_binding = review_binding(root or evidence_dir.parent, task_id, unit_id, gate_id,
+                                            allowed_gates=allowed)
+            if native_binding.get("release_reviewer") and reviewer != native_binding["release_reviewer"]:
+                raise ValueError("this version requires its designated release reviewer")
+            if force:
+                raise ValueError("a consumed gate review is immutable; use a new review round")
+        except (ValueError, OSError) as exc:
+            return {"error": str(exc), "code": "loop_binding"}
+
     # ── FEAT-094 step 2 — 验证结构与修订: conflict check + snapshot ──
     report_verdicts = _report_verdict_tokens(report_text)
     if native_binding and result_norm in ("APPROVED", "APPROVED_WITH_NOTES") and report_verdicts != {result_norm}:
@@ -968,13 +1098,6 @@ def write_review_record(
                 "code": "conflict_report_vs_record",
                 "conflict": {"report_fields": fields, "claimed": result_norm},
             }
-    repo_root = root if root is not None else evidence_dir.parent
-    binding = snapshot_binding(repo_root, bind_files)
-    if bind_tree is not None:
-        if (not re.fullmatch(_GIT_OID, bind_tree) or _git_output(repo_root, "cat-file", "-t", bind_tree) != "tree"
-                or not re.search(r"(?<![0-9a-f])" + re.escape(bind_tree) + r"(?![0-9a-f])", report_text)):
-            return {"error": "the review report must identify the existing immutable candidate tree", "code": "tree_binding"}
-        binding["tree"] = bind_tree
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
     # ── FEAT-094 steps 3+4 — the atomic ledger core (登记发现 event +

@@ -298,18 +298,11 @@ def check_change_triage(root=None, governance_dir=None,
         Never raises.
     """
     issues = []
-    if governance_dir is None:
-        try:
-            import verify_workflow as _vw
-            governance_dir = _vw.GOVERNANCE_DIR
-        except Exception:  # noqa: BLE001 — degrade to missing-dir scan
-            governance_dir = None
-    if root is None:
-        try:
-            import verify_workflow as _vw
-            root = _vw.ROOT
-        except Exception:  # noqa: BLE001
-            root = Path(governance_dir).parent if governance_dir else Path.cwd()
+    if root is None or governance_dir is None:
+        from resolve_entry import current_triage_roots
+        package, ledger = current_triage_roots()
+        root = package if root is None else root
+        governance_dir = ledger if governance_dir is None else governance_dir
     root = Path(root)
     if verify_path is None:
         verify_path = _verify_workflow_path(root)
@@ -517,18 +510,11 @@ def check_r1_completion_gate(root=None, governance_dir=None) -> dict:
         },
     }
     stats = result["stats"]
-    if governance_dir is None:
-        try:
-            import verify_workflow as _vw
-            governance_dir = _vw.GOVERNANCE_DIR
-        except Exception:  # noqa: BLE001 — degrade to no-verdict
-            governance_dir = None
-    if root is None:
-        try:
-            import verify_workflow as _vw
-            root = _vw.ROOT
-        except Exception:  # noqa: BLE001
-            root = Path(governance_dir).parent if governance_dir else Path.cwd()
+    if root is None or governance_dir is None:
+        from resolve_entry import current_triage_roots
+        package, ledger = current_triage_roots()
+        root = package if root is None else root
+        governance_dir = ledger if governance_dir is None else governance_dir
     gov = Path(governance_dir) if governance_dir else None
     if gov is None or not gov.is_dir():
         result["reason"] = "no .governance dir — nothing to judge"

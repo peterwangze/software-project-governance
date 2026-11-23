@@ -366,6 +366,31 @@ class Check36TaskPriorityTests(unittest.TestCase):
 class Check36ContractTests(unittest.TestCase):
     """Result shape + Check numbering (F9: Check 36 with Check 35 before it)."""
 
+    def test_preloaded_risk_readers_share_overridden_ledgers_and_reference_policy(self):
+        import re
+        import registry
+        from checks import risk_domain
+
+        stale = registry.load_check("check-2")
+        escalation = registry.load_check("check-8")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            risk_log = root / "other-risk.md"
+            plan = root / "other-plan.md"
+            risk_log.write_text(_risk_content(_risk_row(refs="FIX-300")), encoding="utf-8")
+            with mock.patch.object(vw, "HOST_PROJECT_ROOT", root), mock.patch.object(vw, "SAMPLE_PATH", plan):
+                for selected, count in [(root / "no-ledger", 0), (risk_log, 1), (root / "no-ledger", 0)]:
+                    with mock.patch.object(vw, "RISK_PATH", selected):
+                        self.assertEqual([stale()["total_open"], escalation()["total_open"],
+                                          len(risk_domain.parse_open_risks())], [count] * 3)
+                with mock.patch.object(risk_domain, "parse_task_dependencies", side_effect=OSError) as parse:
+                    risk_domain._default_task_status_map()
+                    parse.assert_called_once_with(plan)
+                with mock.patch.object(vw, "RISK_PATH", risk_log), mock.patch.object(vw, "_TASK_ID_IN_REF_RE", re.compile("NEVER")):
+                    actual = risk_domain.check_risk_mitigation_closure(task_status_map=DONE)
+                    self.assertEqual(actual, vw.check_risk_mitigation_closure(task_status_map=DONE))
+                    self.assertEqual(actual["verdict"], "WARN")
+
     def test_result_contract_shape(self):
         r = vw.check_risk_mitigation_closure(
             risk_content=_risk_content(_risk_row(refs="FIX-300")),

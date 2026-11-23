@@ -432,6 +432,48 @@ def resolve_host_root(project_root_arg):
         return None
 
 
+# The CLI root can be rebound by --project-root or a caller between checks.
+# Standalone consumers can resolve their host without loading the CLI.
+_host_root_reader = None
+_snapshot_paths_reader = None
+_triage_roots_reader = None
+
+
+def bind_host_root(reader, *, snapshot_paths=None, triage_roots=None):
+    global _host_root_reader, _snapshot_paths_reader, _triage_roots_reader
+    _host_root_reader = reader
+    _snapshot_paths_reader = snapshot_paths
+    _triage_roots_reader = triage_roots
+
+
+def snapshot_paths(root):
+    governance = Path(root) / ".governance"
+    return root, governance / "session-snapshot.md", governance / "plan-tracker.md", governance / "evidence-log.md"
+
+
+def current_snapshot_paths():
+    if _snapshot_paths_reader is not None:
+        return _snapshot_paths_reader()
+    return snapshot_paths(current_host_root())
+
+
+def current_triage_roots():
+    if _triage_roots_reader is not None:
+        return _triage_roots_reader()
+    return PLUGIN_HOME.parent.parent, Path(current_host_root()) / ".governance"
+
+
+def package_context_file(root, relative_path):
+    """An explicit context wins. The historical context default is the installed package root."""
+    return (Path(root) if root is not None else PLUGIN_HOME.parent.parent) / relative_path
+
+
+def current_host_root():
+    if _host_root_reader is not None:
+        return _host_root_reader()
+    return resolve_host_root(None) or PLUGIN_HOME.parent.parent
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description=(

@@ -109,6 +109,61 @@ def _frozen_engine_clock(frozen_now):
 
 
 # ─── Tests ─────────────────────────────────────────────────────
+class CurrentHostRootTests(unittest.TestCase):
+    def test_loop_readers_see_current_binding_and_explicit_root_wins(self):
+        import loop_engine
+        import loop_gate_processor
+        import verify_workflow as workflow
+
+        original = workflow.HOST_PROJECT_ROOT
+        with tempfile.TemporaryDirectory() as directory:
+            first, second = Path(directory) / "one", Path(directory) / "two"
+            first.mkdir()
+            second.mkdir()
+            for current, explicit in ((first, second), (second, first)):
+                with patch.object(workflow, "HOST_PROJECT_ROOT", current), \
+                     patch("governance_readers.loop_state", side_effect=lambda root: root):
+                    self.assertEqual(re_.current_host_root(), current)
+                    self.assertEqual(loop_engine.rollup_loop_state(), current)
+                    self.assertEqual(loop_engine.rollup_loop_state(explicit), explicit)
+                    self.assertEqual(loop_gate_processor._runtime_path(None),
+                                     current / ".governance" / "flow-unit-runtime.json")
+                    self.assertEqual(loop_gate_processor._runtime_path(explicit),
+                                     explicit / ".governance" / "flow-unit-runtime.json")
+        self.assertEqual(re_.current_host_root(), original)
+
+    def test_standalone_domains_follow_consecutive_hosts_without_loading_the_cli(self):
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as directory:
+            hosts = []
+            for label, task in (("first", "FIX-111"), ("second", "FIX-222")):
+                host = Path(directory) / label
+                governance = host / ".governance"
+                governance.mkdir(parents=True)
+                (governance / "evidence-log.md").write_text(f"| EVD-1 | {task} |", encoding="utf-8")
+                hosts.append(str(host))
+            probe = """
+import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from checks import evidence_domain, risk_domain
+for root in sys.argv[2:]:
+    os.chdir(root)
+    print(sorted(evidence_domain.parse_evidence_task_ids()))
+    assert evidence_domain.check_goal_layer_contract_readiness()["active_units"] is False
+    assert evidence_domain.check_fact_grounding()["pass"]
+    assert evidence_domain.check_structured_evidence()["pass"]
+    assert risk_domain._parse_context_open_risks(Path(root)) == []
+assert "verify_workflow" not in sys.modules
+"""
+            result = subprocess.run([sys.executable, "-I", "-c", probe, str(_INFRA_DIR), *hosts],
+                                    capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["['FIX-111']", "['FIX-222']"])
+
+
+
 class ResolveEntryTests(unittest.TestCase):
     """RISK-040 closure tests for the dual-root entry resolver."""
 

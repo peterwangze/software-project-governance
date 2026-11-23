@@ -1151,3 +1151,13 @@ class WriterResult:
                 _fail(f"WriterResult: {disposition} code {self.code!r} must "
                       f"not carry observed_revision — it is the conflict "
                       f"channel only")
+
+
+EXECUTION_PACKET_REQUIRED_FIELDS = {
+    "task_id": str,
+    "goal": str,
+    "allowed_change_scope": list,
+    "required_evidence": list,
+    "next_commands": list,
+    "done_definition": list,
+}

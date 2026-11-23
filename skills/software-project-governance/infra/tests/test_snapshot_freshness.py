@@ -331,6 +331,22 @@ class Check35RegexConsistencyTests(unittest.TestCase):
 class Check35LiveModeTests(unittest.TestCase):
     """Live read paths: SESSION_SNAPSHOT_PATH + git facts drive the check."""
 
+    def test_preloaded_snapshot_check_follows_rebound_file_and_date_rule(self):
+        import re
+        import registry
+
+        check = registry.load_check("check-35")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            snapshot = root / "separate-snapshot.md"
+            snapshot.write_text("cut=" + _ISO, encoding="utf-8")
+            with mock.patch.object(vw, "HOST_PROJECT_ROOT", root), mock.patch.object(vw, "SESSION_SNAPSHOT_PATH", snapshot):
+                self.assertIsNone(check()["stats"]["session_date"])
+                with mock.patch.object(vw, "FIX_105_SNAPSHOT_DATE_RE", re.compile(r"cut=([0-9-]+)")):
+                    self.assertEqual(check(commit_date=_ISO)["stats"]["session_date"], _ISO)
+                    self.assertEqual(sd.check_snapshot_freshness(commit_date=_ISO), vw.check_snapshot_freshness(commit_date=_ISO))
+                self.assertIsNone(check()["stats"]["session_date"])
+
     def test_live_mode_reads_patched_paths_fresh(self):
         today_iso = _ISO
         with tempfile.TemporaryDirectory() as td:
@@ -509,14 +525,21 @@ class Check35ContractTests(unittest.TestCase):
         self.assertIn("def _git_governance_facts", domain)
         self.assertTrue(hasattr(vw, "check_snapshot_freshness"))
 
-    def test_check35_import_export_placed_with_domain_imports(self):
-        """Thin re-export sits with the other domain import blocks (no
-        import cycle / no late function re-binding)."""
-        src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
-        self.assertIn("from checks.snapshot_domain import (", src)
-        idx_import = src.index("from checks.snapshot_domain import (")
-        idx_block = src.index("yield governance.section_35_snapshot_freshness(")
-        self.assertLess(idx_import, idx_block)
+    def test_missing_host_root_keeps_the_mtime_fallback_available(self):
+        with mock.patch.object(vw, "HOST_PROJECT_ROOT", None), \
+             mock.patch.object(vw, "SAMPLE_PATH", None), mock.patch.object(vw, "EVIDENCE_PATH", None):
+            result = vw.check_snapshot_freshness(snapshot_text=_snap("2026-08-01"))
+        self.assertEqual(result["verdict"], "WARN")
+
+    def test_check35_export_calls_the_snapshot_domain_with_current_paths(self):
+        import checks.snapshot_domain as domain
+
+        expected = {"verdict": "fixture"}
+        with mock.patch.object(domain, "check_snapshot_freshness", return_value=expected) as real:
+            self.assertIs(vw.check_snapshot_freshness(snapshot_text="sample"), expected)
+        real.assert_called_once_with(None, "sample", None, None, host_root=vw.HOST_PROJECT_ROOT,
+                                     snapshot_path=vw.SESSION_SNAPSHOT_PATH, plan_path=vw.SAMPLE_PATH,
+                                     evidence_path=vw.EVIDENCE_PATH, session_date_pattern=vw.FIX_105_SNAPSHOT_DATE_RE)
 
 
 # ── P1 hardening (review-FIX-268-CODE-R0: P1-1 / P1-2) ───────────────────

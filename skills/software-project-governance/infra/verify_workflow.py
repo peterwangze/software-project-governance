@@ -286,6 +286,10 @@ def _resolve_host_root():
 
 PLUGIN_ROOT = _resolve_plugin_root()
 HOST_PROJECT_ROOT = _resolve_host_root()
+from resolve_entry import bind_host_root as _bind_host_root
+_bind_host_root(lambda: HOST_PROJECT_ROOT,
+                snapshot_paths=lambda: (HOST_PROJECT_ROOT, SESSION_SNAPSHOT_PATH, SAMPLE_PATH, EVIDENCE_PATH),
+                triage_roots=lambda: (ROOT, GOVERNANCE_DIR))
 
 # Governance FACTS live in the host project, never in the plugin cache.
 GOVERNANCE_DIR = HOST_PROJECT_ROOT / ".governance"
@@ -1108,15 +1112,8 @@ from checks.capability_registry import (  # noqa: E402
     CAPABILITY_REGISTRY_PATH,
 )
 
-# ── Evidence domain (extracted to infra/checks/evidence_domain.py in 0.70.0) ──
-# DEC-083 Phase 5a / ADR-016 / FEAT-009: the evidence check domain (Checks 1,
-# 1b, 6, 6b plus evidence-only parsing helpers) now lives in
-# checks.evidence_domain. Thin re-export keeps existing call sites (the
-# Check 1/1b/6/6b blocks in cmd_check_governance, the test suite
-# `import verify_workflow as vw; vw.check_evidence_completeness()`, and
-# discover_governance_context) working unchanged. Shared helpers/constants
-# stay here and are reached by the new module via its deferred `_vw()`
-# accessor (same pattern as manifest/capability_registry).
+# Evidence operations receive the CLI's configurable inputs at the composition point below.
+from checks import evidence_domain as _evidence_domain
 from checks.evidence_domain import (  # noqa: E402
     _evidence_header_index,
     _extract_evidence_task_id,
@@ -1143,30 +1140,50 @@ from checks.evidence_domain import (  # noqa: E402
 # re-export keeps existing call sites (Check 2/8 blocks in
 # cmd_check_governance and discover_governance_context) working unchanged.
 from checks import risk_domain
-from checks.risk_domain import (  # noqa: E402
-    _parse_context_open_risks,
-    is_risk_status_open,
-    parse_open_risks,
-    parse_active_risks,
-    check_risk_staleness,
-    check_risk_escalation,
-    emit_risk_staleness,
-    emit_risk_escalation, emit_risk_mitigation_closure,
-    _ARCHIVE_FAMILY_RANGE_RE, _ARCHIVE_RANGE_SPAN_CAP, _ARCHIVE_RESOLVED_STATUS,
-    check_risk_mitigation_closure,  # FIX-265 / REQ-145.3 (Check 36)
-    _default_task_status_map,  # FIX-294: active map for the archive wrapper
-    _resolve_shared,  # FIX-294: refresh deferred shared names before the
-    # map build — _default_task_status_map reads risk_domain's deferred
-    # globals (SAMPLE_PATH), which are stale unless refreshed in-process.
+from checks.risk_domain import (
+    is_risk_status_open, emit_risk_staleness, emit_risk_escalation, emit_risk_mitigation_closure,
+    _ARCHIVE_FAMILY_RANGE_RE, _ARCHIVE_RANGE_SPAN_CAP, _ARCHIVE_RESOLVED_STATUS, _resolve_shared,
 )
+
+
+def _parse_context_open_risks(root):
+    return risk_domain._parse_context_open_risks(root, context_file=_context_file, context_task=_context_task)
+
+
+def parse_open_risks():
+    return risk_domain.parse_open_risks(risk_path=RISK_PATH)
+
+
+def parse_active_risks(risk_content=None):
+    return risk_domain.parse_active_risks(risk_content, risk_path=RISK_PATH)
+
+
+def check_risk_staleness():
+    return risk_domain.check_risk_staleness(risk_path=RISK_PATH)
+
+
+def check_risk_escalation():
+    return risk_domain.check_risk_escalation(risk_path=RISK_PATH)
+
+
+def _default_task_status_map():
+    return risk_domain._default_task_status_map(SAMPLE_PATH)
+
+
+def check_risk_mitigation_closure(risk_content=None, task_status_map=None):
+    return risk_domain.check_risk_mitigation_closure(risk_content, task_status_map, risk_path=RISK_PATH,
+                                                    plan_path=SAMPLE_PATH, task_id_pattern=_TASK_ID_IN_REF_RE)
+
 
 # ── Snapshot domain (new in 0.76.0) ──────────────────────────────────────
 # FIX-268 / REQ-145.2 (design §3.2): the snapshot-freshness watchdog
 # (Check 35). New domain module checks/snapshot_domain.py mirrors the
 # risk_domain pattern: deferred _vw() shared accessor, no import cycle.
-from checks.snapshot_domain import (  # noqa: E402
-    check_snapshot_freshness,  # FIX-268 / REQ-145.2 (Check 35)
-)
+def check_snapshot_freshness(plan_content=None, snapshot_text=None, evidence_mtime=None, commit_date=None):
+    from checks.snapshot_domain import check_snapshot_freshness as check
+    return check(plan_content, snapshot_text, evidence_mtime, commit_date, host_root=HOST_PROJECT_ROOT,
+                 snapshot_path=SESSION_SNAPSHOT_PATH, plan_path=SAMPLE_PATH, evidence_path=EVIDENCE_PATH,
+                 session_date_pattern=FIX_105_SNAPSHOT_DATE_RE)
 
 # ── Gate domain (new in 0.76.0) ────────────────────────────────────
 # FIX-266 / REQ-145.4 (design §3.4): the gate↔release interlock watchdog
@@ -1266,10 +1283,15 @@ from checks.review_domain import (  # noqa: E402
 # ── Change-control triage domain (checks/triage_domain.py in 0.73.0) ────────
 # FIX-237.4 / ADR-017 §4.4: Check 32 — mandatory change-control triage for
 # product-code task intake (CLI wiring + record validity + no-record FAIL).
-from checks.triage_domain import (  # noqa: E402
-    check_change_triage,
-    check_r1_completion_gate,
-)
+def check_change_triage(root=None, governance_dir=None, verify_path=None):
+    from checks.triage_domain import check_change_triage as check
+    return check(ROOT if root is None else root, GOVERNANCE_DIR if governance_dir is None else governance_dir,
+                 verify_path)
+
+
+def check_r1_completion_gate(root=None, governance_dir=None):
+    from checks.triage_domain import check_r1_completion_gate as check
+    return check(ROOT if root is None else root, GOVERNANCE_DIR if governance_dir is None else governance_dir)
 
 
 # ── Existing verification functions ──────────────────────────────
@@ -1319,6 +1341,32 @@ def check_snippets():
 
 
 _HOST_POLICY_OWNERS = {
+    **dict.fromkeys(('_MARKDOWN_BOLD_SPAN_RE', '_TOO_BROAD_SCOPE_PHRASE_RE'), 'execution_packet_checks'),
+    **dict.fromkeys(('_COMPLETED_STATUS_PREFIX', '_HOT_STATUS_STATE_COMMITTED', '_HOT_STATUS_STATE_LEGACY',
+                     '_NONACTIVE_SUBSECTION_MARKERS'), 'plan_task_selection'),
+    **dict.fromkeys((
+        'GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS',
+        'GOVERNANCE_CONTEXT_EVIDENCE_CLOSED_MARKERS',
+        'GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS',
+        'GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS',
+    ), 'checks.evidence_domain'),
+    **dict.fromkeys((
+        '_GOVERNANCE_STORE_MARKER_PREFIX',
+        '_EVIDENCE_MACHINE_CREDENTIAL_RE',
+    ), 'write_guard_records'),
+    **dict.fromkeys((
+        'PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS',
+        'PRODUCT_SUCCESS_PLACEHOLDER_RE',
+        'PRODUCT_SUCCESS_PROCESS_ONLY_RE',
+        'PRODUCT_SUCCESS_USER_OUTCOME_RE',
+        'PRODUCT_SUCCESS_RUNNABLE_RE',
+    ), 'delivery_contract_checks'),
+    **dict.fromkeys((
+        '_W7_TERMINAL_MARKERS',
+        '_W7_ACTIVE_MARKERS',
+        '_W7_TERMINAL_DATE_RE',
+        '_WRITER_OP_ANCHOR_RE',
+    ), 'plan_status'),
     **dict.fromkeys((
         'EXTERNAL_PROJECT_NATIVE_ENTRY_FILES', 'EXTERNAL_PROJECT_NATIVE_ENTRY_PATTERNS',
         'EXTERNAL_PROJECT_REQUIRED_INSTALLED_HOOKS', 'EXTERNAL_PROJECT_VALIDATION_BOUNDARY',
@@ -1373,7 +1421,7 @@ _HOST_POLICY_OWNERS = {
 
 
 def __getattr__(name):
-    """Resolve the public archive reader and installed host policies on first access."""
+    """Resolve the public archive reader and the installed policy owners on first access."""
     if name == "GovernanceDataSource":
         return _archive_reader_class()
     module = _HOST_POLICY_OWNERS.get(name)
@@ -1405,501 +1453,83 @@ def check_loop_role_skill_consistency(root=None):
     )
 
 
-def _markdown_has_heading(content, level, title):
-    return re.search(rf"^{'#' * level}\s+{re.escape(title)}\s*$", content, re.MULTILINE) is not None
-
-
-def _markdown_section(content, heading):
-    lines = content.splitlines()
-    start = None
-    level = None
-    for idx, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped == heading:
-            start = idx + 1
-            level = len(stripped) - len(stripped.lstrip("#"))
-            break
-    if start is None:
-        return ""
-
-    end = len(lines)
-    heading_pattern = re.compile(r"^(#{1,%d})\s+" % level)
-    for idx in range(start, len(lines)):
-        if heading_pattern.match(lines[idx].strip()):
-            end = idx
-            break
-    return "\n".join(lines[start:end])
-
-
-def _markdown_section_by_prefix(content, heading_prefix):
-    lines = content.splitlines()
-    for line_no, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped == heading_prefix:
-            return _markdown_section(content, heading_prefix)
-        if stripped.startswith(heading_prefix):
-            level = len(stripped) - len(stripped.lstrip("#"))
-            start = line_no + 1
-            end = len(lines)
-            heading_pattern = re.compile(r"^(#{1,%d})\s+" % level)
-            for idx in range(start, len(lines)):
-                if heading_pattern.match(lines[idx].strip()):
-                    end = idx
-                    break
-            return "\n".join(lines[start:end])
-    return ""
-
-
-def _markdown_table_cells(line):
-    stripped = line.strip()
-    if not stripped.startswith("|"):
-        return []
-    return [cell.strip() for cell in stripped.strip("|").split("|")]
-
-
-def _normalize_agent_token(token):
-    token = re.sub(r"[`*]", "", token)
-    token = re.sub(r"[（(][^）)]*[）)]", "", token)
-    return token.strip()
-
-
-def _generic_reviewer_cells(content):
-    hits = []
-    for line_no, line in enumerate(content.splitlines(), start=1):
-        for cell in _markdown_table_cells(line):
-            cleaned = _normalize_agent_token(cell)
-            parts = [
-                _normalize_agent_token(part)
-                for part in re.split(r"\s*(?:,|，|、|\+|/|或|和)\s*", cleaned)
-            ]
-            if any(part in ("Reviewer", "Reviewer Agent") for part in parts):
-                hits.append(line_no)
-                break
-    return hits
-
-
-def _normalize_markdown_cell(cell):
-    return re.sub(r"[`*]", "", cell).strip()
-
-
-def _find_table_row_by_first_cell(content, first_cell):
-    for line in content.splitlines():
-        cells = _markdown_table_cells(line)
-        if cells and _normalize_markdown_cell(cells[0]) == first_cell:
-            return cells
-    return []
-
-
-def _find_table_rows_with_cell(content, target_cell):
-    rows = []
-    for line in content.splitlines():
-        cells = _markdown_table_cells(line)
-        if any(_normalize_markdown_cell(cell) == target_cell for cell in cells):
-            rows.append(cells)
-    return rows
-
-
-def _status_cell_is_delivered(status):
-    return "✅" in status or "已交付" in status or "已完成" in status
+from hot_governance_facts import (
+    _markdown_has_heading, _markdown_section, _markdown_section_by_prefix, _markdown_table_cells,
+    _normalize_agent_token, _generic_reviewer_cells, _normalize_markdown_cell,
+    _find_table_row_by_first_cell, _find_table_rows_with_cell, _status_cell_is_delivered,
+)
 
 
 def _hot_status_cell_is_delivered(status):
-    """Delivered test for Check 28c task rows (FIX-395): the legacy
-    ✅/已交付/已完成 word forms (:func:`_status_cell_is_delivered` — S_old,
-    byte-for-byte) OR the FIX-393 writer-terminal predicate consumed BY
-    IDENTITY (:func:`_status_is_writer_committed_cell` — the governed
-    writer's own chain ``task_row_update._STATE_MARKER_CHAIN`` + the ops
-    receipt anchor; never a fourth mirror). A writer-committed terminal
-    cell (「committed … 〔op-<32hex>〕」) carries none of the legacy
-    literals, so the legacy read alone judged the delivered 0.88.0 release
-    chain (REL-087/088/089) NOT delivered → released_face=False → the
-    roadmap missing-task/overstate pseudo-FAIL cluster (census 20,
-    2026-09-26). Guarded directions preserved: active dev/triaged cells
-    keep the open verdict even when writer-anchored (every writer write
-    carries an anchor — the chain FIRST-HIT must be ``committed``);
-    hand-written 「committed」 without the anchor (B-1 class) and unknown
-    tokens are never guessed terminal (未知不猜). Check 18/18b's narrower
-    FIX-390 three-state exemption face (:func:`_hot_status_completion_state`)
-    is untouched — two faces, two predicates, one FIX-393 authority.
-    """
-    if _status_cell_is_delivered(status):
-        return True
-    return _status_is_writer_committed_cell(_status_clean_cell(status))
+    from hot_governance_facts import _hot_status_cell_is_delivered as run
+    return run(status, status_clean_cell=_status_clean_cell,
+               status_is_writer_committed_cell=_status_is_writer_committed_cell)
 
 
-def _contains_fix_token_or_range(content, fix_id):
-    if fix_id in content:
-        return True
-    match = re.match(r"FIX-(\d{3})$", fix_id)
-    if not match:
-        return False
-    fix_num = int(match.group(1))
-    for start, end in re.findall(r"FIX-(\d{3})\s*[~～-]\s*(\d{3})", content):
-        if int(start) <= fix_num <= int(end):
-            return True
-    return False
-
-
-# FIX-339 (DEC-195 a): 0.38.0-era version anchors removed — the active anchor
-# derives from plan-tracker 工作流版本; the face follows its REL delivery state.
-FIX_087_READINESS_VERSION = ".".join(["1", "0", "0"])
-FIX_087_REQ_TASKS = {
-    "REQ-070": ["FIX-082", "FIX-085"],
-    "REQ-071": ["FIX-083"],
-    "REQ-072": ["FIX-084"],
-    "REQ-073": ["FIX-086"],
-    "REQ-074": ["FIX-087"],
-}
-
-# FIX-399: the date cell may carry a decorated suffix inside the same bold
-# run (real roadmap shapes: `**2026-09-27（M-0 … GO→发布同日）**`), so the
-# capture no longer requires the closing `**` to sit flush after the date —
-# any non-`*` run up to the closing `**` is tolerated.
-# FIX-421: the STATUS cell drifted the same way (real 0.93.x shapes:
-# `**已发布 2026-09-30 REL-096（tag …，ledger 双 PASS）**`) — a bold run
-# OPENING with 已发布 plus a decorated tail, no longer the exact literal
-# `**已发布**`. The tail is tolerated with the same non-`*` rule (pure
-# `**已发布**` stays the empty-tail case); the version/date capture groups
-# and the FIX-399 last-date semantics are unchanged.
-FIX_105_SNAPSHOT_RELEASE_VERSION_RE = re.compile(r"\|\s*\*\*(0\.\d+(?:\.\d+)?)\*\*\s*\|\s*\*\*已发布[^*]*\*\*\s*\|\s*\*\*((?:\d{4}-\d{2}-\d{2})[^*]*)\*\*")
-# FIX-339 F-03 registration (REVIEW-FIX-339-CODE-R0): two 工作流版本 parsers
-# coexist on purpose. This strict pattern serves the snapshot face and the
-# real session-snapshot.md format (closed `**工作流版本:**` bold run). The hot
-# face (check_hot_fact_source_consistency) needs a looser inline pattern
-# because the real plan-tracker line is `- **工作流版本: 0.81.0（**已发布…`
-# (unclosed bold). Not unified until the data format is normalized: feeding
-# the loose pattern to the snapshot face would change its parsing there.
-FIX_105_PLAN_WORKFLOW_VERSION_RE = re.compile(r"\*\*工作流版本\*\*:\s*([0-9]+(?:\.[0-9]+){2})")
-FIX_105_SNAPSHOT_VERSION_RE = re.compile(r"\*\*工作流版本\*\*:\s*([0-9]+(?:\.[0-9]+){2})")
-FIX_105_SNAPSHOT_DATE_RE = re.compile(r"\*\*session_date\*\*:\s*(\d{4}-\d{2}-\d{2})")
-FIX_105_READINESS_RELEASE_BLOCKERS = ["REL-018", "REL-019"]
-
-
-def _version_row_text(plan_content, version):
-    row = _find_table_row_by_first_cell(plan_content, version)
-    return " | ".join(row) if row else ""
-
-
-def _task_statuses_for_hot_source(plan_content, task_id, version=None):
-    statuses = []
-    for cells in _find_table_rows_with_cell(plan_content, task_id):
-        normalized = [_normalize_markdown_cell(cell) for cell in cells]
-        if len(normalized) >= 2 and normalized[1] == task_id:
-            if version and len(normalized) >= 5 and normalized[4] != version:
-                continue
-            statuses.append(cells[-1])
-    return statuses
+from hot_governance_facts import (
+    _contains_fix_token_or_range, FIX_087_READINESS_VERSION,
+)
+from hot_governance_facts import (
+    FIX_087_REQ_TASKS, FIX_105_SNAPSHOT_RELEASE_VERSION_RE,
+)
+from hot_governance_facts import FIX_105_PLAN_WORKFLOW_VERSION_RE
+from hot_governance_facts import FIX_105_SNAPSHOT_VERSION_RE
+from hot_governance_facts import FIX_105_SNAPSHOT_DATE_RE
+from hot_governance_facts import (
+    FIX_105_READINESS_RELEASE_BLOCKERS, _version_row_text, _task_statuses_for_hot_source,
+)
 
 
 def _hot_task_is_delivered(plan_content, task_id, version=None):
-    statuses = _task_statuses_for_hot_source(plan_content, task_id, version=version)
-    # FIX-395: writer-committed terminal cells count delivered (FIX-393
-    # criteria by identity) — S_new ⊇ S_old, guarded shapes unchanged.
-    return bool(statuses) and any(_hot_status_cell_is_delivered(status) for status in statuses)
+    from hot_governance_facts import _hot_task_is_delivered as run
+    return run(plan_content, task_id, version,
+               is_delivered=lambda cell: _hot_status_cell_is_delivered(cell))
 
 
 def _hot_task_is_open(plan_content, task_id, version=None):
-    statuses = _task_statuses_for_hot_source(plan_content, task_id, version=version)
-    # FIX-395: mirror of _hot_task_is_delivered — a writer-committed row no
-    # longer counts open; dev/triaged rows (anchored or not) still do.
-    return bool(statuses) and any(not _hot_status_cell_is_delivered(status) for status in statuses)
+    from hot_governance_facts import _hot_task_is_open as run
+    return run(plan_content, task_id, version,
+               is_delivered=lambda cell: _hot_status_cell_is_delivered(cell))
 
 
 def _hot_task_ids_for_version(plan_content, version):
-    """FIX-339: data-derived task facts for the active version anchor.
-
-    Returns ``(task_ids, release_delivered, release_declared)`` where
-    ``task_ids`` are task-pattern rows whose cells mention ``version`` as a
-    standalone token — the target-version cell, a ``X.Y.Z 或后续`` target
-    form, or the 事项 cell when the target column carries a date/gate
-    reference (REVIEW-FIX-339-CODE-R0 F-01/F-05; real REL-077 row shape) —
-    and the release flags describe REL rows *for that version*.
-
-    FIX-339 (REVIEW-FIX-339-CODE-R1 F-R1-01): recognition keeps any-cell
-    recall, but a REL row only feeds the release flags when it belongs to
-    ``version`` — its target-version cell names the anchor (exact or
-    ``X.Y.Z 或后续`` form) or its 事项 cell opens with the ``发布 <anchor>``
-    header form. A bare anchor mention in any other cell (narrative,
-    dependency, status) never lifts the released face.
-
-    FIX-395 (version-row mapping semantics — documented, NOT changed): a
-    task whose target cell names a NEWER version still joins ``task_ids``
-    when its narrative mentions the anchor (the bump-source form
-    「V→V+1」, e.g. the live REL-091 row) — existing FIX-339 any-cell
-    recall, deliberately recall-first. The membership only bites through
-    the roadmap enumeration demand, which runs ONLY while ``version`` is
-    unreleased (``not released_face``); once the release face lifts — now
-    writer-committed-aware via :func:`_hot_status_cell_is_delivered` — the
-    enumeration loop is skipped and a swept V+1-target task can no longer
-    FAIL the V roadmap row.
-    """
-    ids, release_delivered, release_declared = [], False, False
-    version_token_re = re.compile(r"(?<![\d.])" + re.escape(version) + r"(?![\d.])")
-    release_item_re = re.compile(r"[*\s]*发布\s*" + version_token_re.pattern)
-    for line in plan_content.splitlines():
-        cells = _markdown_table_cells(line)
-        normalized = [_normalize_markdown_cell(cell) for cell in cells]
-        if len(normalized) < 5 or not re.fullmatch(r"(?:FIX|REL|AUDIT)-\d{3}", normalized[1]):
-            continue
-        if not any(version_token_re.search(cell) for cell in normalized):
-            continue
-        if normalized[1] not in ids:
-            ids.append(normalized[1])
-        if normalized[1].startswith("REL-") and (
-            version_token_re.search(normalized[4]) or release_item_re.match(normalized[2])
-        ):
-            release_declared = True
-            release_delivered = release_delivered or _hot_status_cell_is_delivered(cells[-1])
-    return ids, release_delivered, release_declared
+    from hot_governance_facts import _hot_task_ids_for_version as run
+    return run(plan_content, version,
+               is_delivered=lambda cell: _hot_status_cell_is_delivered(cell))
 
 
-def _line_mentions_completed_range_as_pending(line, completed_task_ids):
-    pending_markers = ["待实施", "待启动", "未完成", "待闭环"]
-    if not any(marker in line for marker in pending_markers):
-        return ""
-    for task_id in completed_task_ids:
-        if _contains_fix_token_or_range(line, task_id):
-            return task_id
-    return ""
-
-
-def _extract_task_ids(text):
-    return sorted(set(re.findall(r"\b(?:FIX|REL|AUDIT)-\d{3}\b", text)))
-
-
-def _parse_iso_date(value):
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
-    except (TypeError, ValueError):
-        return None
+from hot_governance_facts import (
+    _line_mentions_completed_range_as_pending, _extract_task_ids, _parse_iso_date,
+)
 
 
 def _latest_published_release_fact(plan_content):
-    latest = None
-    for version, date_cell in FIX_105_SNAPSHOT_RELEASE_VERSION_RE.findall(plan_content):
-        # FIX-399: a decorated cell may narrate several dates (real 0.89.0
-        # shape: 立项 2026-09-25 … 发布 2026-09-26). A 已发布 row feeds the
-        # latest-published-by-date comparison, so its key must be its release
-        # time point — taken as the LAST date in the cell (the release closes
-        # the milestone narrative), not the initiation date it opens with.
-        # Limitation: this assumes the cell narrates dates in chronological
-        # order with the release last; a labelled (发布:) date extraction
-        # would need a roadmap format normalization first.
-        dates = re.findall(r"\d{4}-\d{2}-\d{2}", date_cell)
-        if not dates:
-            continue
-        release_date = _parse_iso_date(dates[-1])
-        if release_date is None:
-            continue
-        fact = {"version": version, "date": release_date, "date_text": dates[-1]}
-        if latest is None or release_date > latest["date"]:
-            latest = fact
-    return latest
+    from hot_governance_facts import _latest_published_release_fact as run
+    return run(plan_content, policy=_hot_fact_policy())
+
+
+def _hot_fact_policy():
+    from hot_governance_facts import HotFactPolicy
+    return HotFactPolicy(FIX_087_READINESS_VERSION, FIX_087_REQ_TASKS, FIX_105_SNAPSHOT_RELEASE_VERSION_RE,
+                         FIX_105_PLAN_WORKFLOW_VERSION_RE, FIX_105_SNAPSHOT_VERSION_RE,
+                         FIX_105_SNAPSHOT_DATE_RE, FIX_105_READINESS_RELEASE_BLOCKERS)
 
 
 def _snapshot_fact_source_issues(plan_content, plan_tracker_path):
-    plan_version_match = FIX_105_PLAN_WORKFLOW_VERSION_RE.search(plan_content)
-    plan_version = plan_version_match.group(1) if plan_version_match else ""
-    latest_release = _latest_published_release_fact(plan_content)
-
-    snapshot_path = Path(plan_tracker_path).with_name("session-snapshot.md")
-    if not snapshot_path.exists():
-        return []
-
-    snapshot_content = snapshot_path.read_text(encoding="utf-8")
-    rel_snapshot = _display_path(snapshot_path)
-    issues = []
-
-    snapshot_version_match = FIX_105_SNAPSHOT_VERSION_RE.search(snapshot_content)
-    snapshot_version = snapshot_version_match.group(1) if snapshot_version_match else ""
-    if plan_version and snapshot_version and snapshot_version != plan_version:
-        issues.append(f"{rel_snapshot}: session snapshot workflow version {snapshot_version} does not match plan-tracker {plan_version}")
-    elif plan_version and not snapshot_version:
-        issues.append(f"{rel_snapshot}: session snapshot missing workflow version")
-
-    date_match = FIX_105_SNAPSHOT_DATE_RE.search(snapshot_content)
-    snapshot_date = _parse_iso_date(date_match.group(1)) if date_match else None
-    if latest_release and snapshot_date and snapshot_date < latest_release["date"]:
-        issues.append(
-            f"{rel_snapshot}: session snapshot date {date_match.group(1)} is older than latest published release "
-            f"{latest_release['version']} ({latest_release['date_text']})"
-        )
-    elif latest_release and snapshot_date is None:
-        issues.append(f"{rel_snapshot}: session snapshot missing parseable session_date")
-
-    if latest_release and latest_release["version"] not in snapshot_content:
-        issues.append(f"{rel_snapshot}: session snapshot missing latest published release {latest_release['version']}")
-
-    return issues
+    from hot_governance_facts import _snapshot_fact_source_issues as run
+    return run(plan_content, plan_tracker_path, policy=_hot_fact_policy(), display_path=_display_path)
 
 
 def _hot_fact_source_plugin_scope():
-    """Check 28c plugin-project scope (FIX-270 mixed-root fix).
-
-    The FIX-087-era expectations (0.38.0 roadmap row, FIX-082~087 active
-    task table, REQ-070~074 requirement matrix, RISK-033 / REL-013 blocker
-    chain, ``### 1.0.0 依赖链`` section) assert facts about the governed
-    object being the plugin project itself. They may only run in dogfood
-    mode (host root == plugin root); a host project (roots diverge) must not
-    be FAILed on those expectations — generic section/snapshot consistency
-    still applies there.
-    """
-    return not _host_plugin_roots_divergent()
+    from hot_governance_facts import _hot_fact_source_plugin_scope as run
+    return run(host_plugin_roots_divergent=_host_plugin_roots_divergent)
 
 
 def check_hot_fact_source_consistency(plan_tracker_path=None):
-    """FIX-087: keep plan-tracker hot sections aligned across active release facts.
-
-    FIX-270 (mixed-root): generic consistency (snapshot version/date vs
-    plan-tracker + required hot sections) applies to every project. The
-    plugin-project expectations (0.38.0 roadmap / FIX-082~087 / REQ-070~074 /
-    RISK-033 / REL-013 / ``### 1.0.0 依赖链``) assert facts about the governed
-    object being the plugin project and are enforced only in dogfood mode
-    (see :func:`_hot_fact_source_plugin_scope`); host mode reports the
-    downgrade honestly instead of FAILing host data.
-    """
-    plan_tracker_path = plan_tracker_path or _governance_dir() / "plan-tracker.md"
-    failures = []
-    if not plan_tracker_path.is_file():
-        return [f"{_display_path(plan_tracker_path)}: plan-tracker unavailable"]
-    plan_content = plan_tracker_path.read_text(encoding="utf-8")
-    rel_plan = _display_path(plan_tracker_path)
-    _gov = _governance_dir()
-    if (
-        "External Validation Temporary Project" in plan_content
-        and "temporary external-project workspace" in plan_content
-        and (_gov / "external-validation-target.json").is_file()
-        and plan_tracker_path.resolve() == (_gov / "plan-tracker.md").resolve()
-    ):
-        print("[OK] hot fact-source consistency skipped for external validation temporary workspace")
-        return []
-    failures.extend(_snapshot_fact_source_issues(plan_content, plan_tracker_path))
-
-    plugin_scope = _hot_fact_source_plugin_scope()
-    required_sections = [
-        "## 项目配置",
-        "## 当前活跃事项",
-        "## 版本规划",
-        "## 需求跟踪矩阵",
-    ]
-    if plugin_scope:
-        required_sections.append("### 1.0.0 依赖链")
-    sections = {heading: _markdown_section_by_prefix(plan_content, heading) for heading in required_sections}
-    for heading, content in sections.items():
-        if not content:
-            failures.append(f"{rel_plan}: missing hot fact-source section {heading}")
-
-    project_config = sections.get("## 项目配置", "")
-    overview = _markdown_section_by_prefix(plan_content, "## 项目总览")
-    active_items = sections.get("## 当前活跃事项", "")
-    dependency_chain = sections.get("### 1.0.0 依赖链", "")
-
-    # FIX-270: host mode → plugin-project expectations dormant (downgraded,
-    # not FAILed); generic consistency above stays enforced.
-    if not plugin_scope:
-        return failures
-
-    # Loose form (FIX-339 F-03): matches the real unclosed-bold 工作流版本
-    # line; see the FIX_105_PLAN_WORKFLOW_VERSION_RE registration note above.
-    version_match = re.search(r"\*\*工作流版本(?:\*\*)?:\s*([0-9]+(?:\.[0-9]+){2})", project_config)
-    active_version = version_match.group(1) if version_match else ""
-    if not active_version:
-        failures.append(f"{rel_plan}: project config missing 工作流版本 (cannot derive active version anchor)")
-    if active_version:
-        active_row_text = _version_row_text(plan_content, active_version)
-        version_task_ids, release_delivered, release_declared = _hot_task_ids_for_version(plan_content, active_version)
-        # FIX-339 (REVIEW-FIX-339-CODE-R0 F-01): the released face must be
-        # corroborated by a delivered REL row. The former
-        # `not release_declared and roadmap self-claims 已发布` fallback is
-        # removed — an uncorroborated self-claim now FAILs below instead of
-        # silently upgrading the face.
-        released_face = release_delivered
-        if not active_row_text:
-            failures.append(f"{rel_plan}: missing {active_version} roadmap row")
-        elif released_face and "已发布" not in active_row_text:
-            failures.append(f"{rel_plan}: {active_version} roadmap row must be 已发布 after its release task is delivered")
-        elif not released_face and "已发布" in active_row_text:
-            if release_declared:
-                failures.append(f"{rel_plan}: {active_version} roadmap row must not claim 已发布 before its release task is delivered")
-            else:
-                failures.append(f"{rel_plan}: {active_version} roadmap row claims 已发布 but no delivered release task row corroborates it")
-        if not any(version != active_version for version, _date_text in FIX_105_SNAPSHOT_RELEASE_VERSION_RE.findall(plan_content)):
-            failures.append(f"{rel_plan}: missing released roadmap row before {active_version}")
-        if not released_face and re.search(re.escape(active_version) + r"[^。\n|]*已发布", project_config):
-            failures.append(f"{rel_plan}: hot sections overstate {active_version} as released before its release task is delivered")
-        if not released_face:
-            if not version_task_ids:
-                failures.append(f"{rel_plan}: active {active_version} task table has no task rows")
-            for task_id in version_task_ids:
-                if active_row_text and not _contains_fix_token_or_range(active_row_text, task_id):
-                    failures.append(f"{rel_plan}: {active_version} roadmap row missing active task {task_id}")
-        if dependency_chain:
-            if FIX_087_READINESS_VERSION not in dependency_chain:
-                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing active blocker token {FIX_087_READINESS_VERSION}")
-            for token in ["RISK-033", "REL-013"]:
-                if token in plan_content and token not in dependency_chain:
-                    failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing active blocker token {token}")
-            for token in FIX_105_READINESS_RELEASE_BLOCKERS:
-                if token in plan_content and token not in dependency_chain:
-                    failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing readiness release blocker token {token}")
-            if released_face:
-                risk033_lines = [line for line in dependency_chain.splitlines() if "RISK-033" in line]
-                if risk033_lines and not any("已关闭" in line for line in risk033_lines):
-                    failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain still lacks RISK-033 closure after release")
-            elif "不得打 1.0.0" not in dependency_chain and "不得推进 1.0.0" not in dependency_chain:
-                failures.append(f"{rel_plan}: {FIX_087_READINESS_VERSION} dependency chain missing blocking language for active release")
-            # FIX-339 (REVIEW-FIX-339-CODE-R1 F-R1-05): completion lookups span
-            # the task's own rows (version=None, same caliber as F-02 above) —
-            # exact-anchor filtering silently no-oped these checks for
-            # `或后续`/gate-reference target cells. Recall-only: this never
-            # relaxes a completion judgment, it only restores recall.
-            completed_active_tasks = [task_id for task_id in version_task_ids if _hot_task_is_delivered(plan_content, task_id, version=None)]
-            for line in dependency_chain.splitlines():
-                stale_task = _line_mentions_completed_range_as_pending(line, completed_active_tasks)
-                if stale_task:
-                    failures.append(f"{rel_plan}: dependency chain line marks completed {stale_task} as pending: {line.strip()}")
-        remaining_line = next(
-            (line for line in overview.splitlines() if "RISK-033" in line and ("继续由" in line or "承载" in line)), ""
-        )
-        if released_face:
-            if "RISK-033" in overview and "已关闭" not in overview:
-                failures.append(f"{rel_plan}: project overview mentions RISK-033 after release but does not mark it closed")
-        elif remaining_line:
-            remaining_text = remaining_line.split("RISK-033", 1)[1] if "RISK-033" in remaining_line else remaining_line
-            for task_id in _extract_task_ids(remaining_text):
-                # FIX-339 (F-R1-05): version=None — see the stale-range note above.
-                if _hot_task_is_delivered(plan_content, task_id, version=None):
-                    failures.append(f"{rel_plan}: project overview says completed {task_id} still carries RISK-033")
-        elif "RISK-033" in overview and "FIX-087" not in overview:
-            failures.append(f"{rel_plan}: project overview mentions RISK-033 but does not name remaining FIX-087")
-        for req_id, task_ids in FIX_087_REQ_TASKS.items():
-            req_row = _find_table_row_by_first_cell(plan_content, req_id)
-            if not req_row:
-                failures.append(f"{rel_plan}: requirement matrix missing {req_id}")
-                continue
-            if len(req_row) < 6:
-                failures.append(f"{rel_plan}: requirement matrix {req_id} row has too few columns")
-                continue
-            req_status = req_row[5]
-            linked = req_row[4] if len(req_row) > 4 else ""
-            for task_id in task_ids:
-                if task_id not in linked:
-                    failures.append(f"{rel_plan}: requirement matrix {req_id} must reference {task_id}")
-            # FIX-339 (REVIEW-FIX-339-CODE-R0 F-02): look at each linked task
-            # row regardless of the active anchor — filtering by the active
-            # version made REQ rows linked to other versions' tasks no-op.
-            all_tasks_delivered = all(_hot_task_is_delivered(plan_content, task_id, version=None) for task_id in task_ids)
-            any_task_open = any(_hot_task_is_open(plan_content, task_id, version=None) for task_id in task_ids)
-            if all_tasks_delivered and not _status_cell_is_delivered(req_status):
-                failures.append(f"{rel_plan}: requirement matrix {req_id} is not delivered while {', '.join(task_ids)} are complete")
-            if any_task_open and _status_cell_is_delivered(req_status):
-                failures.append(f"{rel_plan}: requirement matrix {req_id} is delivered while linked task remains open")
-
-    for failure in failures:
-        print(f"[FAIL] hot fact-source consistency: {failure}")
-    if not failures:
-        print("[OK] hot fact-source consistency synchronized")
-    return failures
+    from hot_governance_facts import check_hot_fact_source_consistency as run
+    return run(plan_tracker_path, policy=_hot_fact_policy(), display_path=_display_path,
+               governance_dir=_governance_dir, host_plugin_roots_divergent=_host_plugin_roots_divergent,
+               is_delivered=lambda cell: _hot_status_cell_is_delivered(cell))
 
 
 def _load_adapter_manifest(adapter_dir):
@@ -4532,51 +4162,6 @@ def _parse_snapshot_context_tasks(root):
     )
 
 
-GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS = (
-    "进行中",
-    "未完成",
-    "carry-over",
-    "next action",
-    "resume",
-    "阻塞",
-    "blocked",
-    "待确认",
-    "待处理",
-    "待启动",
-    "pending",
-    "in progress",
-)
-
-GOVERNANCE_CONTEXT_EVIDENCE_CLOSED_MARKERS = (
-    "已完成",
-    "完成",
-    "闭环",
-    "已关闭",
-    "关闭",
-    "approved",
-    "closed",
-    "resolved",
-)
-
-GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS = (
-    "对应任务",
-    "任务id",
-    "任务 id",
-    "关联任务",
-    "task id",
-)
-
-GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS = (
-    "状态",
-    "备注",
-    "证据类型",
-    "status",
-    "note",
-    "remark",
-    "type",
-)
-
-
 def _context_git_toplevel(root):
     from project_context import _context_git_toplevel as read
     return read(root)
@@ -5137,161 +4722,13 @@ def check_version_consistency():
 
 
 def check_commit_task_references(limit=20):
-    """Check that recent commit messages contain task ID references.
-
-    Per M7.4 step 4 and M7.5 step 4, every commit message MUST contain
-    a task ID as prefix (e.g., "AUDIT-044: description", "MAINT-028: description").
-    This function is the external validation counterpart — it detects commits
-    without task ID prefixes, which indicate untracked modifications.
-
-    FIX-420 revert awareness: a revert of tracked work quotes the original
-    subject (``Revert "FIX-397: ..."``), so the tracked-task evidence lives
-    at the start of the quoted original subject, not at the message start.
-    Such a commit counts as tracked, and ``task_id`` records the ORIGINAL
-    task ID in plain machine-readable form (e.g. "FIX-397" — no decorated
-    "(revert)" suffix, so downstream consumers can match it with the same
-    ``[A-Z]+-\\d+`` caliber). Fail-closed boundary: ONLY a ``Revert "``
-    prefix whose quoted original subject itself starts with a legal task
-    ID counts as tracked — plain no-ID subjects and reverts of no-ID
-    subjects remain reported as untracked.
-
-    Returns: dict with commits list, issues list, and summary stats.
-    """
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(ROOT), "log", f"--format=%H %s", f"-{limit}"],
-            capture_output=True, text=True, timeout=10, encoding="utf-8",
-            errors="replace",
-        )
-        if result.returncode != 0:
-            return {"error": f"git log failed: {result.stderr}", "commits": [], "issues": []}
-    except FileNotFoundError:
-        return {"error": "git command not found", "commits": [], "issues": []}
-    except Exception as e:
-        return {"error": str(e), "commits": [], "issues": []}
-
-    commits = []
-    issues = []
-    # Match task ID prefix at start of commit message: "AUDIT-044: ..." or "MAINT-028: ..."
-    task_id_pattern = re.compile(r"^([A-Z]+-\d+)")
-    # FIX-420: revert subjects quote the original — `Revert "FIX-397: ..."`.
-    revert_subject_pattern = re.compile(r'^Revert "([^"]*)"')
-
-    if not result.stdout:
-        return {"error": "git log returned empty output", "commits": [], "issues": []}
-
-    for line in result.stdout.strip().split("\n"):
-        if not line:
-            continue
-        parts = line.split(" ", 1)
-        if len(parts) < 2:
-            continue
-        sha = parts[0][:7]
-        message = parts[1]
-
-        task_match = task_id_pattern.match(message)
-        if task_match is None:
-            # FIX-420: fall back to the quoted original subject of a revert.
-            revert_match = revert_subject_pattern.match(message)
-            if revert_match is not None:
-                task_match = task_id_pattern.match(revert_match.group(1))
-            else:
-                # A GitHub-generated merge may have no ticket in its title.
-                # Its incoming ticket applies only when Git proves that the
-                # wrapper contributes no additional content or divergence.
-                task_match = commit_checks.github_merge_task_match(ROOT, parts[0], message, task_id_pattern)
-        has_task_id = task_match is not None
-        task_id = task_match.group(1) if has_task_id else None
-
-        commit_info = {
-            "sha": sha,
-            "message": message,
-            "has_task_id": has_task_id,
-            "task_id": task_id,
-        }
-        commits.append(commit_info)
-
-        if not has_task_id:
-            issues.append(commit_info)
-
-    return {
-        "commits": commits,
-        "issues": issues,
-        "total_checked": len(commits),
-        "without_task_id": len(issues),
-    }
+    from checks.commit import check_commit_task_references as run
+    return run(limit, product_root=ROOT)
 
 
 def check_task_deadline():
-    """Check for non-completed tasks whose planned completion date has passed.
-
-    Per AUDIT-048: plan-tracker has "计划完成" column for each task,
-    but when the date passes with task still in "未开始" or "进行中",
-    nothing detects or escalates it. This is the same pattern as risk escalation
-    (AUDIT-045) — deadline fields exist but are not enforced.
-
-    Returns: dict with overdue tasks list and summary stats.
-    """
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    today = date.today()
-    overdue = []
-    all_active = 0
-
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line.startswith("| ") or "---" in line:
-            continue
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) < 15:
-            continue
-
-        task_id_match = re.match(r"([A-Z]+-\d+)", parts[1])
-        if not task_id_match:
-            continue
-
-        task_id = task_id_match.group(1)
-        status = parts[10] if len(parts) > 10 else ""
-        priority = parts[11] if len(parts) > 11 else ""
-        # Column mapping: 0=empty,1=ID,...,12=计划开始,13=计划完成,14=实际完成
-        plan_complete_str = parts[13] if len(parts) > 13 else ""
-
-        # Only check non-terminal tasks — FIX-479: shared terminal
-        # predicate (_status_is_terminal_cell, same source as the DRI
-        # face in check_protocol_compliance) normalizes emoji-prefixed
-        # terminal shapes (「✅ 已完成」/「✅ committed」/「✅ 完成」/
-        # 「⏳ ✅ committed」); the overdue semantics for genuinely active
-        # rows (passed deadline → WARN) are unchanged.
-        if _status_is_terminal_cell(status):
-            continue
-
-        all_active += 1
-
-        if not plan_complete_str or plan_complete_str == "":
-            continue
-
-        try:
-            plan_complete = datetime.strptime(plan_complete_str, "%Y-%m-%d").date()
-            if today > plan_complete:
-                overdue.append({
-                    "task_id": task_id,
-                    "status": status,
-                    "priority": priority,
-                    "plan_complete": plan_complete_str,
-                    "days_overdue": (today - plan_complete).days,
-                })
-        except ValueError:
-            continue
-
-    # Sort by priority then days overdue
-    priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
-    overdue.sort(key=lambda t: (priority_order.get(t["priority"], 99), -t["days_overdue"]))
-
-    return {
-        "overdue": overdue,
-        "total_active": all_active,
-        "overdue_count": len(overdue),
-    }
+    from checks.commit import check_task_deadline as run
+    return run(plan_path=SAMPLE_PATH, status_is_terminal_cell=_status_is_terminal_cell)
 
 
 # ── CLI commands ─────────────────────────────────────────────────
@@ -5383,11 +4820,6 @@ def _status_iso_date(value):
 # (「——已撤回，改推方案B」) are NOT assertions. 「推进中」 stays in the ACTIVE
 # set (not in the ✅-branch exclusion set) so 「0.78.0 已发布，0.79.0 推进中」
 # remains ACTIVE.
-_W7_TERMINAL_MARKERS = (
-    "✅", "已发布", "已关闭", "已终止", "已撤回", "失效", "不可信", "取消", "废弃",
-)
-_W7_ACTIVE_MARKERS = ("进行中", "待执行", "推进中", "⏳", "🔄")
-_W7_TERMINAL_DATE_RE = re.compile(r"^[（(]\s*\d{4}-\d{2}-\d{2}")
 
 
 def _last_marker_pos(text, markers):
@@ -5397,7 +4829,7 @@ def _last_marker_pos(text, markers):
 
 def _w7_terminal_assertion_positions(text):
     from plan_status import _w7_terminal_assertion_positions as read
-    return read(text, markers=_W7_TERMINAL_MARKERS, terminal_date=_W7_TERMINAL_DATE_RE)
+    return read(text, markers=_host_policy("_W7_TERMINAL_MARKERS"), terminal_date=_host_policy("_W7_TERMINAL_DATE_RE"))
 
 
 # FIX-393 — writer-terminal recognition (0.89.0). verify_workflow already
@@ -5411,19 +4843,18 @@ def _w7_terminal_assertion_positions(text):
 # terminal. Search-anywhere anchor: live cells may carry narrative brackets
 # AFTER the anchor (FEAT-061's trailing 〔R0 …〕 group).
 _WRITER_STATE_MARKER_CHAIN = task_row_update._STATE_MARKER_CHAIN
-_WRITER_OP_ANCHOR_RE = re.compile(r"〔op-[0-9a-f]{32}〕")
 
 
 def _status_is_writer_committed_cell(text):
     from plan_status import _status_is_writer_committed_cell as read
-    return read(text, operation_anchor=_WRITER_OP_ANCHOR_RE, state_chain=_WRITER_STATE_MARKER_CHAIN)
+    return read(text, operation_anchor=_host_policy("_WRITER_OP_ANCHOR_RE"), state_chain=_WRITER_STATE_MARKER_CHAIN)
 
 
 def _status_is_completed_cell(cell):
     from plan_status import _status_is_completed_cell as read
     return read(
         cell,
-        active_markers=_W7_ACTIVE_MARKERS,
+        active_markers=_host_policy("_W7_ACTIVE_MARKERS"),
         writer_committed=_status_is_writer_committed_cell,
         terminal_positions=_w7_terminal_assertion_positions,
     )
@@ -5667,1840 +5098,201 @@ def check_exploration_sample_advisories(root=None):
 
 
 def check_cross_references():
-    """Scan .md and .py files for path references, build a reference graph,
-    and detect: (1) dangling references (target file does not exist),
-    (2) deprecated path patterns, (3) circular references (cycle detection).
-
-    Path reference patterns extracted:
-    - Markdown: [text](path), bare `` file.md `` paths, `` `path/to/file` ``
-    - Python: ROOT / "relative/path" format
-    """
-    import collections
-
-    scan_dirs = [
-        "skills/software-project-governance/",
-        "commands/",
-        "agents/",
-    ]
-
-    # Collect all .md files from scan directories
-    md_files = []
-    for d in scan_dirs:
-        p = ROOT / d
-        if p.is_dir():
-            md_files.extend(p.rglob("*.md"))
-
-    # Also include verify_workflow.py itself
-    py_files = [ROOT / "skills/software-project-governance/infra/verify_workflow.py"]
-
-    # Build: dict[source_relpath] -> list of (target_raw, line_num)
-    refs = {}
-    source_lines = {}
-
-    for f in md_files + py_files:
-        try:
-            content = f.read_text(encoding="utf-8")
-        except Exception:
-            continue
-        source = str(f.relative_to(ROOT)).replace("\\", "/")
-        refs[source] = []
-        source_lines[source] = content.split("\n")
-
-        in_code_block = False
-        for i, line in enumerate(source_lines[source], 1):
-            if f.suffix == ".py":
-                # Python: ROOT / "relative/path"  pattern
-                for m in re.finditer(r'\bROOT\s*/\s*"([^"]+)"', line):
-                    target = m.group(1)
-                    if Path(target).suffix:
-                        refs[source].append((target, i))
-            else:
-                # ── Code block tracking: skip fenced and indented code blocks ──
-                # Fenced code blocks (``` or ~~~). Strip language tag if present.
-                if re.match(r'^\s*```', line):
-                    in_code_block = not in_code_block
-                    continue
-                if re.match(r'^\s*~~~', line):
-                    in_code_block = not in_code_block
-                    continue
-                if in_code_block:
-                    continue
-                # Indented code block (4+ spaces or 1+ tab at line start)
-                if re.match(r'^ {4,}', line) or line.startswith('\t'):
-                    continue
-
-                # Backticked explicit paths with a directory separator are
-                # intentional references and should still be validated.
-                for m in re.finditer(r"`([^`]+/[^\s`]+\.(?:md|py)(?:\.template)?)`", line):
-                    refs[source].append((m.group(1), i))
-
-                # ── Strip inline code (backtick-quoted) from the line ──
-                stripped_line = re.sub(r'`+[^`]*`+', '', line)
-
-                # Markdown: [text](path) — skip http/https/#/mailto links
-                for m in re.finditer(r'\[([^\]]*)\]\(([^)]+)\)', stripped_line):
-                    target = m.group(2)
-                    if not target.startswith(("http://", "https://", "#", "mailto:")):
-                        refs[source].append((target, i))
-                # Bare paths must include a directory separator.  A lone
-                # filename such as "SKILL.md" is often prose shorthand and
-                # caused hundreds of dangling-reference false positives after
-                # archive cleanup. Markdown links still cover explicit
-                # same-directory references.
-                for m in re.finditer(r'(?<!["\w/\-.])([a-zA-Z0-9_\-]+/[a-zA-Z0-9_\-/]+\.(?:md|py)(?:\.template)?)(?!\w|\.\w)', stripped_line):
-                    refs[source].append((m.group(1), i))
-
-    # ── Detect dangling references ──
-    dangling = []
-    root_relative_prefixes = (
-        "skills/", "agents/", "agent-presets/", "commands/", "adapters/", "project/", "docs/",
-        ".governance/", ".github/", ".agents/", ".claude-plugin/", ".codex-plugin/",
-    )
-    skill_root_relative_prefixes = ("core/", "infra/", "references/")
-    placeholder_prefixes = ("skill/", "relative/")
-    placeholder_markers = ("<", ">", "{", "}", "*")
-    entry_source = "skills/software-project-governance/SKILL.md"
-    validator_source = "skills/software-project-governance/infra/verify_workflow.py"
-
-    def normalize_ref_target(target):
-        target = target.strip()
-        if target.startswith("python "):
-            target = target.split(None, 1)[1]
-        if target.startswith("./"):
-            target = target[2:]
-        return target
-
-    def is_placeholder_ref(target):
-        return target.startswith(placeholder_prefixes) or any(m in target for m in placeholder_markers)
-
-    def source_supports_skill_root_relative(source):
-        return (
-            source.startswith("skills/software-project-governance/")
-            or source.startswith("commands/")
-            or source.startswith("agents/")
-        )
-
-    def resolve_ref(source, target):
-        source_dir = (ROOT / source).parent
-        if source.endswith(".py"):
-            return (ROOT / target).resolve()
-        if target.startswith(root_relative_prefixes):
-            return (ROOT / target).resolve()
-        if (source_supports_skill_root_relative(source)
-                and target.startswith(skill_root_relative_prefixes)):
-            return (ROOT / "skills/software-project-governance" / target).resolve()
-        return (source_dir / target).resolve()
-
-    def line_text(source, line_num):
-        lines = source_lines.get(source, [])
-        if 1 <= line_num <= len(lines):
-            return lines[line_num - 1].strip()
-        return ""
-
-    def is_in_generated_output_section(source, line_num):
-        if not source.startswith("agents/"):
-            return False
-        lines = source_lines.get(source, [])
-        in_output = False
-        for idx, line in enumerate(lines, 1):
-            stripped = line.strip()
-            if idx > line_num:
-                break
-            if stripped.startswith("## "):
-                in_output = stripped == "## 输出格式"
-                continue
-        return in_output
-
-    def is_generated_output_ref(source, target, line_num):
-        if not is_in_generated_output_section(source, line_num):
-            return False
-        if not target.startswith(("docs/", ".github/", "Dockerfile", "docker-compose.yml")):
-            return False
-        context = "\n".join(source_lines.get(source, [])[max(0, line_num - 4):line_num + 1])
-        return "必须生成" in context or line_text(source, line_num).startswith("-")
-
-    def is_external_or_runtime_generated_ref(source, target, line_num):
-        current_line = line_text(source, line_num)
-        if target.startswith(".governance/"):
-            return True
-        if target.startswith((
-            "project/e2e-test-project/agents/",
-            "project/e2e-test-project/commands/",
-            "project/e2e-test-project/skills/",
-        )):
-            return True
-        if target == "archive/index.md" and ("不" in current_line and "自动生成" in current_line):
-            return True
-        return False
-
-    def should_ignore_ref(source, target, line_num):
-        return (
-            is_placeholder_ref(target)
-            or is_generated_output_ref(source, target, line_num)
-            or is_external_or_runtime_generated_ref(source, target, line_num)
-        )
-
-    for source, targets in refs.items():
-        for target, line_num in targets:
-            target = normalize_ref_target(target)
-            if should_ignore_ref(source, target, line_num):
-                continue
-            # Resolve target relative to the source file's directory
-            try:
-                resolved = resolve_ref(source, target)
-                resolved.relative_to(ROOT)
-            except (ValueError, OSError):
-                continue  # outside project or unresolvable
-            if not resolved.exists():
-                dangling.append({
-                    "source": source,
-                    "line": line_num,
-                    "target": target,
-                })
-
-    # ── Detect deprecated path patterns ──
-    deprecated_patterns = [
-        "skills/software-project-governance/skills/",
-        "skills/software-project-governance/agents/",
-    ]
-    deprecated = []
-    for source, targets in refs.items():
-        for target, line_num in targets:
-            for dp in deprecated_patterns:
-                if dp in target:
-                    deprecated.append({
-                        "source": source,
-                        "line": line_num,
-                        "target": target,
-                        "deprecated_pattern": dp,
-                    })
-
-    # ── Detect circular references (DFS on directed graph) ──
-    graph = collections.defaultdict(list)
-    for source, targets in refs.items():
-        # verify_workflow.py contains coverage constants and check fixtures that
-        # cite product files. Those are validation edges, not runtime or
-        # architecture dependencies, so they must not create source↔validator
-        # circular-reference failures.
-        if source in (entry_source, validator_source):
-            continue
-        for target, line_num in targets:
-            target = normalize_ref_target(target)
-            if should_ignore_ref(source, target, line_num):
-                continue
-            try:
-                resolved = resolve_ref(source, target)
-                rel_target = str(resolved.relative_to(ROOT)).replace("\\", "/")
-            except (ValueError, OSError):
-                continue
-            if rel_target in (entry_source, validator_source):
-                continue
-            if rel_target in refs:  # only edges within scanned scope
-                graph[source].append(rel_target)
-
-    cycles = []
-    seen_nodes = set()
-    WHITE, GRAY, BLACK = 0, 1, 2
-
-    def _dfs_cycle(node, colors, parent_map, stack):
-        colors[node] = GRAY
-        stack.append(node)
-        for neighbor in graph.get(node, []):
-            ncolors_key = neighbor
-            if colors.get(ncolors_key, WHITE) == WHITE:
-                parent_map[neighbor] = node
-                _dfs_cycle(neighbor, colors, parent_map, stack)
-            elif colors.get(ncolors_key, WHITE) == GRAY:
-                # Found a cycle — extract the subsequence
-                try:
-                    idx = stack.index(neighbor)
-                    cycle = stack[idx:] + [neighbor]
-                    cycles.append(cycle)
-                except ValueError:
-                    pass
-        colors[node] = BLACK
-        stack.pop()
-
-    colors_map = {}
-    for node in list(graph):
-        if colors_map.get(node, WHITE) == WHITE:
-            _dfs_cycle(node, colors_map, {}, [])
-
-    # Deduplicate cycles (same set of nodes in different rotations)
-    unique_cycles = []
-    seen_cycles = set()
-    for cycle in cycles:
-        if len(cycle) == 2 and cycle[0] == cycle[1]:
-            continue
-        key = tuple(sorted(cycle))
-        if key not in seen_cycles:
-            seen_cycles.add(key)
-            unique_cycles.append(cycle)
-
-    # ── FIX-432 (F-4 / F-A2): citation/note quote-sync guard ──
-    quote_sync = _check_quote_sync_issues()
-
-    # ── FEAT-088 (F-A3): exploration-channel evidence-form guard ──
-    # Same carrier discipline as quote_sync: a related-but-distinct manifest
-    # sub-face riding the manifest/cross-reference machine-check surface
-    # instead of a new numbered check section (registry/frozen-snapshot zero
-    # churn; fact source stays plugin-package like its host section).
-    exploration_channels = check_exploration_channels()
-
-    return {
-        "dangling": dangling,
-        "deprecated": deprecated,
-        "cycles": unique_cycles,
-        "quote_sync": quote_sync,
-        "exploration_channels": exploration_channels,
-        "total_files_scanned": len(md_files) + len(py_files),
-        "total_refs": sum(len(t) for t in refs.values()),
-    }
+    from ledger_references import check_cross_references as check
+    return check(product_root=ROOT, validator_path=ROOT / "skills/software-project-governance/infra/verify_workflow.py",
+                 quote_sync_issues=lambda: _check_quote_sync_issues(),
+                 check_exploration_channels=lambda: check_exploration_channels())
 
 
 # ── SYSGAP-009: Sequential ID Checking ────────────────────────────
 
 def check_sequential_ids():
-    """Verify ID continuity in governance records:
-    1. DEC-XXX: detect numbering gaps starting from 001
-    2. EVD-XXX: detect numbering gaps
-    3. RISK-XXX: detect numbering gaps
-    4. Cross-reference integrity: task IDs referenced in evidence/decision/risk
-       must exist in plan-tracker
-    5. Completed tasks in plan-tracker must have evidence entries
-    """
-
-    def _extract_ids(file_path, prefix):
-        """Extract sequential IDs with given prefix from a file, return sorted list of ints."""
-        if not file_path.is_file():
-            return []
-        content = file_path.read_text(encoding="utf-8")
-        ids = set()
-        for m in re.finditer(rf"\b{re.escape(prefix)}(\d+)\b", content):
-            ids.add(int(m.group(1)))
-        return sorted(ids)
-
-    def _find_gaps(sorted_ids, prefix):
-        """Find gaps in a sorted list of integer IDs. Returns list of missing numbers."""
-        if not sorted_ids:
-            return []
-        gaps = []
-        expected = 1  # IDs start at 001
-        for num in sorted_ids:
-            while expected < num:
-                gaps.append(expected)
-                expected += 1
-            expected = num + 1
-        return gaps
-
-    dec_path = GOVERNANCE_DIR / "decision-log.md"
-    evd_path = GOVERNANCE_DIR / "evidence-log.md"
-    risk_path = GOVERNANCE_DIR / "risk-log.md"
-
-    # Use GovernanceDataSource for archive-aware ID collection.
-    # Falls back to hot-file-only when archive/index.md does not exist.
-    ds = _archive_reader()
-
-    # DEC/RISK: via GovernanceDataSource (hot + archive)
-    dec_ids = ds.get_all_decision_ids()
-    risk_ids = ds.get_all_risk_ids()
-
-    # EVD: collect from hot evidence-log + archive evidence files
-    evd_id_set = set()
-    if evd_path.is_file():
-        evd_content = evd_path.read_text(encoding="utf-8")
-        for m in re.finditer(r"\bEVD-(\d+)\b", evd_content):
-            evd_id_set.add(int(m.group(1)))
-    for entry in ds._scan_archive_files(ds.archive_evidence_dir,
-                                         ds._extract_evidence_entries):
-        evd_match = re.match(r"EVD-(\d+)", entry.get("evd_id", ""))
-        if evd_match:
-            evd_id_set.add(int(evd_match.group(1)))
-    evd_ids = sorted(evd_id_set)
-
-    dec_gaps = _find_gaps(dec_ids, "DEC-")
-    evd_gaps = _find_gaps(evd_ids, "EVD-")
-    risk_gaps = _find_gaps(risk_ids, "RISK-")
-
-    # Cross-reference: all task IDs in evidence/decision/risk must exist
-    # in plan-tracker.  Use GovernanceDataSource to include archived tasks.
-    all_task_ids = ds.get_all_task_ids()
-
-    # Collect task IDs referenced in evidence-log (hot + archive)
-    evd_task_ids = ds.get_all_evidence_task_ids()
-
-    # Collect task IDs referenced in decision-log
-    dec_task_ids = set()
-    if dec_path.is_file():
-        dec_content = dec_path.read_text(encoding="utf-8")
-        for m in re.finditer(r"\b([A-Z]+-\d+)\b", dec_content):
-            task_id = m.group(1)
-            if re.match(r"^[A-Z]+-\d+$", task_id) and not task_id.startswith("DEC-"):
-                dec_task_ids.add(task_id)
-
-    # Collect task IDs referenced in risk-log
-    risk_task_ids = set()
-    if risk_path.is_file():
-        risk_content = risk_path.read_text(encoding="utf-8")
-        for m in re.finditer(r"\b([A-Z]+-\d+)\b", risk_content):
-            task_id = m.group(1)
-            if re.match(r"^[A-Z]+-\d+$", task_id) and not task_id.startswith("RISK-"):
-                risk_task_ids.add(task_id)
-
-    orphan_evd = sorted(evd_task_ids - all_task_ids)
-    orphan_dec = sorted(dec_task_ids - all_task_ids - evd_task_ids)  # avoid dup reporting
-    orphan_risk = sorted(risk_task_ids - all_task_ids)
-
-    # Completed tasks without evidence (archive-aware). Only hot missing
-    # evidence is actionable; archived gaps are historical residue.
-    completed_entries = ds.get_all_completed_task_entries()
-    completed = {entry["id"] for entry in completed_entries}
-    hot_completed = {
-        entry["id"] for entry in completed_entries
-        if entry.get("source") == "hot"
-    }
-    missing_evd_all = completed - evd_task_ids
-    missing_evd = sorted(missing_evd_all & hot_completed)
-    historical_missing_evd = sorted(missing_evd_all - set(missing_evd))
-
-    return {
-        "dec_ids": dec_ids,
-        "evd_ids": evd_ids,
-        "risk_ids": risk_ids,
-        "dec_gaps": dec_gaps,
-        "evd_gaps": evd_gaps,
-        "risk_gaps": risk_gaps,
-        "orphan_evidence_refs": orphan_evd,
-        "orphan_decision_refs": orphan_dec,
-        "orphan_risk_refs": orphan_risk,
-        "completed_missing_evidence": missing_evd,
-        "historical_completed_missing_evidence": historical_missing_evd,
-    }
+    from ledger_identifiers import check_sequential_ids as run
+    return run(governance_dir=GOVERNANCE_DIR, data_source=_archive_reader)
 
 
 def _format_id_sequence_status(prefix, ids):
-    """Return a compact, empty-safe ID range summary."""
-    if not ids:
-        return f"{prefix}-IDs: no entries found."
-    return f"{prefix}-IDs: {ids[0]:03d}-{ids[-1]:03d} ({len(ids)} entries, no gaps)"
+    from ledger_identifiers import _format_id_sequence_status as run
+    return run(prefix, ids)
 
 
 def _print_sequential_id_check(si_result):
-    """Print Check 13 details and return the blocking issue count."""
-    issue_count = 0
-    if si_result["dec_gaps"]:
-        issue_count += 1
-        print(f"│  [WARN] DEC-ID gaps: missing {si_result['dec_gaps']}")
-    else:
-        print(f"│  [PASS] {_format_id_sequence_status('DEC', si_result['dec_ids'])}")
-
-    if si_result["evd_gaps"]:
-        print(f"│  [INFO] EVD-ID gaps: missing {si_result['evd_gaps']} "
-              f"(historical archive residue)")
-    else:
-        print(f"│  [PASS] {_format_id_sequence_status('EVD', si_result['evd_ids'])}")
-
-    if si_result["risk_gaps"]:
-        issue_count += 1
-        print(f"│  [WARN] RISK-ID gaps: missing {si_result['risk_gaps']}")
-    else:
-        print(f"│  [PASS] {_format_id_sequence_status('RISK', si_result['risk_ids'])}")
-
-    # Orphan cross-references: info-only — these are historical cleanup residues
-    # (old task IDs removed from plan-tracker during intentional cleanup, not errors)
-    orphans = (si_result.get("orphan_evidence_refs", []) +
-               si_result.get("orphan_decision_refs", []) +
-               si_result.get("orphan_risk_refs", []))
-    if orphans:
-        print(f"│  [INFO] {len(orphans)} cross-reference(s) to non-existent task ID(s)"
-              f" (historical cleanup residue): {orphans[:10]}")
-        if len(orphans) > 10:
-            print(f"│         ... and {len(orphans) - 10} more")
-    else:
-        print(f"│  [PASS] All cross-referenced task IDs exist in plan-tracker.")
-
-    missing_evd = si_result.get("completed_missing_evidence", [])
-    if missing_evd:
-        issue_count += len(missing_evd)
-        print(f"│  [WARN] {len(missing_evd)} completed task(s) without evidence: {missing_evd[:10]}")
-    else:
-        print(f"│  [PASS] All completed tasks have evidence entries.")
-
-    historical_missing_evd = si_result.get("historical_completed_missing_evidence", [])
-    if historical_missing_evd:
-        print(f"│  [INFO] {len(historical_missing_evd)} archived completed task(s) "
-              f"without evidence (historical residue): {historical_missing_evd[:10]}")
-    if issue_count == 0:
-        print(f"│  [PASS] All ID sequences are clean.")
-    return issue_count
+    from ledger_identifiers import _print_sequential_id_check as run
+    return run(si_result)
 
 
 def _scan_unicode_line_separators():
-    """FIX-349 ⑥: Unicode line/segment separators in governance hot files.
-
-    EVD-890: a U+000B (VT) inside one evidence-log row silently became a line
-    boundary for splitlines-style consumers (Python ``str.splitlines``,
-    editors, markdown renderers) while the "\\n"-based governance checks saw
-    one long line — the M5.4b false positive. EVD-1063 repaired that single
-    occurrence without a systemic guard; this scan closes the class. It
-    reports every occurrence of the FIX-349 ⑥ separator family (VT, FF,
-    FS/GS/RS, NEL, LS, PS — all honored as line boundaries by splitlines-style
-    consumers) in the hot files that line-based governance checks parse.
-
-    Severity caliber (FIX-350 F-2): the WARN issues emitted here are
-    non-blocking inside the ``check-governance`` aggregation
-    (``structural_issue_is_blocking`` treats WARN as non-blocking), but the
-    standalone ``check-structural-validity`` CLI exits 1 on ANY issue,
-    WARN included — run it only when a fail-closed reading is intended.
-
-    WARN severity (same caliber as ``evidence_col_mismatch``): the
-    characters are a parsing hazard, not a broken schema, and the data fix
-    belongs to the Coordinator's governance write-back, not to this check.
-    """
-    scan_files = (
-        "plan-tracker.md", "evidence-log.md", "decision-log.md",
-        "risk-log.md", "session-snapshot.md",
-    )
-    separators = (
-        ("U+000B", "\x0b"),    # VT  — vertical tab (EVD-890 incident character)
-        ("U+000C", "\x0c"),    # FF  — form feed (FIX-350 F-1: splitlines boundary)
-        ("U+001C", "\x1c"),    # FS  — file separator
-        ("U+001D", "\x1d"),    # GS  — group separator
-        ("U+001E", "\x1e"),    # RS  — record separator
-        ("U+0085", "\x85"),    # NEL — next line
-        ("U+2028", "\u2028"),  # LS  — line separator
-        ("U+2029", "\u2029"),  # PS  — paragraph separator
-    )
-    issues = []
-    for name in scan_files:
-        path = GOVERNANCE_DIR / name
-        if not path.is_file():
-            continue  # 存在才扫 — optional hot files (e.g. session-snapshot)
-        content = path.read_text(encoding="utf-8")
-        for label, char in separators:
-            pos = content.find(char)
-            while pos != -1:
-                issues.append({
-                    "type": "unicode_line_separator",
-                    "severity": "WARN",
-                    "file": f".governance/{name}",
-                    "line": content.count("\n", 0, pos) + 1,
-                    "col": pos - content.rfind("\n", 0, pos),
-                    "detail": f"{label} line/segment separator in hot file "
-                              f"(breaks splitlines-style parsing; "
-                              f"EVD-890 class)",
-                })
-                pos = content.find(char, pos + 1)
-    return issues
+    from ledger_identifiers import _scan_unicode_line_separators as run
+    return run(governance_dir=GOVERNANCE_DIR)
 
 
 # ── SYSGAP-010: Structural Validity Checking ─────────────────────
 
 def check_structural_validity():
-    """Validate structural integrity of governance files:
-    1. plan-tracker.md: table column count consistency (every row
-       pipe-count matches header)
-    2. evidence-log.md: every record has consistent column count
-       (10 columns standard)
-    3. decision-log.md: each ADR contains all required fields
-    4. SKILL.md: frontmatter contains required fields (name/version/description)
-    5. manifest.json: product / repo_only / exclude sections all present
-    6. Unicode line/segment separators (FIX-349 ⑥) in the governance hot
-       files — WARN-level disclosure via _scan_unicode_line_separators()
-    """
-    import json as _json
-    issues = []
-
-    # ── 1. plan-tracker.md table column consistency ──
-    pt_path = GOVERNANCE_DIR / "plan-tracker.md"
-    if pt_path.is_file():
-        pt_content = pt_path.read_text(encoding="utf-8")
-        # Find all markdown tables: contiguous |...| lines after a header row
-        lines = pt_content.split("\n")
-        current_header_cols = None
-        current_header_line = 0
-        for i, line in enumerate(lines, 1):
-            line = line.strip()
-            if not line.startswith("|"):
-                current_header_cols = None
-                continue
-            if "---" in line or ":--" in line:
-                continue  # separator row
-            # Strip inline code (backtick-quoted) to avoid false | in column count
-            # e.g., | text `✅ 已完成 |` next | → the | inside backticks is NOT a column separator
-            clean_line = re.sub(r'`+[^`]*`+', '__CODE__', line)
-            cols = len(clean_line.split("|")) - 2  # strip outer empty parts
-            if not cols:
-                continue
-
-            # Heuristic: if this looks like a header (next line is separator),
-            # treat it as header
-            is_header = False
-            if i < len(lines):
-                next_line = lines[i].strip()
-                if re.match(r"^\|[\s\-:]+\|", next_line):
-                    is_header = True
-
-            if is_header:
-                current_header_cols = cols
-                current_header_line = i
-                continue
-
-            if current_header_cols is not None and cols != current_header_cols:
-                issues.append({
-                    "type": "table_column_mismatch",
-                    "file": ".governance/plan-tracker.md",
-                    "line": i,
-                    "detail": f"Row has {cols} columns, header (line {current_header_line}) has {current_header_cols}",
-                })
-    else:
-        issues.append({
-            "type": "file_missing",
-            "file": ".governance/plan-tracker.md",
-            "detail": "plan-tracker.md not found",
-        })
-
-    # ── 2. evidence-log.md column count consistency ──
-    evd_path = GOVERNANCE_DIR / "evidence-log.md"
-    if evd_path.is_file():
-        evd_content = evd_path.read_text(encoding="utf-8")
-        evd_lines = evd_content.split("\n")
-        standard_cols = None
-        for i, line in enumerate(evd_lines, 1):
-            line = line.strip()
-            if not line.startswith("| EVD-"):
-                continue
-            parts = _split_markdown_table_row(line)
-            cols = len(parts)
-            if standard_cols is None:
-                standard_cols = cols
-            elif cols != standard_cols:
-                evd_id = parts[0] if parts else "???"
-                issues.append({
-                    "type": "evidence_col_mismatch",
-                    "severity": "WARN",
-                    "file": ".governance/evidence-log.md",
-                    "line": i,
-                    "detail": f"{evd_id}: {cols} columns (expected {standard_cols})",
-                })
-    else:
-        issues.append({
-            "type": "file_missing",
-            "file": ".governance/evidence-log.md",
-            "detail": "evidence-log.md not found",
-        })
-
-    # ── 3. decision-log.md ADR required fields ──
-    dec_path = GOVERNANCE_DIR / "decision-log.md"
-    required_decision_fields = ["日期", "状态", "决策", "原因"]
-    if dec_path.is_file():
-        dec_content = dec_path.read_text(encoding="utf-8")
-        # Parse ADR sections: each ADR starts with "## DEC-XXX"
-        adr_sections = re.split(r"\n(?=## DEC-)", dec_content)
-        for section in adr_sections:
-            if not section.strip().startswith("## DEC-"):
-                continue
-            adr_id = section.split("\n")[0].replace("##", "").strip()
-            missing = []
-            for field in required_decision_fields:
-                if field not in section:
-                    missing.append(field)
-            if missing:
-                issues.append({
-                    "type": "decision_missing_fields",
-                    "file": ".governance/decision-log.md",
-                    "detail": f"{adr_id}: missing required fields — {', '.join(missing)}",
-                })
-    else:
-        issues.append({
-            "type": "file_missing",
-            "file": ".governance/decision-log.md",
-            "detail": "decision-log.md not found",
-        })
-
-    # ── 4. SKILL.md frontmatter required fields ──
-    skill_path = ROOT / "skills/software-project-governance/SKILL.md"
-    if skill_path.is_file():
-        content = skill_path.read_text(encoding="utf-8")
-        # Extract frontmatter: content between first --- and second ---
-        fm_match = re.match(r"^\s*---\s*\n(.*?)\n\s*---", content, re.DOTALL)
-        if fm_match:
-            fm_text = fm_match.group(1)
-            required_frontmatter = ["name:", "description:"]
-            missing = []
-            for fm_field in required_frontmatter:
-                if fm_field not in fm_text:
-                    missing.append(fm_field.rstrip(":"))
-            if not _extract_skill_version(skill_path):
-                missing.append("version")
-            if missing:
-                issues.append({
-                    "type": "skill_frontmatter_missing",
-                    "file": "skills/software-project-governance/SKILL.md",
-                    "detail": f"Frontmatter missing required fields: {', '.join(missing)}",
-                })
-        else:
-            issues.append({
-                "type": "skill_frontmatter_missing",
-                "file": "skills/software-project-governance/SKILL.md",
-                "detail": "No YAML frontmatter found (missing --- delimiters)",
-            })
-
-    # ── 5. manifest.json structure ──
-    manifest_path = ROOT / "skills/software-project-governance/core/manifest.json"
-    if manifest_path.is_file():
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = _json.load(f)
-            for section in ["product", "repo_only", "exclude_from_cleanup"]:
-                if section not in manifest:
-                    issues.append({
-                        "type": "manifest_section_missing",
-                        "file": "skills/software-project-governance/core/manifest.json",
-                        "detail": f"manifest.json is missing '{section}' section",
-                    })
-        except (_json.JSONDecodeError, IOError) as e:
-            issues.append({
-                "type": "manifest_parse_error",
-                "file": "skills/software-project-governance/core/manifest.json",
-                "detail": str(e),
-            })
-    else:
-        issues.append({
-            "type": "file_missing",
-            "file": "skills/software-project-governance/core/manifest.json",
-            "detail": "manifest.json not found",
-        })
-
-    # ── 6. Unicode line/segment separators in hot files (FIX-349 ⑥) ──
-    issues.extend(_scan_unicode_line_separators())
-
-    return issues
+    from ledger_identifiers import check_structural_validity as check
+    return check(governance_dir=GOVERNANCE_DIR, extract_skill_version=_extract_skill_version,
+                 skill_file=lambda: ROOT / "skills/software-project-governance/SKILL.md",
+                 manifest_file=lambda: ROOT / "skills/software-project-governance/core/manifest.json",
+                 split_markdown_table_row=_split_markdown_table_row)
 
 
 # ── SYSGAP-012: Commit Scope Verification ────────────────────────
 
 def check_commit_scope(limit=20):
-    """Check recent commits for scope discipline violations:
-    1. If commit message contains "顺带" / "also" / "顺便" keywords -> WARN
-    2. Single commit touching > 15 files -> WARN (possible bulk commit)
-
-    Multiple commits for the same task are normal for review/rework loops and
-    are not a scope violation.
-    """
-    import subprocess
-
-    try:
-        # Get full commit log with stats
-        result = subprocess.run(
-            ["git", "-C", str(ROOT), "log", f"--format=%H%x00%s", f"-{limit}",
-             "--no-merges"],
-            capture_output=True, text=True, timeout=10, encoding="utf-8",
-            errors="replace",
-        )
-        if result.returncode != 0:
-            return {"error": f"git log failed: {result.stderr}", "issues": []}
-    except FileNotFoundError:
-        return {"error": "git command not found", "issues": []}
-    except Exception as e:
-        return {"error": str(e), "issues": []}
-
-    if not result.stdout:
-        return {"error": "git log returned empty output", "issues": []}
-
-    issues = []
-    duo_commits = []        # commits with "also"/"顺带"/"顺便"
-
-    lines = result.stdout.strip().split("\n")
-    for line in lines:
-        if not line or "\x00" not in line:
-            continue
-        sha, message = line.split("\x00", 1)
-        sha_short = sha[:7]
-
-        # Check 1: "顺带"/"also"/"顺便" keywords
-        if re.search(r"顺带|顺便|also\b", message, re.IGNORECASE):
-            duo_commits.append({"sha": sha_short, "message": message[:100]})
-
-        # Check 2: files touched > 15 (use git show --stat)
-        try:
-            stat_result = subprocess.run(
-                ["git", "-C", str(ROOT), "show", "--stat", "--format=", sha],
-                capture_output=True, text=True, timeout=5, encoding="utf-8",
-                errors="replace",
-            )
-            if stat_result.returncode == 0:
-                # Count changed files from --stat output
-                file_count = len([l for l in stat_result.stdout.split("\n")
-                                 if l.strip() and "|" in l and not l.startswith(" ")])
-                if file_count > 15:
-                    issues.append({
-                        "type": "bulk_commit",
-                        "sha": sha_short,
-                        "detail": f"{file_count} files changed in single commit",
-                    })
-        except (subprocess.TimeoutExpired, Exception):
-            pass
-
-    # Add duo keyword warnings
-    for duo in duo_commits:
-        issues.append({
-            "type": "side_effect_warning",
-            "sha": duo["sha"],
-            "detail": f"Commit contains 'also/顺带/顺便': {duo['message']}",
-        })
-
-    return {
-        "issues": issues,
-        "total_checked": len(lines),
-        "issue_count": len(issues),
-    }
+    from checks.commit import check_commit_scope as run
+    return run(limit, product_root=ROOT)
 
 
 # ── SYSGAP-023: Goal Alignment Check ──────────────────────────────
 
-PRODUCT_CODE_PATTERNS = [
-    "skills/", "agents/", "infra/", "commands/",
-    "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
-    "project/",
-]
-
-
-# FIX-371/DEC-227 路线 b: a hot-tracker status cell leading with ✅ marks the
-# terminal (完成) state — the row is historical bookkeeping retained in the
-# hot table, not an active task. Only the ✅ prefix exempts; every other
-# status (🔄 活跃 / 📋 待启 / plain text / chains not led by ✅) stays fully
-# guarded — active/new rows have ZERO exemption (non-weakening red line).
-_COMPLETED_STATUS_PREFIX = "✅"
+from plan_impact import PRODUCT_CODE_PATTERNS
 
 
 def _plan_hot_tracker_task_statuses():
-    """Return {task_id: status cell} from the current active hot-task table.
-
-    FIX-371: single scan-source for the Check 16/17 entry collection —
-    parse_impact_analysis_entries_with_exemptions consumes this statuses
-    dict directly (same section boundaries: `## 当前活跃事项` until
-    `### 最近完成`), so the exemption set is always a subset of the id set
-    the entry collection consumes.
-
-    Status-cell read (FIX-376 F-7 勘正): the compact layout ends with 状态 —
-    those rows read the same cell parse_current_active_tasks reads (last
-    cell, 同源). The legacy REQ-row layout carries 状态 second-to-last —
-    there the ✅ word-prefix read overrides the last-cell read (F-3 分叉
-    口径: a deliberate divergence from parse_current_active_tasks, which
-    always reads the last cell and cannot see a legacy-row ✅ status).
-
-    FIX-376 F-3 刻意分叉 (conservative; DEC-227 unchanged): the exemption
-    predicate stays NARROWER than the FIX-292 authoritative terminal
-    predicate ``_status_is_completed_cell`` — a mixed chain 「🔄 … → ✅ 完成」
-    is W-7-terminal by that predicate but does not lead with ✅ → stays
-    guarded (no exemption — conservative false-FAIL direction). FIX-390
-    (DEC-241 消解, 0.89.0) evolves the exemption face to the three-state
-    structured read :func:`_hot_status_completion_state` — the writer-era
-    terminal (``committed`` + ops anchor, FIX-393 identity) joins the
-    hand-era ✅ prefix — while EVERY other shape (mixed chains, triaged/dev
-    cells with anchors, anchor-less hand-written 「committed」, unknown
-    tokens) keeps the guarded verdict. The F-3 conservative direction is
-    preserved for everything outside those two terminal eras.
-    """
-    if not SAMPLE_PATH.is_file():
-        return {}
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    statuses = {}
-    in_active_section = False
-    for line in content.split("\n"):
-        if line.startswith("## 当前活跃事项"):
-            in_active_section = True
-            continue
-        if in_active_section and line.startswith("### 最近完成"):
-            break
-        if not in_active_section:
-            continue
-        stripped = line.strip()
-        if not stripped.startswith("| ") or "---" in stripped:
-            continue
-        match = re.search(r"\|\s*(?:\*\*)?([A-Z]+-\d+)(?:\*\*)?\s*\|", stripped)
-        if not match:
-            continue
-        cells = _governance_table_cells(stripped)
-        # FIX-371: the hot table mixes shapes — the compact layout ends with
-        # 状态 while the legacy REQ-row layout carries 状态 second-to-last.
-        # FIX-376 F-3: the ✅ cell is scanned RIGHT-TO-LEFT — the status
-        # column is a row-end anchor in both shapes, so the rightmost
-        # ✅-led cell is the status-cell candidate. The old left-to-right
-        # "first ✅ cell" read let an early ✅-led description/来源 cell
-        # outrank the real status cell whenever both lead with ✅. Residual
-        # theoretical vector outside this ticket's decided scope: an active
-        # row whose real status does not lead with ✅ while an earlier cell
-        # does — column-position pinning was R0's alternative and is not
-        # adopted. Fallback stays the last cell when no ✅-led cell exists
-        # (active rows).
-        status = ""
-        for cell in reversed(cells):
-            if cell.startswith(_COMPLETED_STATUS_PREFIX):
-                status = cell.strip()
-                break
-        if not status and cells:
-            status = cells[-1].strip()
-        statuses[match.group(1)] = status
-    return statuses
-
-
-# FIX-390 (DEC-241 消解, 0.89.0) — three-state structured completion read for
-# the Check 16/17/18/18b exemption face. Display prefixes are no longer the
-# only completion authority: the governed writer's own terminal state
-# (``committed`` + ops receipt anchor, FIX-393 criterion consumed BY IDENTITY
-# via :func:`_status_is_writer_committed_cell`) is the machine-era exact
-# analog of the hand-era ✅ prefix (DEC-227 路线 b). States:
-#   "committed" — writer-terminal + 〔op-<32hex>〕 anchor → completed/exempt;
-#   "legacy"    — ✅-led hand-era terminal → completed/exempt (byte-for-byte
-#                 the FIX-371/DEC-227 semantics — S_new ⊇ S_old invariant);
-#   ""          — EVERYTHING else (mixed chains not led by ✅, triaged/dev
-#                 cells with anchors, hand-written 「committed」 without the
-#                 anchor, unknown tokens, empty) → 未知不猜: stays guarded
-#                 (fail-closed; the row is judged on its fact merits instead).
-_HOT_STATUS_STATE_COMMITTED = "committed"
-_HOT_STATUS_STATE_LEGACY = "legacy"
+    from plan_task_selection import _plan_hot_tracker_task_statuses as run
+    return run(plan_path=SAMPLE_PATH)
 
 
 def _hot_status_completion_state(status):
-    """Classify a hot-tracker status cell into the FIX-390 three states.
-
-    Returns :data:`_HOT_STATUS_STATE_COMMITTED`, :data:
-    `_HOT_STATUS_STATE_LEGACY` or ``""`` (unknown — never guessed). The
-    committed branch reuses the FIX-393 writer-terminal predicate by
-    identity; a cell that merely displays 「committed」 without the ops
-    anchor was not written by the governed writer (B-1 hand-edit class) and
-    resolves to unknown.
-    """
-    text = _status_clean_cell(status)
-    if not text:
-        return ""
-    if _status_is_writer_committed_cell(text):
-        return _HOT_STATUS_STATE_COMMITTED
-    if text.startswith(_COMPLETED_STATUS_PREFIX):
-        return _HOT_STATUS_STATE_LEGACY
-    return ""
+    from plan_task_selection import _hot_status_completion_state as run
+    return run(status, status_clean_cell=_status_clean_cell,
+               status_is_writer_committed_cell=_status_is_writer_committed_cell)
 
 
 def _current_release_task_ids():
-    """Return task IDs from the active in-progress version roadmap row."""
-    if not SAMPLE_PATH.is_file():
-        return set()
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    task_ids = set()
-    for line in content.split("\n"):
-        if not line.strip().startswith("| "):
-            continue
-        if "进行中" not in line:
-            continue
-        for raw in re.findall(r"[A-Z]+-\d+(?:~\d+)?", line):
-            task_ids |= expand_task_ids(raw)
-    return task_ids
+    from plan_task_selection import _current_release_task_ids as run
+    return run(plan_path=SAMPLE_PATH, expand_task_ids=expand_task_ids)
 
 
 def _normalize_priority(value):
-    normalized = value.strip().strip("*")
-    return normalized if normalized in ("P0", "P1", "P2") else ""
+    from plan_task_selection import _normalize_priority as run
+    return run(value)
 
 
 def _task_priority_from_table_parts(parts):
-    priority_first = _normalize_priority(parts[1]) if len(parts) > 1 else ""
-    if priority_first:
-        return priority_first
-    old_table_priority = _normalize_priority(parts[11]) if len(parts) >= 12 else ""
-    return old_table_priority
+    from plan_task_selection import _task_priority_from_table_parts as run
+    return run(parts)
 
 
 def _split_governance_table_row(line):
-    from governance_readers import split_governance_table_row
-    return split_governance_table_row(line)
-
-
-# Standalone task-ID table cell (e.g. ``FIX-222`` / ``**REL-070**``). Single
-# definition shared by parse_current_active_tasks and the FEAT-011
-# governance-write-guard task-row scanner — no second shape source (FIX-292
-# semantic dual-source lesson).
-_TASK_ID_CELL_RE = re.compile(r"^(?:\*\*)?[A-Z]+-\d+(?:\*\*)?$")
+    from plan_task_selection import _split_governance_table_row as run
+    return run(line)
 
 
 def _governance_table_cells(line):
-    from governance_readers import governance_table_cells
-    return governance_table_cells(line)
-
-
-# Date-cell content shape (FIX-374): ``YYYY-MM-DD`` / ``YYYY/MM/DD`` as
-# written by the LIVE evidence-log convention. Sole consumer: the evidence
-# format check in check_protocol_compliance — for an ambiguous 9-cell row,
-# a date-shaped cells[6] proves the historical Date cell is present
-# (genuine historical row); any other value contradicts the historical
-# Date semantics and marks the row as a truncated LIVE row (Date cell
-# lost). FIX-382 adds a second probe in that truncated face: a date-shaped
-# cells[7] proves the real Date cell survived at its shifted LIVE offset
-# (trailing Gate/Notes cell lost — not a missing Date). Real-data basis
-# (production-parser census 2026-09-24, FIX-382): all 12 live 9-cell
-# historical rows in .governance/evidence-log.md carry a date-shaped
-# cells[6] and a non-date cells[7] — zero incidence on the historical
-# face of either probe (literal-pipe grep counts 11 rows: parser-protected
-# pipes (code-span/JSON-string/bracket-depth) bias — review-FIX-374 F-1
-# count question resolved).
-_EVIDENCE_DATE_SHAPE_RE = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$")
+    from plan_task_selection import _governance_table_cells as run
+    return run(line)
 
 
 def _is_incomplete_task_status(status):
-    """Active-task test for plan/snapshot status cells (FIX-292, DEC-181).
-
-    Delegates to the W-7/BC-7 authoritative terminal-chain predicate
-    :func:`_status_is_completed_cell` (FIX-291) instead of maintaining a
-    second naive marker vocabulary — the authoritative predicate is
-    consumed as-is, never rewritten here. Effects (AUDIT-149 §3 域 1):
-
-    - a mixed transition chain whose trailing state is terminal
-      (「🔄 进行中 (…) → ✅ 完成 (…)」, live: FIX-253/254/255/266/
-      REL-069) is COMPLETED — the old 「进行中」 substring hit hid the
-      trailing terminal state (M2; the FIX-274 M2-shaped cell still
-      verdicts ACTIVE via the inherited 「未完成」 narrative guard);
-    - narrative English tokens (``p0_pending=0``, live: FIX-291) no
-      longer hit a ``pending`` substring blacklist (M3);
-    - conservative verdicts of the authoritative predicate are inherited
-      (reopened trailing-active chains stay ACTIVE; bare 「终止」 is not
-      in the W-7 terminal vocabulary → stays ACTIVE — fail-safe side);
-    - empty/missing status stays incomplete (fail-closed: completion
-      that cannot be proven = active, aligned with the execution-packet
-      ``assumption_record``; ragged-row M1 shapes therefore keep their
-      conservative ACTIVE verdict — the data-side write guard is
-      FEAT-011's domain).
-    """
-    text = str(status or "").strip()
-    if not text:
-        return True
-    return not _status_is_completed_cell(text)
-
-
-# FIX-287③: subsection headings inside `## 当前活跃事项` that hold completed /
-# archived content — collection suspends on them regardless of section order.
-_NONACTIVE_SUBSECTION_MARKERS = ("最近完成", "已完成", "已归档", "依赖链")
+    from plan_task_selection import _is_incomplete_task_status as run
+    return run(status, status_is_completed_cell=_status_is_completed_cell)
 
 
 def _is_nonactive_subsection(heading):
-    """Return True for `### ` subsections that terminate active-task collection."""
-    return any(marker in heading for marker in _NONACTIVE_SUBSECTION_MARKERS)
+    from plan_task_selection import _is_nonactive_subsection as run
+    return run(heading)
 
 
 def parse_current_active_tasks():
-    """Parse hot active task rows from plan-tracker compact tables.
-
-    FIX-481 (D1 third round): two live header shapes inside 当前活跃事项.
-    The compact 优先级-led table keeps the ID-anchored relative-offset
-    reads below (unchanged behavior). The 0.54-era ID-first 20-column
-    table (任务ID / ``ID`` leading, 状态 at a header-declared offset,
-    trailing 备注) is parsed by HEADER SEMANTICS through the same public
-    mapping dependency analysis uses — ``task_priority.parse_task_dependencies``
-    is fed the table's own header + the single row, so task_id / priority
-    / status / target_version come from the SAME header-semantic mapping
-    FIX-480 established (P5 single semantic source; no second header-index
-    implementation lives here). Host python_game Layer1 probe 2026-11-04:
-    the old positional read took the trailing 备注 cell as the status and
-    阶段 as the title, so 20 ✅-terminal history rows fed
-    ``_active_execution_packet_tasks`` as fake active P0/P1 — host Check
-    18c~18i ×20 = 120 fake FAILs (89% of the host's 135 quick issues),
-    and ``discover_governance_context``'s active_tasks projection was
-    equally polluted.
-
-    Field trade-offs on the ID-first shape (honest not-applicable
-    marking): title is read from the header-declared 事项 column when
-    present (task_priority's column index deliberately ignores
-    display-only columns — the lookup here is by exact header cell name,
-    not a second semantic index); dependency carries the task-family IDs
-    the header declares (empty on the stock 0.54 template — fail-closed,
-    never a neighbouring-column guess); target_version likewise
-    header-declared or empty; closure_path stays empty (the 0.54 template
-    declares no 闭环路径 column; consumers fall back closure_path →
-    title → task_id).
-    """
-    if not SAMPLE_PATH.is_file():
-        return []
-    # Deferred peer import (matches the module's TPA call style, e.g. the
-    # dependency-analysis entry): the public FIX-480 mapping is the single
-    # header-semantics source for ID-first rows.
-    from task_priority import parse_task_dependencies  # noqa: WPS433
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    tasks = []
-    in_active_section = False
-    collecting = True
-    # FIX-481: remember the header of the table currently being walked.
-    # 优先级-led headers keep the compact positional parser; ID-first
-    # headers (任务ID / ID leading — the lead labels task_priority's own
-    # header detection accepts) switch data rows to header semantics.
-    table_header_line = ""
-    table_header_cells = []
-    for line in content.split("\n"):
-        if line.startswith("## 当前活跃事项"):
-            in_active_section = True
-            collecting = True
-            continue
-        if not in_active_section:
-            continue
-        if line.startswith("## "):
-            # FIX-287③: the next top-level section always ends the active section.
-            break
-        if line.startswith("### "):
-            # FIX-287③: order-tolerant subsection boundary — known completed/
-            # archived subsections suspend collection; other subsections resume
-            # it (host trackers may reorder, e.g. 最近完成 before active tables).
-            collecting = not _is_nonactive_subsection(line)
-            continue
-        if not collecting:
-            continue
-        stripped = line.strip()
-        if not stripped.startswith("|") or "---" in stripped:
-            continue
-        cells = _governance_table_cells(stripped)
-        if not cells or cells[0] in {"优先级", "任务ID", "ID"}:
-            # Header row: record the current table's shape, never emit
-            # (the pre-FIX-481 skip set plus the plain-``ID`` lead FIX-480
-            # recognizes).
-            table_header_line = stripped
-            table_header_cells = cells
-            continue
-        task_idx = next(
-            (idx for idx, cell in enumerate(cells)
-             if _TASK_ID_CELL_RE.match(cell.strip())),
-            None,
-        )
-        if task_idx is None:
-            continue
-        acceptance = next((value for header, value in zip(table_header_cells, cells)
-                           if header == "验收要求"), "")
-        if table_header_cells and table_header_cells[0] in {"任务ID", "ID"}:
-            # FIX-481 header-semantic path — single source: the row is
-            # parsed by the same public mapping dependency analysis uses.
-            # The micro-document (this table's header + this one row)
-            # drives task_priority's own header detection and ID-first
-            # dispatch, so the semantic columns land where the header
-            # declares them — 状态 never the trailing 备注, 优先级 never
-            # a prose scan hit. A row the shared parser cannot resolve
-            # (no ID cell) is skipped — same conservative skip the
-            # task_idx guard above applies to the compact path.
-            dep_rows = parse_task_dependencies(
-                table_header_line + "\n" + stripped)
-            if not dep_rows:
-                continue
-            dep = dep_rows[0]
-            title_idx = next(
-                (idx for idx, cell in enumerate(table_header_cells)
-                 if cell.strip() in {"事项", "任务项"}),
-                None,
-            )
-            tasks.append({
-                "task_id": dep.task_id,
-                "priority": dep.priority,
-                "title": (cells[title_idx].strip()
-                          if title_idx is not None and title_idx < len(cells)
-                          else ""),
-                "dependency": ",".join(dep.dependencies),
-                "target_version": dep.target_version,
-                "closure_path": "",
-                "status": dep.status,
-                **({"acceptance": acceptance} if acceptance else {}),
-                "raw_line": stripped,
-            })
-            continue
-        task_id = cells[task_idx].strip().strip("*")
-        priority = ""
-        for cell in cells:
-            normalized = _normalize_priority(cell)
-            if normalized:
-                priority = normalized
-                break
-        status = cells[-1].strip() if cells else ""
-        title = cells[task_idx + 1].strip() if task_idx + 1 < len(cells) else ""
-        dependency = cells[task_idx + 2].strip() if task_idx + 2 < len(cells) else ""
-        target_version = cells[task_idx + 3].strip() if task_idx + 3 < len(cells) else ""
-        closure_path = cells[task_idx + 4].strip() if task_idx + 4 < len(cells) else ""
-        tasks.append({
-            "task_id": task_id,
-            "priority": priority,
-            "title": title,
-            "dependency": dependency,
-            "target_version": target_version,
-            "closure_path": closure_path,
-            "status": status,
-            **({"acceptance": acceptance} if acceptance else {}),
-            "raw_line": stripped,
-        })
-    return tasks
+    from plan_task_selection import parse_current_active_tasks as run
+    return run(plan_path=SAMPLE_PATH)
 
 
 def _active_execution_packet_tasks():
-    """Plan rows available for an explicit bulk handoff."""
-    return [
-        task for task in parse_current_active_tasks()
-        if task.get("priority") in {"P0", "P1"} and _is_incomplete_task_status(task.get("status", ""))
-    ]
+    from plan_task_selection import _active_execution_packet_tasks as run
+    return run(status_is_completed_cell=_status_is_completed_cell,
+               parse_current_active_tasks=lambda: parse_current_active_tasks())
 
 
 def _declared_packet_checks(result, packet_path, contract=None):
-    """Select actual handoffs. Native local work has its own acceptance receipt."""
-    from governance_readers import loop_state
-    path = packet_path or SAMPLE_PATH.parent / "execution-packets.json"
-    try:
-        packets, _ = _read_execution_packet_document(path, missing_ok=True)
-        if not packets:
-            return []
-        tasks = {task["task_id"]: task for task in parse_current_active_tasks()
-                 if _is_incomplete_task_status(task.get("status", ""))}
-        view = loop_state(SAMPLE_PATH.parent.parent)
-        if view["state"] == "invalid":
-            raise ValueError(view["message"])
-        for unit in view["units"]:
-            if unit["runtime_status"] != "completed":
-                for key in (unit["flow_unit_id"], unit["task_id"]):
-                    tasks.setdefault(key, {"task_id": key, "status": unit["runtime_status"]})
-        selected = []
-        for key, task in tasks.items():
-            if key not in packets:
-                continue
-            packet = packets[key]
-            if contract and contract != "acceptance_contract" and isinstance(packet, dict):
-                required = packet.get("required_contracts", [])
-                if isinstance(required, list) and contract not in required and contract not in packet:
-                    continue
-            result["required_tasks"].append(key)
-            selected.append((task, packet))
-        return selected
-    except (ValueError, OSError) as exc:
-        result["pass"] = False
-        result["issues"].append(str(exc))
-        return []
+    from execution_packet_checks import _declared_packet_checks as run
+    return run(result, packet_path, contract, plan_path_now=lambda: SAMPLE_PATH,
+               is_incomplete_task_status=lambda status: _is_incomplete_task_status(status),
+               parse_current_active_tasks=lambda: parse_current_active_tasks(),
+               read_document=lambda path, **options: _read_execution_packet_document(path, **options))
 
 
 def parse_impact_analysis_entries():
-    """Parse evidence-log entries that must carry goal/user impact guardrails.
-
-    This includes explicit type=影响分析 rows and hot plan product-code delivery
-    evidence rows. FIX-073: product-code evidence with no standalone impact
-    analysis must not make Check 16/17 silently pass with 0 entries.
-
-    FIX-371/DEC-227 路线 b: EVD rows whose task row is terminal-complete in
-    the hot tracker (historical hand-written-era ✅ rows; writer-committed
-    rows since FIX-390) are exempt from the entry set.
-    Backward-compatible wrapper — returns only the non-exempt entries; use
-    parse_impact_analysis_entries_with_exemptions() for the disclosure ledger.
-
-    Returns list of dicts: {evd_id, task_id, description, file_location, raw_line}
-    """
-    entries, _ = parse_impact_analysis_entries_with_exemptions()
-    return entries
+    from plan_impact import parse_impact_analysis_entries as run
+    return run(parse_impact_analysis_entries_with_exemptions=lambda: parse_impact_analysis_entries_with_exemptions())
 
 
 def parse_impact_analysis_entries_with_exemptions():
-    """parse_impact_analysis_entries + historical-exemption ledger (FIX-371).
-
-    DEC-227 路线 b: an EVD row whose task row is terminal-complete in the hot
-    tracker (historical hand-written-era data) is exempt from the Check 16/17
-    entry set; every exemption is disclosed in the returned ledger — never
-    silent. Rows whose task is active/new or whose terminal status is
-    unprovable keep zero exemption (fail-closed).
-
-    FIX-390 (DEC-241 消解): terminal-complete is the three-state structured
-    read :func:`_hot_status_completion_state` — writer-committed terminal
-    cells (ops anchor, FIX-393 identity) join the legacy ✅ prefix; unknown
-    tokens are never guessed. The ✅ face of the ledger is unchanged
-    (S_new ⊇ S_old); the expansion is exactly the writer-committed rows and
-    stays fully disclosed.
-
-    Returns (entries, historical_exempted); historical_exempted is a list of
-    {evd_id, task_id, status} dicts.
-    """
-    if not EVIDENCE_PATH.is_file():
-        return [], []
-    content = EVIDENCE_PATH.read_text(encoding="utf-8")
-    entries = []
-    historical_exempted = []
-    hot_task_statuses = _plan_hot_tracker_task_statuses()
-    completed_hot_task_ids = {
-        task_id
-        for task_id, status in hot_task_statuses.items()
-        if _hot_status_completion_state(status)
-    }
-    hot_task_ids = _current_release_task_ids() | set(hot_task_statuses)
-
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line.startswith("| EVD-"):
-            continue
-        parts = [p.strip() for p in _split_governance_table_row(line)]
-        if len(parts) < 8:
-            continue
-        evd_id = parts[1]
-        task_id = parts[2]
-        # FIX-368: LIVE evidence-log column layout is
-        # parts[3]=type, parts[4]=description, parts[5]=fact basis,
-        # parts[6]=file location (10 data cells -> 12 split parts incl. the
-        # leading/trailing empties). The pre-fix parts[4]/parts[5] read was a
-        # +1 offset that matched 目标对齐/用户影响 against the fact-basis
-        # column — the EVD-1118 false-FAIL root cause in Check 16/17.
-        evd_type = parts[3] if len(parts) > 3 else ""
-        description = parts[4] if len(parts) > 4 else ""
-        file_location = parts[6] if len(parts) > 6 else ""
-
-        covered_ids = expand_task_ids(task_id) if task_id and re.search(r"[A-Z]+-\d+", task_id) else set()
-        if requires_impact_evidence(task_id, evd_type, file_location, active=bool(covered_ids & hot_task_ids)):
-            hot_covered = covered_ids & hot_task_ids
-            target_ids = sorted(hot_covered) if hot_covered else [task_id]
-            if not target_ids:
-                target_ids = [task_id]
-            for covered_task_id in target_ids:
-                # FIX-371/DEC-227 路线 b: ✅-terminal hot-tracker task -> exempt
-                # with ledger disclosure; anything unproven stays guarded.
-                if covered_task_id in completed_hot_task_ids:
-                    historical_exempted.append({
-                        "evd_id": evd_id,
-                        "task_id": covered_task_id,
-                        "status": hot_task_statuses.get(covered_task_id, ""),
-                    })
-                    continue
-                entries.append({
-                    "evd_id": evd_id,
-                    "task_id": covered_task_id,
-                    "description": description,
-                    # FIX-390: the DEC-168 machine row-family contract lands
-                    # the fact basis in the independent basis column
-                    # (parts[5], governance_store._build_evidence_row
-                    # --basis channel). Surfaced so the Check 18/18b strict
-                    # judgment reads the structured column instead of only
-                    # the description narrative.
-                    "fact_basis": parts[5] if len(parts) > 5 else "",
-                    "file_location": file_location,
-                    "raw_line": line,
-                })
-    return entries, historical_exempted
+    from plan_impact import parse_impact_analysis_entries_with_exemptions as run
+    return run(evidence_path=EVIDENCE_PATH, current_release_task_ids=_current_release_task_ids,
+               hot_status_completion_state=_hot_status_completion_state,
+               plan_hot_tracker_task_statuses=_plan_hot_tracker_task_statuses,
+               split_governance_table_row=_split_governance_table_row, expand_task_ids=expand_task_ids,
+               requires_impact_evidence=requires_impact_evidence)
 
 
 def check_goal_alignment():
-    """SYSGAP-023: Check that all impact analysis entries have goal alignment.
-
-    Checks:
-    1. plan-tracker has 项目目标 field (WARN if missing)
-    2. Each 影响分析 entry has 目标对齐: field with >= 30 chars (FAIL if missing/short)
-    3. Identical goal alignment text across different EVD rows
-       (WARN — template reuse; FIX-349 ③: entries fanned out of ONE EVD row
-       share a single description by construction and are never compared)
-
-    Returns dict with 'has_project_goal', 'entries', 'duplicates', 'pass' and
-    'historical_exempted' (FIX-371 ledger: terminal-complete hot-tracker rows
-    exempted from the entry set — ✅ prefix, and writer-committed cells since
-    FIX-390; disclosed, never silent).
-    """
-    result = {
-        "has_project_goal": False,
-        "project_goal": "",
-        "entries": [],
-        "duplicates": [],
-        "historical_exempted": [],
-        "pass": True,
-    }
-
-    # 1. Check project goal in plan-tracker
-    config = parse_project_config()
-    project_goal = config.get("项目目标", "")
-    result["project_goal"] = project_goal
-    if project_goal:
-        result["has_project_goal"] = True
-
-    # 2. Parse impact analysis entries (FIX-371/DEC-227 路线 b: historical
-    # ✅-terminal rows exempted with an explicit ledger)
-    entries, historical_exempted = parse_impact_analysis_entries_with_exemptions()
-    result["historical_exempted"] = historical_exempted
-    if not entries:
-        return result
-
-    goal_map = {}  # goal_text -> [(evd_id, task_id)]
-
-    for entry in entries:
-        desc = entry["description"]
-        # Extract 目标对齐: field — captures text until next known field or end
-        goal_match = re.search(
-            r'目标对齐[:：]\s*(.+?)(?:\s*(?:用户影响[:：]|范围[:：]|依赖[:：]|架构影响[:：]|$))',
-            desc
-        )
-        goal_text = goal_match.group(1).strip() if goal_match else ""
-        goal_len = len(goal_text)
-
-        has_goal = bool(goal_text)
-        status = "PASS"
-        if not has_goal:
-            status = "FAIL"
-            result["pass"] = False
-        elif goal_len < 30:
-            status = "FAIL"
-            result["pass"] = False
-        else:
-            # Track for duplicate detection
-            if goal_text in goal_map:
-                goal_map[goal_text].append((entry["evd_id"], entry["task_id"]))
-            else:
-                goal_map[goal_text] = [(entry["evd_id"], entry["task_id"])]
-
-        result["entries"].append({
-            "task_id": entry["task_id"],
-            "evd_id": entry["evd_id"],
-            "has_goal": has_goal,
-            "goal_text": goal_text[:80] + ("..." if goal_len > 80 else ""),
-            "goal_len": goal_len,
-            "status": status,
-        })
-
-    # 3. Check duplicates
-    # FIX-349 ③: compare only entries from DIFFERENT evd_id rows. One EVD row
-    # fanning out to several tasks (expand_task_ids in
-    # parse_impact_analysis_entries) shares a single description by
-    # construction, so identical goal text inside one row is structural, not
-    # template reuse (live false positive: EVD-507 -> REQ-094<->REQ-095).
-    # Cross-EVD comparison — the real template-reuse signal — is unchanged.
-    for goal_text, evd_tasks in goal_map.items():
-        if len(evd_tasks) >= 2:
-            for i in range(len(evd_tasks)):
-                for j in range(i + 1, len(evd_tasks)):
-                    if evd_tasks[i][0] != evd_tasks[j][0]:
-                        result["duplicates"].append(
-                            (evd_tasks[i][1], evd_tasks[j][1]))
-
-    return result
+    from plan_impact import check_goal_alignment as run
+    return run(parse_impact_analysis_entries_with_exemptions=lambda: parse_impact_analysis_entries_with_exemptions(),
+               parse_project_config=parse_project_config)
 
 
 # ── SYSGAP-024: User Impact Check ────────────────────────────────
 
 def check_user_impact():
-    """SYSGAP-024: Check that all impact analysis entries have user impact analysis.
-
-    Checks:
-    1. Each 影响分析 entry has 用户影响: field (FAIL if missing)
-    2. Required sub-fields parsed: 获得= / 感知= / 体验变化= / 迁移指南=
-    3. Value validity for 获得= (WARN if unrecognized)
-    4. Contradiction: 体验变化=否 but diff involves user-visible files (WARN)
-    5. Breaking change: 体验变化=是 but 迁移指南=不需要 (BLOCKING)
-    6. Breaking change: migration guide path does not exist (BLOCKING — if path provided)
-
-    Returns dict with 'entries', 'blocking', 'pass' and 'historical_exempted'
-    (FIX-371 ledger: terminal-complete hot-tracker rows exempted from the
-    entry set — ✅ prefix, and writer-committed cells since FIX-390;
-    disclosed, never silent).
-    """
-    USER_VISIBLE_PATTERNS = [
-        "CLAUDE.md", "README.md", "CHANGELOG.md",
-        "plugin.json", "marketplace.json",
-        "commands/", ".claude-plugin/", ".codex-plugin/",
-    ]
-
-    # FIX-406 F-2 predicate unification: the closed vocabulary is defined
-    # ONCE in the writer domain (governance_store.VALID_OBTAIN_VALUES —
-    # the intake mirror and this engine check consume the same constant;
-    # the pre-fix local copy is retired so the two faces can never drift).
-    from governance_store import VALID_OBTAIN_VALUES
-
-    result = {
-        "entries": [],
-        "blocking": [],
-        "historical_exempted": [],
-        "pass": True,
-    }
-
-    # FIX-371/DEC-227 路线 b: historical ✅-terminal rows exempted with an
-    # explicit ledger — disclosed, never silent.
-    entries, historical_exempted = parse_impact_analysis_entries_with_exemptions()
-    result["historical_exempted"] = historical_exempted
-    if not entries:
-        return result
-
-    # FIX-410 read-side latest-wins: per task, ONLY the latest
-    # field-carrying (用户影响:) row is judged — a compliant correction
-    # row supersedes older malformed rows of the same task (live RCA:
-    # EVD-1252 kept Check 17 FAILing forever although a compliant
-    # correction row was in place; the write side already prevents NEW
-    # bad rows — the intake mirror — but the read side refused to
-    # recognize corrections). Superseded rows stay in the log as
-    # append-only history and are disclosed via a counter, never silent.
-    # A task with NO field-carrying row keeps the original per-entry
-    # logic (missing-field FAIL stands — fail-closed).
-    _field_re = re.compile(r'用户影响[:：]\s*(.+?)')
-    _latest_field_index = {}
-    for _index, _entry in enumerate(entries):
-        if _field_re.search(_entry["description"]):
-            _latest_field_index[_entry["task_id"]] = _index
-    _judged_entries = []
-    _superseded = 0
-    for _index, _entry in enumerate(entries):
-        _latest = _latest_field_index.get(_entry["task_id"])
-        # P1-1 (FIX-410 R0 review): supersede applies ONLY to field-carrying
-        # rows — a LATER fieldless row keeps its original per-row judgment
-        # (missing field -> FAIL); the earlier combination seam let such a
-        # row be superseded away, swallowing the rule-1 missing-field FAIL.
-        if (_latest is None or _index == _latest
-                or not _field_re.search(_entry["description"])):
-            _judged_entries.append(_entry)
-        else:
-            _superseded += 1
-    result["latest_wins_superseded"] = _superseded
-    entries = _judged_entries
-
-    for entry in entries:
-        desc = entry["description"]
-        file_location = entry["file_location"]
-
-        # Extract 用户影响: field — captures text until next known field or end
-        user_impact_match = re.search(
-            r'用户影响[:：]\s*(.+?)(?:\s*(?:目标对齐[:：]|范围[:：]|依赖[:：]|架构影响[:：]|$))',
-            desc
-        )
-        user_impact_text = user_impact_match.group(1).strip() if user_impact_match else ""
-
-        has_field = bool(user_impact_text)
-
-        # Parse sub-fields
-        obtain_match = re.search(r'获得=([^,]*?)(?:,|，|\s*(?:感知=|体验变化=|迁移指南=|$))', user_impact_text)
-        obtain = obtain_match.group(1).strip() if obtain_match else ""
-
-        perceive_match = re.search(r'感知=([^,]*?)(?:,|，|\s*(?:获得=|体验变化=|迁移指南=|$))', user_impact_text)
-        perceive = perceive_match.group(1).strip() if perceive_match else ""
-
-        exp_change_match = re.search(r'体验变化=([^,]*?)(?:,|，|\s*(?:获得=|感知=|迁移指南=|$))', user_impact_text)
-        exp_change = exp_change_match.group(1).strip() if exp_change_match else ""
-
-        migration_match = re.search(r'迁移指南=([^,]*?)(?:,|，|\s*(?:获得=|感知=|体验变化=|$))', user_impact_text)
-        migration = migration_match.group(1).strip() if migration_match else ""
-
-        status = "PASS"
-        issues = []
-
-        if not has_field:
-            status = "FAIL"
-            issues.append("缺少 用户影响: 字段")
-            result["pass"] = False
-        else:
-            # Check sub-fields presence
-            missing_subs = []
-            if not obtain:
-                missing_subs.append("获得=")
-            if not perceive:
-                missing_subs.append("感知=")
-            if not exp_change:
-                missing_subs.append("体验变化=")
-            if not migration:
-                missing_subs.append("迁移指南=")
-            if missing_subs:
-                issues.append(f"缺少子字段: {', '.join(missing_subs)}")
-                status = "FAIL"
-                result["pass"] = False
-
-            # Value validity for 获得=
-            if obtain:
-                # Check if obtain value matches any valid value (lenient — contains check)
-                found_valid = any(v in obtain for v in VALID_OBTAIN_VALUES)
-                if not found_valid:
-                    issues.append(
-                        f"获得= 值 '{obtain}' 不在合法范围内"
-                        f" ({', '.join(VALID_OBTAIN_VALUES[:4])} 等)"
-                    )
-                    if status == "PASS":
-                        status = "WARN"
-
-            # Contradiction: 体验变化=否 but file_location contains user-visible patterns
-            if exp_change == "否":
-                for pattern in USER_VISIBLE_PATTERNS:
-                    if pattern in file_location:
-                        issues.append(
-                            f"体验变化=否 但证据位置涉及用户可见文件 '{pattern}'"
-                        )
-                        if status == "PASS":
-                            status = "WARN"
-                        break
-
-            # Breaking change: 体验变化=是 + 迁移指南=不需要
-            if exp_change == "是" and migration == "不需要":
-                status = "BLOCKING"
-                issues.append("体验变化=是（Breaking Change）但 迁移指南=不需要")
-
-            # Breaking change: migration guide path validity
-            if exp_change == "是" and migration and migration not in ("不需要", ""):
-                # migration could be a relative file path from repo root
-                migration_path = ROOT / migration.lstrip("/")
-                if not migration_path.is_file():
-                    status = "BLOCKING"
-                    issues.append(
-                        f"体验变化=是（Breaking Change）但迁移指南路径不存在: {migration}"
-                    )
-
-        entry_result = {
-            "task_id": entry["task_id"],
-            "evd_id": entry["evd_id"],
-            "has_field": has_field,
-            "obtain": obtain,
-            "perceive": perceive,
-            "exp_change": exp_change,
-            "migration": migration,
-            "status": status,
-            "issues": issues,
-        }
-        result["entries"].append(entry_result)
-
-        if status in ("FAIL", "BLOCKING"):
-            result["pass"] = False
-        if status == "BLOCKING":
-            result["blocking"].append(entry["task_id"])
-
-    return result
+    from plan_impact import check_user_impact as run
+    return run(product_root=ROOT,
+               parse_impact_analysis_entries_with_exemptions=lambda: parse_impact_analysis_entries_with_exemptions())
 
 
 # ── FIX-080: Fact Grounding Check ────────────────────────────────
 
-FACT_BASIS_RE = re.compile(
-    r'事实依据[:：]\s*(.+?)(?:\s*(?:目标对齐[:：]|用户影响[:：]|范围[:：]|依赖[:：]|架构影响[:：]|$))'
-)
-
-UNGROUNDED_CLAIM_RE = re.compile(
-    r"(?:我\s*)?(?:假设|猜测|推测|估计)|(?:大概|应该|可能)(?:已经|是|可以|完成|存在)|编造|幻觉"
-)
+from checks.evidence_domain import FACT_BASIS_RE, UNGROUNDED_CLAIM_RE
 
 def _current_release_impact_entries():
-    """Return impact/product-delivery entries for the active in-progress release.
-
-    FIX-080 avoids retroactively failing historical evidence that predates the
-    fact-grounding field. The commit hook enforces every new product-code commit;
-    check-governance enforces the active version row so future work cannot omit it.
-    """
-    release_task_ids = _current_release_task_ids()
-    if not release_task_ids:
-        return []
-    return [entry for entry in parse_impact_analysis_entries()
-            if entry["task_id"] in release_task_ids]
+    from plan_impact import _current_release_impact_entries as run
+    return run(current_release_task_ids=_current_release_task_ids,
+               parse_impact_analysis_entries_with_exemptions=lambda: parse_impact_analysis_entries_with_exemptions())
 
 
 # ── FIX-083: Structured Evidence Check ────────────────────────────
 
 # ── FIX-084: AI Execution Packet Check ───────────────────────────
 
-EXECUTION_PACKET_REQUIRED_FIELDS = {
-    "task_id": str,
-    "goal": str,
-    "allowed_change_scope": list,
-    "required_evidence": list,
-    "next_commands": list,
-    "done_definition": list,
-}
+from contracts import EXECUTION_PACKET_REQUIRED_FIELDS
 
 
 def _read_execution_packet_document(path, *, missing_ok=False):
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        if missing_ok:
-            return {}, {}
-        raise
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ValueError(f"invalid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("execution packet root must be object")
-    if "version" in data and (type(data["version"]) is not int or data["version"] != 1):
-        raise ValueError(f"unsupported execution packet version: {data['version']!r}")
-    packets = data.get("packets", data)
-    if not isinstance(packets, dict):
-        raise ValueError("packets must be object")
-    from execution_packet import has_native_unit_identity
-
-    for key, packet in packets.items():
-        if not governance_store._TASK_ID_RE.fullmatch(key) and not has_native_unit_identity(key, packet):
-            raise ValueError("execution packet map must be keyed by its task or native work unit")
-    metadata = {k: v for k, v in data.items() if k != "packets"} if "packets" in data else {}
-    return packets, metadata
+    from execution_packet_checks import _read_execution_packet_document as run
+    return run(path, missing_ok=missing_ok)
 
 
 def _load_execution_packets(path=None):
-    packet_path = path or EXECUTION_PACKET_PATH
-    try:
-        packets, _ = _read_execution_packet_document(packet_path)
-        return packets, ""
-    except FileNotFoundError:
-        return {}, f"{packet_path} not found"
-    except (OSError, ValueError) as exc:
-        return {}, str(exc)
+    from execution_packet_checks import _load_execution_packets as run
+    return run(path, packet_path_now=lambda: EXECUTION_PACKET_PATH, read_document=_read_execution_packet_document)
 
 
 def _execution_packet_field_issues(packet):
-    """Structural field issues for one packet (shared validator — single
-    definition of the EXECUTION_PACKET_REQUIRED_FIELDS semantics).
-
-    Consumed by Check 18c (:func:`_validate_execution_packet`) and by the
-    FEAT-011 governance-write-guard structural face — no second field
-    semantics (FIX-292 dual-source lesson). Pure: no I/O.
-    """
-    issues = []
-    if not isinstance(packet, dict):
-        return ["packet must be object"]
-    for field, expected_type in EXECUTION_PACKET_REQUIRED_FIELDS.items():
-        value = packet.get(field)
-        if not isinstance(value, expected_type):
-            issues.append(f"{field} missing or invalid")
-            continue
-        if expected_type is str and not value.strip():
-            issues.append(f"{field} must be non-empty")
-        if expected_type is list and (
-            not value or not all(isinstance(item, str) and item.strip() for item in value)
-        ):
-            issues.append(f"{field} must be non-empty string array")
-    from execution_packet import OPTIONAL_CONTRACTS
-    required = packet.get("required_contracts", [])
-    if not isinstance(required, list) or not all(isinstance(name, str) and name in OPTIONAL_CONTRACTS for name in required):
-        issues.append("required_contracts must list supported handoff contracts")
-    else:
-        issues.extend(f"missing required {name}" for name in required if name not in packet)
-    # FEAT-092: optional advisory budget field — absent is legal (缺省不写),
-    # present must be exactly {max_steps: positive int} (fail-closed on
-    # illegal shapes so Check 18c / write-guard surface them).
-    budget = packet.get("budget")
-    if budget is not None:
-        if (not isinstance(budget, dict)
-                or set(budget) != {"max_steps"}
-                or isinstance(budget.get("max_steps"), bool)
-                or not isinstance(budget.get("max_steps"), int)
-                or budget["max_steps"] <= 0):
-            issues.append(
-                "budget must be {max_steps: positive integer} (FEAT-092)")
-    return issues
-
-
-# FIX-319: `allowed_change_scope` is assembled from plan-tracker row text (see
-# `build_execution_packet`), which carries markdown emphasis — `**NOT_RUN**`,
-# `**契约层**`. Bold uses a PAIRED `**` delimiter, so the old substring
-# predicate `"*" in scope.lower()` reported EVERY bold-bearing scope as
-# `too broad` (systematic false positive: FIX-315 / FIX-317 / FEAT-031).
-#
-# Only `**` needs neutralising: the predicate inspects `*` and the whole-repo
-# phrases, and `` ` `` / `_` carry no asterisk semantics (stripping them would
-# change no verdict). A single `*` is deliberately NOT stripped — in a scope
-# string it is far more often a glob (`src/*`, `*.py`, `*foo*`) than italic
-# emphasis, so leaving it in place keeps the judgement on the strict side.
-# The same decision covers italic emphasis: `*foo*` is NOT neutralised and is
-# still reported `too broad` (FIX-319 boundary, restated by FIX-321).
-#
-# FIX-321 (review FIX-319 F-01): the pairing alone was not enough — a `**` run
-# must also be a TRUE run boundary, otherwise `**/tests/**` falls inside one
-# span, becomes ` /tests/ ` and PASSes, while its sibling `**/*.py` still FAILs
-# (the `/` blocked the span) — an inconsistency, and exactly the laundering the
-# predicate's contract forbids. So a `**` run counts as a bold delimiter only
-# when it is a MAXIMAL run of exactly two stars that touches neither another
-# `*` nor a path separator `/` on EITHER side — the glob tokens are `**/`,
-# `/**` and `/**/`. A rejected span is left verbatim, its `*` survives, and the
-# scope stays FAIL: an ambiguous boundary always resolves to the strict side.
-_MARKDOWN_BOLD_SPAN_RE = re.compile(
-    r"(?<![\*/])\*\*(?![\*/])(?P<inner>[^*]+?)(?<![\*/])\*\*(?![\*/])"
-)
-
-# Whole-repo phrases, anchored at a WORD START (and case-insensitive) so that
-# natural language merely containing the sequence — `install files`,
-# `as many files as` — is not misread as an unbounded scope. The start anchor
-# alone is enough: the trailing part is left open so the old substring
-# coverage of plurals (`any files`, `whole repository`) is preserved.
-_TOO_BROAD_SCOPE_PHRASE_RE = re.compile(r"\b(?:any file|all files|whole repo)", re.IGNORECASE)
+    from execution_packet_checks import _execution_packet_field_issues as run
+    return run(packet, required_fields=lambda: EXECUTION_PACKET_REQUIRED_FIELDS)
 
 
 def _strip_markdown_bold_markers(text):
-    """Neutralise PAIRED markdown bold markers, keeping the inner text.
-
-    `**X**` becomes ` X ` — the inner text survives so a genuinely broad bold
-    phrase (`**all files**`) is still caught. A single pass is sufficient: the
-    inner group excludes `*` and the replacement only inserts the inner text
-    plus spaces, so no new `**` pair can appear for a second pass to find.
-
-    FIX-321: only spans whose two `**` runs are TRUE run boundaries are
-    neutralised — a maximal two-star run that touches neither `*` nor `/` on
-    either side (see `_MARKDOWN_BOLD_SPAN_RE`). Everything else is left
-    verbatim, so a glob such as `**/tests/**` or `**/*.py` keeps its `*` and
-    stays `too broad`. The slash may live inside the span (`**a/b**` is bold);
-    only a slash glued to a delimiter disqualifies it. Ambiguity therefore
-    fails closed instead of laundering a wildcard.
-
-    Deliberate boundary (FIX-319, restated by FIX-321): single-`*` emphasis
-    (`*foo*`) is NOT stripped either, because in a scope string a lone `*` is
-    far more often a glob than italic emphasis — it is reported `too broad`.
-    """
-    return _MARKDOWN_BOLD_SPAN_RE.sub(lambda match: f" {match.group('inner')} ", text)
+    from execution_packet_checks import _strip_markdown_bold_markers as run
+    return run(text, span_pattern=_host_policy("_MARKDOWN_BOLD_SPAN_RE"))
 
 
 def _is_too_broad_scope_text(text):
-    """True when an `allowed_change_scope` blob declares an unbounded scope.
-
-    FIX-319: markdown bold is stripped first. A *surviving* `*` is a genuine
-    wildcard — standalone (`*`), attached (`src/*`, `*.py`) or glob
-    (`**/*.py`, `**/tests/**`, `/**`) — and stays `too broad`; stripping must
-    never launder it. FIX-321 makes that guarantee mechanical rather than
-    incidental: `_strip_markdown_bold_markers` refuses any span whose `**`
-    runs are not true run boundaries, so a recursive-directory glob can no
-    longer land inside one.
-    """
-    stripped = _strip_markdown_bold_markers(text)
-    if "*" in stripped:
-        return True
-    return bool(_TOO_BROAD_SCOPE_PHRASE_RE.search(stripped))
+    from execution_packet_checks import _is_too_broad_scope_text as run
+    return run(text, strip_markers=_strip_markdown_bold_markers,
+               phrase_search=lambda value: _host_policy("_TOO_BROAD_SCOPE_PHRASE_RE").search(value))
 
 
 def _validate_execution_packet(task, packet):
-    issues = _execution_packet_field_issues(packet)
-    if not isinstance(packet, dict):
-        return issues  # HEAD-identical early exit: ["packet must be object"]
-    if packet.get("task_id") and packet.get("task_id") != task["task_id"]:
-        issues.append("task_id does not match active task")
-    if any(not isinstance(packet.get(field), list) or not all(isinstance(value, str) for value in packet[field])
-           for field in ("allowed_change_scope", "required_evidence", "done_definition")):
-        return issues
-    allowed_text = " ".join(packet["allowed_change_scope"])
-    if allowed_text and _is_too_broad_scope_text(allowed_text):
-        issues.append("allowed_change_scope is too broad")
-    for field in ("goal", "allowed_change_scope", "required_evidence", "next_commands", "done_definition"):
-        values = packet.get(field, [])
-        if isinstance(values, str):
-            values = [values]
-        if isinstance(values, list) and any(isinstance(value, str) and PRODUCT_SUCCESS_PLACEHOLDER_RE.search(value)
-                                            for value in values):
-            issues.append(f"{field} contains a placeholder")
-    return issues
+    from execution_packet_checks import _validate_execution_packet as run
+    return run(task, packet, field_issues=_execution_packet_field_issues,
+               broad_scope=lambda value: _is_too_broad_scope_text(value),
+               placeholder_search=lambda value: _host_policy("PRODUCT_SUCCESS_PLACEHOLDER_RE").search(value))
 
 
 DETERMINISTIC_SCAFFOLD_DIR = ROOT / "skills/software-project-governance/core/templates/deterministic-scaffolds"
 
-
-PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS = {
-    "user": str,
-    "job_to_be_done": str,
-    "non_goals": list,
-    "success_metrics": list,
-    "competitive_baseline": str,
-    "done_definition": list,
-}
-
-PRODUCT_SUCCESS_PLACEHOLDER_RE = re.compile(
-    r"(?:\b(?:todo|tbd|to_be_defined|n/?a|none|null|unknown)\b|待补|待定|暂无|占位)",
-    re.IGNORECASE,
-)
-
-PRODUCT_SUCCESS_PROCESS_ONLY_RE = re.compile(
-    r"(?:check-governance|verify_workflow|evidence-log|plan-tracker|review|commit|push|archive|"
-    r"治理|证据|归档|提交|审查|记录|hook|\bgate\s*(?:G?\d+\s*)?(?:已?通过|pass(?:ed)?\b))",
-    re.IGNORECASE,
-)
-
-PRODUCT_SUCCESS_USER_OUTCOME_RE = re.compile(
-    r"(?:user|customer|persona|outcome|value|usable|acceptance|scenario|quality|competitive|"
-    r"用户|客户|使用者|产品|体验|价值|可用|可见|验收|场景|质量|竞争)",
-    re.IGNORECASE,
-)
-
-PRODUCT_SUCCESS_RUNNABLE_RE = re.compile(
-    r"(?:e2e|test|unit|integration|fixture|ci|command|script|execute|run|pass|"
-    r"测试|验证|用例|命令|脚本|执行|通过)",
-    re.IGNORECASE,
-)
 
 ACCEPTANCE_CONTRACT_REQUIRED_FIELDS = {
     "scenario": str,
@@ -7810,11 +5602,11 @@ INTERRUPTION_POLICY_DEFAULT_EXAMPLES = [
 def _product_success_policy():
     from delivery_contract_checks import ProductSuccessPolicy
     return ProductSuccessPolicy(
-        required_fields=PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS,
-        placeholder=PRODUCT_SUCCESS_PLACEHOLDER_RE,
+        required_fields=_host_policy("PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS"),
+        placeholder=_host_policy("PRODUCT_SUCCESS_PLACEHOLDER_RE"),
         process_only_metric=_is_process_only_product_success_metric,
-        user_outcome=PRODUCT_SUCCESS_USER_OUTCOME_RE,
-        runnable=PRODUCT_SUCCESS_RUNNABLE_RE,
+        user_outcome=_host_policy("PRODUCT_SUCCESS_USER_OUTCOME_RE"),
+        runnable=_host_policy("PRODUCT_SUCCESS_RUNNABLE_RE"),
     )
 
 
@@ -7825,7 +5617,7 @@ def _acceptance_policy():
         runnable_command=ACCEPTANCE_RUNNABLE_COMMAND_RE,
         pass_statuses=ACCEPTANCE_PASS_STATUSES,
         not_run_statuses=ACCEPTANCE_NOT_RUN_STATUSES,
-        placeholder=PRODUCT_SUCCESS_PLACEHOLDER_RE,
+        placeholder=_host_policy("PRODUCT_SUCCESS_PLACEHOLDER_RE"),
     )
 
 
@@ -7838,7 +5630,7 @@ def _quality_budget_policy():
         exempt_statuses=QUALITY_BUDGET_EXEMPT_STATUSES,
         validation_signal=QUALITY_BUDGET_VALIDATION_SIGNAL_RE,
         weak_prose=QUALITY_BUDGET_WEAK_PROSE_RE,
-        placeholder=PRODUCT_SUCCESS_PLACEHOLDER_RE,
+        placeholder=_host_policy("PRODUCT_SUCCESS_PLACEHOLDER_RE"),
         pending_task=_is_task_pending_status_allowed,
     )
 
@@ -7856,7 +5648,7 @@ def _vertical_slice_policy():
         broad_scope=VERTICAL_SLICE_BROAD_SCOPE_RE,
         weak_prose=VERTICAL_SLICE_WEAK_PROSE_RE,
         weak_quality_prose=QUALITY_BUDGET_WEAK_PROSE_RE,
-        placeholder=PRODUCT_SUCCESS_PLACEHOLDER_RE,
+        placeholder=_host_policy("PRODUCT_SUCCESS_PLACEHOLDER_RE"),
         pending_task=_is_task_pending_status_allowed,
     )
 
@@ -7890,7 +5682,7 @@ def _interruption_policy():
 
 def _is_process_only_product_success_metric(value):
     from delivery_contract_checks import _is_process_only_product_success_metric as judge
-    return judge(value, PRODUCT_SUCCESS_PROCESS_ONLY_RE)
+    return judge(value, _host_policy("PRODUCT_SUCCESS_PROCESS_ONLY_RE"))
 
 
 def _is_task_pending_status_allowed(task):
@@ -7986,88 +5778,27 @@ def build_execution_packet(task, **options):
 
 
 def generate_execution_packets(existing=None, *, task_ids=None, governance_dir=None, contracts=(), quality_dimensions=()):
-    from execution_packet import generate_packet_document
-    existing = existing or {}
-    if any(not isinstance(packet, dict) for packet in existing.values()):
-        raise ValueError("each execution packet must be object")
-    from functools import partial
-    tasks = _active_execution_packet_tasks()
-    if task_ids:
-        known = {task["task_id"] for task in tasks}
-        tasks.extend(task for task in parse_current_active_tasks() if task["task_id"] in task_ids - known
-                     and _is_incomplete_task_status(task.get("status", "")))
-    return generate_packet_document(tasks, task_ids=task_ids, existing=existing,
-                                    governance_dir=governance_dir or SAMPLE_PATH.parent,
-                                    build_packet=partial(build_execution_packet, contracts=contracts,
-                                                         quality_dimensions=quality_dimensions))
+    from execution_packet_checks import generate_execution_packets as run
+    return run(existing, task_ids=task_ids, governance_dir=governance_dir, contracts=contracts,
+               quality_dimensions=quality_dimensions, plan_path_now=lambda: SAMPLE_PATH,
+               active_execution_packet_tasks=lambda: _active_execution_packet_tasks(),
+               is_incomplete_task_status=_is_incomplete_task_status,
+               packet_builder=lambda: build_execution_packet,
+               parse_current_active_tasks=lambda: parse_current_active_tasks())
 
 
 
 def check_execution_packets(packet_path=None):
-    result = {
-        "required_tasks": [],
-        "entries": [],
-        "missing": [],
-        "issues": [],
-        "pass": True,
-    }
-    for task, packet in _declared_packet_checks(result, packet_path, None):
-        task_id = task["task_id"]
-        issues = _validate_execution_packet(task, packet)
-        status = "PASS" if not issues else "FAIL"
-        if issues:
-            result["pass"] = False
-        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
-    return result
+    from execution_packet_checks import check_execution_packets as run
+    return run(packet_path, declared_packet_checks=_declared_packet_checks,
+               validate_packet=lambda task, packet: _validate_execution_packet(task, packet))
 
 
 def cmd_execution_packet(args):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    from contextlib import nullcontext
-
-    budget = getattr(args, "budget", None)
-    if budget is not None and (type(budget) is not int or budget <= 0):
-        print(f"[ERROR] --budget must be a positive integer (got {budget!r})")
-        sys.exit(2)
-
-    wanted = set(args.task) if args.task else None
-    note = ""
-    try:
-        path = EXECUTION_PACKET_PATH.resolve()
-        with governance_store._TargetLock(path) if args.write else nullcontext():
-            packets, metadata = _read_execution_packet_document(path, missing_ok=True)
-            contracts = set(getattr(args, "contract", None) or [])
-            dimensions = list(dict.fromkeys(getattr(args, "quality_dimension", None) or []))
-            if dimensions:
-                contracts.add("quality_budget")
-            selection = wanted if wanted is not None else set(packets)
-            payload = generate_execution_packets(existing=packets, task_ids=selection, governance_dir=path.parent,
-                                                 contracts=contracts, quality_dimensions=dimensions)
-            generated = payload["packets"]
-            if budget is not None:
-                for packet in generated.values():
-                    packet["budget"] = {"max_steps": budget}
-            if not args.write:
-                message = json.dumps(payload, ensure_ascii=False, indent=2)
-            elif not generated:
-                message = "[OK] no active execution packets matched the selected tasks"
-            else:
-                payload["packets"] = {**packets, **generated}
-                if wanted is not None:
-                    preserved = len(payload["packets"]) - len(generated)
-                    note = (f" (incremental merge: regenerated {', '.join(sorted(generated))};"
-                            f" preserved {preserved} other {'entry' if preserved == 1 else 'entries'})")
-                document = {**metadata, **payload}
-                data = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
-                governance_store._atomic_write_bytes(path, data)
-                message = f"[OK] wrote {len(payload['packets'])} execution packet(s) to {EXECUTION_PACKET_PATH}{note}"
-    except (OSError, ValueError, governance_store.StoreError) as exc:
-        print(f"[ERROR] {EXECUTION_PACKET_PATH}: {exc}", file=sys.stderr)
-        sys.exit(1)
-    print(message)
+    from governance_fact_cli import cmd_execution_packet as run
+    return run(args, packet_path_now=lambda: EXECUTION_PACKET_PATH,
+               read_execution_packet_document=lambda path, **options: _read_execution_packet_document(path, **options),
+               generate_execution_packets=lambda **options: generate_execution_packets(**options))
 
 
 # ── SYSGAP-036: Agent Activation Check (Check 20) ────────────────
@@ -8142,7 +5873,6 @@ def _resolve_archive_task_refs(task_ids):
 
 def check_risk_mitigation_closure_with_archive(risk_content=None, task_status_map=None):
     """Run the archive-aware risk check with the current host configuration."""
-    _resolve_shared()
     if task_status_map is None:
         task_status_map = _default_task_status_map()
     return risk_domain.check_risk_mitigation_closure_with_archive(
@@ -8750,571 +6480,200 @@ def _print_check_summary(summary, args):
 # Each function returns: (PASS/FAIL/NEEDS_HUMAN, detail_message)
 
 def _check_file_exists(relative_path, label):
-    """Check if a file or directory exists."""
-    path = ROOT / relative_path
-    if path.exists():
-        return "PASS", f"{label}: {relative_path} exists"
-    return "FAIL", f"{label}: {relative_path} NOT FOUND"
+    from gate_judgment import _check_file_exists as run
+    return run(relative_path, label, product_root=ROOT)
 
 
 def _check_snippet_in_file(relative_path, snippet, label):
-    """Check if a snippet exists in a file."""
-    path = ROOT / relative_path
-    if not path.is_file():
-        return "FAIL", f"{label}: file {relative_path} NOT FOUND"
-    content = path.read_text(encoding="utf-8")
-    if snippet in content:
-        return "PASS", f"{label}: '{snippet[:50]}...' found in {relative_path}"
-    return "FAIL", f"{label}: '{snippet[:50]}...' NOT found in {relative_path}"
+    from gate_judgment import _check_snippet_in_file as run
+    return run(relative_path, snippet, label, product_root=ROOT)
 
 
 def _check_all_required_files_exist():
-    """Silently check if all required files exist (for auto-judgment)."""
-    required = build_required_files_from_manifest()
-    if required is None:
-        required = REQUIRED_FILES
-    missing = [label for label, path in required.items() if not path.is_file()]
-    if not missing:
-        return "PASS", "所有必需文件存在 — 仓库结构符合约定"
-    return "FAIL", f"缺失 {len(missing)} 个必需文件: {', '.join(missing[:3])}..."
+    from gate_judgment import _check_all_required_files_exist as run
+    return run(required_files=lambda: REQUIRED_FILES,
+               build_required_files_from_manifest=build_required_files_from_manifest)
 
 
 def _check_governance_file_exists(filename):
-    """Check if a governance file exists and has content."""
-    path = GOVERNANCE_DIR / filename
-    if path.is_file() and path.stat().st_size > 0:
-        return "PASS", f".governance/{filename} 存在且非空"
-    return "FAIL", f".governance/{filename} 不存在或为空"
+    from gate_judgment import _check_governance_file_exists as run
+    return run(filename, governance_dir=GOVERNANCE_DIR)
 
 
 def _check_quantifiable_metrics():
-    """Check if project has quantifiable success metrics in plan-tracker."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    # Look for numeric targets in plan-tracker overview or config
-    metrics_patterns = [
-        r"≥\s*\d+",           # ≥ N
-        r"\d+%",              # N%
-        r"≤\s*\d+",           # ≤ N
-        r"coverage.*\d+",      # coverage mention with number
-        r"PASSED.*\d+",        # PASSED with count
-    ]
-    for pattern in metrics_patterns:
-        if re.search(pattern, content, re.IGNORECASE):
-            return "PASS", "项目目标含量化指标（检测到数字阈值或百分比）"
-    return "NEEDS_HUMAN", "无法自动检测量化指标——需人工确认项目目标是否可衡量"
+    from gate_judgment import _check_quantifiable_metrics as run
+    return run(plan_path=SAMPLE_PATH)
 
 
 def _check_scope_boundary():
-    """Check if scope boundaries are defined."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    if "范围" in content or "scope" in content.lower():
-        return "PASS", "plan-tracker 中包含范围相关描述"
-    return "NEEDS_HUMAN", "需人工确认范围边界是否清晰"
+    from gate_judgment import _check_scope_boundary as run
+    return run(plan_path=SAMPLE_PATH)
 
 
 def _check_stakeholders():
-    """Check if stakeholders are identified."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    # Check for role descriptions in plan-tracker tasks or config
-    if "项目负责人" in content or "Owner" in content:
-        return "PASS", "检测到干系人角色（项目负责人/Owner）"
-    return "NEEDS_HUMAN", "需人工确认干系人列表"
+    from gate_judgment import _check_stakeholders as run
+    return run(plan_path=SAMPLE_PATH)
 
 
 def _check_out_of_scope():
-    """Check if out-of-scope items are explicitly listed."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    if "范围外" in content or "不做什么" in content or "out of scope" in content.lower():
-        return "PASS", "检测到范围外/不做什么声明"
-    return "NEEDS_HUMAN", "需人工确认范围外事项是否明确"
+    from gate_judgment import _check_out_of_scope as run
+    return run(plan_path=SAMPLE_PATH)
 
 
 def _check_completed_ratio(min_ratio=0.5):
-    """Check if plan-tracker completed ratio meets threshold."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    # Match the overview table: after "总任务数" header line, the data row has:
-    # | name | stage | total | completed | blocked | risks | gate | date |
-    lines = content.split("\n")
-    in_overview = False
-    for i, line in enumerate(lines):
-        if "总任务数" in line and "已完成" in line:
-            in_overview = True
-            continue
-        if in_overview and line.strip().startswith("|") and not "---" in line:
-            # Data row: extract columns
-            parts = [p.strip() for p in line.split("|")]
-            # parts[0]=empty, [1]=name, [2]=stage, [3]=total, [4]=completed, ...
-            if len(parts) >= 5:
-                try:
-                    total = int(parts[3])
-                    completed = int(parts[4])
-                    ratio = completed / total if total > 0 else 0
-                    if ratio >= min_ratio:
-                        return "PASS", f"任务完成率 {ratio:.0%} ≥ {min_ratio:.0%}（{completed}/{total}）"
-                    return "FAIL", f"任务完成率 {ratio:.0%} < {min_ratio:.0%}（{completed}/{total}）"
-                except ValueError:
-                    continue
-            break
-    return "NEEDS_HUMAN", "无法从 plan-tracker 解析完成率"
+    from gate_judgment import _check_completed_ratio as run
+    return run(min_ratio, plan_path=SAMPLE_PATH)
 
 
 def _check_evidence_mentions(keyword, label):
-    """Check if evidence-log contains a keyword."""
-    content = EVIDENCE_PATH.read_text(encoding="utf-8")
-    if keyword in content:
-        return "PASS", f"{label}: evidence-log 含'{keyword[:30]}'相关证据"
-    return "NEEDS_HUMAN", f"{label}: evidence-log 未找到'{keyword[:30]}'——需人工确认"
+    from gate_judgment import _check_evidence_mentions as run
+    return run(keyword, label, evidence_path=EVIDENCE_PATH)
 
 
 def _read_archive_aware_governance_text(include=()):
-    """Read hot governance files plus selected archive directories."""
-    ds = _archive_reader()
-    chunks = []
-    hot_paths = []
-    if "plan" in include:
-        hot_paths.append(ds.sample_path)
-    if "evidence" in include:
-        hot_paths.append(ds.evidence_path)
-    if "decision" in include:
-        hot_paths.append(ds.decision_path)
-    if "risk" in include:
-        hot_paths.append(ds.risk_path)
-
-    for path in hot_paths:
-        if path.is_file():
-            chunks.append(path.read_text(encoding="utf-8"))
-
-    archive_dirs = []
-    if "plan" in include:
-        archive_dirs.append(ds.archive_tasks_dir)
-    if "evidence" in include:
-        archive_dirs.append(ds.archive_evidence_dir)
-    if "decision" in include:
-        archive_dirs.append(ds.archive_decisions_dir)
-    if "risk" in include:
-        archive_dirs.append(ds.archive_risks_dir)
-
-    if ds._has_archive():
-        for archive_dir in archive_dirs:
-            if not archive_dir.exists():
-                continue
-            for path in sorted(archive_dir.glob("*.md")):
-                if path.name != ".gitkeep":
-                    chunks.append(path.read_text(encoding="utf-8"))
-
-    return "\n".join(chunks)
+    from gate_judgment import _read_archive_aware_governance_text as run
+    return run(include, data_source=_archive_reader)
 
 
 def _contains_all(text, keywords):
-    return all(keyword in text for keyword in keywords)
+    from gate_judgment import _contains_all as run
+    return run(text, keywords)
 
 
 def _contains_any(text, keywords):
-    return any(keyword in text for keyword in keywords)
+    from gate_judgment import _contains_any as run
+    return run(text, keywords)
 
 
 def _has_line_with_all(text, keyword_groups):
-    """Return True when one line contains at least one keyword from each group."""
-    for line in text.splitlines():
-        if all(_contains_any(line, group) for group in keyword_groups):
-            return True
-    return False
+    from gate_judgment import _has_line_with_all as run
+    return run(text, keyword_groups)
 
 
 def _iter_archive_aware_evidence_units():
-    """Yield hot/archive evidence rows; fallback to whole non-table archive docs."""
-    ds = _archive_reader()
-    if ds.evidence_path.is_file():
-        for line in ds.evidence_path.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("| EVD-"):
-                yield line
-
-    if not ds._has_archive() or not ds.archive_evidence_dir.exists():
-        return
-
-    for path in sorted(ds.archive_evidence_dir.glob("*.md")):
-        if path.name == ".gitkeep":
-            continue
-        content = path.read_text(encoding="utf-8")
-        rows = [
-            line for line in content.splitlines()
-            if line.strip().startswith("| EVD-")
-        ]
-        if rows:
-            for row in rows:
-                yield row
-        else:
-            yield content
+    from gate_judgment import _iter_archive_aware_evidence_units as run
+    return run(data_source=_archive_reader)
 
 
 def _line_has_issue_severity(line):
-    """Detect explicit issue severity values, not schema/header field names."""
-    severity_patterns = [
-        r"严重级别\s*[:：=|]\s*(P0|P1|P2|高风险|中风险|低风险|高严重|中严重|低严重|critical|high|medium|low)\b",
-        r"\bseverity\s*[:：=|]\s*(P0|P1|P2|critical|high|medium|low)\b",
-        r"\b(P0|P1|P2|critical|high|medium|low)\b",
-        r"(高风险|中风险|低风险|高严重|中严重|低严重)",
-    ]
-    return any(re.search(pattern, line, re.IGNORECASE) for pattern in severity_patterns)
+    from gate_judgment import _line_has_issue_severity as run
+    return run(line)
 
 
 def _line_has_issue_status_value(line):
-    """Detect explicit issue status values, not only a status field name."""
-    status_patterns = [
-        r"状态\s*[:：=|]\s*(打开|已关闭|进行中|待处理|处理中|已解决|closed|open|done|resolved|in progress)\b",
-        r"\bstatus\s*[:：=|]\s*(closed|open|done|resolved|in progress)\b",
-    ]
-    return any(re.search(pattern, line, re.IGNORECASE) for pattern in status_patterns)
+    from gate_judgment import _line_has_issue_status_value as run
+    return run(line)
 
 
 def _line_has_real_issue_item(line):
-    """Detect an actual issue item/task entry rather than a schema-only line."""
-    if _contains_any(line.lower(), ("schema", "header")):
-        return False
-    if _contains_any(line, ("字段", "表头", "模板", "格式")):
-        return False
-    item_patterns = [
-        r"(问题项|问题条目|问题实例|issue item)",
-        r"\b(ISSUE|BUG|TASK|FIX|AUDIT)-\d+\b",
-        r"问题\s*\d+",
-        r"问题\s*[:：]\s*\S+",
-        r"任务\s*[:：]\s*\S+",
-    ]
-    return any(re.search(pattern, line, re.IGNORECASE) for pattern in item_patterns)
+    from gate_judgment import _line_has_real_issue_item as run
+    return run(line)
 
 
 def _plan_row_is_inactive(parts):
-    """Return True when a plan table row is completed/terminated/cancelled."""
-    joined = " ".join(parts).lower()
-    inactive_markers = (
-        "已完成", "✅", "已终止", "终止", "取消", "已取消",
-        "closed", "done", "completed", "terminated", "cancelled", "canceled",
-    )
-    return any(marker in joined for marker in inactive_markers)
+    from gate_judgment import _plan_row_is_inactive as run
+    return run(parts)
 
 
 def _check_g10_real_operation_data():
-    """G10: require explicit real operation data for at least one week."""
-    text = _read_archive_aware_governance_text(include=("evidence",))
-    if _has_line_with_all(text, (
-        ("真实运营数据", "真实运行数据", "运行数据", "运营数据"),
-        ("至少 1 周", "至少1周", "一周", "7天", "7 天", "1 week", "one week"),
-    )):
-        return "PASS", "检测到至少 1 周真实运营/运行数据证据（含归档 evidence）"
-    return "NEEDS_HUMAN", "未检测到明确的至少 1 周真实运营数据证据"
+    from gate_judgment import _check_g10_real_operation_data as run
+    return run(data_source=_archive_reader)
 
 
 def _check_g10_feedback_archived_classified():
-    """G10: feedback must be archived and classified."""
-    text = _read_archive_aware_governance_text(include=("evidence", "plan"))
-    if _has_line_with_all(text, (
-        ("用户反馈", "反馈汇总", "反馈归档"),
-        ("已归档", "归档", "archive"),
-        ("分类", "类别", "类型"),
-    )):
-        return "PASS", "检测到已归档且已分类的用户反馈证据（含归档 evidence）"
-    return "NEEDS_HUMAN", "未检测到反馈归档+分类的完整证据"
+    from gate_judgment import _check_g10_feedback_archived_classified as run
+    return run(data_source=_archive_reader)
 
 
 def _check_g10_issue_list_severity_status():
-    """G10: issue list must include severity and status, not just priority."""
-    text = _read_archive_aware_governance_text(include=("evidence", "plan", "risk"))
-    for line in text.splitlines():
-        has_issue_list = _contains_any(line, ("问题清单", "issue list", "问题列表"))
-        if (
-            has_issue_list
-            and _line_has_real_issue_item(line)
-            and _line_has_issue_severity(line)
-            and _line_has_issue_status_value(line)
-        ):
-            return "PASS", "检测到包含严重级别和状态的问题清单"
-    return "NEEDS_HUMAN", "未检测到真实问题项及其严重级别值和状态值"
+    from gate_judgment import _check_g10_issue_list_severity_status as run
+    return run(data_source=_archive_reader)
 
 
 def _check_g10_executable_optimization_items():
-    """G10: optimization direction must be executable, not only a slogan."""
-    text = _read_archive_aware_governance_text(include=("evidence", "plan"))
-    if _has_line_with_all(text, (
-        ("优化项", "改进项", "优化方向", "改进方向", "可执行优化项"),
-        ("Owner", "DRI", "截止", "验收", "验证", "命令", "文件", "任务"),
-    )):
-        return "PASS", "检测到带执行标记的优化/改进项"
-    return "NEEDS_HUMAN", "未检测到可执行优化项（需 Owner/截止/验收/验证等执行标记）"
+    from gate_judgment import _check_g10_executable_optimization_items as run
+    return run(data_source=_archive_reader)
 
 
 def _check_g11_retro_complete():
-    """G11: retro must include the four required sections."""
-    required = ("目标回顾", "结果评估", "原因分析", "经验沉淀")
-    evidence_units = list(_iter_archive_aware_evidence_units())
-    for unit in evidence_units:
-        if _contains_all(unit, required):
-            return "PASS", "复盘证据包含目标回顾/结果评估/原因分析/经验沉淀（含归档 evidence）"
-    text = "\n".join(evidence_units)
-    if not text:
-        text = _read_archive_aware_governance_text(include=("evidence",))
-    missing = [keyword for keyword in required if keyword not in text]
-    if not missing:
-        return "NEEDS_HUMAN", "复盘四要素分散在多条证据中，未检测到同一条复盘证据包含全部四要素"
-    return "NEEDS_HUMAN", f"复盘证据缺少: {', '.join(missing)}"
+    from gate_judgment import _check_g11_retro_complete as run
+    return run(data_source=_archive_reader)
 
 
 def _check_g11_rules_templates_backfilled():
-    """G11: rules/templates backfill needs evidence, commit, or file-change proof."""
-    text = _read_archive_aware_governance_text(include=("evidence",))
-    if _has_line_with_all(text, (
-        ("回灌", "规则修订", "模板更新", "经验回灌"),
-        ("规则", "模板", "protocol", "template", "SKILL.md", "stage-gates.md"),
-        ("commit", "提交", "文件变更", "修改", "更新", ".md", ".py"),
-    )):
-        return "PASS", "检测到规则/模板回灌及提交或文件变更证据"
-    return "NEEDS_HUMAN", "未检测到规则/模板回灌的提交或文件变更证据"
+    from gate_judgment import _check_g11_rules_templates_backfilled as run
+    return run(data_source=_archive_reader)
 
 
 def _check_g11_next_round_direction():
-    """G11: next-round direction must be explicit or an active P0, not any historical P0."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8") if SAMPLE_PATH.is_file() else ""
-    active_section = content
-    marker = "## 当前活跃事项"
-    if marker in content:
-        active_section = content.split(marker, 1)[1].split("\n## ", 1)[0]
-
-    for line in active_section.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("|") or "---" in stripped:
-            continue
-        parts = _split_markdown_table_row(line)
-        normalized = [part.replace("*", "").strip() for part in parts]
-        has_active_p0 = any(part == "P0" for part in normalized)
-        if has_active_p0 and not _plan_row_is_inactive(normalized):
-            return "PASS", "当前活跃事项中存在未完成的 P0 任务，下一轮方向明确"
-
-    next_round_terms = ("下一轮", "下轮")
-    for line in active_section.splitlines():
-        if (
-            _contains_any(line, next_round_terms)
-            and re.search(r"[A-Z]+-\d+", line)
-            and not _plan_row_is_inactive([line])
-        ):
-            return "PASS", "当前活跃事项显式描述下一轮方向并关联任务"
-
-    return "FAIL", "未检测到计划中的下一轮方向或活跃 P0 任务"
+    from gate_judgment import _check_g11_next_round_direction as run
+    return run(plan_path=SAMPLE_PATH, split_markdown_table_row=_split_markdown_table_row)
 
 
-def _check_risk_has_closed(label="关键缺陷"):
-    """Check if risk-log has any closed/critical risk entries."""
-    content = RISK_PATH.read_text(encoding="utf-8")
-    closed_count = sum(1 for line in content.split("\n") if "已关闭" in line or "已缓解" in line)
-    if closed_count > 0:
-        return "PASS", f"{label}: {closed_count} 条风险已关闭/已缓解"
-    return "NEEDS_HUMAN", f"{label}: 无已关闭风险——需人工确认是否所有关键缺陷已处理"
+def _check_risk_has_closed(label='关键缺陷'):
+    from gate_judgment import _check_risk_has_closed as run
+    return run(label, risk_path=RISK_PATH)
 
 
-def _check_plan_has_priority(priority="P0"):
-    """Check if plan-tracker has tasks at a given priority."""
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    count = len(re.findall(rf"\|\s*{priority}\s*\|", content))
-    if count > 0:
-        return "PASS", f"plan-tracker 含 {count} 条 {priority} 任务"
-    return "FAIL", f"plan-tracker 无 {priority} 任务——下轮方向不明确"
+def _check_plan_has_priority(priority='P0'):
+    from gate_judgment import _check_plan_has_priority as run
+    return run(priority, plan_path=SAMPLE_PATH)
 
 
 def _check_version_consistency_heuristic():
-    """Lightweight version consistency check for G11 auto-judgment (SYSGAP-020 enhanced).
+    from gate_judgment import _check_version_consistency_heuristic as check
+    return check(product_root=ROOT, extract_skill_version=_extract_skill_version,
+                 skill_file=lambda: ROOT / "skills/software-project-governance/SKILL.md",
+                 changelog_file=lambda: ROOT / "project/CHANGELOG.md")
 
-    Checks: SKILL.md frontmatter version must appear consistently in all
-    version declaration files (8 positions), CHANGELOG latest entry,
-    and verify_workflow.py hardcoded snippets.
-    """
+
+_GATE_CHECK_BINDINGS = {
+    'check_quantifiable_metrics': lambda: _check_quantifiable_metrics,
+    'check_scope_boundary': lambda: _check_scope_boundary,
+    'check_stakeholders': lambda: _check_stakeholders,
+    'check_out_of_scope': lambda: _check_out_of_scope,
+    'check_all_required_files_exist': lambda: _check_all_required_files_exist,
+    'check_g10_real_operation_data': lambda: _check_g10_real_operation_data,
+    'check_g10_feedback_archived_classified': lambda: _check_g10_feedback_archived_classified,
+    'check_g10_issue_list_severity_status': lambda: _check_g10_issue_list_severity_status,
+    'check_g10_executable_optimization_items': lambda: _check_g10_executable_optimization_items,
+    'check_g11_retro_complete': lambda: _check_g11_retro_complete,
+    'check_g11_rules_templates_backfilled': lambda: _check_g11_rules_templates_backfilled,
+    'check_g11_next_round_direction': lambda: _check_g11_next_round_direction,
+    'check_risk_has_closed': lambda: _check_risk_has_closed,
+    'check_version_consistency_heuristic': lambda: _check_version_consistency_heuristic,
+}
+
+
+def _registered_gate_function(name):
+    binding = _GATE_CHECK_BINDINGS.get(name)
     try:
-        skill_version = _extract_skill_version(ROOT / "skills/software-project-governance/SKILL.md")
-        if not skill_version:
-            return "NEEDS_HUMAN", "无法从 SKILL.md 提取版本号"
-
-        # Version declaration files
-        version_files = [
-            "skills/software-project-governance/core/manifest.json",
-            ".claude-plugin/plugin.json",
-            ".claude-plugin/marketplace.json",
-            ".codex-plugin/plugin.json",
-            "skills/software-project-governance/infra/verify_workflow.py",
-        ]
-        for vf in version_files:
-            vf_path = ROOT / vf
-            if vf_path.exists():
-                vf_content = vf_path.read_text(encoding="utf-8")
-                if skill_version not in vf_content:
-                    return "FAIL", f"{vf} 版本与 SKILL.md ({skill_version}) 不一致"
-
-        # CHANGELOG latest entry
-        changelog_path = ROOT / "project/CHANGELOG.md"
-        if changelog_path.exists():
-            changelog_content = changelog_path.read_text(encoding="utf-8")
-            cl_match = re.search(r'##\s*\[([\d.]+)\]', changelog_content)
-            if cl_match and cl_match.group(1) != skill_version:
-                return "FAIL", f"CHANGELOG.md 最新版本 [{cl_match.group(1)}] 与 SKILL.md ({skill_version}) 不一致"
-
-        return "PASS", f"版本 {skill_version} 在 {len(version_files)} 个声明文件中一致"
-    except Exception as e:
-        return "NEEDS_HUMAN", f"版本检查异常: {e}"
+        return binding() if binding is not None else None
+    except NameError:
+        return None
 
 
 def _gate_check_result_from_definition(check_definition):
-    executor = check_definition.get("executor")
-    if executor == "function":
-        function_map = {
-            "check_quantifiable_metrics": "_check_quantifiable_metrics",
-            "check_scope_boundary": "_check_scope_boundary",
-            "check_stakeholders": "_check_stakeholders",
-            "check_out_of_scope": "_check_out_of_scope",
-            "check_all_required_files_exist": "_check_all_required_files_exist",
-            "check_g10_real_operation_data": "_check_g10_real_operation_data",
-            "check_g10_feedback_archived_classified": "_check_g10_feedback_archived_classified",
-            "check_g10_issue_list_severity_status": "_check_g10_issue_list_severity_status",
-            "check_g10_executable_optimization_items": "_check_g10_executable_optimization_items",
-            "check_g11_retro_complete": "_check_g11_retro_complete",
-            "check_g11_rules_templates_backfilled": "_check_g11_rules_templates_backfilled",
-            "check_g11_next_round_direction": "_check_g11_next_round_direction",
-            "check_risk_has_closed": "_check_risk_has_closed",
-            "check_version_consistency_heuristic": "_check_version_consistency_heuristic",
-        }
-        fn = globals().get(function_map.get(check_definition.get("function"), ""))
-        if not callable(fn):
-            return "FAIL", f"未知检查函数 `{check_definition.get('function')}`"
-        return fn()
-    if executor == "file_exists":
-        return _check_file_exists(check_definition.get("path", ""), check_definition["label"])
-    if executor == "snippet_in_file":
-        return _check_snippet_in_file(
-            check_definition.get("path", ""),
-            check_definition.get("snippet", ""),
-            check_definition["label"],
-        )
-    if executor == "completed_ratio":
-        return _check_completed_ratio(check_definition.get("min_ratio", 0.5))
-    if executor == "research_doc_count":
-        path = ROOT / check_definition.get("path", "project/workflows/software-project-governance/research")
-        min_count = check_definition.get("min_count", 0)
-        if path.exists() and len(list(path.glob("*.md"))) >= min_count:
-            return "PASS", check_definition.get("message", "research docs count satisfied")
-        return "FAIL", check_definition.get("failure_message", f"{path} 文档数量不足")
-    if executor == "constant_result":
-        return check_definition.get("result", "NEEDS_HUMAN"), check_definition.get("message", "")
-    if executor == "evidence_mentions":
-        return _check_evidence_mentions(check_definition.get("keyword", ""), check_definition["label"])
-    return "FAIL", f"未知 executor `{executor}`"
+    from gate_judgment import _gate_check_result_from_definition as run
+    return run(check_definition, evidence_path=EVIDENCE_PATH, product_root=ROOT, plan_path=SAMPLE_PATH,
+               registered_gate_function=_registered_gate_function)
 
 
 def auto_judge_gate(gate_id, unit_id=None):
-    """Auto-judge a specific Gate based on available evidence.
+    from gate_judgment import auto_judge_gate as run
 
-    Returns: dict with overall_result (passed/blocked/passed-with-conditions/needs_human)
-             and per-item results list.
+    def validate_registry(registry):
+        path = _display_path(LIFECYCLE_REGISTRY_PATH, ROOT)
+        return _gate_execution_registry_contract_issues(registry, path)
 
-    ``unit_id`` (optional, FIX-236.2 Wiring B): when a flow-unit id is given
-    and the gate rendered a verdict (not needs_human), the judgment is routed
-    to :func:`loop_gate_processor.process_gate_result` as a thin best-effort
-    call (actor="gate-engine"). The wiring result is attached under the
-    ``wiring`` key only when ``unit_id`` is provided, so existing callers see
-    an unchanged dict shape.
-    """
-    gate_id = gate_id.upper()
-    if not gate_id.startswith("G"):
-        gate_id = "G" + gate_id
-
-    detail = parse_gate_detail(gate_id)
-    if not detail:
-        return {"error": f"Gate {gate_id} not found", "items": []}
-
-    registry, registry_issues = _load_lifecycle_registry()
-    if registry_issues or not isinstance(registry, dict):
-        return {"error": f"Lifecycle registry unavailable for {gate_id}", "items": []}
-    registry_display = _display_path(LIFECYCLE_REGISTRY_PATH, ROOT)
-    registry_contract_issues = _gate_execution_registry_contract_issues(registry, registry_display)
-    if registry_contract_issues:
-        detail_text = "; ".join(registry_contract_issues[:3])
-        if len(registry_contract_issues) > 3:
-            detail_text += f"; ... ({len(registry_contract_issues)} total issues)"
-        return {
-            "gate": gate_id,
-            "title": detail["title"],
-            "overall": "blocked",
-            "items": [{
-                "check": "Gate execution registry contract",
-                "result": "FAIL",
-                "detail": detail_text,
-            }],
-            "summary": f"registry validation failed: {len(registry_contract_issues)} issue(s)",
-        }
-
-    gate_registry = registry.get("gate_execution_registry", {})
-    gate_checks = gate_registry.get("gate_checks", []) if isinstance(gate_registry, dict) else []
-    gate_entry = next(
-        (item for item in gate_checks if isinstance(item, dict) and item.get("gate_id") == gate_id),
-        None,
-    )
-    if not gate_entry:
-        return {"error": f"Gate {gate_id} not found in execution registry", "items": []}
-
-    # ── Execute auto-judgment ──
-    items = []
-    pass_count = 0
-    fail_count = 0
-    human_count = 0
-
-    for check_definition in gate_entry.get("checks", []):
-        try:
-            result, message = _gate_check_result_from_definition(check_definition)
-        except Exception as e:
-            result, message = "FAIL", f"判定异常: {e}"
-
-        items.append({
-            "check": check_definition.get("label", check_definition.get("check_id", "<missing>")),
-            "result": result,
-            "detail": message,
-        })
-        if result == "PASS":
-            pass_count += 1
-        elif result == "FAIL":
-            fail_count += 1
-        else:
-            human_count += 1
-
-    # ── Overall result ──
-    total = len(items)
-    if total == 0:
-        overall = "needs_human"
-    elif fail_count > 0:
-        overall = "blocked"
-    elif human_count > 0:
-        overall = "passed-with-conditions"
-    else:
-        overall = "passed"
-
-    # Diagnostics report local checks. Scoped review is applied by the native writer.
-    result = {
-        "gate": gate_id,
-        "title": detail["title"],
-        "overall": overall,
-        "items": items,
-        "summary": f"PASS={pass_count} FAIL={fail_count} NEEDS_HUMAN={human_count}",
-    }
-    return result
+    return run(gate_id, unit_id, parse_gate_detail=parse_gate_detail,
+               load_lifecycle_registry=lambda: _load_lifecycle_registry(), validate_registry=validate_registry,
+               gate_check_result_from_definition=lambda definition: _gate_check_result_from_definition(definition))
 
 
 def cmd_gate_check(args):
-    """Evaluate only an identified unit's current gate using its scoped receipt."""
-    from loop_workflow import gate_review
-    if not getattr(args, "unit", None) or not getattr(args, "review", None):
-        print("gate-check requires --unit and --review from this unit and iteration", file=sys.stderr)
-        sys.exit(2)
-    try:
-        outcome = gate_review(HOST_PROJECT_ROOT, args.unit, args.gate_id.upper(), args.review)
-    except (ValueError, OSError) as exc:
-        print(f"gate-check: {exc}", file=sys.stderr)
-        sys.exit(2)
-    print(json.dumps(outcome, ensure_ascii=False, indent=2))
-    if outcome.get("decision") in ("escalate", "iterate") and getattr(args, "fail_on_blocked", False):
-        sys.exit(1)
+    from governance_fact_cli import cmd_gate_check as run
+    return run(args)
 
 def check_plugin_freshness():
     """Compare installed plugin version with source repository HEAD."""
@@ -10679,83 +8038,9 @@ def cmd_check_release(args):
 # ── Standalone CLI wrappers for new checks ────────────────────────
 
 def cmd_check_cross_references(args):
-    """CLI wrapper for cross-reference checking (SYSGAP-008)."""
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-    result = check_cross_references()
-    print()
-    print("=== Cross-Reference Check ===")
-    print(f"  Files scanned: {result['total_files_scanned']}")
-    print(f"  References extracted: {result['total_refs']}")
-    fail = False
-
-    if result["dangling"]:
-        fail = True
-        print(f"\n  [FAIL] {len(result['dangling'])} dangling reference(s):")
-        for d in result["dangling"]:
-            print(f"    - {d['source']}:{d['line']} -> {d['target']}")
-    else:
-        print(f"\n  [PASS] No dangling references.")
-
-    if result["deprecated"]:
-        fail = True
-        print(f"\n  [FAIL] {len(result['deprecated'])} deprecated path(s):")
-        for d in result["deprecated"]:
-            print(f"    - {d['source']}:{d['line']}: {d['target']} ({d['deprecated_pattern']})")
-    else:
-        print(f"\n  [PASS] No deprecated paths.")
-
-    if result["cycles"]:
-        fail = True
-        print(f"\n  [FAIL] {len(result['cycles'])} circular reference(s):")
-        for cycle in result["cycles"]:
-            print(f"    - {' -> '.join(cycle)}")
-    else:
-        print(f"\n  [PASS] No circular references.")
-
-    # FIX-432 (F-4/F-A2) / FIX-436 F-8 wording: citation/note quote-sync
-    # guard; the current check_cross_references() always emits the key —
-    # .get only tolerates pre-FIX-432/partial dict shapes that lack it.
-    quote_sync = result.get("quote_sync", [])
-    if quote_sync:
-        fail = True
-        print(f"\n  [FAIL] {len(quote_sync)} quote-sync issue(s) (FIX-432 F-4/F-A2):")
-        for issue in quote_sync:
-            print(f"    - {issue}")
-    else:
-        print(f"\n  [PASS] Citation/note quote sync clean (FIX-432 F-4/F-A2).")
-
-    # FEAT-088 (F-A3): exploration-channel evidence-form guard sub-face.
-    channels_face = result.get("exploration_channels", {}) or {}
-    channel_issues = channels_face.get("issues", [])
-    if channel_issues:
-        fail = True
-        print(f"\n  [FAIL] {len(channel_issues)} exploration-channel "
-              f"evidence-form issue(s) (FEAT-088 F-A3):")
-        for issue in channel_issues:
-            print(f"    - {issue}")
-    else:
-        print(f"\n  [PASS] Exploration-channel evidence forms clean "
-              f"(FEAT-088 F-A3).")
-    for advisory in (channels_face.get("advisories") or [])[:5]:
-        print(f"  [ADVISORY] {advisory}")
-    layering = channels_face.get("probe_layering") or {}
-    if layering:
-        print("\n  Probe layering (honesty statement):")
-        for label, text in layering.items():
-            print(f"    - {label}: {text}")
-
-    # FIX-436 (F-B3 / DEC-317): M10.2 sample-report exploration-block
-    # presence advisory — WARN-class, disclosed but never counted toward
-    # the exit code (MUST NOT be a blocking FAIL per DEC-317).
-    for advisory in check_exploration_sample_advisories():
-        print(f"  [ADVISORY] {advisory}")
-
-    print()
-    if fail:
-        sys.exit(1)
+    from governance_fact_cli import cmd_check_cross_references as run
+    return run(args, check_cross_references=lambda: check_cross_references(),
+               check_exploration_sample_advisories=lambda: check_exploration_sample_advisories())
 
 
 def cmd_check_exploration_channels(args):
@@ -10769,187 +8054,28 @@ def cmd_check_loop_role_skills(_args):
 
 
 def cmd_check_sequential_ids(args):
-    """CLI wrapper for sequential ID checking (SYSGAP-009)."""
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-    result = check_sequential_ids()
-    print()
-    print("=== Sequential ID Check ===")
-    fail = False
-
-    def _report(prefix, ids, gaps):
-        nonlocal fail
-        if ids:
-            print(f"  {prefix}: {ids[0]:03d}-{ids[-1]:03d} ({len(ids)} entries)")
-        else:
-            print(f"  {prefix}: no entries found")
-        if gaps:
-            fail = True
-            print(f"    [FAIL] Gaps detected: missing {gaps}")
-        else:
-            print(f"    [PASS] No gaps.")
-
-    _report("DEC", result["dec_ids"], result["dec_gaps"])
-    _report("EVD", result["evd_ids"], result["evd_gaps"])
-    _report("RISK", result["risk_ids"], result["risk_gaps"])
-
-    orphans = (result.get("orphan_evidence_refs", []) +
-               result.get("orphan_decision_refs", []) +
-               result.get("orphan_risk_refs", []))
-    if orphans:
-        fail = True
-        print(f"\n  [FAIL] {len(orphans)} cross-reference(s) to non-existent task IDs: {orphans}")
-    else:
-        print(f"\n  [PASS] All cross-referenced task IDs exist in plan-tracker.")
-
-    missing_evd = result.get("completed_missing_evidence", [])
-    if missing_evd:
-        fail = True
-        print(f"  [FAIL] {len(missing_evd)} completed task(s) without evidence: {missing_evd}")
-    else:
-        print(f"  [PASS] All completed tasks have evidence.")
-
-    print()
-    if fail:
-        sys.exit(1)
+    from governance_fact_cli import cmd_check_sequential_ids as run
+    return run(args, check_sequential_ids=check_sequential_ids)
 
 
 def cmd_check_structural_validity(args):
-    """CLI wrapper for structural validity checking (SYSGAP-010)."""
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-    issues = check_structural_validity()
-    print()
-    print("=== Structural Validity Check ===")
-    if issues:
-        print(f"  [FAIL] {len(issues)} structural issue(s):")
-        for v in issues:
-            ftype = v.get("type", "unknown")
-            ffile = v.get("file", "?")
-            detail = v.get("detail", "")
-            print(f"    - [{ftype}] {ffile}: {detail}")
-        print()
-        sys.exit(1)
-    print(f"  [PASS] All governance files have valid structure.")
-    print()
+    from governance_fact_cli import cmd_check_structural_validity as run
+    return run(args, check_structural_validity=check_structural_validity)
 
 
 def cmd_check_commit_scope(args):
-    """CLI wrapper for commit scope verification (SYSGAP-012)."""
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-    limit = args.limit if hasattr(args, 'limit') else 20
-    result = check_commit_scope(limit=limit)
-    print()
-    print("=== Commit Scope Verification ===")
-    if result.get("error"):
-        print(f"  [ERROR] {result['error']}")
-        print()
-        return
-    print(f"  Recent commits checked: {result['total_checked']}")
-    issues = result["issues"]
-    if issues:
-        print(f"\n  [WARN] {len(issues)} scope discipline issue(s):")
-        for v in issues:
-            itype = v.get("type", "?")
-            detail = v.get("detail", "")
-            sha = v.get("sha", "?")
-            print(f"    - [{itype}] {sha}: {detail}")
-    else:
-        print(f"\n  [PASS] All recent commits have clean scope discipline.")
-    print()
+    from governance_fact_cli import cmd_check_commit_scope as run
+    return run(args, check_commit_scope=check_commit_scope)
 
 
 def cmd_check_goal_alignment(args):
-    """CLI wrapper for goal alignment checking (SYSGAP-023)."""
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-    result = check_goal_alignment()
-    fail = False
-    print()
-    print("=== Goal Alignment Check ===")
-    if not result["has_project_goal"]:
-        print(f"  [WARN] plan-tracker missing 项目目标 field.")
-    else:
-        project_goal_short = result["project_goal"][:60]
-        print(f"  [INFO] 项目目标: {project_goal_short}...")
-    print(f"  Impact analysis entries: {len(result['entries'])}")
-    exempted = result.get("historical_exempted", [])
-    print(f"  Historical exempted (FIX-371/DEC-227 ✅-terminal + FIX-390 writer-committed, skipped): {len(exempted)}")
-    for row in exempted:
-        print(f"    - {row['task_id']} ({row['evd_id']}): {row['status']}")
-    if result["entries"]:
-        for e in result["entries"]:
-            if e["status"] == "FAIL":
-                fail = True
-                if not e["has_goal"]:
-                    print(f"  [FAIL] {e['task_id']} ({e['evd_id']}): 缺少 目标对齐: 字段")
-                else:
-                    print(f"  [FAIL] {e['task_id']} ({e['evd_id']}): 目标对齐: 仅 {e['goal_len']} chars (需 >= 30)")
-            elif e["status"] == "PASS":
-                print(f"  [PASS] {e['task_id']} ({e['evd_id']}): {e['goal_len']} chars")
-        if result["duplicates"]:
-            print(f"  [WARN] {len(result['duplicates'])} duplicate goal alignment(s):")
-            for t1, t2 in result["duplicates"]:
-                print(f"    - {t1} <-> {t2}")
-    else:
-        print(f"  [PASS] No impact analysis entries to check.")
-    if not fail and result["has_project_goal"]:
-        print(f"  [PASS] All impact analysis entries have valid goal alignment.")
-    print()
-    if fail:
-        sys.exit(1)
+    from governance_fact_cli import cmd_check_goal_alignment as run
+    return run(args, check_goal_alignment=check_goal_alignment)
 
 
 def cmd_check_user_impact(args):
-    """CLI wrapper for user impact checking (SYSGAP-024)."""
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-    result = check_user_impact()
-    fail = False
-    print()
-    print("=== User Impact Check ===")
-    print(f"  Impact analysis entries: {len(result['entries'])}")
-    exempted = result.get("historical_exempted", [])
-    print(f"  Historical exempted (FIX-371/DEC-227 ✅-terminal + FIX-390 writer-committed, skipped): {len(exempted)}")
-    for row in exempted:
-        print(f"    - {row['task_id']} ({row['evd_id']}): {row['status']}")
-    if result["entries"]:
-        for e in result["entries"]:
-            status_label = {
-                "BLOCKING": "BLOCK",
-                "FAIL": "FAIL",
-                "WARN": "WARN",
-                "PASS": "PASS",
-            }.get(e["status"], "?")
-            if e["status"] in ("BLOCKING", "FAIL"):
-                fail = True
-                for issue in e["issues"]:
-                    print(f"  [{status_label}] {e['task_id']} ({e['evd_id']}): {issue}")
-            elif e["status"] == "WARN":
-                for issue in e["issues"]:
-                    print(f"  [WARN] {e['task_id']} ({e['evd_id']}): {issue}")
-            else:
-                print(f"  [PASS] {e['task_id']} ({e['evd_id']}): "
-                      f"获得={e['obtain']}, 体验变化={e['exp_change']}, "
-                      f"迁移指南={e['migration']}")
-    else:
-        print(f"  [PASS] No impact analysis entries to check.")
-    if not fail and not result["blocking"]:
-        print(f"  [PASS] All impact analysis entries have valid user impact analysis.")
-    print()
-    if fail:
-        sys.exit(1)
+    from governance_fact_cli import cmd_check_user_impact as run
+    return run(args, check_user_impact=check_user_impact)
 
 
 # ── SYSGAP-037: check-agent-team subcommand ──────────────────────
@@ -11132,24 +8258,9 @@ def cmd_quality_tools(_args):
 
 
 def cmd_check_hot_fact_source(args):
-    """Run hot fact-source consistency guard independently."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    issues = check_hot_fact_source_consistency()
-    print("\n=== Hot Fact-Source Consistency Check ===")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — hot fact-source sections are synchronized")
-    print()
+    from governance_fact_cli import cmd_check_hot_fact_source as run
+    return run(args,
+               check_hot_fact_source_consistency=lambda *a, **kw: check_hot_fact_source_consistency(*a, **kw))
 
 
 def cmd_check_runtime_readiness_matrix(args):
@@ -11381,7 +8492,7 @@ RECO_ROW_MARKER = "task-priority-analysis 机器写入完成必推荐调用快�
 _LEGACY_SNAPSHOT_MARKER = "完成必推荐调用快照"
 _RECO_TASK_ID_RE = re.compile(r"^[A-Z]+-\d+$")
 _SNAPSHOT_REF_RE = re.compile(r"(?:RECO-[A-Z]+-\d+|EVD-\d+)")
-_TASK_ID_IN_REF_RE = re.compile(r"\b([A-Z]+-\d+)\b")
+from hot_governance_facts import _TASK_ID_IN_REF_RE, _TASK_ID_CELL_RE, _EVIDENCE_DATE_SHAPE_RE
 
 
 def _recommendation_snapshot_row_text(task_id, report, date_str):
@@ -11723,8 +8834,6 @@ def _evidence_machine_row_issues(content):
     return inspect_rows(content, machine_families=_EVIDENCE_MACHINE_ROW_FAMILIES)
 
 
-
-
 _WRITE_GUARD_STATE_FILENAME = ".write-guard-state.json"
 _WRITE_GUARD_STATE_SCHEMA_VERSION = 1
 _WRITE_GUARD_STATE_TOOL = "governance-write-guard/row-family-reconciliation"
@@ -11733,7 +8842,6 @@ _WRITE_GUARD_STATE_TOOL = "governance-write-guard/row-family-reconciliation"
 # (``（机器写入：governance-store evidence-append op-…；schema vN）`` /
 #  ``（机器写入：governance-store decision-append op-…；schema vN）`` —
 # governance_store._build_evidence_row / _build_decision_row).
-_GOVERNANCE_STORE_MARKER_PREFIX = "机器写入：governance-store"
 
 # FIX-390 (DEC-241 消解, 0.89.0) — the Check 18b machine-attestation
 # credential for DEC-168 machine row-family EVIDENCE rows: the writer's own
@@ -11746,15 +8854,11 @@ _GOVERNANCE_STORE_MARKER_PREFIX = "机器写入：governance-store"
 # the credential shape and never re-implements the ledger check. A marker
 # with a malformed/truncated op id (or a foreign writer's marker) does NOT
 # attest — 未知不猜.
-_EVIDENCE_MACHINE_CREDENTIAL_RE = re.compile(
-    re.escape(_GOVERNANCE_STORE_MARKER_PREFIX)
-    + r"\s+evidence-append\s+op-[0-9a-f]{32}\b"
-)
 
 
 def _row_has_governance_store_machine_credential(raw_line):
     from write_guard_records import _row_has_governance_store_machine_credential as has_receipt
-    return has_receipt(raw_line, receipt_pattern=_EVIDENCE_MACHINE_CREDENTIAL_RE)
+    return has_receipt(raw_line, receipt_pattern=_host_policy("_EVIDENCE_MACHINE_CREDENTIAL_RE"))
 
 # ops-ledger receipt anchor: task_row_update receipt lines carry the
 # operation id under this key (task_row_update.RECEIPT_RECORD_KIND face).
@@ -11798,7 +8902,7 @@ def _row_family_credential_ok(surface, row_key, row_text):
     return has_receipt(
         surface, row_key, row_text,
         review_marker=REVIEW_MACHINE_ROW_MARKER,
-        store_prefix=_GOVERNANCE_STORE_MARKER_PREFIX,
+        store_prefix=_host_policy("_GOVERNANCE_STORE_MARKER_PREFIX"),
         operation_anchor=_OPS_LEDGER_RECEIPT_ANCHOR,
     )
 
@@ -11986,8 +9090,6 @@ def cmd_enforcement_check_engine(args):
 def cmd_governance_write_guard(args):
     from write_guard_cli import cmd_governance_write_guard as run
     return run(args, governance_dir=GOVERNANCE_DIR, check_shapes=check_governance_write_shapes)
-
-
 
 
 _BOOTSTRAP_CHECK_TOOL = "governance-write-guard/release-bootstrap-check"
@@ -12595,19 +9697,29 @@ def main(argv=None):
     return registry.load_handler(args.command or "verify", parsed_args=True)(args)
 
 
-_DSH_WORKFLOW_COMMANDS = {cmd.__name__: cmd for cmd in (
-    cmd_check_dsh_preset_smoke, cmd_check_dsh_preset_compat, cmd_check_dsh_boundary, cmd_dsh_doctor,
+_ENGINE_COMMAND_DEFAULTS = {cmd.__name__: cmd for cmd in (
+    cmd_check_dsh_preset_smoke, cmd_check_dsh_preset_compat, cmd_check_dsh_boundary, cmd_dsh_doctor, cmd_gate_check,
 )}
 
 
-def _effective_dsh_command(name, native):
-    if name in _DSH_WORKFLOW_COMMANDS:
+def _effective_engine_command(name, native):
+    if name in _ENGINE_COMMAND_DEFAULTS:
         if name not in globals():
             raise AttributeError(name)
         current = globals()[name]
-        if current is not _DSH_WORKFLOW_COMMANDS[name]:
+        if current is not _ENGINE_COMMAND_DEFAULTS[name]:
             return current
     return native
+
+
+if __name__ in ("verify_workflow", "__main__"):
+    try:
+        from governance_fact_cli import bind_gate_command as _bind_gate_command
+    except (ImportError, SyntaxError):
+        # Unrelated commands can start. Dispatch reports a broken or missing gate owner.
+        pass
+    else:
+        _bind_gate_command(_effective_engine_command)
 
 
 try:
@@ -12619,7 +9731,31 @@ else:
     if __name__ in ("verify_workflow", "__main__"):
         _bind_workflow_dsh(smoke=lambda **kwargs: check_dsh_preset_smoke(**kwargs),
                            channels=lambda root: check_exploration_channels(root),
-                           command=_effective_dsh_command)
+                           command=_effective_engine_command)
+
+
+# Standalone checks have native filesystem/contract readers. When this CLI is loaded,
+# independently imported checks must also see changes to its historical public bindings.
+_evidence_domain._governance_directory = lambda: GOVERNANCE_DIR
+_evidence_domain._task_reference_source = lambda: (EVIDENCE_PATH, expand_task_ids)
+_evidence_domain._evidence_archive_reader = _archive_reader
+_evidence_domain._context_projection = lambda: (
+    _context_file, _context_task, _extract_task_title_from_line, _governance_table_cells,
+    _normalize_priority, _host_policy("GOVERNANCE_CONTEXT_EVIDENCE_TASK_HEADERS"))
+_evidence_domain._state_headers = lambda: _host_policy("GOVERNANCE_CONTEXT_EVIDENCE_STATE_HEADERS")
+_evidence_domain._closed_markers = lambda: _host_policy("GOVERNANCE_CONTEXT_EVIDENCE_CLOSED_MARKERS")
+_evidence_domain._unfinished_markers = lambda: _host_policy("GOVERNANCE_CONTEXT_EVIDENCE_UNFINISHED_MARKERS")
+_evidence_domain._grounding_inputs = lambda: (_current_release_impact_entries, FACT_BASIS_RE, UNGROUNDED_CLAIM_RE)
+_evidence_domain._structured_inputs = lambda: (_current_release_impact_entries, _row_has_governance_store_machine_credential)
+_evidence_domain._goal_inputs = lambda: (
+    GOVERNANCE_DIR, _active_execution_packet_tasks, _load_execution_packets, _validate_product_success_contract)
+import hot_governance_facts as _hot_facts
+_hot_facts.snapshot_date_pattern = lambda: FIX_105_SNAPSHOT_DATE_RE
+risk_domain._risk_path = lambda: RISK_PATH
+risk_domain._plan_path = lambda: SAMPLE_PATH
+risk_domain._task_reference_pattern = lambda: _TASK_ID_IN_REF_RE
+risk_domain._context_readers = lambda: (_context_file, _context_task)
+risk_domain._legacy_aliases = lambda: (RISK_PATH, SAMPLE_PATH, _context_file, _context_task, _TASK_ID_IN_REF_RE)
 
 
 __all__ = sorted({name for name in globals() if not name.startswith("_")}

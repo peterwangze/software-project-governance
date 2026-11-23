@@ -8,14 +8,8 @@ commits) carried month-old snapshots while .governance/ kept moving. The
 watchdog is a CONTENT+timeline assertion: the snapshot's session_date must
 not fall behind the latest .governance/ commit.
 
-This module owns the snapshot check domain. Shared helpers and constants
-still defined in verify_workflow.py (``SESSION_SNAPSHOT_PATH``,
-``HOST_PROJECT_ROOT``, ``SAMPLE_PATH``, ``EVIDENCE_PATH``,
-``FIX_105_SNAPSHOT_DATE_RE``) are reached through a deferred module
-reference rather than a top-level import, so verify_workflow.py can import
-this module at module load time without an import cycle — the same
-deferred-``_vw()`` pattern as checks.risk_domain / checks.manifest /
-checks.capability_registry.
+The CLI supplies its current paths to the watchdog. Standalone callers use the
+selected host and the hot-ledger date pattern.
 
 Design orthogonality: Check 28c (`_snapshot_fact_source_issues`) compares
 the snapshot date vs the latest PUBLISHED RELEASE date; Check 34 compares
@@ -32,44 +26,6 @@ import subprocess
 from datetime import date, datetime
 from pathlib import Path
 
-# ── Shared-helper access (deferred to avoid import cycle) ──────────
-# Same deferred-_vw() pattern as checks.risk_domain (Phase 5b). The shared
-# names are resolved lazily on the first call into this module (after
-# verify_workflow has finished loading) and cached in this module's globals,
-# so moved function bodies can reference them by bare name unchanged.
-
-_VW_CACHE = None
-
-
-def _vw():
-    """Return the verify_workflow module (imported lazily, cached)."""
-    global _VW_CACHE
-    if _VW_CACHE is None:
-        import verify_workflow  # noqa: WPS433 (deferred import on purpose)
-        _VW_CACHE = verify_workflow
-    return _VW_CACHE
-
-
-# Shared names this domain reaches back into verify_workflow for. Refreshed
-# on every call into `_resolve_shared()` (NOT cached) so test-time monkey-
-# patching of verify_workflow attributes propagates.
-_SHARED_NAMES = (
-    "SESSION_SNAPSHOT_PATH",  # live snapshot read (host .governance/)
-    "HOST_PROJECT_ROOT",      # git facts root (FIX-270 mixed-root fix)
-    "SAMPLE_PATH",            # plan-tracker (live mtime secondary baseline)
-    "EVIDENCE_PATH",          # evidence-log (live mtime secondary baseline)
-    "FIX_105_SNAPSHOT_DATE_RE",  # proven **session_date** regex (design §3.2)
-)
-
-
-def _resolve_shared():
-    """Refresh this module's globals with shared names from verify_workflow."""
-    vw = _vw()
-    g = globals()
-    for _name in _SHARED_NAMES:
-        g[_name] = getattr(vw, _name)
-
-
 # ── Domain constants ────────────────────────────────────────────────
 
 # S1c AND double threshold (design §3.2): FAIL only when the snapshot is
@@ -77,6 +33,8 @@ def _resolve_shared():
 # behind. AND avoids mis-FAILing low-frequency projects (design 误报面 ② / F5).
 SNAPSHOT_STALE_DAYS = 7
 SNAPSHOT_STALE_COMMITS = 10
+
+_DEFAULT_PATH = object()
 
 _GIT_TIMEOUT = 15  # mirrors checks.projection._tracked_target_files (15s)
 
@@ -134,7 +92,7 @@ def _git_governance_facts(host_root):
 
 # ── Parsing helpers ────────────────────────────────────────────────
 
-def _parse_session_dates(text):
+def _parse_session_dates(text, session_date_pattern=_DEFAULT_PATH):
     """Return the parseable ``**session_date**`` dates in ``text`` (ascending).
 
     Uses the shared ``FIX_105_SNAPSHOT_DATE_RE`` — the proven regex declared
@@ -147,11 +105,13 @@ def _parse_session_dates(text):
     would otherwise raise TypeError. The caller's pre-check already routes
     non-str input to S1a WARN; this guard protects every future call site.
     """
-    _resolve_shared()
     if not isinstance(text, str):
         return []
     parsed = []
-    for raw in FIX_105_SNAPSHOT_DATE_RE.findall(text):
+    if session_date_pattern is _DEFAULT_PATH:
+        from hot_governance_facts import snapshot_date_pattern
+        session_date_pattern = snapshot_date_pattern()
+    for raw in session_date_pattern.findall(text):
         try:
             parsed.append(datetime.strptime(raw, "%Y-%m-%d").date())
         except ValueError:
@@ -176,11 +136,10 @@ def _to_date(value):
     return None
 
 
-def _live_mtime_baseline():
+def _live_mtime_baseline(plan_path, evidence_path):
     """Return the newest plan-tracker/evidence-log mtime date, or None."""
-    _resolve_shared()
     candidates = []
-    for path in (SAMPLE_PATH, EVIDENCE_PATH):
+    for path in (plan_path, evidence_path):
         try:
             if path is not None and path.is_file():
                 candidates.append(datetime.fromtimestamp(path.stat().st_mtime).date())
@@ -200,7 +159,9 @@ def _set_verdict(result, verdict, reason):
 # ── Check 35 ───────────────────────────────────────────────────────
 
 def check_snapshot_freshness(plan_content=None, snapshot_text=None,
-                             evidence_mtime=None, commit_date=None):
+                             evidence_mtime=None, commit_date=None, *, host_root=_DEFAULT_PATH,
+                             snapshot_path=_DEFAULT_PATH, plan_path=_DEFAULT_PATH,
+                             evidence_path=_DEFAULT_PATH, session_date_pattern=_DEFAULT_PATH):
     """FIX-268 / REQ-145.2 (design audit-145-watchdog-design §3.2): Check 35.
 
     Session-snapshot freshness watchdog. The snapshot's ``session_date``
@@ -266,13 +227,22 @@ def check_snapshot_freshness(plan_content=None, snapshot_text=None,
             "violation_count": 0,
         },
     }
-    _resolve_shared()
+    if any(item is _DEFAULT_PATH for item in (host_root, snapshot_path, plan_path, evidence_path)):
+        from resolve_entry import current_snapshot_paths, snapshot_paths
+        defaults = current_snapshot_paths() if host_root is _DEFAULT_PATH else snapshot_paths(host_root)
+        host_root = defaults[0]
+        if snapshot_path is _DEFAULT_PATH:
+            snapshot_path = defaults[1]
+        if plan_path is _DEFAULT_PATH:
+            plan_path = defaults[2]
+        if evidence_path is _DEFAULT_PATH:
+            evidence_path = defaults[3]
 
     # ── Resolve snapshot text (S1d: nothing to judge) ──
     text = snapshot_text
     if text is None:
         try:
-            if not SESSION_SNAPSHOT_PATH.is_file():
+            if not snapshot_path.is_file():
                 return _set_verdict(
                     result, "no-verdict",
                     "session-snapshot.md not found — no snapshot to judge")
@@ -281,7 +251,7 @@ def check_snapshot_freshness(plan_content=None, snapshot_text=None,
             # path via replacement chars, never raise UnicodeDecodeError
             # (UnicodeDecodeError is a ValueError, NOT caught by IOError/
             # OSError — the "never raises" contract would be broken).
-            text = SESSION_SNAPSHOT_PATH.read_text(
+            text = snapshot_path.read_text(
                 encoding="utf-8", errors="replace")
         except (IOError, OSError):
             return _set_verdict(
@@ -300,7 +270,7 @@ def check_snapshot_freshness(plan_content=None, snapshot_text=None,
                 type(text).__name__))
 
     # ── S1a: session_date parse (fail-safe WARN on drift) ──
-    snap_dates = _parse_session_dates(text)
+    snap_dates = _parse_session_dates(text, session_date_pattern)
     result["stats"]["session_dates_seen"] = len(snap_dates)
     if not snap_dates:
         return _set_verdict(
@@ -317,7 +287,7 @@ def check_snapshot_freshness(plan_content=None, snapshot_text=None,
     facts = None
     git_last = _to_date(commit_date)
     if git_last is None:
-        facts = _git_governance_facts(HOST_PROJECT_ROOT)
+        facts = _git_governance_facts(host_root)
         if facts and facts["tracked"] and facts["dates"]:
             git_last = facts["dates"][-1]
 
@@ -404,7 +374,7 @@ def check_snapshot_freshness(plan_content=None, snapshot_text=None,
     # ── No git commit baseline → secondary mtime baseline (WARN cap) ──
     mtime_dt = _to_date(evidence_mtime)
     if mtime_dt is None:
-        mtime_dt = _live_mtime_baseline()
+        mtime_dt = _live_mtime_baseline(plan_path, evidence_path)
     if mtime_dt is not None:
         result["stats"]["baseline_kind"] = "mtime"
         result["stats"]["mtime_date"] = mtime_dt.isoformat()

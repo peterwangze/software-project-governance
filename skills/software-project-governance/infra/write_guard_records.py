@@ -2,9 +2,18 @@
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import governance_readers
+
+
+_GOVERNANCE_STORE_MARKER_PREFIX = "机器写入：governance-store"
+
+_EVIDENCE_MACHINE_CREDENTIAL_RE = re.compile(
+    re.escape(_GOVERNANCE_STORE_MARKER_PREFIX)
+    + r"\s+evidence-append\s+op-[0-9a-f]{32}\b"
+)
 
 
 def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
@@ -247,7 +256,7 @@ def _evidence_machine_row_issues(content, *, machine_families):
     return issues
 
 
-def _row_has_governance_store_machine_credential(raw_line, *, receipt_pattern):
+def _row_has_governance_store_machine_credential(raw_line, *, receipt_pattern=_EVIDENCE_MACHINE_CREDENTIAL_RE):
     """True when an evidence-log row carries the DEC-168 machine credential.
 
     FIX-390 Check 18b input: a row written by ``governance-store

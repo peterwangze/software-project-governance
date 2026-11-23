@@ -14704,6 +14704,63 @@ class GateAutoJudgmentEvidenceQualityTests(unittest.TestCase):
     def _patch_governance_paths(self, sp, ep, rp):
         return patch.multiple(vw, SAMPLE_PATH=sp, EVIDENCE_PATH=ep, RISK_PATH=rp)
 
+    def test_gate_resolves_each_registered_checker_when_its_item_runs(self):
+        def first():
+            vw._check_scope_boundary = lambda: ("PASS", "replacement ran second")
+            return "PASS", "first item"
+
+        with patch.object(vw, "_check_quantifiable_metrics", first), \
+             patch.object(vw, "_check_scope_boundary", side_effect=AssertionError("resolved before first item")):
+            result = vw.auto_judge_gate("G1")
+        self.assertEqual([item["detail"] for item in result["items"][:2]],
+                         ["first item", "replacement ran second"])
+
+    def test_g4_reads_the_fallback_file_set_after_the_manifest_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            good = Path(directory) / "present"
+            good.touch()
+            missing = good.with_name("missing")
+            for fallback, manifest_files, expected in (
+                (good, None, "PASS"), (missing, None, "FAIL"),
+                (missing, {"real-manifest-file": good}, "PASS"), (good, None, "PASS"),
+            ):
+                with self.subTest(fallback=fallback, manifest_files=manifest_files):
+                    def read_manifest():
+                        vw.REQUIRED_FILES = {"late-file": fallback}
+                        return manifest_files
+
+                    with patch.object(vw, "REQUIRED_FILES", {"early-file": good}), \
+                         patch.object(vw, "build_required_files_from_manifest", side_effect=read_manifest) as read:
+                        result = vw.auto_judge_gate("G4")
+                    read.assert_called_once_with()
+                    row = next(item for item in result["items"] if item["check"] == "仓库结构符合约定")
+                    self.assertEqual(row["result"], expected)
+                    if expected == "FAIL":
+                        self.assertIn("late-file", row["detail"])
+
+    def test_registry_reader_and_diagnostic_path_follow_preceding_gate_steps(self):
+        diagnostic_paths = []
+        new_path = vw.ROOT / "changed-during-registry-read.json"
+
+        def load_registry():
+            vw.LIFECYCLE_REGISTRY_PATH = new_path
+            return {}, []
+
+        def detail(gate):
+            vw._load_lifecycle_registry = load_registry
+            return {"title": gate}
+
+        def validate(registry, display):
+            diagnostic_paths.append(display)
+            return ["deliberately incomplete registry"]
+
+        with patch.object(vw, "parse_gate_detail", detail), patch.object(vw, "LIFECYCLE_REGISTRY_PATH"), \
+             patch.object(vw, "_load_lifecycle_registry", side_effect=AssertionError("reader selected before detail")), \
+             patch.object(vw, "_gate_execution_registry_contract_issues", validate):
+            result = vw.auto_judge_gate("G1")
+        self.assertEqual(result["overall"], "blocked")
+        self.assertEqual(diagnostic_paths, [vw._display_path(new_path, vw.ROOT)])
+
     def test_auto_judge_gate_reads_registry_check_definitions(self):
         """FIX-138: gate judgment is registry-backed for classic G1-G11."""
         data = json.loads(vw.LIFECYCLE_REGISTRY_PATH.read_text(encoding="utf-8"))
@@ -24994,12 +25051,15 @@ class Fix479Check9TerminalStatusNormalizationTests(unittest.TestCase):
         """Both plan-table call sites (check_task_deadline Check 9 +
         check_protocol_compliance DRI) source the SAME predicate; the old
         scattered bare-word tuple leaves zero residue."""
-        src = Path(vw.__file__).read_text(encoding="utf-8")
-        self.assertEqual(
-            len(re.findall(r"if _status_is_terminal_cell\(status\):", src)), 2,
-            "both call sites must use the shared terminal predicate")
-        self.assertNotIn('in ("已完成", "已终止")', src,
-                         "old scattered word-form must be gone")
+        import inspect
+        from checks import commit
+
+        dri = inspect.getsource(vw.check_protocol_compliance)
+        deadline = inspect.getsource(commit.check_task_deadline)
+        self.assertIn("if _status_is_terminal_cell(status):", dri)
+        self.assertIn("if status_is_terminal_cell(status):", deadline)
+        self.assertIn("status_is_terminal_cell=_status_is_terminal_cell", inspect.getsource(vw.check_task_deadline))
+        self.assertNotIn('in ("已完成", "已终止")', dri + deadline)
 
     def test_dri_check_skips_emoji_terminal_rows(self):
         """DRI face (the other same-shape call site): emoji-prefixed
@@ -25203,10 +25263,12 @@ class Fix481ActiveTaskHeaderSemanticMappingTests(unittest.TestCase):
         """P5 pin: the parser delegates ID-first rows to the shared
         public mapping (parse_task_dependencies) and builds no local
         header-name index for the semantic columns."""
-        src = Path(vw.__file__).read_text(encoding="utf-8")
-        start = src.index("def parse_current_active_tasks(")
-        end = src.index("def _active_execution_packet_tasks(")
-        func_src = src[start:end]
+        import inspect
+        import plan_task_selection
+
+        func_src = inspect.getsource(plan_task_selection.parse_current_active_tasks)
+        self.assertIn("from plan_task_selection import parse_current_active_tasks",
+                      inspect.getsource(vw.parse_current_active_tasks))
         self.assertIn("parse_task_dependencies(", func_src,
                       "ID-first rows must delegate to the shared public mapping")
         self.assertNotIn('"状态"', func_src,

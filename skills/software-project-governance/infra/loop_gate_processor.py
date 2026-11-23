@@ -95,29 +95,6 @@ import loop_paro_engine
 # ─── Fixed anchors ─────────────────────────────────────────────
 PLUGIN_HOME = Path(__file__).resolve().parent.parent
 
-# ─── Deferred verify_workflow import (avoid import cycle) ──────
-# verify_workflow imports this module's loop_fuse_check via the thin release-gate
-# wiring, so this module MUST NOT import verify_workflow at module top level. We
-# resolve it lazily on first runtime read (the ``_vw()`` pattern, same as
-# loop_health.py / loop_engine.py rollup).
-_VW_CACHE = None
-
-
-def _vw():
-    """Lazy accessor for verify_workflow (deferred to avoid the import cycle).
-
-    verify_workflow imports this module (the release-gate fuse-block wiring),
-    so importing it at module top level would create a cycle. Resolved lazily on
-    the first runtime read, exactly mirroring the ``_vw()`` pattern in
-    ``loop_health.py`` and ``loop_engine.rollup_loop_state``.
-    """
-    global _VW_CACHE
-    if _VW_CACHE is None:
-        import verify_workflow  # noqa: WPS433 deferred import
-        _VW_CACHE = verify_workflow
-    return _VW_CACHE
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Phase / outcome / result vocabulary (kept in sync with loop_paro_engine).
 # ═══════════════════════════════════════════════════════════════════════════
@@ -251,23 +228,13 @@ class GateOutcome:
 
 
 def _runtime_path(root):
-    """Resolve the ``flow-unit-runtime.json`` path for a host ``root``.
-
-    Uses verify_workflow's ``_flow_unit_runtime_path`` (the canonical RISK-040
-    HOST_PROJECT_ROOT resolver) when ``root`` is given or verify_workflow is the
-    source of truth. When verify_workflow cannot be loaded (defensive), falls
-    back to ``<root>/.governance/flow-unit-runtime.json``. Returns None when
-    neither root nor verify_workflow can resolve a path. Never raises.
-    """
+    """Resolve the active host's runtime, including a freshly rebound default."""
     if root is not None:
-        # Explicit host root: prefer verify_workflow's path constant for shape
-        # consistency, but compute directly so we never depend on the deferred
-        # import for a caller-supplied root (tests pass a tmpdir root).
         return Path(root) / ".governance" / "flow-unit-runtime.json"
     try:
-        vw = _vw()
-        return Path(vw._flow_unit_runtime_path(None))
-    except Exception:  # pragma: no cover - defensive (vw loader shape changed)
+        from resolve_entry import current_host_root
+        return Path(current_host_root()) / ".governance" / "flow-unit-runtime.json"
+    except Exception:
         return None
 
 

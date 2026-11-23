@@ -58,6 +58,69 @@ class ExecutionPacketBudgetTests(unittest.TestCase):
         self.tmpdir = tempfile.mkdtemp(prefix="feat092_budget_")
         self.packet_path = Path(self.tmpdir) / "execution-packets.json"
 
+    def test_builder_replaced_during_task_selection_is_bound_once_for_the_document(self):
+        tasks = _fake_tasks()
+        later = mock.Mock(side_effect=AssertionError("builder changed within one document"))
+        original = vw.build_execution_packet
+        calls = []
+
+        def selected_builder(task, **options):
+            calls.append(task["task_id"])
+            vw.build_execution_packet = later
+            return original(task, **options)
+
+        def select_tasks():
+            vw.build_execution_packet = selected_builder
+            return tasks
+
+        with mock.patch.object(vw, "_active_execution_packet_tasks", select_tasks), \
+             mock.patch.object(vw, "build_execution_packet", side_effect=AssertionError("builder selected too early")):
+            packets = vw.generate_execution_packets(governance_dir=self.packet_path.parent)["packets"]
+        self.assertEqual(list(packets), ["FIX-201", "FIX-202"])
+        self.assertEqual(calls, ["FIX-201", "FIX-202"])
+        later.assert_not_called()
+
+    def test_registered_check_uses_each_packet_validator_and_its_current_field_rules(self):
+        import registry
+
+        check = registry.load_check("check-18c")
+        tasks = _fake_tasks()
+        payload = {task["task_id"]: vw.build_execution_packet(task) for task in tasks}
+        self.packet_path.write_text(json.dumps({"packets": payload}), encoding="utf-8")
+        with mock.patch.object(vw, "SAMPLE_PATH", self.packet_path.with_name("plan-tracker.md")), \
+             mock.patch.object(vw, "parse_current_active_tasks", return_value=tasks):
+            def select():
+                vw.EXECUTION_PACKET_REQUIRED_FIELDS = {**vw.EXECUTION_PACKET_REQUIRED_FIELDS, "runtime_witness": str}
+                return tasks
+            with mock.patch.object(vw, "parse_current_active_tasks", select), \
+                 mock.patch.object(vw, "EXECUTION_PACKET_REQUIRED_FIELDS", vw.EXECUTION_PACKET_REQUIRED_FIELDS):
+                entries = check(self.packet_path)["entries"]
+                self.assertEqual([entry["task_id"] for entry in entries], ["FIX-201", "FIX-202"])
+                self.assertTrue(all("runtime_witness missing or invalid" in entry["issues"] for entry in entries))
+            def first_validator(task, packet):
+                vw._validate_execution_packet = lambda t, p: ["replaced between packets"]
+                return ["first validator"]
+            with mock.patch.object(vw, "_validate_execution_packet", first_validator):
+                self.assertEqual([e["issues"] for e in check(self.packet_path)["entries"]],
+                                 [["first validator"], ["replaced between packets"]])
+            with mock.patch.object(vw, "_execution_packet_field_issues", return_value=["shared field rule"]):
+                self.assertTrue(all("shared field rule" in e["issues"] for e in check(self.packet_path)["entries"]))
+
+    def test_generation_uses_the_binding_after_reading_the_existing_document(self):
+        payload = {"packets": {}}
+        replacement = mock.Mock(return_value=payload)
+
+        def read_document(path, *, missing_ok):
+            self.assertEqual(path, self.packet_path)
+            self.assertTrue(missing_ok)
+            vw.generate_execution_packets = replacement
+            return {"FIX-201": {}}, {}
+
+        with mock.patch.object(vw, "_read_execution_packet_document", read_document), \
+             mock.patch.object(vw, "generate_execution_packets", side_effect=AssertionError("resolved before read")):
+            self._run(write=False)
+        self.assertEqual(replacement.call_args.kwargs["task_ids"], {"FIX-201"})
+
     def _run(self, *, write=True, task=(), budget=...):
         """Invoke cmd_execution_packet under the patched paths.
 

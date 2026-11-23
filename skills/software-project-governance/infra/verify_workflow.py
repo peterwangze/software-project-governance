@@ -167,7 +167,7 @@ from bootstrap_aggregate import cmd_governance_bootstrap
 import task_row_update
 from task_row_update import cmd_task_row_update
 import governance_store
-from contracts import QUALITY_BUDGET_DIMENSIONS
+from contracts import DETERMINISTIC_SCAFFOLD_TYPES, QUALITY_BUDGET_DIMENSIONS
 from governance_store import (cmd_decision_append, cmd_evidence_append,
                               cmd_locks_amend, cmd_locks_extend,
                               cmd_locks_release)
@@ -11597,6 +11597,9 @@ def _validate_execution_packet(task, packet):
     return issues
 
 
+DETERMINISTIC_SCAFFOLD_DIR = ROOT / "skills/software-project-governance/core/templates/deterministic-scaffolds"
+
+
 PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS = {
     "user": str,
     "job_to_be_done": str,
@@ -11610,98 +11613,24 @@ PRODUCT_SUCCESS_PLACEHOLDER_RE = re.compile(
     r"(?:\b(?:todo|tbd|to_be_defined|n/?a|none|null|unknown)\b|待补|待定|暂无|占位)",
     re.IGNORECASE,
 )
+
 PRODUCT_SUCCESS_PROCESS_ONLY_RE = re.compile(
     r"(?:check-governance|verify_workflow|evidence-log|plan-tracker|review|commit|push|archive|"
     r"治理|证据|归档|提交|审查|记录|hook|\bgate\s*(?:G?\d+\s*)?(?:已?通过|pass(?:ed)?\b))",
     re.IGNORECASE,
 )
+
 PRODUCT_SUCCESS_USER_OUTCOME_RE = re.compile(
     r"(?:user|customer|persona|outcome|value|usable|acceptance|scenario|quality|competitive|"
     r"用户|客户|使用者|产品|体验|价值|可用|可见|验收|场景|质量|竞争)",
     re.IGNORECASE,
 )
+
 PRODUCT_SUCCESS_RUNNABLE_RE = re.compile(
     r"(?:e2e|test|unit|integration|fixture|ci|command|script|execute|run|pass|"
     r"测试|验证|用例|命令|脚本|执行|通过)",
     re.IGNORECASE,
 )
-
-
-def _is_meaningful_product_success_text(value):
-    return isinstance(value, str) and len(value.strip()) >= 8 and not PRODUCT_SUCCESS_PLACEHOLDER_RE.match(value)
-
-
-def _is_meaningful_product_success_list(value):
-    return (
-        isinstance(value, list)
-        and bool(value)
-        and all(_is_meaningful_product_success_text(item) for item in value)
-    )
-
-
-def _is_process_only_product_success_metric(value):
-    text = value.strip()
-    if not PRODUCT_SUCCESS_PROCESS_ONLY_RE.search(text):
-        return False
-    # A visible, repeatable product interaction can itself display review or evidence data.
-    interaction = re.search(
-        r"(?:用户|客户|使用者).*?(?:刷新|打开|点击|选择|搜索|运行|执行).*?(?:看到|看见|显示|返回|恢复|找到|获取)"
-        r"|\b(?:users?|customers?|operators?)\b.*?\b(?:refresh|open|click|select|search|run|execute)\w*\b"
-        r".*?\b(?:see|display|show|return|restore|find|receive)\w*\b",
-        text, re.IGNORECASE,
-    )
-    return interaction is None
-
-
-def _validate_product_success_contract(packet):
-    issues = []
-    contract = packet.get("product_success_contract") if isinstance(packet, dict) else None
-    if not isinstance(contract, dict):
-        return ["missing product_success_contract"]
-
-    for field, expected_type in PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS.items():
-        value = contract.get(field)
-        if not isinstance(value, expected_type):
-            issues.append(f"product_success_contract.{field} missing or invalid")
-            continue
-        if expected_type is str and not _is_meaningful_product_success_text(value):
-            issues.append(f"product_success_contract.{field} must be specific and non-placeholder")
-        if expected_type is list and not _is_meaningful_product_success_list(value):
-            issues.append(f"product_success_contract.{field} must be a non-empty specific string array")
-
-    success_metrics = contract.get("success_metrics")
-    if isinstance(success_metrics, list) and success_metrics:
-        process_only = [
-            metric for metric in success_metrics
-            if isinstance(metric, str) and _is_process_only_product_success_metric(metric)
-        ]
-        if process_only:
-            issues.append("product_success_contract.success_metrics must not contain process-only metrics")
-        if not any(isinstance(metric, str) and PRODUCT_SUCCESS_USER_OUTCOME_RE.search(metric) for metric in success_metrics):
-            issues.append("product_success_contract.success_metrics needs at least one user-visible outcome")
-        if not any(isinstance(metric, str) and PRODUCT_SUCCESS_RUNNABLE_RE.search(metric) for metric in success_metrics):
-            issues.append("product_success_contract.success_metrics needs at least one runnable validation signal")
-
-    return issues
-
-
-def check_product_success_contracts(packet_path=None):
-    """FIX-088: active P0/P1 tasks need explicit Product Success Contract fields."""
-    result = {
-        "required_tasks": [],
-        "entries": [],
-        "issues": [],
-        "pass": True,
-    }
-    for task, packet in _declared_packet_checks(result, packet_path, 'product_success_contract'):
-        task_id = task["task_id"]
-        issues = _validate_product_success_contract(packet)
-        status = "PASS" if not issues else "FAIL"
-        if issues:
-            result["pass"] = False
-        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
-    return result
-
 
 ACCEPTANCE_CONTRACT_REQUIRED_FIELDS = {
     "scenario": str,
@@ -11718,77 +11647,15 @@ ACCEPTANCE_RUNNABLE_COMMAND_RE = re.compile(
 )
 
 ACCEPTANCE_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
+
 ACCEPTANCE_NOT_RUN_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
 
-
-def _is_meaningful_acceptance_text(value):
-    return _is_meaningful_product_success_text(value)
-
-
-def _is_acceptance_run_deferrable(task):
-    status = str(task.get("status", "")).strip().lower()
-    return any(marker in status for marker in ("待实施", "待启动", "pending", "planned"))
-
-
-def _validate_acceptance_contract(task, packet):
-    issues = []
-    contract = packet.get("acceptance_contract") if isinstance(packet, dict) else None
-    if not isinstance(contract, dict):
-        return ["missing acceptance_contract"]
-
-    for field, expected_type in ACCEPTANCE_CONTRACT_REQUIRED_FIELDS.items():
-        value = contract.get(field)
-        if not isinstance(value, expected_type):
-            issues.append(f"acceptance_contract.{field} missing or invalid")
-            continue
-        if expected_type is str and not _is_meaningful_acceptance_text(value):
-            issues.append(f"acceptance_contract.{field} must be specific and non-placeholder")
-
-    command = contract.get("command")
-    if isinstance(command, str) and _is_meaningful_acceptance_text(command):
-        if not ACCEPTANCE_RUNNABLE_COMMAND_RE.search(command):
-            issues.append("acceptance_contract.command must be a runnable validation command")
-
-    last_run = contract.get("last_run")
-    if isinstance(last_run, dict):
-        status = str(last_run.get("status", "")).strip().lower()
-        exit_code = last_run.get("exit_code")
-        summary = last_run.get("summary")
-        if status in ACCEPTANCE_NOT_RUN_STATUSES and _is_acceptance_run_deferrable(task):
-            if not _is_meaningful_acceptance_text(summary):
-                issues.append("acceptance_contract.last_run.summary must be specific and non-placeholder")
-            return issues
-        if PRODUCT_SUCCESS_PLACEHOLDER_RE.search(status) or status not in ACCEPTANCE_PASS_STATUSES:
-            issues.append("acceptance_contract.last_run.status must be PASS")
-        if not isinstance(exit_code, int) or exit_code != 0:
-            issues.append("acceptance_contract.last_run.exit_code must be 0")
-        if not _is_meaningful_acceptance_text(summary):
-            issues.append("acceptance_contract.last_run.summary must be specific and non-placeholder")
-
-    return issues
-
-
-def check_acceptance_contracts(packet_path=None):
-    """FIX-089: active P0/P1 tasks need runnable acceptance contracts."""
-    result = {
-        "required_tasks": [],
-        "entries": [],
-        "issues": [],
-        "pass": True,
-    }
-    for task, packet in _declared_packet_checks(result, packet_path, 'acceptance_contract'):
-        task_id = task["task_id"]
-        issues = _validate_acceptance_contract(task, packet)
-        status = "PASS" if not issues else "FAIL"
-        if issues:
-            result["pass"] = False
-        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
-    return result
-
-
 QUALITY_BUDGET_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
+
 QUALITY_BUDGET_PENDING_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
+
 QUALITY_BUDGET_EXEMPT_STATUSES = {"exempt", "exception", "waived", "not_applicable", "n/a", "豁免", "不适用"}
+
 QUALITY_BUDGET_VALIDATION_SIGNAL_RE = re.compile(
     r"(?:"
     r"python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|cmd|powershell|pwsh|"
@@ -11798,6 +11665,7 @@ QUALITY_BUDGET_VALIDATION_SIGNAL_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
 QUALITY_BUDGET_WEAK_PROSE_RE = re.compile(
     r"(?:"
     r"quality is okay|quality is ok|looks fine|looks good|good enough|review says|review artifact|"
@@ -11806,46 +11674,6 @@ QUALITY_BUDGET_WEAK_PROSE_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
-
-
-def _normalize_quality_dimension_name(value):
-    text = str(value or "").strip().lower()
-    aliases = {
-        "perf": "performance",
-        "性能": "performance",
-        "可靠性": "reliability",
-        "安全": "security",
-        "安全性": "security",
-        "a11y": "accessibility",
-        "可访问性": "accessibility",
-        "无障碍": "accessibility",
-        "user_experience": "ux",
-        "user experience": "ux",
-        "用户体验": "ux",
-        "体验": "ux",
-        "maint": "maintainability",
-        "可维护性": "maintainability",
-        "维护性": "maintainability",
-    }
-    return aliases.get(text, text)
-
-
-def _quality_budget_dimensions(contract):
-    dimensions = contract.get("dimensions") if isinstance(contract, dict) else None
-    if isinstance(dimensions, dict):
-        rows = []
-        for name, payload in dimensions.items():
-            if isinstance(payload, dict):
-                row = dict(payload)
-                row.setdefault("dimension", name)
-                rows.append(row)
-            else:
-                rows.append({"dimension": name, "value": payload})
-        return rows
-    if isinstance(dimensions, list):
-        return dimensions
-    return None
-
 
 # FIX-475: single shared vocabulary + predicate for the Check 18f/18g
 # pending allowance — no second semantic source (FIX-292 lesson). Markers
@@ -11867,94 +11695,6 @@ TASK_PENDING_STATUS_MARKERS = (
     "wip",
 )
 
-
-def _is_task_pending_status_allowed(task):
-    status = str(task.get("status", "")).strip().lower()
-    return any(marker in status for marker in TASK_PENDING_STATUS_MARKERS)
-
-
-def _has_quality_validation_signal(value):
-    if not _is_meaningful_product_success_text(value):
-        return False
-    return bool(QUALITY_BUDGET_VALIDATION_SIGNAL_RE.search(value))
-
-
-def _is_weak_quality_prose(value):
-    return isinstance(value, str) and bool(QUALITY_BUDGET_WEAK_PROSE_RE.search(value))
-
-
-def _validate_quality_budget(task, packet):
-    issues = []
-    contract = packet.get("quality_budget") if isinstance(packet, dict) else None
-    if not isinstance(contract, dict):
-        return ["missing quality_budget"]
-
-    dimensions = _quality_budget_dimensions(contract)
-    if not isinstance(dimensions, list) or not dimensions:
-        return ["quality_budget.dimensions missing or invalid"]
-
-    seen = set()
-    for idx, item in enumerate(dimensions):
-        if not isinstance(item, dict):
-            issues.append(f"quality_budget.dimensions[{idx}] must be an object")
-            continue
-        dimension = _normalize_quality_dimension_name(item.get("dimension"))
-        if dimension not in QUALITY_BUDGET_DIMENSIONS:
-            issues.append(f"quality_budget dimension invalid: {item.get('dimension')}")
-            continue
-        if dimension in seen:
-            issues.append(f'quality_budget duplicate dimension: {dimension}')
-        seen.add(dimension)
-
-        for field in ("threshold", "validation", "evidence"):
-            if not _is_meaningful_product_success_text(item.get(field)):
-                issues.append(f"quality_budget.{dimension}.{field} must be specific and non-placeholder")
-            elif _is_weak_quality_prose(item.get(field)):
-                issues.append(f"quality_budget.{dimension}.{field} must not be review/prose-only quality evidence")
-
-        if not _has_quality_validation_signal(item.get("validation")):
-            issues.append(f"quality_budget.{dimension}.validation must include a runnable command, metric, or quality signal")
-
-        status = str(item.get("status", "")).strip().lower()
-        if PRODUCT_SUCCESS_PLACEHOLDER_RE.search(status):
-            issues.append(f"quality_budget.{dimension}.status must be PASS, NOT_RUN_YET, or EXEMPT")
-            continue
-        if status in QUALITY_BUDGET_EXEMPT_STATUSES:
-            if not _is_meaningful_product_success_text(item.get("exception")):
-                issues.append(f"quality_budget.{dimension}.exception must justify the exemption")
-            continue
-        if status in QUALITY_BUDGET_PENDING_STATUSES and _is_task_pending_status_allowed(task):
-            continue
-        if status not in QUALITY_BUDGET_PASS_STATUSES:
-            issues.append(f"quality_budget.{dimension}.status must be PASS or a justified EXEMPT status")
-
-    required = contract.get('required_dimensions', [])
-    if not isinstance(required, list) or not all(isinstance(dim, str) and dim in QUALITY_BUDGET_DIMENSIONS for dim in required):
-        return issues + ['quality_budget.required_dimensions must name supported dimensions']
-    missing = [dim for dim in required if dim not in seen]
-    if missing:
-        issues.append(f"quality_budget missing dimension(s): {', '.join(missing)}")
-    return issues
-
-
-def check_quality_budget(packet_path=None):
-    """FIX-090: active P0/P1 tasks need quality budget thresholds and evidence."""
-    result = {
-        "required_tasks": [],
-        "entries": [],
-        "issues": [],
-        "pass": True,
-    }
-    for task, packet in _declared_packet_checks(result, packet_path, 'quality_budget'):
-        task_id = task["task_id"]
-        issues = _validate_quality_budget(task, packet)
-        status = "PASS" if not issues else "FAIL"
-        if issues:
-            result["pass"] = False
-        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
-    return result
-
-
 VERTICAL_SLICE_REQUIRED_FIELDS = (
     "user_visible_slice",
     "demo_path",
@@ -11963,8 +11703,11 @@ VERTICAL_SLICE_REQUIRED_FIELDS = (
     "status",
     "evidence",
 )
+
 VERTICAL_SLICE_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
+
 VERTICAL_SLICE_PENDING_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
+
 VERTICAL_SLICE_DEMO_SIGNAL_RE = re.compile(
     r"(?:"
     r"\b(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|powershell|pwsh|"
@@ -11973,89 +11716,34 @@ VERTICAL_SLICE_DEMO_SIGNAL_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
 VERTICAL_SLICE_USER_SIGNAL_RE = re.compile(
     r"(?:user|persona|customer|operator|viewer|admin|用户|客户|使用者|操作者|可见|页面|命令输出|行为|场景)",
     re.IGNORECASE,
 )
+
 VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE = re.compile(
     r"(?:\b(?:run|observe|see|click|open|use|complete|display|command output|scenario|page|form|result|pass)\b|"
     r"运行|观察|看到|点击|打开|使用|完成|显示|命令输出|场景|页面|表单|结果|通过)",
     re.IGNORECASE,
 )
+
 VERTICAL_SLICE_TECH_LAYER_RE = re.compile(
     r"(?:repository|service layer|abstraction|refactor|backend|database|schema|dao|model layer|internal|"
     r"技术层|服务层|抽象|重构|后端|数据库|数据表|内部)",
     re.IGNORECASE,
 )
+
 VERTICAL_SLICE_BROAD_SCOPE_RE = re.compile(
     r"(?:entire project|whole project|whole codebase|all files|everything|\*|全仓|整个项目|所有文件|全部重构|无边界)",
     re.IGNORECASE,
 )
+
 VERTICAL_SLICE_WEAK_PROSE_RE = re.compile(
     r"(?:review says|review artifact|manual review|looks good|looks fine|prose|subjective|审查通过|人工审查|看起来可以|主观)",
     re.IGNORECASE,
 )
 
-
-def _validate_vertical_slice(task, packet):
-    issues = []
-    contract = packet.get("vertical_slice") if isinstance(packet, dict) else None
-    if not isinstance(contract, dict):
-        return ["missing vertical_slice"]
-
-    for field in VERTICAL_SLICE_REQUIRED_FIELDS:
-        if field == "status":
-            continue
-        if not _is_meaningful_product_success_text(contract.get(field)):
-            issues.append(f"vertical_slice.{field} must be specific and non-placeholder")
-        elif _is_weak_quality_prose(contract.get(field)) or VERTICAL_SLICE_WEAK_PROSE_RE.search(str(contract.get(field))):
-            issues.append(f"vertical_slice.{field} must not be review/prose-only evidence")
-
-    user_slice = str(contract.get("user_visible_slice", ""))
-    if _is_meaningful_product_success_text(user_slice) and not VERTICAL_SLICE_USER_SIGNAL_RE.search(user_slice):
-        issues.append("vertical_slice.user_visible_slice must describe a user-observable behavior or scenario")
-    if VERTICAL_SLICE_TECH_LAYER_RE.search(user_slice) and not VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE.search(user_slice):
-        issues.append("vertical_slice.user_visible_slice must not disguise a technical-layer change as a user-visible slice")
-
-    demo_path = str(contract.get("demo_path", ""))
-    if _is_meaningful_product_success_text(demo_path) and not VERTICAL_SLICE_DEMO_SIGNAL_RE.search(demo_path):
-        issues.append("vertical_slice.demo_path must include a runnable demo, smoke, test, check, URL, screenshot, or command signal")
-
-    scope_guard = str(contract.get("scope_guard", ""))
-    if VERTICAL_SLICE_BROAD_SCOPE_RE.search(scope_guard):
-        issues.append("vertical_slice.scope_guard must define a narrow slice boundary, not the whole project/codebase")
-
-    status = str(contract.get("status", "")).strip().lower()
-    if PRODUCT_SUCCESS_PLACEHOLDER_RE.search(status):
-        issues.append("vertical_slice.status must be PASS or NOT_RUN_YET for planned work")
-    elif status in VERTICAL_SLICE_PENDING_STATUSES and _is_task_pending_status_allowed(task):
-        pass
-    elif status not in VERTICAL_SLICE_PASS_STATUSES:
-        issues.append("vertical_slice.status must be PASS unless the task is explicitly pending/planned")
-
-    return issues
-
-
-def check_vertical_slices(packet_path=None):
-    """FIX-091: active P0/P1 tasks need usable vertical-slice delivery packets."""
-    result = {
-        "required_tasks": [],
-        "entries": [],
-        "issues": [],
-        "pass": True,
-    }
-    for task, packet in _declared_packet_checks(result, packet_path, 'vertical_slice'):
-        task_id = task["task_id"]
-        issues = _validate_vertical_slice(task, packet)
-        status = "PASS" if not issues else "FAIL"
-        if issues:
-            result["pass"] = False
-        result["entries"].append({"task_id": task_id, "status": status, "issues": issues})
-    return result
-
-
-DETERMINISTIC_SCAFFOLD_DIR = ROOT / "skills/software-project-governance/core/templates/deterministic-scaffolds"
-DETERMINISTIC_SCAFFOLD_TYPES = ("web-app", "cli-tool", "workflow-plugin")
 DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS = (
     "## Product Success Contract",
     "## PRD-lite",
@@ -12065,27 +11753,33 @@ DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS = (
     "## Demo Checklist",
     "## Tooling",
 )
+
 DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS = QUALITY_BUDGET_DIMENSIONS
+
 DETERMINISTIC_SCAFFOLD_COMMAND_RE = re.compile(
     r"(?m)^\s*-\s*`(?:(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|powershell|pwsh)\b|"
     r"(?:\./|\.\\|skills/|skills\\|scripts/|scripts\\).+)",
     re.IGNORECASE,
 )
+
 DETERMINISTIC_SCAFFOLD_SIGNAL_RE = re.compile(
     r"(?:persona|jtbd|job to be done|non-goal|success metric|acceptance|quality budget|demo checklist|"
     r"vertical slice|rollback|PRD-lite|用户|验收|质量预算|演示|切片)",
     re.IGNORECASE,
 )
+
 DETERMINISTIC_SCAFFOLD_WEAK_RE = re.compile(
     r"(?:review says|review passed|reviewer approved|approved.*prose|looks good|manual review only|"
     r"ship it|whatever|\bTODO\b|\bTBD\b|\bTO_BE_DEFINED\b|待补|待定|占位)",
     re.IGNORECASE,
 )
+
 DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE = re.compile(
     r"(?:entire repository|whole repository|whole repo|full repo|entire repo|"
     r"entire project|whole project|whole codebase|all files|everything|\*|全仓|整个项目|所有文件|全部重构|无边界)",
     re.IGNORECASE,
 )
+
 DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS = {
     "## Product Success Contract": (
         r"(?:persona|用户|使用者)",
@@ -12117,105 +11811,6 @@ DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS = {
     ),
 }
 
-
-def _scaffold_dir(scaffold_dir=None):
-    return Path(scaffold_dir) if scaffold_dir is not None else DETERMINISTIC_SCAFFOLD_DIR
-
-
-def _scaffold_path(scaffold_type, scaffold_dir=None):
-    return _scaffold_dir(scaffold_dir) / f"{scaffold_type}.md"
-
-
-def render_deterministic_scaffold(scaffold_type, scaffold_dir=None):
-    """FIX-092: render a deterministic scaffold template by type."""
-    if scaffold_type not in DETERMINISTIC_SCAFFOLD_TYPES:
-        valid = ", ".join(DETERMINISTIC_SCAFFOLD_TYPES)
-        raise ValueError(f"unknown scaffold type '{scaffold_type}'. Valid types: {valid}")
-    path = _scaffold_path(scaffold_type, scaffold_dir)
-    if not path.exists():
-        raise FileNotFoundError(f"missing scaffold template: {path}")
-    return path.read_text(encoding="utf-8")
-
-
-def _extract_markdown_section_body(text, heading):
-    pattern = re.compile(rf"(?ms)^{re.escape(heading)}\s*\n(.*?)(?=^## |\Z)")
-    match = pattern.search(text)
-    return match.group(1).strip() if match else ""
-
-
-def _validate_deterministic_scaffold_text(scaffold_type, text):
-    issues = []
-    if not isinstance(text, str) or len(text.strip()) < 800:
-        return [f"{scaffold_type}: scaffold template must be substantial and non-empty"]
-    if DETERMINISTIC_SCAFFOLD_WEAK_RE.search(text):
-        issues.append(f"{scaffold_type}: scaffold must not contain placeholders or review/prose-only language")
-    for section in DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS:
-        if section not in text:
-            issues.append(f"{scaffold_type}: missing section {section}")
-            continue
-        body = _extract_markdown_section_body(text, section)
-        bullets = re.findall(r"(?m)^\s*-\s+\S", body)
-        if len(body) < 120 or len(bullets) < 2:
-            issues.append(f"{scaffold_type}: section {section} must contain substantive scaffold bullets")
-        for signal in DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS.get(section, ()):
-            if not re.search(signal, body, re.IGNORECASE):
-                issues.append(f"{scaffold_type}: section {section} missing required signal {signal}")
-    if not DETERMINISTIC_SCAFFOLD_COMMAND_RE.search(text):
-        issues.append(f"{scaffold_type}: missing runnable command bullet in backticks")
-    if not DETERMINISTIC_SCAFFOLD_SIGNAL_RE.search(text):
-        issues.append(f"{scaffold_type}: missing product success, acceptance, quality, demo, or slice signals")
-    lower_text = text.lower()
-    for dimension in DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS:
-        if dimension not in lower_text:
-            issues.append(f"{scaffold_type}: missing quality dimension {dimension}")
-    if DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE.search(text):
-        issues.append(f"{scaffold_type}: scaffold scope guard must not allow whole-project/all-files delivery")
-    return issues
-
-
-def check_deterministic_scaffolds(scaffold_dir=None):
-    """FIX-092: verify weak-LLM deterministic scaffold templates and generator index."""
-    base = _scaffold_dir(scaffold_dir)
-    result = {
-        "required_types": list(DETERMINISTIC_SCAFFOLD_TYPES),
-        "entries": [],
-        "issues": [],
-        "pass": True,
-    }
-    index_path = base / "index.md"
-    if not base.exists():
-        result["pass"] = False
-        result["issues"].append(f"missing scaffold directory: {base}")
-        return result
-    if not index_path.exists():
-        result["pass"] = False
-        result["issues"].append(f"missing scaffold index: {index_path}")
-        index_text = ""
-    else:
-        index_text = index_path.read_text(encoding="utf-8")
-        if "generate-deterministic-scaffold" not in index_text:
-            result["pass"] = False
-            result["issues"].append("scaffold index must document generate-deterministic-scaffold")
-        for scaffold_type in DETERMINISTIC_SCAFFOLD_TYPES:
-            if f"{scaffold_type}.md" not in index_text:
-                result["pass"] = False
-                result["issues"].append(f"scaffold index missing {scaffold_type}.md")
-
-    for scaffold_type in DETERMINISTIC_SCAFFOLD_TYPES:
-        path = _scaffold_path(scaffold_type, base)
-        if not path.exists():
-            issues = [f"missing scaffold template: {path}"]
-        else:
-            issues = _validate_deterministic_scaffold_text(scaffold_type, path.read_text(encoding="utf-8"))
-        status = "PASS" if not issues else "FAIL"
-        if issues:
-            result["pass"] = False
-        result["entries"].append({"scaffold_type": scaffold_type, "path": str(path), "status": status, "issues": issues})
-    return result
-
-
-# ── FIX-093: User Interruption Policy v2 ─────────────────────────
-
 INTERRUPTION_POLICY_REQUIRED_PHRASES = (
     "User Interruption Policy v2",
     "critical-only",
@@ -12241,6 +11836,7 @@ INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS = (
     "validation",
     "rollback",
 )
+
 INTERRUPTION_POLICY_PLACEHOLDER_RE = re.compile(
     r"(?:\b(?:todo|tbd|to_be_defined|n/?a|none|null|unknown)\b|待补|待定|暂无|占位)",
     re.IGNORECASE,
@@ -12255,6 +11851,7 @@ INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS = (
     "external_dependency",
     "mode_change",
 )
+
 INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS = (
     "product intent",
     "acceptance",
@@ -12340,163 +11937,177 @@ INTERRUPTION_POLICY_DEFAULT_EXAMPLES = [
 ]
 
 
+def _product_success_policy():
+    from delivery_contract_checks import ProductSuccessPolicy
+    return ProductSuccessPolicy(
+        required_fields=PRODUCT_SUCCESS_CONTRACT_REQUIRED_FIELDS,
+        placeholder=PRODUCT_SUCCESS_PLACEHOLDER_RE,
+        process_only_metric=_is_process_only_product_success_metric,
+        user_outcome=PRODUCT_SUCCESS_USER_OUTCOME_RE,
+        runnable=PRODUCT_SUCCESS_RUNNABLE_RE,
+    )
+
+
+def _acceptance_policy():
+    from delivery_contract_checks import AcceptancePolicy
+    return AcceptancePolicy(
+        required_fields=ACCEPTANCE_CONTRACT_REQUIRED_FIELDS,
+        runnable_command=ACCEPTANCE_RUNNABLE_COMMAND_RE,
+        pass_statuses=ACCEPTANCE_PASS_STATUSES,
+        not_run_statuses=ACCEPTANCE_NOT_RUN_STATUSES,
+        placeholder=PRODUCT_SUCCESS_PLACEHOLDER_RE,
+    )
+
+
+def _quality_budget_policy():
+    from delivery_contract_checks import QualityBudgetPolicy
+    return QualityBudgetPolicy(
+        dimensions=QUALITY_BUDGET_DIMENSIONS,
+        pass_statuses=QUALITY_BUDGET_PASS_STATUSES,
+        pending_statuses=QUALITY_BUDGET_PENDING_STATUSES,
+        exempt_statuses=QUALITY_BUDGET_EXEMPT_STATUSES,
+        validation_signal=QUALITY_BUDGET_VALIDATION_SIGNAL_RE,
+        weak_prose=QUALITY_BUDGET_WEAK_PROSE_RE,
+        placeholder=PRODUCT_SUCCESS_PLACEHOLDER_RE,
+        pending_task=_is_task_pending_status_allowed,
+    )
+
+
+def _vertical_slice_policy():
+    from delivery_contract_checks import VerticalSlicePolicy
+    return VerticalSlicePolicy(
+        required_fields=VERTICAL_SLICE_REQUIRED_FIELDS,
+        pass_statuses=VERTICAL_SLICE_PASS_STATUSES,
+        pending_statuses=VERTICAL_SLICE_PENDING_STATUSES,
+        demo_signal=VERTICAL_SLICE_DEMO_SIGNAL_RE,
+        user_signal=VERTICAL_SLICE_USER_SIGNAL_RE,
+        behavior_signal=VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE,
+        tech_layer=VERTICAL_SLICE_TECH_LAYER_RE,
+        broad_scope=VERTICAL_SLICE_BROAD_SCOPE_RE,
+        weak_prose=VERTICAL_SLICE_WEAK_PROSE_RE,
+        weak_quality_prose=QUALITY_BUDGET_WEAK_PROSE_RE,
+        placeholder=PRODUCT_SUCCESS_PLACEHOLDER_RE,
+        pending_task=_is_task_pending_status_allowed,
+    )
+
+
+def _scaffold_policy():
+    from scaffold_contracts import ScaffoldPolicy
+    return ScaffoldPolicy(
+        types=DETERMINISTIC_SCAFFOLD_TYPES,
+        sections=DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS,
+        quality_dimensions=DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS,
+        command=DETERMINISTIC_SCAFFOLD_COMMAND_RE,
+        signal=DETERMINISTIC_SCAFFOLD_SIGNAL_RE,
+        weak=DETERMINISTIC_SCAFFOLD_WEAK_RE,
+        broad_scope=DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE,
+        section_signals=DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS,
+    )
+
+
+def _interruption_policy():
+    from interruption_contracts import InterruptionPolicy
+    return InterruptionPolicy(
+        required_phrases=INTERRUPTION_POLICY_REQUIRED_PHRASES,
+        template_phrases=INTERRUPTION_POLICY_REQUIRED_TEMPLATE_PHRASES,
+        assumption_fields=INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS,
+        placeholder=INTERRUPTION_POLICY_PLACEHOLDER_RE,
+        critical_keys=INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS,
+        packet_signals=INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS,
+        examples=INTERRUPTION_POLICY_DEFAULT_EXAMPLES,
+    )
+
+
+def _is_process_only_product_success_metric(value):
+    from delivery_contract_checks import _is_process_only_product_success_metric as judge
+    return judge(value, PRODUCT_SUCCESS_PROCESS_ONLY_RE)
+
+
+def _is_task_pending_status_allowed(task):
+    from delivery_contract_checks import _is_task_pending_status_allowed as judge
+    return judge(task, TASK_PENDING_STATUS_MARKERS)
+
+
+def _validate_product_success_contract(packet):
+    from delivery_contract_checks import _validate_product_success_contract as validate
+    return validate(packet, _product_success_policy())
+
+
+def _validate_acceptance_contract(task, packet):
+    from delivery_contract_checks import _validate_acceptance_contract as validate
+    return validate(task, packet, _acceptance_policy())
+
+
+def _validate_quality_budget(task, packet):
+    from delivery_contract_checks import _validate_quality_budget as validate
+    return validate(task, packet, _quality_budget_policy())
+
+
+def _validate_vertical_slice(task, packet):
+    from delivery_contract_checks import _validate_vertical_slice as validate
+    return validate(task, packet, _vertical_slice_policy())
+
+
+def check_product_success_contracts(packet_path=None):
+    from delivery_contract_checks import check_declared_contracts
+    return check_declared_contracts(
+        "product_success_contract", packet_path, _declared_packet_checks,
+        lambda task, packet: _validate_product_success_contract(packet),
+    )
+
+
+def check_acceptance_contracts(packet_path=None):
+    from delivery_contract_checks import check_declared_contracts
+    return check_declared_contracts(
+        "acceptance_contract", packet_path, _declared_packet_checks,
+        _validate_acceptance_contract,
+    )
+
+
+def check_quality_budget(packet_path=None):
+    from delivery_contract_checks import check_declared_contracts
+    return check_declared_contracts(
+        "quality_budget", packet_path, _declared_packet_checks,
+        _validate_quality_budget,
+    )
+
+
+def check_vertical_slices(packet_path=None):
+    from delivery_contract_checks import check_declared_contracts
+    return check_declared_contracts(
+        "vertical_slice", packet_path, _declared_packet_checks,
+        _validate_vertical_slice,
+    )
+
+
+def render_deterministic_scaffold(scaffold_type, scaffold_dir=None):
+    from scaffold_contracts import render_deterministic_scaffold as render
+    return render(scaffold_type, scaffold_dir, DETERMINISTIC_SCAFFOLD_TYPES, default_dir=DETERMINISTIC_SCAFFOLD_DIR)
+
+
+def check_deterministic_scaffolds(scaffold_dir=None):
+    from scaffold_contracts import check_deterministic_scaffolds as check
+    return check(scaffold_dir, _scaffold_policy(), default_dir=DETERMINISTIC_SCAFFOLD_DIR)
+
+
 def classify_user_interruption(decision):
-    """Return the required user-interruption action for a decision fact map."""
-    if not isinstance(decision, dict):
-        return "ask_user"
-    if any(bool(decision.get(key)) for key in INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS):
-        return "ask_user"
-    if bool(decision.get("irreversible")) or bool(decision.get("destructive")):
-        return "ask_user"
-    if bool(decision.get("routine_execution")) or bool(decision.get("local_validation")) or bool(decision.get("governance_record_update")) or bool(decision.get("commit_push")):
-        if decision.get("known_scope", False) is True:
-            return "auto_execute"
-        return "record_assumption"
-    if decision.get("reversible", False) is True:
-        return "record_assumption"
-    return "ask_user"
-
-
-def _validate_assumption_record(record):
-    if not isinstance(record, dict):
-        return ["assumption_record missing or invalid"]
-    issues = []
-    for field in INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS:
-        value = record.get(field)
-        if not isinstance(value, str) or len(value.strip()) < 12:
-            issues.append(f"assumption_record.{field} missing or too short")
-        elif INTERRUPTION_POLICY_PLACEHOLDER_RE.search(value):
-            issues.append(f"assumption_record.{field} must not be placeholder text")
-    return issues
+    from interruption_contracts import classify_user_interruption as classify
+    return classify(decision, INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS)
 
 
 def _validate_interruption_policy_examples(examples):
-    issues = []
-    seen_critical = set()
-    seen_auto = set()
-    seen_assumption = False
-    for example in examples:
-        if not isinstance(example, dict):
-            issues.append("policy example must be object")
-            continue
-        example_id = example.get("id", "<unknown>")
-        decision = example.get("decision")
-        expected = example.get("expected_action")
-        actual = classify_user_interruption(decision)
-        if actual != expected:
-            issues.append(f"{example_id}: expected {expected}, got {actual}")
-        if isinstance(decision, dict):
-            seen_critical.update(key for key in INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS if decision.get(key))
-            if expected == "auto_execute":
-                if decision.get("routine_execution"):
-                    seen_auto.add("routine_execution")
-                if decision.get("local_validation"):
-                    seen_auto.add("local_validation")
-                if decision.get("governance_record_update"):
-                    seen_auto.add("governance_record_update")
-                if decision.get("commit_push"):
-                    seen_auto.add("commit_push")
-            if expected == "record_assumption":
-                seen_assumption = True
-                issues.extend(f"{example_id}: {issue}" for issue in _validate_assumption_record(decision.get("assumption_record")))
-
-    missing_critical = sorted(set(INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS) - seen_critical)
-    if missing_critical:
-        issues.append(f"missing critical trigger examples: {', '.join(missing_critical)}")
-    required_auto = {"routine_execution", "local_validation", "governance_record_update", "commit_push"}
-    missing_auto = sorted(required_auto - seen_auto)
-    if missing_auto:
-        issues.append(f"missing auto-execute examples: {', '.join(missing_auto)}")
-    if not seen_assumption:
-        issues.append("missing record_assumption example")
-    return issues
+    from interruption_contracts import _validate_interruption_policy_examples as validate
+    return validate(examples, _interruption_policy(), classify_user_interruption)
 
 
-def _validate_packet_interruption_policy(packet, task_id):
-    policy = packet.get("interruption_policy") if isinstance(packet, dict) else None
-    if not isinstance(policy, dict):
-        return [f"{task_id}: missing interruption_policy"]
-    issues = []
-    mode = policy.get("mode")
-    if not isinstance(mode, str) or "critical" not in mode.lower():
-        issues.append(f"{task_id}: interruption_policy.mode must declare critical-only/default execute behavior")
-    for field in ("critical_triggers", "auto_execute", "assumption_record", "interruption_budget"):
-        if field not in policy:
-            issues.append(f"{task_id}: interruption_policy.{field} missing")
-    critical = policy.get("critical_triggers")
-    if not isinstance(critical, list) or not all(isinstance(item, str) and len(item.strip()) >= 8 for item in critical):
-        issues.append(f"{task_id}: interruption_policy.critical_triggers must be a non-empty string array")
-    else:
-        critical_text = " ".join(critical).lower()
-        for token in INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS:
-            if token not in critical_text:
-                issues.append(f"{task_id}: interruption_policy.critical_triggers missing {token}")
-    auto_execute = policy.get("auto_execute")
-    if not isinstance(auto_execute, list) or not all(isinstance(item, str) and len(item.strip()) >= 8 for item in auto_execute):
-        issues.append(f"{task_id}: interruption_policy.auto_execute must be a non-empty string array")
-    else:
-        auto_text = " ".join(auto_execute).lower()
-        if "routine" not in auto_text or "record" not in auto_text:
-            issues.append(f"{task_id}: interruption_policy.auto_execute must cover routine execution and record updates")
-    issues.extend(f"{task_id}: {issue}" for issue in _validate_assumption_record(policy.get("assumption_record")))
-    budget = policy.get("interruption_budget")
-    if not isinstance(budget, str) or not re.search(r"(?:one|1|一次|single)", budget, re.IGNORECASE):
-        issues.append(f"{task_id}: interruption_policy.interruption_budget must limit interruptions per work unit")
-    return issues
-
-
-def check_interruption_policy(
-    interaction_boundary_path=None,
-    template_path=None,
-    packet_path=None,
-    examples=None,
-):
-    """FIX-093: verify critical-only user interruption policy and packet fields."""
-    boundary_path = Path(interaction_boundary_path) if interaction_boundary_path is not None else INTERACTION_BOUNDARY_PATH
-    policy_template_path = Path(template_path) if template_path is not None else USER_INTERRUPTION_POLICY_TEMPLATE_PATH
-    result = {
-        "examples": [],
-        "required_tasks": [],
-        "entries": [],
-        "issues": [],
-        "pass": True,
-    }
-
-    if not boundary_path.is_file():
-        result["issues"].append(f"missing interaction boundary policy: {boundary_path}")
-    else:
-        boundary_text = boundary_path.read_text(encoding="utf-8")
-        for phrase in INTERRUPTION_POLICY_REQUIRED_PHRASES:
-            if phrase not in boundary_text:
-                result["issues"].append(f"interaction boundary missing required phrase: {phrase}")
-
-    if not policy_template_path.is_file():
-        result["issues"].append(f"missing interruption policy template: {policy_template_path}")
-    else:
-        template_text = policy_template_path.read_text(encoding="utf-8")
-        for phrase in INTERRUPTION_POLICY_REQUIRED_TEMPLATE_PHRASES:
-            if phrase not in template_text:
-                result["issues"].append(f"interruption policy template missing required phrase: {phrase}")
-
-    example_list = examples if examples is not None else INTERRUPTION_POLICY_DEFAULT_EXAMPLES
-    example_issues = _validate_interruption_policy_examples(example_list)
-    for example in example_list:
-        decision = example.get("decision", {}) if isinstance(example, dict) else {}
-        result["examples"].append({
-            "id": example.get("id", "<unknown>") if isinstance(example, dict) else "<invalid>",
-            "expected_action": example.get("expected_action") if isinstance(example, dict) else None,
-            "actual_action": classify_user_interruption(decision),
-        })
-    result["issues"].extend(example_issues)
-
-    for task, packet in _declared_packet_checks(result, packet_path, "interruption_policy"):
-        task_id = task["task_id"]
-        entry_issues = _validate_packet_interruption_policy(packet, task_id) if isinstance(packet, dict) else ["invalid packet"]
-        result["entries"].append({"task_id": task_id, "status": "FAIL" if entry_issues else "PASS", "issues": entry_issues})
-
-    if result["issues"] or any(entry["status"] == "FAIL" for entry in result["entries"]):
-        result["pass"] = False
-    return result
+def check_interruption_policy(interaction_boundary_path=None, template_path=None, packet_path=None, examples=None):
+    from interruption_contracts import check_interruption_policy as check
+    return check(
+        INTERACTION_BOUNDARY_PATH if interaction_boundary_path is None else Path(interaction_boundary_path),
+        USER_INTERRUPTION_POLICY_TEMPLATE_PATH if template_path is None else Path(template_path),
+        packet_path, examples, _declared_packet_checks, _interruption_policy(),
+        classify_user_interruption, _validate_interruption_policy_examples,
+    )
 
 
 def build_execution_packet(task, **options):
@@ -19933,192 +19544,55 @@ def cmd_check_governance_pack_status(args):
 
 
 def cmd_check_product_success_contracts(args):
-    """Run Product Success Contract guard independently."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_product_success_contracts()
-    print("\n=== Product Success Contract Check ===")
-    print(f"  Required active P0/P1 contract(s): {len(result['required_tasks'])}")
-    issue_count = len(result["issues"])
-    for issue in result["issues"]:
-        print(f"  [FAIL] {issue}")
-    for entry in result["entries"]:
-        if entry["status"] == "FAIL":
-            issue_count += 1
-            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
-        else:
-            print(f"  [PASS] {entry['task_id']}")
-    if issue_count:
-        print(f"\n  Result: FAILED — {issue_count} issue(s)")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n  Result: PASSED — product success contracts are ready")
-    print(); render_rb2_goal_contract_block()
+    from delivery_contract_cli import run_contract_check
+    run_contract_check(
+        args, check_product_success_contracts, title="Product Success Contract Check",
+        count_label="Required active P0/P1 contract(s)", success="product success contracts are ready",
+    )
+    render_rb2_goal_contract_block()
 
 
 def cmd_check_acceptance_contracts(args):
-    """Run Executable Acceptance Contract guard independently."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_acceptance_contracts()
-    print("\n=== Executable Acceptance Contract Check ===")
-    print(f"  Required active P0/P1 acceptance contract(s): {len(result['required_tasks'])}")
-    issue_count = len(result["issues"])
-    for issue in result["issues"]:
-        print(f"  [FAIL] {issue}")
-    for entry in result["entries"]:
-        if entry["status"] == "FAIL":
-            issue_count += 1
-            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
-        else:
-            print(f"  [PASS] {entry['task_id']}")
-    if issue_count:
-        print(f"\n  Result: FAILED — {issue_count} issue(s)")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n  Result: PASSED — executable acceptance contracts are ready")
-    print()
+    from delivery_contract_cli import run_contract_check
+    run_contract_check(
+        args, check_acceptance_contracts, title="Executable Acceptance Contract Check",
+        count_label="Required active P0/P1 acceptance contract(s)", success="executable acceptance contracts are ready",
+    )
 
 
 def cmd_check_quality_budget(args):
-    """Run Quality Budget Gate independently."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_quality_budget()
-    print("\n=== Quality Budget Check ===")
-    print(f"  Required active P0/P1 quality budget(s): {len(result['required_tasks'])}")
-    issue_count = len(result["issues"])
-    for issue in result["issues"]:
-        print(f"  [FAIL] {issue}")
-    for entry in result["entries"]:
-        if entry["status"] == "FAIL":
-            issue_count += 1
-            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
-        else:
-            print(f"  [PASS] {entry['task_id']}")
-    if issue_count:
-        print(f"\n  Result: FAILED — {issue_count} issue(s)")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n  Result: PASSED — quality budgets are ready")
-    print()
+    from delivery_contract_cli import run_contract_check
+    run_contract_check(
+        args, check_quality_budget, title="Quality Budget Check",
+        count_label="Required active P0/P1 quality budget(s)", success="quality budgets are ready",
+    )
 
 
 def cmd_check_vertical_slices(args):
-    """Run Vertical Slice Delivery Packet guard independently."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_vertical_slices()
-    print("\n=== Vertical Slice Check ===")
-    print(f"  Required active P0/P1 vertical slice(s): {len(result['required_tasks'])}")
-    issue_count = len(result["issues"])
-    for issue in result["issues"]:
-        print(f"  [FAIL] {issue}")
-    for entry in result["entries"]:
-        if entry["status"] == "FAIL":
-            issue_count += 1
-            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
-        else:
-            print(f"  [PASS] {entry['task_id']}")
-    if issue_count:
-        print(f"\n  Result: FAILED — {issue_count} issue(s)")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n  Result: PASSED — vertical slice packets are ready")
-    print()
+    from delivery_contract_cli import run_contract_check
+    run_contract_check(
+        args, check_vertical_slices, title="Vertical Slice Check",
+        count_label="Required active P0/P1 vertical slice(s)", success="vertical slice packets are ready",
+    )
 
 
 def cmd_check_deterministic_scaffolds(args):
-    """Run Weak-LLM Deterministic Scaffold guard independently."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_deterministic_scaffolds()
-    print("\n=== Weak-LLM Deterministic Scaffold Check ===")
-    print(f"  Required scaffold type(s): {len(result['required_types'])}")
-    issue_count = len(result["issues"])
-    for issue in result["issues"]:
-        print(f"  [FAIL] {issue}")
-    for entry in result["entries"]:
-        if entry["status"] == "FAIL":
-            issue_count += 1
-            print(f"  [FAIL] {entry['scaffold_type']}: {', '.join(entry['issues'])}")
-        else:
-            print(f"  [PASS] {entry['scaffold_type']}")
-    if issue_count:
-        print(f"\n  Result: FAILED — {issue_count} issue(s)")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n  Result: PASSED — deterministic scaffolds are ready")
-    print()
+    from delivery_contract_cli import run_contract_check
+    run_contract_check(
+        args, check_deterministic_scaffolds, title="Weak-LLM Deterministic Scaffold Check",
+        count_label="Required scaffold type(s)", success="deterministic scaffolds are ready",
+        required="required_types", entry_key="scaffold_type",
+    )
 
 
 def cmd_check_interruption_policy(args):
-    """Run User Interruption Policy v2 guard independently."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_interruption_policy()
-    print("\n=== User Interruption Policy Check ===")
-    print(f"  Policy example(s): {len(result['examples'])}")
-    print(f"  Active packet policy field(s): {len(result['required_tasks'])}")
-    issue_count = len(result["issues"])
-    for issue in result["issues"]:
-        print(f"  [FAIL] {issue}")
-    for example in result["examples"]:
-        if example["actual_action"] == example["expected_action"]:
-            print(f"  [PASS] {example['id']}: {example['actual_action']}")
-        else:
-            issue_count += 1
-            print(f"  [FAIL] {example['id']}: expected {example['expected_action']}, got {example['actual_action']}")
-    for entry in result["entries"]:
-        if entry["status"] == "FAIL":
-            issue_count += 1
-            print(f"  [FAIL] {entry['task_id']}: {', '.join(entry['issues'])}")
-        else:
-            print(f"  [PASS] {entry['task_id']}: interruption policy ready")
-    if issue_count:
-        print(f"\n  Result: FAILED — {issue_count} issue(s)")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("\n  Result: PASSED — user interruption policy is ready")
-    print()
+    from delivery_contract_cli import run_interruption_check
+    run_interruption_check(args, check_interruption_policy)
 
 
 def cmd_generate_deterministic_scaffold(args):
-    """Render a deterministic scaffold template to stdout or a file."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    try:
-        content = render_deterministic_scaffold(args.type)
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"ERROR: {exc}")
-        sys.exit(1)
-    if getattr(args, "output", None):
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(content, encoding="utf-8")
-        print(f"Wrote deterministic scaffold: {output_path}")
-    else:
-        print(content, end="" if content.endswith("\n") else "\n")
+    from delivery_contract_cli import generate_scaffold
+    generate_scaffold(args, render_deterministic_scaffold)
 
 
 def _web_console_url(host="127.0.0.1", port=5173):

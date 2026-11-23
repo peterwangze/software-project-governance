@@ -149,6 +149,7 @@ __all__ = [
     "OPERATION_ID_PATTERN",
     "OPERATION_REPLAY_DECISIONS",
     "QUALITY_BUDGET_DIMENSIONS",
+    "DETERMINISTIC_SCAFFOLD_TYPES",
     "RecordScope",
     "REFERENCE_VALIDATION_STATES",
     "RESULT_OK",
@@ -177,6 +178,8 @@ __all__ = [
 
 CheckID = str
 CommandKey = str
+
+DETERMINISTIC_SCAFFOLD_TYPES = ("web-app", "cli-tool", "workflow-plugin")
 
 QUALITY_BUDGET_DIMENSIONS = (
     "performance",

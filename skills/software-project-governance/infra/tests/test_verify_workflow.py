@@ -11383,6 +11383,56 @@ class ProductSuccessContractTests(unittest.TestCase):
                 self.assertTrue(vw._is_process_only_product_success_metric(process))
 
 
+    def test_check_and_legacy_consumers_share_the_product_outcome_policy(self):
+        import delivery_contract_checks
+        from checks import evidence_domain
+
+        evidence_domain._resolve_shared()
+        self.assertIs(evidence_domain._validate_product_success_contract,
+                      vw._validate_product_success_contract)
+        replacement = re.compile("fixture policy")
+        packet = {"product_success_contract": self._valid_contract()}
+        original = delivery_contract_checks._validate_product_success_contract
+        with patch.object(vw, "PRODUCT_SUCCESS_PLACEHOLDER_RE", replacement), \
+             patch.object(delivery_contract_checks, "_validate_product_success_contract", wraps=original) as judge:
+            evidence_domain._validate_product_success_contract(packet)
+        actual_packet, policy = judge.call_args.args
+        self.assertIs(actual_packet, packet)
+        self.assertIs(policy.placeholder, replacement)
+        with self.assertRaises(AttributeError):
+            getattr(vw, "PRODUCT_SUCCESS_UNREGISTERED_RULE")
+
+
+    def test_public_policy_imports_and_runtime_rebinding(self):
+        import subprocess
+        # Star import is only legal at module scope. Exercise Python's import rules in a new interpreter.
+        source = (
+            "from verify_workflow import *\n"
+            "from verify_workflow import ACCEPTANCE_CONTRACT_REQUIRED_FIELDS as fields\n"
+            "assert fields is ACCEPTANCE_CONTRACT_REQUIRED_FIELDS\n"
+            "assert isinstance(INTERRUPTION_POLICY_DEFAULT_EXAMPLES, list)\n"
+            "assert classify_user_interruption({}) == 'ask_user'\n"
+        )
+        subprocess.run([sys.executable, "-c", source], cwd=_INFRA_DIR, check=True)
+        with patch.object(vw, "DETERMINISTIC_SCAFFOLD_TYPES", ()):
+            with self.assertRaisesRegex(ValueError, r"unknown scaffold type 'web-app'"):
+                vw.render_deterministic_scaffold("web-app")
+            self.assertEqual(vw.check_deterministic_scaffolds()["required_types"], [])
+        with patch.object(vw, "ACCEPTANCE_CONTRACT_REQUIRED_FIELDS", {"changed": str}):
+            self.assertIn("acceptance_contract.changed missing or invalid",
+                          vw._validate_acceptance_contract({}, {"acceptance_contract": {}}))
+        with patch.object(vw, "QUALITY_BUDGET_DIMENSIONS", ()):
+            budget = {"quality_budget": {"dimensions": [{"dimension": "performance"}]}}
+            self.assertIn("quality_budget dimension invalid: performance", vw._validate_quality_budget({}, budget))
+        with patch.object(vw, "VERTICAL_SLICE_REQUIRED_FIELDS", ("changed",)):
+            self.assertIn("vertical_slice.changed must be specific and non-placeholder",
+                          vw._validate_vertical_slice({}, {"vertical_slice": {}}))
+        with patch.object(vw, "INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS", ("fixture",)):
+            self.assertEqual(vw.classify_user_interruption({"fixture": True, "reversible": True}), "ask_user")
+        with patch.object(vw, "INTERRUPTION_POLICY_DEFAULT_EXAMPLES", []):
+            self.assertEqual(vw.check_interruption_policy()["examples"], [])
+
+
 class ExecutableAcceptanceContractTests(unittest.TestCase):
     """FIX-089: active P0/P1 tasks need runnable acceptance contracts."""
 
@@ -25369,6 +25419,75 @@ class ReleaseHookLocationTests(unittest.TestCase):
         self.assertEqual(result["paths"], [])
         self.assertIn("could not resolve Git hooks", result["error"])
         self.assertIn("could not resolve Git hooks", resolve(nested)["diagnostic"])
+
+
+class DeliveryContractBindingTests(unittest.TestCase):
+    def test_default_assets_and_explicit_paths_follow_the_original_reader_contract(self):
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+            root = Path(td)
+            archive = stack.enter_context(zipfile.ZipFile(root / "assets.zip", "w"))
+            archive.writestr("scaffolds/index.md", "generate-deterministic-scaffold web-app.md")
+            archive.writestr("scaffolds/web-app.md", "archived template")
+            archive.writestr("boundary.md", vw.INTERACTION_BOUNDARY_PATH.read_bytes())
+            archive.writestr("policy.md", vw.USER_INTERRUPTION_POLICY_TEMPLATE_PATH.read_bytes())
+            assets = zipfile.Path(archive)
+            absent = root / "no-packets.json"
+            expected = vw.check_interruption_policy(str(vw.INTERACTION_BOUNDARY_PATH),
+                                                     str(vw.USER_INTERRUPTION_POLICY_TEMPLATE_PATH),
+                                                     packet_path=absent, examples=[])
+            stack.enter_context(patch.multiple(
+                vw, DETERMINISTIC_SCAFFOLD_DIR=assets / "scaffolds",
+                INTERACTION_BOUNDARY_PATH=assets / "boundary.md",
+                USER_INTERRUPTION_POLICY_TEMPLATE_PATH=assets / "policy.md"))
+            self.assertEqual(vw.check_interruption_policy(packet_path=absent, examples=[]), expected)
+            self.assertEqual(vw.render_deterministic_scaffold("web-app"), "archived template")
+            with self.assertRaises(TypeError):
+                vw.check_interruption_policy(template_path=assets / "policy.md")
+            with self.assertRaises(TypeError):
+                vw.render_deterministic_scaffold("web-app", assets / "scaffolds")
+            with self.assertRaisesRegex(ValueError, "unknown scaffold type"):
+                vw.render_deterministic_scaffold("no-such-type", assets / "scaffolds")
+            # The index consumes the default asset, while a per-type lookup
+            # receives the selected base as an explicit filesystem path.
+            with patch.object(vw, "DETERMINISTIC_SCAFFOLD_TYPES", ()):
+                self.assertTrue(vw.check_deterministic_scaffolds()["pass"])
+            with self.assertRaises(TypeError):
+                vw.check_deterministic_scaffolds()
+
+    def test_selected_task_id_is_recorded_before_the_validator_updates_its_input(self):
+        import loop_workflow
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gov = root / ".governance"
+            gov.mkdir()
+            loop_workflow.start(root, unit_id="FIX-901", tier="inner", goal="Validate a selected unit",
+                                acceptance="The result names the selected unit")
+            packet = {"acceptance_contract": {}, "quality_budget": {}, "vertical_slice": {}}
+            (gov / "execution-packets.json").write_text(json.dumps({"packets": {"FIX-901": packet}}),
+                                                       encoding="utf-8")
+            for checker, validator in ((vw.check_acceptance_contracts, "_validate_acceptance_contract"),
+                                       (vw.check_quality_budget, "_validate_quality_budget"),
+                                       (vw.check_vertical_slices, "_validate_vertical_slice")):
+                for remove in (False, True):
+                    def update_task(task, packet):
+                        self.assertEqual(task["task_id"], "FIX-901")
+                        if remove:
+                            task.pop("task_id")
+                        else:
+                            task["task_id"] = "FIX-ALIAS"
+                        return []
+
+                    with self.subTest(checker=checker.__name__, remove=remove), \
+                         patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                         patch.object(vw, validator, side_effect=update_task) as check:
+                        result = checker()
+                    check.assert_called_once()
+                    self.assertEqual(result["required_tasks"], ["FIX-901"])
+                    self.assertEqual(result["entries"], [{"task_id": "FIX-901", "status": "PASS", "issues": []}])
+                    self.assertTrue(result["pass"])
 
 
 if __name__ == "__main__":

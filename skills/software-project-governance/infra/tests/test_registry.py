@@ -437,6 +437,88 @@ class CommandRegistryTests(unittest.TestCase):
                 self.assertEqual(inspect_cli_registration(engine, "status", "cmd_status")["argparse"], expected)
             self.assertFalse(family.with_suffix(".imported").exists())
 
+    def test_capability_adapter_follows_the_target_owners(self):
+        import shutil
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            engine = target / "verify_workflow.py"
+            for module in ("verify_workflow", "capability_context", "status_cli"):
+                shutil.copyfile(_INFRA_DIR / (module + ".py"), target / (module + ".py"))
+
+            def has_handler():
+                return inspect_cli_registration(engine, "capability-context", "cmd_capability_context")["handler"]
+
+            self.assertTrue(has_handler())
+            for module in ("capability_context", "status_cli"):
+                with self.subTest(module=module):
+                    owner = target / (module + ".py")
+                    original = owner.read_bytes()
+                    owner.unlink()
+                    self.assertFalse(has_handler())
+                    owner.write_text("# no exported implementation", encoding="utf-8")
+                    self.assertFalse(has_handler())
+                    owner.write_bytes(original)
+                    self.assertTrue(has_handler())
+
+    def test_capability_handler_uses_its_imported_name_and_forwards_its_arguments(self):
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        # Exercise the shipped wrappers in a foreign source-only installation.
+        # A sibling deliberately raises if the observation imports that code.
+        entry = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
+        lines = entry.splitlines(keepends=True)
+        names = {"cmd_capability_context", "discover_capability_context", "check_capability_context"}
+        original = "\n".join("".join(lines[n.lineno - 1:n.end_lineno]) for n in ast.parse(entry).body
+                             if isinstance(n, ast.FunctionDef) and n.name in names)
+        binding = "from status_cli import cmd_capability_context as read"
+        delegate = binding + "\n    return read("
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp) / "verify_workflow.py"
+            for module in ("status_cli", "capability_context"):
+                source = (_INFRA_DIR / (module + ".py")).read_text(encoding="utf-8")
+                engine.with_name(module + ".py").write_text(
+                    "raise AssertionError('observer imported a target module')\n" + source, encoding="utf-8")
+
+            def check(source, expected):
+                engine.write_text(source, encoding="utf-8")
+                facts = inspect_cli_registration(engine, "capability-context", "cmd_capability_context")
+                self.assertEqual(facts["handler"], expected)
+
+            check(original, True)
+            for old, new, expected in (
+                    (binding, binding.replace("from status_cli", "from .status_cli"), False),
+                    (binding, binding.replace("as read", "as report"), False),
+                    (delegate, delegate.replace("read", "report"), True),
+                    (delegate, "from status_cli import cmd_capability_context\n    return cmd_capability_context(", True),
+                    (binding, "if False: " + binding, False),
+                    (binding, "return\n    " + binding, False),
+                    (binding, "from other_owner import cmd_capability_context as read", False),
+                    (delegate, delegate.replace("read", "args"), False),
+                    ("discover=discover_capability_context", "discover=check_capability_context", False),
+                    ("plugin_root=ROOT,", "", False),
+                    ("        args,", "        unknown_args,", False),
+                    ("from capability_context import discover_capability_context as read",
+                     "from .capability_context import discover_capability_context as read", False),
+                    ("return validate(", "return disconnected(", False)):
+                with self.subTest(old=old, new=new):
+                    self.assertEqual(original.count(old), 1)
+                    check(original.replace(old, new), expected)
+            check(original, True)
+            owner = engine.with_name("status_cli.py")
+            source = owner.read_text(encoding="utf-8")
+            for changed in (source.replace("def cmd_capability_context(args, *", "def cmd_capability_context(args, cfg, *"),
+                            source + "\ncmd_capability_context = None\n"):
+                with self.subTest(owner_change=changed[-40:]):
+                    self.assertNotEqual(changed, source)
+                    owner.write_text(changed, encoding="utf-8")
+                    check(original, False)
+            owner.write_text(source, encoding="utf-8")
+            check(original, True)
+
     def test_early_command_requires_the_complete_shipped_schema(self):
         import shutil
         import tempfile
@@ -445,7 +527,7 @@ class CommandRegistryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
             for name in ("verify_workflow", "registry", "workflow_cli", "workflow_cli_checks",
-                         "workflow_cli_operations"):
+                         "workflow_cli_operations", "status_cli", "capability_context"):
                 shutil.copyfile(_INFRA_DIR / (name + ".py"), target / (name + ".py"))
             operations = target / "workflow_cli_operations.py"
             original = operations.read_text(encoding="utf-8")

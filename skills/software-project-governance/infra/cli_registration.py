@@ -111,6 +111,21 @@ def _binds_schema_call(call, definition, *, wrapper=False):
             and set(given) <= set(positional + named_only))
 
 
+def _local_definition(statements, name, kind=ast.FunctionDef):
+    """Read the final direct definition; a later replacement is not that callable."""
+    for node in reversed(statements):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
+            return node if isinstance(node, kind) else None
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.Delete)) and any(
+                isinstance(ref, ast.Name) and ref.id == name and isinstance(ref.ctx, (ast.Store, ast.Del))
+                for ref in ast.walk(node)):
+            return None
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                (alias.asname or alias.name.split(".")[0]) == name for alias in node.names):
+            return None
+    return None
+
+
 def _schema_declares_parser(path, wrapper, invocation, key):
     """Follow the shipped wrapper and its called families in this checkout only."""
     body = wrapper.body
@@ -129,20 +144,10 @@ def _schema_declares_parser(path, wrapper, invocation, key):
         except (OSError, UnicodeError, SyntaxError):
             return None
 
-    def function(statements, name):
-        for node in reversed(statements):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
-                return node if isinstance(node, ast.FunctionDef) else None
-            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.Delete)) and any(
-                    isinstance(ref, ast.Name) and ref.id == name and isinstance(ref.ctx, (ast.Store, ast.Del))
-                    for ref in ast.walk(node)):
-                return None
-        return None
-
     schema = read_schema("workflow_cli")
     if schema is None:
         return False
-    builder = function(schema, "build_cli_parser")
+    builder = _local_definition(schema, "build_cli_parser")
     if (not builder or not _binds_schema_call(body[1].value, builder)
             or ast.unparse(builder.body[-1]) != "return (parser, subparsers)"):
         return False
@@ -173,7 +178,7 @@ def _schema_declares_parser(path, wrapper, invocation, key):
         module, _, name = ast.unparse(call.func).rpartition(".")
         if module not in sources or not name.startswith("register_"):
             return False
-        family = function(sources[module], name)
+        family = _local_definition(sources[module], name)
         if (family is None or not _binds_schema_call(call, family) or not call.args
                 or ast.unparse(call.args[0]) != "subparsers" or not family.args.args
                 or family.args.args[0].arg != "subparsers"):
@@ -181,6 +186,85 @@ def _schema_declares_parser(path, wrapper, invocation, key):
         found = found or _declares_parser(family.body, key)
     # main receives the parser only after every mandatory registration returns.
     return found
+
+
+def _capability_delegates(definition, module, owner_body, positional, keywords, setup=()):
+    """Recognize a direct, unconditional import and return in the shipped adapters."""
+    body = definition.body[1:] if ast.get_docstring(definition) is not None else definition.body
+    if len(body) != len(setup) + 2:
+        return False
+    dependency, *assignments, result = body
+    if (not isinstance(dependency, ast.ImportFrom) or dependency.level or dependency.module != module
+            or not isinstance(result, ast.Return) or not isinstance(result.value, ast.Call)):
+        return False
+    aliases = {item.name: item.asname or item.name for item in dependency.names}
+    imported = {definition.name}
+    if setup:
+        imported.add("SelectionPolicy")
+    if set(aliases) != imported or len(set(aliases.values())) != len(dependency.names):
+        return False
+    call = result.value
+    if (not isinstance(call.func, ast.Name) or call.func.id != aliases[definition.name]
+            or not _binds_schema_call(call, _local_definition(owner_body, definition.name))
+            or [ast.unparse(arg) for arg in call.args] != positional
+            or {kw.arg: ast.unparse(kw.value) for kw in call.keywords} != keywords):
+        return False
+    # The validator prepares its local root, context and policy before the
+    # return. Other adapters have no intervening statements or bindings.
+    if any(not isinstance(assign, ast.Assign) or len(assign.targets) != 1
+           or ast.unparse(assign.targets[0]) != name for assign, name in zip(assignments, setup)):
+        return False
+    if setup:
+        policy = assignments[-1].value
+        if (_local_definition(owner_body, "SelectionPolicy", ast.ClassDef) is None or not isinstance(policy, ast.Call)
+                or ast.unparse(policy.func) != aliases["SelectionPolicy"]):
+            return False
+    # An import must not shadow a forwarded argument, a setup local or a
+    # global supplied to the owner (e.g. "as args" would forward the function).
+    forwarded = [*call.args, *(kw.value for kw in call.keywords)]
+    names = {ref.id for expr in forwarded for ref in ast.walk(expr) if isinstance(ref, ast.Name)}
+    return not (set(aliases.values()) & (names | set(setup)))
+
+
+def _has_capability_handler(path, functions):
+    """Observe the historical inline handler or the three current adapter calls."""
+    handler = functions.get("cmd_capability_context")
+    if handler is None:
+        return False
+    discover, validate = "discover_capability_context", "check_capability_context"
+    if not any(isinstance(node, (ast.Import, ast.ImportFrom, ast.Return)) for node in ast.walk(handler)):
+        # A locally implemented registration (including a standalone no-op)
+        # needs no sibling. The shipped inline engines call both local functions.
+        if len(handler.body) == 1 and isinstance(handler.body[0], ast.Pass):
+            return True
+        calls = {node.func.id for node in ast.walk(handler)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        return {discover, validate} <= calls and discover in functions and validate in functions
+    if (discover not in functions or validate not in functions or not handler.args.args
+            or ast.unparse(handler.args) != handler.args.args[0].arg
+            or ast.unparse(functions[discover].args) != "root=None"
+            or ast.unparse(functions[validate].args) != "root=None, *, sampled_context=None"
+            or any(functions[name].decorator_list for name in (handler.name, discover, validate))):
+        return False
+    owners = {}
+    for module in ("status_cli", "capability_context"):
+        sibling = path.with_name(module + ".py")
+        try:
+            body = ast.parse(sibling.read_text(encoding="utf-8"), filename=str(sibling)).body
+        except (OSError, UnicodeError, SyntaxError):
+            return False
+        owners[module] = body
+    paths = {"requirements_path": "CAPABILITY_CONTEXT_DOC_PATH", "tools_path": "CAPABILITY_CONTEXT_TOOLS_PATH"}
+    return (
+        _capability_delegates(handler, "status_cli", owners["status_cli"], [handler.args.args[0].arg],
+                              {"plugin_root": "ROOT", "discover": discover, "validate": validate,
+                               "display_path": "_display_path"})
+        and _capability_delegates(functions[discover], "capability_context", owners["capability_context"],
+                                  ["_context_root(root)"], {**paths, "check_registry": "check_capability_registry"})
+        and _capability_delegates(functions[validate], "capability_context", owners["capability_context"],
+                                  ["root", "context"], {**paths, "policy": "policy", "display_path": "_display_path"},
+                                  setup=("root", "context", "policy"))
+    )
 
 
 def inspect_cli_registration(path: Path, key: str, handler: str) -> dict:
@@ -202,5 +286,7 @@ def inspect_cli_registration(path: Path, key: str, handler: str) -> dict:
                     schema_parser = _schema_declares_parser(path, builder, node.value, key)
                 break
     has_parser = _declares_parser(parser_body, key) or schema_parser
-    return {"main": main is not None, "handler": handler in functions,
+    has_handler = (_has_capability_handler(path, functions) if handler == "cmd_capability_context"
+                   else handler in functions)
+    return {"main": main is not None, "handler": has_handler,
             "argparse": has_parser, "dispatch": _has_dispatch(path, statements, key, handler)}

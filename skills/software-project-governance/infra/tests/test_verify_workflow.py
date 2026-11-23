@@ -3473,6 +3473,26 @@ class GovernanceContextDiscoveryTests(unittest.TestCase):
 class CapabilityContextTests(unittest.TestCase):
     """FIX-115: capability context trace must be fact-backed and degraded-safe."""
 
+    def test_rebound_public_policies_reach_each_context_validator(self):
+        exports = {}
+        exec("from verify_workflow import *", exports)
+        for attribute, discover, validate in (
+            ("CAPABILITY_CONTEXT_REQUIRED_FIELDS", vw.discover_capability_context,
+             vw.check_capability_context),
+            ("HOST_CAPABILITY_CONTEXT_REQUIRED_FIELDS", vw.discover_host_capability_context,
+             vw.check_host_capability_context),
+        ):
+            with self.subTest(attribute=attribute), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                original = getattr(vw, attribute)
+                self.assertIs(exports[attribute], original)
+                context = discover(root)
+                with patch.object(vw, attribute, [*original, "required_by_this_host"]):
+                    issues = validate(root, sampled_context=context)
+                self.assertTrue(any("required_by_this_host" in issue for issue in issues), issues)
+                self.assertFalse(any("required_by_this_host" in issue
+                                     for issue in validate(root, sampled_context=context)))
+
     def _write_project(self, root, command_registered=True, tool_registered=True, future_registry=False, comment_only=False, example_only=False):
         verify_path = root / "skills/software-project-governance/infra/verify_workflow.py"
         verify_path.parent.mkdir(parents=True, exist_ok=True)
@@ -7330,6 +7350,21 @@ class FirstRunDemoTests(unittest.TestCase):
         for marker in ("demo-delivery", "demo-export", "totals match", "loop-evidence/", "local/demo-only"):
             self.assertIn(marker, output)
         self.assertNotIn("G0", output)
+
+    def test_first_run_demo_renders_the_installed_snapshot_provider(self):
+        build = vw.build_delivery_trust_snapshot
+
+        def extend_snapshot(*args, **kwargs):
+            snapshot = build(*args, **kwargs)
+            snapshot["Next action"] = "Read the host's custom delivery report"
+            return snapshot
+
+        output = io.StringIO()
+        with patch.object(vw, "build_delivery_trust_snapshot", side_effect=extend_snapshot) as provider:
+            with redirect_stdout(output):
+                vw.cmd_first_run_demo(argparse.Namespace(assert_snapshot=False))
+        provider.assert_called_once()
+        self.assertIn("Read the host's custom delivery report", output.getvalue())
 
     def test_first_run_demo_rejects_unsuccessful_observation(self):
         with mock.patch("loop_workflow.verify_command", return_value={"decision": "iterate"}):

@@ -5419,15 +5419,9 @@ def check_dsh_preset_smoke(root=None, timeout=120):
 
     ``root`` overrides the package root (test seam); it defaults to
     PLUGIN_ROOT, where ``adapters/dsh/launch.py`` lives. Returns
-    ``{"verdict": "PASS"|"FAIL", "reason", "exit_code", "details",
-    "isolation": {"temp_home", "real_home_writes",
-    "attributed_concurrent_writes"}}``.
+    the verdict, reason, launcher exit code, output and isolation witness.
 
-    FIX-442: ``attributed_concurrent_writes`` carries the launcher's count
-    of write-face changes attributed to a concurrent active session
-    (dual factor: inside the smoke window AND off the adapter's own preset
-    face). The engine does not re-judge attribution — it only refuses a
-    PASS whose ``real-home writes`` count is non-zero, exactly as before.
+    FIX-442: keep launcher attribution separate from smoke-owned writes.
     """
     package_root = Path(root) if root is not None else PLUGIN_ROOT
     launcher = package_root / "adapters" / "dsh" / "launch.py"
@@ -5446,7 +5440,12 @@ def check_dsh_preset_smoke(root=None, timeout=120):
         result["reason"] = f"dsh launcher missing: {launcher.as_posix()}"
         return result
 
-    temp_home = Path(tempfile.mkdtemp(prefix="spg-dsh-smoke-"))
+    from dsh_temp import make_private_dir
+    try:
+        temp_home = make_private_dir("spg-dsh-smoke-")
+    except OSError as exc:
+        result["reason"] = f"could not create private DSH smoke directory: {exc}"
+        return result
     result["isolation"]["temp_home"] = temp_home.as_posix()
     env = os.environ.copy()
     env["DSH_HOME"] = str(temp_home)

@@ -16,6 +16,7 @@ if str(INFRA) not in sys.path:
 import dsh_compat
 import dsh_contract
 import dsh_plane
+import dsh_temp
 
 
 class IsolatedProfileTests(unittest.TestCase):
@@ -114,6 +115,57 @@ class IsolatedProfileTests(unittest.TestCase):
         self.assertEqual(len(set(child_homes)), 4)
         self.assertTrue(all(not path.exists() for path in child_homes))
         self.assertEqual(hashlib.sha256(self.sentinel.read_bytes()).digest(), self.original_hash)
+
+
+class PrivateDshTempTests(unittest.TestCase):
+    owner = "S-1-5-21-111-222-333-1001"
+    workspace = "S-1-4-101-202"
+    session_tmp = "S-1-4-303-404-1"
+    guard = "(D;CIID;DT;;;WD)"
+
+    def grant(self, sid):
+        return f"(A;OICIID;0x110156;;;{sid})"
+
+    def test_only_same_resource_grant_is_retained_with_delete_guard(self):
+        acl = f"O:{self.owner}D:AI" + self.guard + self.grant(self.workspace) + "(A;OICIID;FR;;;BU)"
+        descriptor = dsh_temp._private_descriptor(acl, {self.workspace, self.session_tmp}, self.owner)
+        self.assertEqual(descriptor, "D:P(D;CI;DT;;;WD)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+                         + f"(A;OICI;FA;;;{self.owner})(A;OICI;0x110156;;;{self.workspace})")
+
+    def test_shared_read_only_wrong_scope_and_unknown_layout_refused(self):
+        expected = self.grant(self.workspace)
+        for dacl, token in [
+            (self.guard + expected + "(A;OICI;FA;;;WD)", {self.workspace}),
+            (self.guard + expected + "(A;OICI;GW;;;AU)", {self.workspace}),
+            (self.guard + expected + "(A;OICI;0x1301bf;;;S-1-5-21-8-9-10-2003)", {self.workspace}),
+            (self.guard + expected + "(A;OICI;FA;;;S-1-5-21-8-9-10-513)", {self.workspace}),
+            (self.guard + expected + "(A;OICI;FA;;;S-1-15-3-8-9-10)", {self.workspace}),
+            (self.guard + expected, {"S-1-1-0", "S-1-5-5-1-2"}),
+            (self.guard + self.grant(self.session_tmp), {self.workspace}),
+            (self.guard + expected + self.grant(self.session_tmp), {self.workspace, self.session_tmp}),
+            (expected, {self.workspace}),
+            (self.guard + expected + "(D;OICI;GW;;;BU)", {self.workspace}),
+            (self.guard + expected + "(XA;OICI;FA;;;WD;(@User.condition))", {self.workspace}),
+        ]:
+            with self.subTest(dacl=dacl, token=token), self.assertRaises(PermissionError):
+                dsh_temp._private_descriptor(f"O:{self.owner}D:AI" + dacl, token, self.owner)
+        with self.assertRaises(PermissionError):
+            dsh_temp._private_descriptor("O:BAD:AI" + self.guard + expected, {self.workspace}, self.owner)
+
+    def test_ordinary_temp_uses_stdlib_permissions_and_removes_after_exception(self):
+        with tempfile.TemporaryDirectory() as root:
+            with mock.patch.object(tempfile, "mkdtemp", wraps=tempfile.mkdtemp) as standard:
+                with self.assertRaisesRegex(RuntimeError, "fixture"):
+                    with dsh_temp.private_dir("sample-", root) as directory:
+                        self.assertEqual(directory.parent, Path(root))
+                        if os.name != "nt":
+                            self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+                        (directory / "marker").write_text("sample", encoding="ascii")
+                        raise RuntimeError("fixture")
+                standard.assert_called_once_with(prefix="sample-", dir=root)
+                self.assertFalse(directory.exists())
+            with self.assertRaises(ValueError):
+                dsh_temp.make_private_dir("../outside-", root)
 
 
 if __name__ == "__main__":

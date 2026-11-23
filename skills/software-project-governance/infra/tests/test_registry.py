@@ -153,6 +153,13 @@ def _segment_facts():
     return facts
 
 
+def _copy_installed_sources(destination):
+    """Build an independent copy of the installed CLI for source/dispatch fault controls."""
+    import shutil
+    shutil.copytree(_INFRA_DIR, destination, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("tests", "__pycache__", "*.pyc"))
+
+
 def _engine_modules():
     """{defined symbol: set(infra module path)} over the tree (tests excluded)."""
     modules = {}
@@ -283,6 +290,70 @@ class ContractShapeTests(unittest.TestCase):
 
 class CommandRegistryTests(unittest.TestCase):
 
+    def test_legacy_dotted_paths_share_live_callables_and_python_module_locals(self):
+        from textwrap import dedent
+
+        result = _probe(dedent("""
+            import tempfile
+            import pickle
+            from pathlib import Path
+            from unittest.mock import patch
+            import registry
+            resolve = registry.resolve_loader
+            legacy = "verify_workflow.cmd_status"
+            original = resolve(legacy)
+            assert original is registry.load_handler("status")
+            main = resolve("verify_workflow.main")
+            assert "verify_workflow" not in sys.modules
+            import verify_workflow as entry
+            assert original is entry.cmd_status and main is entry.main
+            namespace = vars(entry)
+            assert type(namespace) is dict and namespace["cmd_status"] is original
+            assert "GovernanceDataSource" not in namespace
+            reader = entry.GovernanceDataSource
+            assert vars(entry)["GovernanceDataSource"] is reader
+            assert reader.__module__ == "verify_workflow" and pickle.loads(pickle.dumps(reader)) is reader
+            with patch.object(entry, "extra_callback", lambda: "added", create=True):
+                assert resolve("verify_workflow.extra_callback")() == "added"
+            try:
+                resolve("verify_workflow.extra_callback")
+            except registry.LoaderResolutionError:
+                pass
+            else:
+                raise AssertionError("an expired Python module attribute was retained")
+            with patch.object(entry, "cmd_status", lambda args: "patched"):
+                assert resolve(legacy)(None) == registry.load_handler("status")(None) == "patched"
+                del entry.cmd_status
+                for loader in (lambda: resolve(legacy), lambda: registry.load_handler("status")):
+                    try:
+                        loader()
+                    except registry.LoaderResolutionError:
+                        pass
+                    else:
+                        raise AssertionError("deleted handler is still callable")
+                assert "cmd_status" not in namespace
+            assert namespace["cmd_status"] is original is resolve(legacy) is registry.load_handler("status")
+            with patch.object(entry, "HOST_PROJECT_ROOT", entry.HOST_PROJECT_ROOT):
+                del entry.HOST_PROJECT_ROOT
+                assert not hasattr(entry, "HOST_PROJECT_ROOT")
+                for load in (lambda: entry.cmd_status, lambda: registry.load_handler("status")):
+                    try:
+                        load()(None)
+                    except NameError as error:
+                        assert str(error) == "name 'HOST_PROJECT_ROOT' is not defined"
+                    else:
+                        raise AssertionError("a missing host root was accepted")
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                previous = entry.HOST_PROJECT_ROOT
+                for selected in [root, previous]:
+                    entry._apply_project_root_override(selected)
+                    assert namespace["HOST_PROJECT_ROOT"] == selected == entry.HOST_PROJECT_ROOT
+                    assert namespace["EVIDENCE_PATH"] == selected / ".governance" / "evidence-log.md"
+            print(json.dumps(True))
+        """))
+        self.assertTrue(result)
+
     def test_gate_handler_follows_public_override_and_restoration(self):
         import governance_fact_cli
         import verify_workflow as workflow
@@ -315,9 +386,7 @@ class CommandRegistryTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ("verify_workflow", "registry", "workflow_cli", "workflow_cli_checks",
-                         "workflow_cli_operations", "governance_fact_cli", "loop_workflow", "resolve_entry"):
-                shutil.copyfile(_INFRA_DIR / (name + ".py"), root / (name + ".py"))
+            _copy_installed_sources(root)
             def inspect_gate():
                 return inspect_cli_registration(root / "verify_workflow.py", "gate-check", "cmd_gate_check")
             self.assertTrue(all(inspect_gate().values()))
@@ -408,9 +477,7 @@ class CommandRegistryTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ("verify_workflow", "registry", "workflow_cli", "workflow_cli_checks",
-                         "workflow_cli_operations", "workspace_check_cli", "workspace_checks", "project_paths"):
-                shutil.copyfile(_INFRA_DIR / (name + ".py"), root / (name + ".py"))
+            _copy_installed_sources(root)
             def facts():
                 return inspect_cli_registration(root / "verify_workflow.py", "check-plugin-freshness",
                                                 "cmd_check_plugin_freshness")
@@ -427,13 +494,15 @@ class CommandRegistryTests(unittest.TestCase):
                     self.assertFalse(facts()["dispatch"])
                     path.write_bytes(original)
 
-            engine = root / "verify_workflow.py"
+            engine = root / "workflow_composition.py"
+            shell = root / "verify_workflow.py"
+            shell_source = shell.read_bytes()
             source = engine.read_bytes()
             owner = root / "workspace_checks.py"
             native = owner.read_bytes()
             for setter, bad_setter, bad_default in (
-                (b"_workspace_checks._product_root = lambda: ROOT",
-                 b"_workspace_checks._product_root = lambda required: ROOT", b"_product_root = None"),
+                (b"_workspace_checks._product_root = lambda: paths.ROOT",
+                 b"_workspace_checks._product_root = lambda required: paths.ROOT", b"_product_root = None"),
                 (b"_workspace_checks.effective_entry = _effective_engine_command",
                  b"_workspace_checks.effective_entry = lambda name, native, required: native", b"del effective_entry"),
             ):
@@ -447,12 +516,13 @@ class CommandRegistryTests(unittest.TestCase):
                     self.assertTrue(facts()["dispatch"])
                     engine.write_bytes(source.replace(setter, bad_setter))
                     self.assertFalse(facts()["dispatch"])
-                    engine.write_bytes(source + b"\n" + bad_setter + b"\n")
-                    self.assertTrue(facts()["dispatch"])  # sys.exit(main()) already ran
                     engine.write_bytes(source)
+                    shell.write_bytes(shell_source + b"\n" + bad_setter + b"\n")
+                    self.assertTrue(facts()["dispatch"])  # sys.exit(main()) already ran
+                    shell.write_bytes(shell_source)
 
-            root_setter = b"_workspace_checks._product_root = lambda: ROOT"
-            engine.write_bytes(source.replace(root_setter, b"_workspace_checks._product_root = lambda: RO0T"))
+            root_setter = b"_workspace_checks._product_root = lambda: paths.ROOT"
+            engine.write_bytes(source.replace(root_setter, b"_workspace_checks._product_root = lambda: paths.RO0T"))
             self.assertFalse(facts()["dispatch"])
             engine.write_bytes(source.replace(root_setter, b"_workspace_checks._product_root = lambda: 1 + 2"))
             self.assertFalse(facts()["dispatch"])
@@ -463,9 +533,9 @@ class CommandRegistryTests(unittest.TestCase):
             engine.write_bytes(source)
             self.assertTrue(facts()["dispatch"])  # the broken default is unused
             owner.write_bytes(native)
-            reader = b"current = check_plugin_freshness if name"
-            self.assertEqual(source.count(reader), 1)
-            engine.write_bytes(source.replace(reader, b"current = check_plugin_freshnes if name"))
+            reader = b"from workflow_public_api import effective_command\n    return effective_command(name, native)"
+            self.assertEqual(source.count(reader), 2)
+            engine.write_bytes(source.replace(reader, reader.replace(b"return effective_command(", b"return absent_command("), 1))
             self.assertFalse(facts()["dispatch"])
             engine.write_bytes(source)
             registry = root / "registry.py"
@@ -551,25 +621,7 @@ class CommandRegistryTests(unittest.TestCase):
         migrated = sorted(spec.key for spec in reg.COMMAND_SPECS
                           if reg.loader_module(spec.handler)
                           != reg.ENGINE_MODULE)
-        self.assertEqual(migrated, [
-            "archguard-ratchet",
-            "authority-ledger",
-            "baseline-evaluate", "baseline-register",
-            "check-capability-registry",
-            "check-dsh-boundary", "check-dsh-preset-compat", "check-dsh-preset-smoke",
-            "check-entry-bootstrap-sync",
-            "check-injection-budget",
-            "check-manifest-consistency", "check-plugin-freshness", "check-review-debt",
-            "decision-append", "dsh-doctor",
-            "evidence-append", "gate-check",
-            "governance-bootstrap",
-            "governance-cost-report",
-            "locks-amend", "locks-extend", "locks-release",
-            "pins",
-            "premise",
-            "quality-tools", "release-ledger", "release-projection",
-            "task-row-update",
-        ])
+        self.assertEqual(migrated, sorted(_frozen_faces()["cli_dispatch"]["keys"]))
 
     def test_release_commands_resolve_native_and_follow_live_overrides(self):
         from unittest.mock import patch
@@ -595,12 +647,8 @@ class CommandRegistryTests(unittest.TestCase):
         from cli_registration import inspect_cli_registration
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
-            for name in ("verify_workflow.py", "registry.py", "workflow_cli.py", "workflow_cli_checks.py",
-                         "workflow_cli_operations.py", "release_validation_cli.py"):
-                shutil.copyfile(Path(reg.__file__).parent / name, target / name)
-            source = Path(reg.__file__).parent
-            shutil.copyfile(source / "project_paths.py", target / "project_paths.py")
-            shutil.copytree(source / "release", target / "release")
+            _copy_installed_sources(target)
+            source = _INFRA_DIR
             engine = target / "verify_workflow.py"
             owner = target / "release_validation_cli.py"
             original = owner.read_text(encoding="utf-8")
@@ -628,20 +676,24 @@ class CommandRegistryTests(unittest.TestCase):
                                          {"main": True, "argparse": True, "handler": available,
                                           "dispatch": available})
 
-            shipped = engine.read_text(encoding="utf-8")
+            shell = engine.read_text(encoding="utf-8")
+            wiring = target / "workflow_composition.py"
+            policies = target / "workflow_policy_bindings.py"
             selected = {
-                "release-ledger": ("lambda: PLUGIN_ROOT, RepositoryContext,",
-                                   "lambda: PLUGIN_ROOT, missing_context,",
+                "release-ledger": ("lambda: paths.PLUGIN_ROOT, RepositoryContext,",
+                                   "lambda: paths.PLUGIN_ROOT, missing_context,",
                                    "from release.context import RepositoryContext"),
-                "release-projection": ("lambda: PLUGIN_ROOT, check_projections,",
-                                       "lambda: PLUGIN_ROOT, missing_check,",
+                "release-projection": ("lambda: paths.PLUGIN_ROOT, check_projections,",
+                                       "lambda: paths.PLUGIN_ROOT, missing_check,",
                                        "from release.projection import check_projections, write_projections"),
                 "quality-tools": ('"probe_quality_tools": "release.quality"',
                                   '"probe_quality_tools": "missing_quality"',
                                   "from release.quality import probe_quality_tools"),
             }
-            guard = 'if __name__ in ("verify_workflow", "__main__"):\n        _bind_release_commands('
+            guard = 'if __name__ in ("__main__", "verify_workflow"):\n    _install()'
             for key, (live, broken, fallback) in selected.items():
+                selected_source = policies if key == "quality-tools" else wiring
+                shipped = selected_source.read_text(encoding="utf-8")
                 handler = "cmd_" + key.replace("-", "_")
                 native_missing = original.replace(fallback, fallback.replace("from release.", "from unavailable."))
                 provider = {"release-ledger": "_ledger_inputs", "release-projection": "_projection_inputs",
@@ -653,18 +705,19 @@ class CommandRegistryTests(unittest.TestCase):
                 local_only = original.replace(declaration, remaining)
                 self.assertIn(live, shipped)
                 self.assertIn(fallback, original)
-                self.assertIn(guard, shipped)
+                self.assertIn(guard, shell)
                 for state, engine_text, owner_text, available in (
                         ("active input missing", shipped.replace(live, broken), original, False),
                         ("unused fallback missing", shipped, native_missing, True),
                         ("setter writes a local", shipped, local_only, True),
                         ("unselected override missing", shipped.replace(live, broken), local_only, True),
                         ("selected fallback missing", shipped, native_missing.replace(declaration, remaining), False),
-                        ("owner defaults selected", shipped.replace(guard, guard.replace('"__main__"', '"other"')),
-                         native_missing, False),
+                        ("owner defaults selected", shipped, native_missing, False),
                         ("restored", shipped, original, True)):
                     with self.subTest(key=key, state=state):
-                        engine.write_text(engine_text, encoding="utf-8")
+                        selected_source.write_text(engine_text, encoding="utf-8")
+                        engine.write_text(shell.replace(guard, guard.replace('"__main__"', '"other"'))
+                                          if state == "owner defaults selected" else shell, encoding="utf-8")
                         owner.write_text(owner_text, encoding="utf-8")
                         facts = inspect_cli_registration(engine, key, handler)
                         self.assertEqual((facts["handler"], facts["dispatch"]), (available, available))
@@ -792,9 +845,7 @@ class CommandRegistryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
             engine = target / "verify_workflow.py"
-            for module in ("verify_workflow", "capability_context", "status_cli"):
-                shutil.copyfile(_INFRA_DIR / (module + ".py"), target / (module + ".py"))
-
+            _copy_installed_sources(target)
             def has_handler():
                 return inspect_cli_registration(engine, "capability-context", "cmd_capability_context")["handler"]
 
@@ -816,22 +867,24 @@ class CommandRegistryTests(unittest.TestCase):
 
         # Exercise the shipped wrappers in a foreign source-only installation.
         # A sibling deliberately raises if the observation imports that code.
-        entry = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
+        entry = (_INFRA_DIR / "workflow_context_bindings.py").read_text(encoding="utf-8")
         lines = entry.splitlines(keepends=True)
         names = {"cmd_capability_context", "discover_capability_context", "check_capability_context"}
         original = "\n".join("".join(lines[n.lineno - 1:n.end_lineno]) for n in ast.parse(entry).body
-                             if isinstance(n, ast.FunctionDef) and n.name in names)
+                             if (isinstance(n, ast.FunctionDef) and n.name in names)
+                             or (isinstance(n, ast.Import) and any(a.name == "workflow_project_roots" for a in n.names)))
         binding = "from status_cli import cmd_capability_context as read"
         delegate = binding + "\n    return read("
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / "verify_workflow.py"
+            _copy_installed_sources(Path(tmp))
             for module in ("status_cli", "capability_context"):
                 source = (_INFRA_DIR / (module + ".py")).read_text(encoding="utf-8")
                 engine.with_name(module + ".py").write_text(
                     "raise AssertionError('observer imported a target module')\n" + source, encoding="utf-8")
 
             def check(source, expected):
-                engine.write_text(source, encoding="utf-8")
+                engine.with_name("workflow_context_bindings.py").write_text(source, encoding="utf-8")
                 facts = inspect_cli_registration(engine, "capability-context", "cmd_capability_context")
                 self.assertEqual(facts["handler"], expected)
 
@@ -846,7 +899,7 @@ class CommandRegistryTests(unittest.TestCase):
                     (binding, "from other_owner import cmd_capability_context as read", False),
                     (delegate, delegate.replace("read", "args"), False),
                     ("discover=discover_capability_context", "discover=check_capability_context", False),
-                    ("plugin_root=ROOT,", "", False),
+                    ("plugin_root=paths.ROOT,", "", False),
                     ("        args,", "        unknown_args,", False),
                     ("from capability_context import discover_capability_context as read",
                      "from .capability_context import discover_capability_context as read", False),
@@ -866,6 +919,184 @@ class CommandRegistryTests(unittest.TestCase):
             owner.write_text(source, encoding="utf-8")
             check(original, True)
 
+    def test_split_startup_uses_only_immediate_dependencies_of_the_selected_command(self):
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_installed_sources(root)
+            entry = root / "verify_workflow.py"
+
+            def observe():
+                facts = inspect_cli_registration(entry, "quality-tools", "cmd_quality_tools")
+                result = subprocess.run([sys.executable, "-B", str(entry), "quality-tools"],
+                                        cwd=root, capture_output=True)
+                available = not result.stderr and bool(result.stdout)
+                if available:
+                    self.assertIsInstance(json.loads(result.stdout), dict)
+                return all(facts.values()), available
+
+            self.assertEqual(observe(), (True, True))
+            for module, before, after, expected in (
+                ("workflow_public_api", b"class PublicModule(", b"class DetachedModule(", False),
+                ("workflow_guard_bindings", b"class _LegacyReviewSources(", b"class DetachedSources(", False),
+                ("workflow_public_api", b"from importlib import import_module", b"def broken(", False),
+                ("verify_workflow", b"PublicModule as _WorkflowModule", b"PublicModule as _OtherModule", False),
+                ("workflow_project_roots", b"def bind_public_paths(", b"def detached_binder(", False),
+                ("workflow_policy_bindings", b"_LAZY_PUBLIC_NAMES =", b"_DETACHED_LAZY_NAMES =", False),
+                ("workflow_policy_bindings", None, None, False),
+                ("workflow_context_bindings", None, None, True),
+                ("host_check_bindings", None, None, True),
+                ("checks/__init__", None, None, True),
+            ):
+                with self.subTest(module=module, mutation=before):
+                    target = root / (module + ".py")
+                    original = target.read_bytes()
+                    try:
+                        if before is None:
+                            target.unlink()
+                        else:
+                            self.assertEqual(original.count(before), 1)
+                            target.write_bytes(original.replace(before, after))
+                        self.assertEqual(observe(), (expected, expected))
+                    finally:
+                        target.write_bytes(original)
+            # The source witness must not execute a target during inspection.
+            api = root / "workflow_public_api.py"
+            api.write_bytes(api.read_bytes() + b"\nfrom pathlib import Path\nPath(__file__).with_suffix('.ran').touch()\n")
+            self.assertTrue(all(inspect_cli_registration(entry, "quality-tools", "cmd_quality_tools").values()))
+            self.assertFalse(api.with_suffix(".ran").exists())
+            self.assertEqual(observe(), (True, True))
+            self.assertTrue(api.with_suffix(".ran").exists())
+
+    def test_split_source_reuse_observes_same_timestamp_changes_and_restoration(self):
+        import os
+        import tempfile
+        from collections import Counter
+        from cli_registration import inspect_cli_registration
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _copy_installed_sources(root)
+            entry = root / "verify_workflow.py"
+            api = root / "workflow_public_api.py"
+            marker = b"# distinguish this installed module from other fixtures"
+            healthy = api.read_bytes() + b"\n" + marker + b"\npass  \n"
+            broken = healthy[:-7] + b"return\n"  # Parses, but cannot be compiled at module scope.
+            self.assertEqual(len(healthy), len(broken))
+            api.write_bytes(healthy)
+            stamp = api.stat()
+            native_read, native_parse = Path.read_bytes, ast.parse
+
+            def observe(expected, *, read_path=api):
+                reads = Counter()
+                parses = []
+
+                def read(path):
+                    reads[path] += 1
+                    return native_read(path)
+
+                def parse(source, *args, **kwargs):
+                    if marker.decode() in (source.decode("utf-8") if isinstance(source, bytes) else source):
+                        parses.append(source)
+                    return native_parse(source, *args, **kwargs)
+
+                with patch.object(Path, "read_bytes", read), patch.object(ast, "parse", parse):
+                    facts = inspect_cli_registration(entry, "quality-tools", "cmd_quality_tools")
+                self.assertEqual(all(facts.values()), expected, facts)
+                self.assertEqual(reads[read_path], 1)
+                self.assertEqual(max(reads.values()), 1, reads)
+                return len(parses)
+
+            self.assertEqual(observe(True), 1)
+            self.assertEqual(observe(True), 0)
+            api.write_bytes(broken)
+            os.utime(api, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            self.assertEqual(observe(False), 1)
+            api.unlink()
+            observe(False)
+            api.write_bytes(healthy)
+            os.utime(api, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            self.assertEqual(observe(True), 0)
+
+            # An installed package takes precedence over a standalone module.
+            package = root / "workflow_public_api"
+            package.mkdir()
+            initializer = package / "__init__.py"
+            initializer.write_bytes(b"return\n")
+            observe(False, read_path=initializer)
+            initializer.unlink()
+            self.assertEqual(observe(True), 0)
+
+    def test_package_precedence_matches_real_startup_and_full_report_sources(self):
+        import tempfile
+        from cli_registration import inspect_cli_registration
+        from full_check_sources import full_check_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            site = Path(tmp)
+            root = site / "skills/software-project-governance/infra"
+            _copy_installed_sources(root)
+            entry = root / "verify_workflow.py"
+            source = entry.read_text(encoding="utf-8")
+
+            def layout():
+                return len(full_check_layout(entry, source)[0])
+
+            def startup(expected):
+                facts = inspect_cli_registration(entry, "capability-context", "cmd_capability_context")
+                self.assertEqual(all(facts.values()), expected)
+                target = subprocess.run([sys.executable, "-B", str(entry), "quality-tools"], capture_output=True)
+                self.assertEqual(target.returncode == 0, expected, target.stderr)
+                observer = subprocess.run([sys.executable, "-B", str(ENGINE), "capability-context",
+                                           "--fixture", str(site)], capture_output=True, check=True)
+                status = "AVAILABLE" if expected else "DEGRADED"
+                self.assertIn(f"local.capability-context.cli (script, {status})".encode(), observer.stdout)
+                if expected:
+                    self.assertEqual(layout(), 72)
+                else:
+                    with self.assertRaises(ValueError):
+                        layout()
+
+            api_file = root / "workflow_public_api.py"
+            healthy = api_file.read_bytes()
+            broken = healthy.replace(b"- policies._DELETED_POLICIES)", b"- policies._DELETEX_POLICIES)")
+            self.assertNotEqual(healthy, broken)
+            package = api_file.with_suffix("")
+            package.mkdir()
+            selected = package / "__init__.py"
+            selected.write_bytes(broken)
+            startup(False)
+            selected.write_bytes(healthy)
+            api_file.write_bytes(b"def broken(\n")
+            startup(True)
+            api_file.unlink()
+            startup(True)
+            api_file.write_bytes(healthy)
+            selected.unlink()
+            package.rmdir()
+            startup(True)
+
+            for name in ("governance_check_cli", "workflow_report_selection", "full_check_runner",
+                         "health_review_sections"):
+                with self.subTest(module=name):
+                    module = root / (name + ".py")
+                    body = module.read_bytes()
+                    package = root / name
+                    package.mkdir()
+                    selected = package / "__init__.py"
+                    selected.write_bytes(body)
+                    module.write_bytes(b"def broken(\n")
+                    self.assertEqual(layout(), 72)
+                    module.write_bytes(body)
+                    selected.write_bytes(b"pass\n")
+                    with self.assertRaises(ValueError):
+                        layout()
+                    selected.unlink()
+                    package.rmdir()
+                    self.assertEqual(layout(), 72)
+
     def test_early_command_requires_the_complete_shipped_schema(self):
         import shutil
         import tempfile
@@ -873,21 +1104,19 @@ class CommandRegistryTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp)
-            for name in ("verify_workflow", "registry", "workflow_cli", "workflow_cli_checks",
-                         "workflow_cli_operations", "status_cli", "capability_context"):
-                shutil.copyfile(_INFRA_DIR / (name + ".py"), target / (name + ".py"))
+            _copy_installed_sources(target)
             operations = target / "workflow_cli_operations.py"
             original = operations.read_text(encoding="utf-8")
 
-            def assert_available(expected):
+            def assert_available(expected, *, startup=True):
                 facts = inspect_cli_registration(target / "verify_workflow.py",
                                                  "capability-context", "cmd_capability_context")
-                self.assertEqual(facts, {"main": True, "handler": True,
-                                         "argparse": expected, "dispatch": True})
+                self.assertEqual(facts, {"main": startup, "handler": startup,
+                                         "argparse": expected, "dispatch": startup})
 
             assert_available(True)
             operations.unlink()
-            assert_available(False)
+            assert_available(False, startup=False)
             operations.write_text(original, encoding="utf-8")
             assert_available(True)
             name = "register_authority_and_isolation"
@@ -903,6 +1132,15 @@ class CommandRegistryTests(unittest.TestCase):
                     operations.write_text(change, encoding="utf-8")
                     assert_available(False)
             operations.write_text(original, encoding="utf-8")
+            assert_available(True)
+
+            factory = target / "workflow_cli.py"
+            shipped = factory.read_text(encoding="utf-8")
+            for member in ("runtime.AGENT_RUNTIME_E2E_PLATFORMS", "scaffold_types=DETERMINISTIC_SCAFFOLD_TYPES"):
+                with self.subTest(member=member):
+                    factory.write_text(shipped.replace(member, member + "_MISSING", 1), encoding="utf-8")
+                    assert_available(False)
+            factory.write_text(shipped, encoding="utf-8")
             assert_available(True)
 
     def test_schema_witness_recognizes_only_its_supported_call_shapes(self):
@@ -1146,8 +1384,7 @@ class CheckRegistryTests(unittest.TestCase):
 class DelegatedLoaderTests(unittest.TestCase):
     """Segments whose implementation is reached through an engine wrapper."""
 
-    def _engine_import_aliases(self):
-        tree = ast.parse(_engine_source())
+    def _owner_import_aliases(self, tree):
         aliases = {}
         for node in tree.body:
             if isinstance(node, ast.ImportFrom) and node.module:
@@ -1160,20 +1397,22 @@ class DelegatedLoaderTests(unittest.TestCase):
         self.assertTrue(reg.DELEGATED_LOADERS)
         for check_id, wrapper in reg.DELEGATED_LOADERS.items():
             self.assertIn(check_id, reg.check_ids())
-            self.assertEqual(reg.loader_module(wrapper), reg.ENGINE_MODULE)
+            self.assertIn(reg.loader_module(wrapper), reg.LOADER_WHITELIST)
+            self.assertNotEqual(reg.loader_module(wrapper), reg.ENGINE_MODULE)
             self.assertNotEqual(reg.loader_module(reg.check_spec(check_id).loader),
                                 reg.ENGINE_MODULE)
 
     def test_engine_wrapper_is_a_single_delegation_to_the_declared_loader(self):
-        aliases = self._engine_import_aliases()
-        tree = ast.parse(_engine_source())
         for check_id, wrapper in reg.DELEGATED_LOADERS.items():
+            owner = _INFRA_DIR / (reg.loader_module(wrapper) + ".py")
+            tree = ast.parse(owner.read_text(encoding="utf-8"))
+            aliases = self._owner_import_aliases(tree)
             attr = reg.loader_attr(wrapper)
             function = next(node for node in ast.walk(tree)
                             if isinstance(node, ast.FunctionDef)
                             and node.name == attr)
             body = [node for node in function.body
-                    if not isinstance(node, ast.Expr)]
+                    if not isinstance(node, (ast.Expr, ast.Import))]
             expected = reg.check_spec(check_id).loader
             if len(body) == 2:
                 binding, result = body
@@ -1214,7 +1453,11 @@ class LoaderWhitelistTests(unittest.TestCase):
         # The bound is the "no package walk, no discovery" red line — it is a
         # magnitude guard, not an exact count: FEAT-039 added the 21st leaf
         # (``checks.injection_budget``) and the declaration is still hand-kept.
-        self.assertLess(len(reg.LOADER_WHITELIST), 32)
+        bindings = {"host_check_bindings", "delivery_check_bindings", "governance_check_bindings",
+                    "release_check_bindings", "governance_check_cli", "workflow_context_bindings",
+                    "workflow_runtime_bindings", "workflow_gate_bindings", "workflow_guard_bindings"}
+        self.assertLess(len(set(reg.LOADER_WHITELIST) - bindings), 32)
+        self.assertTrue(bindings <= {reg.loader_module(row.handler) for row in reg.COMMAND_SPECS})
 
     def test_declared_loader_resolves(self):
         handler = reg.resolve_loader("archguard_ratchet.cmd_archguard_ratchet")

@@ -1,9 +1,26 @@
 """Build the governance CLI argument schema in public help order."""
 
 import argparse
+import sys
+
+from resolve_entry import extract_project_root_arg as _extract_project_root_arg
 
 import workflow_cli_checks
 import workflow_cli_operations
+
+from contracts import DETERMINISTIC_SCAFFOLD_TYPES, QUALITY_BUDGET_DIMENSIONS
+
+
+def build_runtime_parser(parser_argv=()):
+    """Build the production parser using the current root and the supported command choices."""
+    import workflow_project_roots as paths
+    import workflow_runtime_bindings as runtime
+    import release_check_bindings as release
+
+    return build_cli_parser(
+        parser_argv, root=paths.ROOT, quality_dimensions=QUALITY_BUDGET_DIMENSIONS,
+        runtime_platforms=runtime.AGENT_RUNTIME_E2E_PLATFORMS,
+        scaffold_types=DETERMINISTIC_SCAFFOLD_TYPES, replay_hint=release._tagged_release_replay_hint)
 
 
 def build_cli_parser(parser_argv, *, root, quality_dimensions, runtime_platforms,
@@ -318,3 +335,28 @@ def register_host_tools(subparsers, root, runtime_platforms):
         "opencode-provider-preflight",
         help="Check opencode CLI PATH/version/provider model without printing secrets",
     )
+
+
+def main(argv=None):
+    from workflow_project_roots import _apply_project_root_override
+    import workflow_project_roots as paths
+
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        explicit_project_root, parser_argv = _extract_project_root_arg(raw_argv)
+    except ValueError as exc:
+        print(f"verify_workflow: error: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    parser, _ = build_runtime_parser(parser_argv)
+    args = parser.parse_args(parser_argv)
+    if args.project_root and explicit_project_root is None:
+        explicit_project_root = args.project_root
+    args.project_root = explicit_project_root
+    if explicit_project_root is not None:
+        _apply_project_root_override(explicit_project_root)
+        if args.command == "governance-bootstrap":
+            args._validated_host_root = paths.HOST_PROJECT_ROOT
+
+    import registry
+    return registry.load_handler(args.command or "verify", parsed_args=True)(args)

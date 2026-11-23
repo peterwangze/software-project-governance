@@ -73,6 +73,120 @@ def _router_legacy_sequences():
 _ROUTER_COMPLETED = {"ARCH-001": True, "ARCH-002": True, "DEV-002": True}
 
 
+class ReviewTypeIndexScopeTests(unittest.TestCase):
+    @staticmethod
+    def check(ids):
+        return vw.check_review_closure(
+            review_sequence=[{"id": f"REVIEW-{key}-R0", "task_ref": key,
+                              "conclusion": "NEEDS_CHANGE", "date": "2026-10-20"} for key in ids],
+            plan_tracker_completed=dict.fromkeys(ids, True), routing_table={"unit": "—"})
+
+    def test_parser_reuse_keeps_reads_root_and_public_overrides_live(self):
+        import os
+        import tempfile
+
+        ids = [f"FIX-{i}" for i in range(701, 707)]
+        text = "| EVD-001 | " + " ".join(ids) + " | unit | reason |\n"
+        original_root = vw.HOST_PROJECT_ROOT
+        native = vw._evidence_task_type_index
+        with tempfile.TemporaryDirectory() as tmp:
+            first, second = Path(tmp) / "A", Path(tmp) / "B"
+            for root, body in ((first, text), (second, text.replace("unit", "work"))):
+                ledger = root / ".governance" / "evidence-log.md"
+                ledger.parent.mkdir(parents=True)
+                ledger.write_text(body, encoding="utf-8")
+            original_ledger = first / ".governance" / "evidence-log.md"
+            stamp = original_ledger.stat()
+            seen = []
+
+            def reader():
+                n = len(seen)
+                vw._apply_project_root_override(second if n == 2 else first)
+                if n == 4:
+                    original_ledger.write_text(text.replace("unit", "work"), encoding="utf-8")
+                    os.utime(original_ledger, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                    vw._evidence_task_type_index = lambda: dict.fromkeys(ids, "unit")
+                seen.append(vw.EVIDENCE_PATH)
+                native().clear()
+                return native()
+
+            try:
+                with mock.patch.object(vw, "_evidence_task_type_index", reader), mock.patch.object(
+                        rd, "_parse_task_type_index", wraps=rd._parse_task_type_index) as parse:
+                    result = self.check(ids)
+                    self.assertEqual(parse.call_count, 4)
+                self.assertEqual(len(seen), 5)
+                self.assertEqual({v["task_id"] for v in result["violations"] if v["rule"] == "V1"},
+                                 {ids[2], ids[4]})
+            finally:
+                vw._apply_project_root_override(original_root)
+
+    def test_inflight_read_finishes_after_scope_exit_without_reactivating_copied_context(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from contextvars import copy_context
+        from tempfile import TemporaryDirectory
+        from threading import Event
+
+        started, resume = Event(), Event()
+        native = rd._parse_task_type_index
+
+        def slow(text):
+            started.set()
+            self.assertTrue(resume.wait(10))
+            return native(text)
+
+        with TemporaryDirectory() as tmp, ThreadPoolExecutor(1) as pool:
+            ledger = Path(tmp) / "evidence.md"
+            ledger.write_text("| EVD-001 | FIX-701 | work | description |", encoding="utf-8")
+            expected = rd._read_task_type_index(ledger)
+            with mock.patch.object(rd, "_parse_task_type_index", slow):
+                with rd._task_type_scope():
+                    copied = copy_context()
+                    other = copy_context()
+                    running = pool.submit(copied.run, rd._read_task_type_index, ledger)
+                    self.assertTrue(started.wait(10))
+                # The old worker is still alive, but a fresh read through its
+                # sibling context must reach the current parser immediately.
+                with mock.patch.object(rd, "_parse_task_type_index", wraps=native) as independent:
+                    try:
+                        self.assertEqual(other.run(rd._read_task_type_index, ledger), expected)
+                    finally:
+                        resume.set()
+                    self.assertEqual(running.result(timeout=10), expected)
+                    self.assertEqual(copied.run(rd._read_task_type_index, ledger), expected)
+                    self.assertEqual(independent.call_count, 2)
+
+    def test_read_failure_and_exception_end_the_scope_including_copied_context(self):
+        import contextvars
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "evidence-log.md"
+            valid = b"| EVD-001 | FIX-701 | work | text |\n"
+            ledger.write_bytes(valid)
+            captured = []
+
+            def reader():
+                captured.append(contextvars.copy_context())
+                self.assertIn("FIX-701", rd._read_task_type_index(ledger))
+                ledger.unlink()
+                self.assertEqual(rd._read_task_type_index(ledger), {})
+                ledger.write_bytes(valid)
+                with mock.patch.object(Path, "read_text", side_effect=PermissionError()):
+                    self.assertEqual(rd._read_task_type_index(ledger), {})
+                ledger.write_bytes(b"\xff")
+                return rd._read_task_type_index(ledger)
+
+            with mock.patch.object(vw, "_evidence_task_type_index", reader):
+                with self.assertRaises(UnicodeDecodeError):
+                    self.check(["FIX-701"])
+            ledger.write_bytes(valid)
+            with mock.patch.object(rd, "_parse_task_type_index", wraps=rd._parse_task_type_index) as parse:
+                for _ in range(2):
+                    captured[0].run(rd._read_task_type_index, ledger).clear()
+                self.assertEqual(parse.call_count, 2)
+
+
 class LegacyLeadingGapRuleTests(unittest.TestCase):
     """L-A: V2 前导缺口 + 终态任务 → WARN（legacy）；边界保持 FAIL。"""
 

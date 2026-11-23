@@ -10,26 +10,16 @@
     }
   ],
   "generated": {
-    "git_head": "5d754b60784acae8ff82c1ed378e3d01472ca2bf",
+    "git_head": "9f903b944a744775300806d9782290d5efd3036d",
     "loc_caliber": "physical lines (ReadAllLines equivalent — see physical_line_count docstring, facts §1.1)"
   },
   "r1_mainfile_budget": {
-    "anchor_loc": 5119,
+    "anchor_loc": 42,
     "design_anchor_note": "facts-0.80.0 §3.1 design anchor was 24,252 (2026-09-09 HEAD); FEAT-019 packet mandates 实测为准 at regen time (intervening engine deltas: FIX-300 + FEAT-019 dispatch wiring, then FIX-309 Check 28v wiring: 24,356→24,399, whose rendering was moved into infra/dsh_compat.py so the R4 print budget stayed at 1,311). 只降不升 semantics unchanged; the wiring lines are registered as the R1 self-bootstrap exemption.",
     "path": "infra/verify_workflow.py"
   },
   "r2_reverse_dependency": {
-    "inventory": [
-      {
-        "count": 1,
-        "kind": "import_vw",
-        "lines": [
-          92
-        ],
-        "owner_task": "FIX-303",
-        "path": "contract_matrix/generator.py"
-      }
-    ],
+    "inventory": [],
     "scan_exclusions": [
       "tests",
       "__pycache__",
@@ -126,15 +116,8 @@
   },
   "r4_print_orchestration": {
     "path": "infra/verify_workflow.py",
-    "per_function": {
-      "_apply_project_root_override": 1,
-      "_print_check_summary": 9,
-      "_print_product_gate_skipped": 3,
-      "cmd_check_governance": 1,
-      "cmd_verify": 1,
-      "main": 1
-    },
-    "total": 16
+    "per_function": {},
+    "total": 0
   },
   "r5_registration_integrity": {
     "consumes": "infra/contract_matrix/snapshots.json (FEAT-020)",
@@ -146,8 +129,8 @@
     "snapshot_present_at_regen": true
   },
   "r6_startup_budget": {
-    "import_count": 182,
-    "import_set_sha256": "03f674afbe220d914d514c0beb7f81b1fcea44e9e7d1ee4662769f6ca7bf0173",
+    "import_count": 177,
+    "import_set_sha256": "ac8cc66e5bd50cd79f5ff1e603a2f49f480e4e90104578d29937ae7b811dbb49",
     "note": "collection + comparison frame only; FEAT-018's tolerance table fills threshold, then the face tightens — advisory until then, never fatal in v1",
     "probe": "python -I -B -c 'import verify_workflow' (isolated)",
     "threshold": null

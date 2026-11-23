@@ -209,7 +209,7 @@
 **时序（FEAT-034 首次交互前置）**：本次 `governance-bootstrap --format json` 同时提供根与热面，入口首次判根后复用同一结果。按显示模式报告当前目标；出现须由用户裁决的事项时才进入 AskUserQuestion；健康摘要按需后置，推进类动作前 MUST 补齐。详见 M5.5。
 
 1. 从本次结果的 `project` 和 `loops` 取得项目配置及待续工作单元。
-2. **跨会话状态恢复（MANDATORY）**：读取 `.governance/session-snapshot.md`（如存在）。与 `.governance/plan-tracker.md` 对比：
+2. **跨会话状态恢复（MANDATORY，恢复遗留任务的实际修改前）**：读取 `.governance/session-snapshot.md`（如存在）。与 `.governance/plan-tracker.md` 对比：
    - snapshot 中标记为 "进行中" 且 plan-tracker 中仍为 "进行中" 的任务 → 这些是遗留任务，继续执行
    - snapshot 中标记为 "进行中" 但 plan-tracker 中为 "未开始" 的任务 → snapshot 已过期，忽略
    - snapshot 中标记为 "pending" 的决策 → 检查是否已在其他 session 中解决
@@ -397,9 +397,9 @@ AskUserQuestion 是交互边界的**默认行为**。以下是唯一有效的跳
 
 ### M5.5 首次交互前置与实质工作时间跟踪（FEAT-034 / AUDIT-154）
 
-快路径确认当前单元及权限后，直接处理已有授权的任务。
+第一动作先判根。复用同次启动、同一工作区已验证的 `governance-bootstrap` 结果，否则运行聚合命令。判根或运行记录损坏时按 bootstrap 规程停止并显示诊断。
 
-1. **需要用户决定时及时 ask（MUST）**：使用可信根与单元原件判断是否存在实际歧义、授权缺口或需用户接受的风险。存在时在本轮显示影响和可选动作，通过 AskUserQuestion 请求决定。仅作信息更新时按显示模式报告状态。健康深检可后置到相关写入或交付动作之前。
+1. **按现有证据决定首个动作（MUST）**。匹配用户请求与 `loops.units[]` 中的单元，以该单元的 `acceptance`、`root_contract` 及有效裁决为据。两个有效条件导致不同交付结果且取舍未定，或当前动作需要用户授权、接受风险，下一工具动作即 AskUserQuestion，以已有事实列出选项与影响，等待裁决。仅当摘要缺当前单元或裁决依据时，按 ID 复读单元或补读会改变判断的一项原始依据。已授权且方向明确则直接工作，只读查询按显示模式答复。若恢复或交付依赖尚待裁决的版本，使用 `migration` 的版本跨度和当前单元已知的影响、写入目标与回退方式直接询问保留或升级。材料不足才在本项目或已解析安装根内定向查证一次；仍缺则询问该事实。升级确认前零写入；认证、异常升级及成品验收沿各自规程执行。
 2. **诚实语义（MUST）**：健康面未检查时（`health.state="deferred"`）状态行健康位显示「待检查」，MUST NOT 显示绿色通过或暗示已检查——deferred 不是 PASS。
 3. **深检后置 ≠ 深检可选（MUST）**：用户选择推进类动作（发布/版本 bump/治理写回/恢复遗留任务的实际修改）时，MUST 先补跑对应深检再继续——推进类深检面固定 full（FEAT-084/DEC-303）：健康摘要深检用 `check-governance --summary-only`（缺省 scope=full）或显式 `--scope full`，**quick 通过 ≠ 完整治理通过**（插件产品自检等排除面段不在 quick 面）；本条只重排深检时序，不削减 M6 Gate 义务、M8 验证义务与任何安全约束（fail-closed 第一动作不变）。
 4. **实质工作时间跟踪义务（arch 判定，AUDIT-154）**：禁止把"首次 ask 提前"单独当作治理提效结论——"先 ask 选完、用户再等数分钟深检"是虚假改善。治理开销评估 MUST 同时跟踪**进入实质工作时间**（time-to-substantive-work，`governance-cost-report`），与 TTFA（time-to-first-ask）成对报告。口径声明：`time_to_work` 是治理开销的 **lower bound**（DEC-205——ask 后的治理性 read/pwsh 计入 first_work_tool），不得把下界当无偏值使用；跨时点轨迹对比不可直接 diff（RISK-052）——效果验证用同快照内对比或新会话采样后重新生成对照。

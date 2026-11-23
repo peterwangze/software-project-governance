@@ -612,9 +612,11 @@ def _next_actions(payload, envelope):
     migration = payload.get("migration") or {}
     if migration.get("required"):
         actions.append(
-            "版本升级可用：active %s > plan-tracker %s — 走 /governance 升级"
-            "流程（本命令只给标志，不执行迁移）"
-            % (migration.get("active_version"), migration.get("plan_version")))
+            "项目固定 %s，安装版本 %s。只读查询直接答复；已有适用裁决则沿用。"
+            "恢复或交付依赖尚未决定的版本时，用当前单元已有的变更影响、写入目标和回退办法，"
+            "立即调用宿主提问工具，让用户选择保留项目版本或升级。仅缺决定所需事实时，"
+            "在当前项目或已解析安装根内定向查证一次；仍缺则询问该事实。升级确认前零写入。"
+            % (migration["plan_version"], migration["active_version"]))
     risks = payload.get("risks") or {}
     if risks.get("escalation_overdue"):
         actions.append("处理逾期风险升级线：%s"

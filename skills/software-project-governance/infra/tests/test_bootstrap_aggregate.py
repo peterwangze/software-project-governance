@@ -380,6 +380,20 @@ class AggregateFieldCompletenessTests(unittest.TestCase):
         # The fixture head carries the DERIVED active version (FIX-353).
         self.assertEqual(migration["plan_version"], _ACTIVE_VERSION)
         self.assertEqual(migration["active_version"], "9.9.9")
+        action = next(line for line in payload["next_actions"] if "项目固定" in line)
+        self.assertIn(f"项目固定 {_ACTIVE_VERSION}，安装版本 9.9.9", action)
+        self.assertIn("恢复或交付依赖尚未决定的版本", action)
+        self.assertIn("调用宿主提问工具", action)
+        self.assertIn("只读查询直接答复", action)
+        self.assertIn("已有适用裁决则沿用", action)
+        self.assertNotIn("/governance", action)
+
+    def test_equal_ahead_and_unknown_versions_offer_no_upgrade_decision(self):
+        for project, installed in [("2.3.4", "2.3.4"), ("3.0.0", "2.3.4"), ("", "2.3.4")]:
+            with self.subTest(project=project, installed=installed):
+                payload = {"migration": ba.migration_flag(project, installed)}
+                actions = ba._next_actions(payload, {"scenario_hint": "F"})
+                self.assertFalse(any("升级" in item for item in actions), actions)
 
     def test_project_face(self):
         project = self.payload["project"]

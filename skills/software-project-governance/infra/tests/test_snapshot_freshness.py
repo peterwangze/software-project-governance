@@ -492,7 +492,10 @@ class Check35ContractTests(unittest.TestCase):
 
     def test_check35_block_position_and_numbering(self):
         """Check 35 block exists, numbered, between Check 34 and Check 36."""
-        src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
+        from full_check_sources import bound_report_sources
+        engine = _INFRA_DIR / "verify_workflow.py"
+        reports = bound_report_sources(engine, engine.read_text(encoding="utf-8"))
+        src = "\n".join(body for _, body in reports)
         block35 = "┌─ Check 35: Snapshot Freshness (FIX-268)"
         self.assertIn(block35, src)
         self.assertLess(src.index("┌─ Check 34"), src.index(block35))
@@ -512,7 +515,7 @@ class Check35ContractTests(unittest.TestCase):
         src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
         self.assertIn("from checks.snapshot_domain import (", src)
         idx_import = src.index("from checks.snapshot_domain import (")
-        idx_block = src.index("┌─ Check 35")
+        idx_block = src.index("yield governance.section_35_snapshot_freshness(")
         self.assertLess(idx_import, idx_block)
 
 

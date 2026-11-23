@@ -36,6 +36,7 @@ import contextlib
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -256,14 +257,142 @@ class Acceptance1CoverageTests(unittest.TestCase):
         self.assertEqual(set(observed), set(_snapshot_ids()))
 
     def test_engine_discovery_ignores_non_segment_sections(self):
-        """Discovery is scoped to the engine function body, not the whole file."""
-        source = _engine_source()
-        whole_file_hits = len(
-            re.findall(r"^\s*#\s*\u2500\u2500\s*([0-9][A-Za-z0-9]*)\.\s", source, re.M)
-        )
-        in_body_hits = len(qr.discover_engine_segment_ids())
-        self.assertGreater(whole_file_hits, in_body_hits)  # scoping is load-bearing
-        self.assertEqual(in_body_hits, len(_snapshot_ids()))
+        """Only invoked reports count; an unused owner function cannot keep a deleted section live."""
+        from contract_matrix import generator
+        from unittest.mock import patch
+
+        with _sandbox_tmp() as tmp:
+            engine = Path(tmp) / ENGINE.name
+            shutil.copyfile(_INFRA_DIR / "full_check_runner.py", engine.with_name("full_check_runner.py"))
+            for owner in _INFRA_DIR.glob("health_*_sections.py"):
+                shutil.copyfile(owner, engine.with_name(owner.name))
+            source = _engine_source()
+            call = "    yield product.section_28w_dsh_boundary(product_gate_active, _print_product_gate_skipped)"
+            self.assertEqual(source.count(call), 1)
+            for replacement, error in ((call + "\n" + call, "duplicate"),
+                                       ("    return\n" + call, "sequence"),
+                                       (call.replace("dsh_boundary", "missing_report"), "missing report")):
+                engine.write_text(source.replace(call, replacement), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, error):
+                    qr.discover_engine_segment_ids(engine)
+            engine.write_text(source.replace(call, ""), encoding="utf-8")
+            self.assertNotIn("28w", qr.discover_engine_segment_ids(engine))
+            with patch.object(generator, "_ENGINE_PATH", engine):
+                self.assertNotIn("28w", generator.extract_check_segments()["ids"])
+
+
+    def test_runner_observers_follow_the_installed_reducer_and_its_return(self):
+        from contract_matrix import generator
+        from unittest.mock import patch
+
+        with _sandbox_tmp() as tmp:
+            folder = Path(tmp)
+            engine = folder / "verify_workflow.py"
+            engine_source = (
+                "def _full_check_results(args):\n"
+                "    import health_probe_sections as probe\n"
+                "    yield probe.section_1_first()\n"
+                "    yield probe.section_2_second()\n"
+                "def _run_full_engine_checks(args):\n"
+                "    from full_check_runner import run_full_checks\n"
+                "    return run_full_checks(_full_check_results(args))\n"
+            )
+            engine.write_text(engine_source, encoding="utf-8")
+            (folder / "health_probe_sections.py").write_text(
+                'def section_1_first():\n    print("┌─ Check 1: First ─┐")\n    return 2\n'
+                'def section_2_second():\n    print("┌─ Check 2: Second ─┐")\n    return 3\n',
+                encoding="utf-8",
+            )
+            runner = folder / "full_check_runner.py"
+            original = (_INFRA_DIR / runner.name).read_text(encoding="utf-8")
+
+            def run_installed():
+                # Isolated import paths prevent a missing runner from resolving to our own installation.
+                return subprocess.run(
+                    [sys.executable, "-I", "-B", "-X", "utf8", "-c",
+                     "import argparse, sys; sys.path.insert(0, sys.argv[1]); import verify_workflow as v; "
+                     "print(v._run_full_engine_checks(argparse.Namespace()))", str(folder)],
+                    capture_output=True, encoding="utf-8", check=False,
+                )
+
+            with patch.object(generator, "_ENGINE_PATH", engine):
+                def reject():
+                    with self.assertRaises(ValueError):
+                        qr.guard_completeness(engine_path=engine)
+                    with self.assertRaises(ValueError):
+                        generator.extract_check_segments()
+
+                def complete():
+                    self.assertEqual(qr.discover_engine_segment_ids(engine), ("1", "2"))
+                    self.assertEqual(generator.extract_check_segments()["titles"], {"1": "First", "2": "Second"})
+                    result = run_installed()
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("Check 2: Second", result.stdout)
+                    self.assertEqual(result.stdout.splitlines()[-1], "5")
+
+                runner.write_text(original, encoding="utf-8")
+                complete()
+                runner.unlink()
+                reject()
+                result = run_installed()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ModuleNotFoundError", result.stderr)
+                self.assertEqual(result.stdout, "")
+
+                runner.write_text(original.replace("sum(section_results)", "next(iter(section_results))"),
+                                  encoding="utf-8")
+                reject()
+                result = run_installed()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Check 1: First", result.stdout)
+                self.assertNotIn("Check 2:", result.stdout)
+                self.assertEqual(result.stdout.splitlines()[-1], "2")
+
+                for replacement in ("return 0", "all_issues = 0\n    return all_issues",
+                                    "if all_issues:\n        return 1\n    return all_issues"):
+                    with self.subTest(replacement=replacement):
+                        runner.write_text(original.replace("return all_issues", replacement), encoding="utf-8")
+                        reject()
+                runner.write_text("sum = next\n" + original, encoding="utf-8")
+                reject()
+                runner.write_text(original, encoding="utf-8")
+                for binding in ("from .full_check_runner import run_full_checks",
+                                "from full_check_runner import run_full_checks as disconnected"):
+                    with self.subTest(binding=binding):
+                        engine.write_text(engine_source.replace("from full_check_runner import run_full_checks",
+                                                                binding), encoding="utf-8")
+                        reject()
+                for name, imports, decorator, error in (
+                    ("_full_check_results", "from contextlib import contextmanager", "@contextmanager\n",
+                     "_GeneratorContextManager"),
+                    ("_full_check_results", "import contextlib",
+                     "@(\n    contextlib.contextmanager\n)\n\n# selector\n", "_GeneratorContextManager"),
+                    ("_run_full_engine_checks", "from functools import lru_cache", "@lru_cache\n",
+                     "unhashable type"),
+                    ("_run_full_engine_checks", "import functools",
+                     "@functools.lru_cache(\n    maxsize=2,\n)\n# entry\n\n", "unhashable type"),
+                ):
+                    with self.subTest(function=name, decorator=decorator):
+                        marker = f"def {name}("
+                        changed = engine_source.replace(marker, decorator + marker)
+                        engine.write_text(imports + "\n" + changed, encoding="utf-8")
+                        reject()
+                        result = run_installed()
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, "")
+                        self.assertIn("TypeError:", result.stderr)
+                        self.assertIn(error, result.stderr)
+
+                for rebind in ("_run_full_engine_checks = lambda args: 0",
+                               "if True:\n    _full_check_results = lambda args: ()"):
+                    with self.subTest(rebind=rebind):
+                        engine.write_text(engine_source + "\n" + rebind + "\n", encoding="utf-8")
+                        reject()
+                regular = engine_source.replace("def _full_check_results", "def   _full_check_results")
+                engine.write_text(regular, encoding="utf-8")
+                complete()
+                engine.write_text(engine_source, encoding="utf-8")
+                complete()
 
 
 class Acceptance2CompletenessGuardTests(unittest.TestCase):

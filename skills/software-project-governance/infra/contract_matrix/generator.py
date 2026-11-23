@@ -89,10 +89,6 @@ REPRESENTATIVE_RESULT_CALLS = (
 # ── Face 1: CLI dispatch key set (live argparse surface) ───────────────────────────
 
 
-def _engine_tree() -> ast.Module:
-    return ast.parse(_ENGINE_PATH.read_text(encoding="utf-8"))
-
-
 def extract_cli_dispatch() -> dict:
     """Observe public keys and alias groups on the engine's real argument parser and handler resolver."""
     import registry
@@ -129,20 +125,15 @@ def _segment_sort_key(segment_id: str):
 
 
 def extract_check_segments() -> dict:
-    """Union of banner Check ids and product-gate registry Check ids.
+    """Read titles from executable report bodies or historical engine banners."""
+    from full_check_sources import bound_report_sources, parse_module_source
 
-    Banners (``┌─ Check NN: Title ─┐``) carry 69 ids; ``Check 30b`` prints
-    its SKIP line inside Check 30c's box (no own banner) and is only
-    declared in the two product-gate registries — the union is the real
-    70-segment contract surface.
-    """
     source = _ENGINE_PATH.read_text(encoding="utf-8")
+    tree = parse_module_source(_ENGINE_PATH, source)
+    reports = bound_report_sources(_ENGINE_PATH, source, tree=tree)
     titles: dict[str, str] = {}
-    for match in _BANNER_RE.finditer(source):
-        titles[match.group(1)] = match.group(2).strip()
     registry_ids: set[str] = set()
     registry_labels: dict[str, str] = {}
-    tree = _engine_tree()
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
@@ -168,8 +159,21 @@ def extract_check_segments() -> dict:
                         and key_node.value.startswith("Check ")):
                     registry_labels[key_node.value[len("Check "):]] = \
                         value_node.value
-    for segment_id in registry_ids:
-        titles.setdefault(segment_id, registry_labels.get(segment_id, ""))
+    if reports is None:
+        for match in _BANNER_RE.finditer(source):
+            titles[match.group(1)] = match.group(2).strip()
+        for segment_id in registry_ids:
+            titles.setdefault(segment_id, registry_labels.get(segment_id, ""))
+    else:
+        for segment_id, report in reports:
+            banner = _BANNER_RE.search(report)
+            if banner is None:
+                # A few reports render through an existing product-gate emitter.
+                titles[segment_id] = registry_labels[segment_id]
+            elif banner.group(1) == segment_id:
+                titles[segment_id] = banner.group(2).strip()
+            else:
+                raise ValueError(f"Check {segment_id} renders the banner for Check {banner.group(1)}")
     ordered = sorted(titles, key=_segment_sort_key)
     return {
         "count": len(ordered),

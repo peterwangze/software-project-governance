@@ -33,8 +33,13 @@ Run:
 import ast
 import dataclasses
 import functools
+import inspect
+import importlib
+import io
+from contextlib import ExitStack, redirect_stdout
+from types import SimpleNamespace
+from unittest.mock import patch
 import json
-import re
 import subprocess
 import sys
 import unittest
@@ -56,11 +61,6 @@ ENGINE = _INFRA_DIR / "verify_workflow.py"
 REGISTRY_PATH = _INFRA_DIR / "registry.py"
 SNAPSHOT = _INFRA_DIR / "contract_matrix" / "snapshots.json"
 BASELINE = _SKILL_ROOT / "core" / "architecture-baseline.json"
-
-# Box-drawing dashes used by the engine's ``# ── <id>. `` section markers.
-_DASH = "\u2500"
-_ENGINE_ENTRY = "def _run_full_engine_checks"
-_SECTION_RE = re.compile(r"^\s*#\s*" + _DASH + r"{2}\s*([0-9][A-Za-z0-9]*)\.\s")
 
 # Independent import budget measured by the isolated R6 probe.
 FROZEN_ENGINE_IMPORT_COUNT = 212
@@ -88,47 +88,68 @@ def _engine_source():
     return ENGINE.read_text(encoding="utf-8")
 
 
-def _segment_facts():
-    """{segment: {"calls": set[str], "all_issues": bool}} by line attribution.
-
-    One AST parse of the engine; every Call / ``all_issues`` AugAssign node is
-    attributed to the ``# ── <id>. `` section that contains its line. Section
-    scoping follows the FEAT-025 caliber (``_run_full_engine_checks`` body
-    only): 30b prints no banner and 28u's section runs into the summary block,
-    so sub-parsing the section text is unreliable while line attribution is
-    exact.
-    """
-    source = _engine_source()
-    lines = source.splitlines()
-    start = next(i for i, line in enumerate(lines)
-                 if line.startswith(_ENGINE_ENTRY))
-    end = next(i for i in range(start + 5, len(lines))
-               if lines[i].startswith("def "))
-    marks = []
-    for index in range(start, end):
-        match = _SECTION_RE.match(lines[index])
-        if match is not None:
-            marks.append((index + 1, match.group(1)))
-    facts = {}
-    for position, (line_no, segment) in enumerate(marks):
-        stop = marks[position + 1][0] if position + 1 < len(marks) else end + 1
-        facts[segment] = {"range": (line_no, stop), "calls": set(),
-                          "all_issues": False}
-    for node in ast.walk(ast.parse(source)):
-        line = getattr(node, "lineno", None)
-        if line is None:
-            continue
-        for segment, slot in facts.items():
-            low, high = slot["range"]
-            if not low <= line < high:
-                continue
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                slot["calls"].add(node.func.id)
-            elif (isinstance(node, ast.AugAssign)
-                  and isinstance(node.target, ast.Name)
-                  and node.target.id == "all_issues"):
-                slot["all_issues"] = True
+def _report_tree(report):
+    function = ast.parse(inspect.getsource(report)).body[0]
+    for index, statement in enumerate(function.body):
+        if isinstance(statement, ast.Return):
+            function.body = function.body[:index + 1]
             break
+    return function
+
+
+def _contributes_issues(report):
+    """Follow the report's returned counter, including the shared packet renderer."""
+    node = _report_tree(report)
+    returned = node.body[-1].value
+    if isinstance(returned, ast.Constant):
+        return returned.value != 0
+    for operation in ast.walk(node):
+        if (isinstance(operation, ast.AugAssign) and isinstance(operation.target, ast.Name)
+                and operation.target.id == returned.id):
+            return True
+        if (isinstance(operation, ast.Assign) and isinstance(operation.value, ast.Call)
+                and isinstance(operation.value.func, ast.Name)
+                and any(isinstance(t, ast.Name) and t.id == returned.id for t in operation.targets)):
+            renderer = getattr(inspect.getmodule(report), operation.value.func.id)
+            return _contributes_issues(renderer)
+    return False
+
+
+def _segment_facts():
+    """Observe the actual full run's bindings independently of its source census."""
+    import verify_workflow as engine
+
+    facts = {}
+
+    def record(report, *args):
+        segment = report.__name__.split("_")[1]
+        if segment in facts:
+            raise AssertionError(f"full profile ran Check {segment} twice")
+        bound = inspect.signature(report).bind(*args).arguments
+        tree = _report_tree(report)
+        calls = {node.func.id for node in ast.walk(tree)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        targets = {bound[name] for name in calls & bound.keys() if callable(bound[name])}
+        for statement in ast.walk(tree):
+            if isinstance(statement, ast.ImportFrom):
+                for alias in statement.names:
+                    if (alias.asname or alias.name) in calls:
+                        targets.add(getattr(importlib.import_module(statement.module), alias.name))
+        calls = {getattr(bound[name], "__name__", None) if name in bound else name
+                 for name in calls}
+        facts[segment] = {
+            "calls": calls, "targets": targets, "all_issues": _contributes_issues(report),
+        }
+        return 1
+
+    with ExitStack() as stack, redirect_stdout(io.StringIO()):
+        for path in _INFRA_DIR.glob("health_*_sections.py"):
+            owner = importlib.import_module(path.stem)
+            for name, report in inspect.getmembers(owner, inspect.isfunction):
+                if name.startswith("section_"):
+                    stack.enter_context(patch.object(owner, name, functools.partial(record, report)))
+        if engine._run_full_engine_checks(SimpleNamespace(product_gates=True)) != len(facts):
+            raise AssertionError("full engine omitted a returned report count")
     return facts
 
 
@@ -577,6 +598,54 @@ class CheckRegistryTests(unittest.TestCase):
             self.assertIn(module, reg.LOADER_WHITELIST, segment)
             self.assertIn(attr, facts[segment]["calls"],
                           f"{segment}: {attr} is not called in its section")
+            via = reg.DELEGATED_LOADERS.get(spec.check_id, spec.loader)
+            target = getattr(importlib.import_module(reg.loader_module(via)), reg.loader_attr(via))
+            self.assertIn(target, facts[segment]["targets"], f"{segment}: checker owner changed")
+
+    def test_swapping_a_checker_changes_the_observed_loader(self):
+        import verify_workflow as engine
+
+        with patch.object(engine, "check_evidence_completeness", engine.check_risk_staleness):
+            calls = _segment_facts()["1"]["calls"]
+        self.assertNotIn("check_evidence_completeness", calls)
+        self.assertIn("check_risk_staleness", calls)
+
+    def test_same_named_dsh_emitters_have_distinct_owners(self):
+        import dsh_compat
+        from checks import dsh_boundary
+
+        original = dsh_compat.emit_check_section
+        with patch.object(dsh_compat, "emit_check_section", dsh_boundary.emit_check_section):
+            targets = _segment_facts()["28v"]["targets"]
+        self.assertNotIn(original, targets)
+        self.assertIn(dsh_boundary.emit_check_section, targets)
+
+    def test_advisory_errors_are_rendered_without_incrementing_the_total(self):
+        from full_check_runner import run_full_checks
+        from health_product_sections import section_28p_duplicate_code
+
+        def reports():
+            yield section_28p_duplicate_code(lambda: True, lambda: {
+                "findings": [{"severity": "ERROR", "check": "dup"}],
+                "summary": {"errors": 1, "warnings": 0},
+            }, self.fail)
+            yield 2
+
+        with redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(run_full_checks(reports()), 2)
+        self.assertIn("1 ERROR, 0 WARN (advisory)", output.getvalue())
+
+    def test_full_profile_stops_at_the_first_checker_error(self):
+        import verify_workflow as engine
+
+        with patch.object(engine, "check_evidence_completeness", side_effect=LookupError("first")), \
+             patch.object(engine, "check_risk_staleness") as later, redirect_stdout(io.StringIO()) as out:
+            with self.assertRaisesRegex(LookupError, "first"):
+                engine._run_full_engine_checks(SimpleNamespace(product_gates=True))
+        later.assert_not_called()
+        self.assertIn("Check 1: Evidence Completeness", out.getvalue())
+        self.assertNotIn("Check 2:", out.getvalue())
+        self.assertNotIn("Governance Health Summary", out.getvalue())
 
     def test_domain_hosted_loaders_match_the_declaring_module(self):
         definitions = _engine_modules()

@@ -498,18 +498,34 @@ class Check38ContractTests(unittest.TestCase):
 
     def test_check38_block_position_and_numbering(self):
         """Check 38 block exists, numbered, between Check 37 and the summary."""
-        src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
+        from full_check_sources import bound_report_sources
+        engine = _INFRA_DIR / "verify_workflow.py"
+        reports = bound_report_sources(engine, engine.read_text(encoding="utf-8"))
+        src = "\n".join(body for _, body in reports)
         block38 = "┌─ Check 38: CI Evidence (FIX-267)"
         self.assertIn(block38, src)
         self.assertLess(src.index("┌─ Check 37: Release work-unit evidence"),
                         src.index(block38))
-        self.assertLess(src.index(block38),
-                        src.index("┌─ Governance Health Summary"))
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from full_check_runner import run_full_checks
+
+        def last_report():
+            print(block38)
+            yield 1
+
+        with redirect_stdout(StringIO()) as captured:
+            self.assertEqual(run_full_checks(last_report()), 1)
+        output = captured.getvalue()
+        self.assertLess(output.index(block38), output.index("┌─ Governance Health Summary"))
 
     def test_check35_36_37_38_no_interleaving(self):
         """Check 35 / 36 / 37 / 38 blocks appear in ascending order with no
         interleaving."""
-        src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
+        from full_check_sources import bound_report_sources
+        engine = _INFRA_DIR / "verify_workflow.py"
+        reports = bound_report_sources(engine, engine.read_text(encoding="utf-8"))
+        src = "\n".join(body for _, body in reports)
         markers = ["┌─ Check 35: Snapshot Freshness",
                    "┌─ Check 36: Risk Mitigation Closure",
                    "┌─ Check 37: Release work-unit evidence",
@@ -529,7 +545,7 @@ class Check38ContractTests(unittest.TestCase):
         src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
         self.assertIn("from checks.ci_domain import (", src)
         idx_import = src.index("from checks.ci_domain import (")
-        idx_block = src.index("┌─ Check 38")
+        idx_block = src.index("yield delivery.section_38_ci_evidence(")
         self.assertLess(idx_import, idx_block)
 
 

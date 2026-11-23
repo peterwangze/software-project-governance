@@ -79,3 +79,40 @@ def generate_scaffold(args, render):
         print(f"Wrote deterministic scaffold: {output_path}")
     else:
         print(content, end="" if content.endswith("\n") else "\n")
+
+
+def cmd_check_product_success_contracts(args, check, render_goals):
+    run_contract_check(
+        args, check, title="Product Success Contract Check",
+        count_label="Required active P0/P1 contract(s)", success="product success contracts are ready",
+    )
+    render_goals()
+
+
+def cmd_check_acceptance_contracts(args, check):
+    run_contract_check(
+        args, check, title="Executable Acceptance Contract Check",
+        count_label="Required active P0/P1 acceptance contract(s)", success="executable acceptance contracts are ready",
+    )
+
+
+def cmd_check_quality_budget(args, check):
+    run_contract_check(
+        args, check, title="Quality Budget Check",
+        count_label="Required active P0/P1 quality budget(s)", success="quality budgets are ready",
+    )
+
+
+def cmd_check_vertical_slices(args, check):
+    run_contract_check(
+        args, check, title="Vertical Slice Check",
+        count_label="Required active P0/P1 vertical slice(s)", success="vertical slice packets are ready",
+    )
+
+
+def cmd_check_deterministic_scaffolds(args, check):
+    run_contract_check(
+        args, check, title="Weak-LLM Deterministic Scaffold Check",
+        count_label="Required scaffold type(s)", success="deterministic scaffolds are ready",
+        required="required_types", entry_key="scaffold_type",
+    )

@@ -359,6 +359,124 @@ class CommandRegistryTests(unittest.TestCase):
             dependency.write_bytes(source)
             self.assertTrue(all(inspect_gate().values()))
 
+    def test_workspace_entries_preserve_replacements_and_loader_errors(self):
+        import verify_workflow as workflow
+
+        for load, key, attr in ((reg.load_handler, "check-plugin-freshness", "cmd_check_plugin_freshness"),
+                                (reg.load_check, "check-10", "check_m5_compliance_with_record_scope"),
+                                (reg.load_check, "check-25", "check_untracked_files")):
+            with self.subTest(key=key):
+                native = load(key)
+                replacement = lambda *args: key
+                with patch.object(workflow, attr, replacement):
+                    self.assertIs(load(key), replacement)
+                with patch.object(workflow, attr, None), self.assertRaises(reg.LoaderResolutionError):
+                    load(key)
+                self.assertIs(load(key), native)
+
+    def test_freshness_command_preserves_inner_global_and_outer_loader_errors(self):
+        import verify_workflow as workflow
+
+        args = SimpleNamespace()
+        public = workflow.check_plugin_freshness
+        entries = (workflow.cmd_check_plugin_freshness, reg.load_handler("check-plugin-freshness"))
+        try:
+            del workflow.check_plugin_freshness
+            for entry in entries:
+                with self.assertRaises(NameError) as error:
+                    entry(args)
+                self.assertEqual(error.exception.name, "check_plugin_freshness")
+        finally:
+            workflow.check_plugin_freshness = public
+        with patch.object(workflow, "check_plugin_freshness", None):
+            for entry in entries:
+                with self.assertRaises(TypeError):
+                    entry(args)
+        outer = workflow.cmd_check_plugin_freshness
+        try:
+            del workflow.cmd_check_plugin_freshness
+            with self.assertRaises(reg.LoaderResolutionError):
+                reg.load_handler("check-plugin-freshness")
+        finally:
+            workflow.cmd_check_plugin_freshness = outer
+        self.assertIs(reg.load_handler("check-plugin-freshness"), entries[1])
+
+    def test_workspace_command_observes_the_target_handler_and_freshness_reader(self):
+        import shutil
+        import tempfile
+        from cli_registration import inspect_cli_registration
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("verify_workflow", "registry", "workflow_cli", "workflow_cli_checks",
+                         "workflow_cli_operations", "workspace_check_cli", "workspace_checks", "project_paths"):
+                shutil.copyfile(_INFRA_DIR / (name + ".py"), root / (name + ".py"))
+            def facts():
+                return inspect_cli_registration(root / "verify_workflow.py", "check-plugin-freshness",
+                                                "cmd_check_plugin_freshness")
+
+            self.assertTrue(all(facts().values()))
+            for name, mutation in (("workspace_checks", b"cmd_check_plugin_freshness = None"),
+                                   ("workspace_check_cli", b"report_plugin_freshness = None"),
+                                   ("workspace_checks", b"def check_plugin_freshness(extra): pass"),
+                                   ("registry", b"LOADER_WHITELIST = ()")):
+                with self.subTest(name=name, mutation=mutation):
+                    path = root / (name + ".py")
+                    original = path.read_bytes()
+                    path.write_bytes(original + b"\n" + mutation)
+                    self.assertFalse(facts()["dispatch"])
+                    path.write_bytes(original)
+
+            engine = root / "verify_workflow.py"
+            source = engine.read_bytes()
+            owner = root / "workspace_checks.py"
+            native = owner.read_bytes()
+            for setter, bad_setter, bad_default in (
+                (b"_workspace_checks._product_root = lambda: ROOT",
+                 b"_workspace_checks._product_root = lambda required: ROOT", b"_product_root = None"),
+                (b"_workspace_checks.effective_entry = _effective_engine_command",
+                 b"_workspace_checks.effective_entry = lambda name, native, required: native", b"del effective_entry"),
+            ):
+                with self.subTest(setter=setter):
+                    self.assertEqual(source.count(setter), 1)
+                    owner.write_bytes(native + b"\n" + bad_default)
+                    self.assertTrue(facts()["dispatch"])
+                    engine.write_bytes(source.replace(setter, b""))
+                    self.assertFalse(facts()["dispatch"])
+                    owner.write_bytes(native)
+                    self.assertTrue(facts()["dispatch"])
+                    engine.write_bytes(source.replace(setter, bad_setter))
+                    self.assertFalse(facts()["dispatch"])
+                    engine.write_bytes(source + b"\n" + bad_setter + b"\n")
+                    self.assertTrue(facts()["dispatch"])  # sys.exit(main()) already ran
+                    engine.write_bytes(source)
+
+            root_setter = b"_workspace_checks._product_root = lambda: ROOT"
+            engine.write_bytes(source.replace(root_setter, b"_workspace_checks._product_root = lambda: RO0T"))
+            self.assertFalse(facts()["dispatch"])
+            engine.write_bytes(source.replace(root_setter, b"_workspace_checks._product_root = lambda: 1 + 2"))
+            self.assertFalse(facts()["dispatch"])
+            owner.write_bytes(native.replace(b"from project_paths import package_root",
+                                            b"from project_paths import absent_package_root as package_root"))
+            engine.write_bytes(source.replace(root_setter, b""))
+            self.assertFalse(facts()["dispatch"])
+            engine.write_bytes(source)
+            self.assertTrue(facts()["dispatch"])  # the broken default is unused
+            owner.write_bytes(native)
+            reader = b"current = check_plugin_freshness if name"
+            self.assertEqual(source.count(reader), 1)
+            engine.write_bytes(source.replace(reader, b"current = check_plugin_freshnes if name"))
+            self.assertFalse(facts()["dispatch"])
+            engine.write_bytes(source)
+            registry = root / "registry.py"
+            registry_source = registry.read_bytes()
+            registered = b"    return resolve_loader(path)\n\n\ndef handler_alias_groups"
+            self.assertEqual(registry_source.count(registered), 1)
+            registry.write_bytes(registry_source.replace(registered, b"    return None\n\n\ndef handler_alias_groups"))
+            self.assertFalse(facts()["dispatch"])
+            registry.write_bytes(registry_source)
+            self.assertTrue(all(facts().values()))
+
     def test_declares_the_frozen_key_count(self):
         self.assertEqual(len(reg.COMMAND_SPECS), _frozen_faces()["cli_dispatch"]["key_count"])
         self.assertEqual(len(reg.command_keys()), _frozen_faces()["cli_dispatch"]["key_count"])
@@ -441,7 +559,7 @@ class CommandRegistryTests(unittest.TestCase):
             "check-dsh-boundary", "check-dsh-preset-compat", "check-dsh-preset-smoke",
             "check-entry-bootstrap-sync",
             "check-injection-budget",
-            "check-manifest-consistency", "check-review-debt",
+            "check-manifest-consistency", "check-plugin-freshness", "check-review-debt",
             "decision-append", "dsh-doctor",
             "evidence-append", "gate-check",
             "governance-bootstrap",

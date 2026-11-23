@@ -331,6 +331,9 @@ def _split_markdown_table_row(line):
     return markdown_table_cells(line)
 
 
+import workspace_checks as _workspace_checks
+
+
 def lock_issue_is_blocking(issue):
     from plugin_assets import lock_issue_is_blocking as run
     return run(issue, blocking_lock_issue_types=_product_policy("BLOCKING_LOCK_ISSUE_TYPES"))
@@ -414,6 +417,7 @@ def _exception_registry_error_note():
 # Same registry-schema-check pattern as the manifest domain (Phase 1). Thin
 # re-export keeps existing call sites (dispatch, Check 28k in cmd_check_governance)
 # working unchanged.
+from checks import capability_registry as _capability_registry
 from checks.capability_registry import (  # noqa: E402
     check_capability_registry,
     cmd_check_capability_registry,
@@ -759,6 +763,32 @@ _HOST_POLICY_OWNERS = {
 
 _PRODUCT_POLICY_OWNERS = {
     **dict.fromkeys((
+        "ACCEPTANCE_CONTRACT_REQUIRED_FIELDS", "ACCEPTANCE_RUNNABLE_COMMAND_RE", "ACCEPTANCE_PASS_STATUSES",
+        "ACCEPTANCE_NOT_RUN_STATUSES", "QUALITY_BUDGET_PASS_STATUSES", "QUALITY_BUDGET_PENDING_STATUSES",
+        "QUALITY_BUDGET_EXEMPT_STATUSES", "QUALITY_BUDGET_VALIDATION_SIGNAL_RE", "QUALITY_BUDGET_WEAK_PROSE_RE",
+        "TASK_PENDING_STATUS_MARKERS", "VERTICAL_SLICE_REQUIRED_FIELDS", "VERTICAL_SLICE_PASS_STATUSES",
+        "VERTICAL_SLICE_PENDING_STATUSES", "VERTICAL_SLICE_DEMO_SIGNAL_RE", "VERTICAL_SLICE_USER_SIGNAL_RE",
+        "VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE", "VERTICAL_SLICE_TECH_LAYER_RE", "VERTICAL_SLICE_BROAD_SCOPE_RE",
+        "VERTICAL_SLICE_WEAK_PROSE_RE",
+    ), "delivery_contract_checks"),
+    **dict.fromkeys((
+        "DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS", "DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS",
+        "DETERMINISTIC_SCAFFOLD_COMMAND_RE", "DETERMINISTIC_SCAFFOLD_SIGNAL_RE",
+        "DETERMINISTIC_SCAFFOLD_WEAK_RE", "DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE",
+        "DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS",
+    ), "scaffold_contracts"),
+    **dict.fromkeys((
+        "INTERRUPTION_POLICY_REQUIRED_PHRASES", "INTERRUPTION_POLICY_REQUIRED_TEMPLATE_PHRASES",
+        "INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS", "INTERRUPTION_POLICY_PLACEHOLDER_RE",
+        "INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS", "INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS",
+        "INTERRUPTION_POLICY_DEFAULT_EXAMPLES",
+    ), "interruption_contracts"),
+    **dict.fromkeys((
+        "_DEFERRED_LEDGER_FILENAME", "_EVIDENCE_MACHINE_ROW_FAMILIES", "_OPS_LEDGER_RECEIPT_ANCHOR",
+        "_PLAN_TRACKER_ROW_EXPECTED_SHAPE", "_ROW_FAMILY_TEXT_SURFACES", "_WRITE_GUARD_STATE_FILENAME",
+        "_WRITE_GUARD_STATE_SCHEMA_VERSION", "_WRITE_GUARD_STATE_TOOL",
+    ), "write_guard_contracts"),
+    **dict.fromkeys((
         "LIFECYCLE_REGISTRY_ACTIVE_MODE", "LIFECYCLE_REGISTRY_DYNAMIC_MODE",
         "LIFECYCLE_REGISTRY_GATES", "LIFECYCLE_REGISTRY_STAGE_IDS",
         "LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES", "LIFECYCLE_REGISTRY_REQUIRED_PRESET_FIELDS",
@@ -841,7 +871,7 @@ def _host_policy(name):
         return globals()[name]
     except KeyError:
         if name in _DELETED_POLICIES:
-            raise NameError(f"name '{name}' is not defined") from None
+            raise NameError(f"name '{name}' is not defined", name=name) from None
         return __getattr__(name)
 
 
@@ -1128,8 +1158,7 @@ def _governance_pack_file_path(entry):
     return run(entry)
 
 
-def _is_valid_string_list(value):
-    return isinstance(value, list) and bool(value) and all(isinstance(item, str) and item.strip() for item in value)
+from contracts import _is_valid_string_list
 
 
 # _capability_registry_text_values + check_capability_registry moved to
@@ -2824,311 +2853,6 @@ def _validate_execution_packet(task, packet):
 DETERMINISTIC_SCAFFOLD_DIR = ROOT / "skills/software-project-governance/core/templates/deterministic-scaffolds"
 
 
-ACCEPTANCE_CONTRACT_REQUIRED_FIELDS = {
-    "scenario": str,
-    "command": str,
-    "expected_output": str,
-    "last_run": dict,
-    "demo_evidence": str,
-}
-
-ACCEPTANCE_RUNNABLE_COMMAND_RE = re.compile(
-    r"^\s*(?:(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|cmd|powershell|pwsh)\b|"
-    r"(?:\./|\.\\|skills/|skills\\|scripts/|scripts\\).+)",
-    re.IGNORECASE,
-)
-
-ACCEPTANCE_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
-
-ACCEPTANCE_NOT_RUN_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
-
-QUALITY_BUDGET_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
-
-QUALITY_BUDGET_PENDING_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
-
-QUALITY_BUDGET_EXEMPT_STATUSES = {"exempt", "exception", "waived", "not_applicable", "n/a", "豁免", "不适用"}
-
-QUALITY_BUDGET_VALIDATION_SIGNAL_RE = re.compile(
-    r"(?:"
-    r"python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|cmd|powershell|pwsh|"
-    r"test|check|scan|lint|audit|metric|score|coverage|threshold|budget|lighthouse|axe|"
-    r"latency|p95|error rate|vulnerability|security|a11y|accessibility|maintainability|"
-    r"测试|检查|扫描|指标|分数|覆盖率|阈值|预算|延迟|错误率|漏洞|安全|可访问|可维护"
-    r")",
-    re.IGNORECASE,
-)
-
-QUALITY_BUDGET_WEAK_PROSE_RE = re.compile(
-    r"(?:"
-    r"quality is okay|quality is ok|looks fine|looks good|good enough|review says|review artifact|"
-    r"manual reviewer|manual review|prose|subjective|"
-    r"质量还行|看起来可以|人工看看|人工审查|审查通过|主观"
-    r")",
-    re.IGNORECASE,
-)
-
-# FIX-475: single shared vocabulary + predicate for the Check 18f/18g
-# pending allowance — no second semantic source (FIX-292 lesson). Markers
-# substring-match the lowercased plan-tracker status cell, so live emoji
-# forms (「📋 规划中 (…)」/「🚧 派发中 (…)」) match via the text marker.
-# Terminal words (✅/完成/completed/…) must never join this whitelist;
-# terminal tasks are already excluded upstream by
-# _active_execution_packet_tasks -> _is_incomplete_task_status.
-TASK_PENDING_STATUS_MARKERS = (
-    "规划中",
-    "待实施",
-    "pending",
-    "planned",
-    "派发中",
-    "进行中",
-    "开发中",
-    "in progress",
-    "in_progress",
-    "wip",
-)
-
-VERTICAL_SLICE_REQUIRED_FIELDS = (
-    "user_visible_slice",
-    "demo_path",
-    "scope_guard",
-    "rollback_plan",
-    "status",
-    "evidence",
-)
-
-VERTICAL_SLICE_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
-
-VERTICAL_SLICE_PENDING_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
-
-VERTICAL_SLICE_DEMO_SIGNAL_RE = re.compile(
-    r"(?:"
-    r"\b(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|powershell|pwsh|"
-    r"test|check|smoke|e2e|demo|browser|screenshot)\b|localhost|https?://|"
-    r"测试|检查|冒烟|演示|截图|浏览器|验收"
-    r")",
-    re.IGNORECASE,
-)
-
-VERTICAL_SLICE_USER_SIGNAL_RE = re.compile(
-    r"(?:user|persona|customer|operator|viewer|admin|用户|客户|使用者|操作者|可见|页面|命令输出|行为|场景)",
-    re.IGNORECASE,
-)
-
-VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE = re.compile(
-    r"(?:\b(?:run|observe|see|click|open|use|complete|display|command output|scenario|page|form|result|pass)\b|"
-    r"运行|观察|看到|点击|打开|使用|完成|显示|命令输出|场景|页面|表单|结果|通过)",
-    re.IGNORECASE,
-)
-
-VERTICAL_SLICE_TECH_LAYER_RE = re.compile(
-    r"(?:repository|service layer|abstraction|refactor|backend|database|schema|dao|model layer|internal|"
-    r"技术层|服务层|抽象|重构|后端|数据库|数据表|内部)",
-    re.IGNORECASE,
-)
-
-VERTICAL_SLICE_BROAD_SCOPE_RE = re.compile(
-    r"(?:entire project|whole project|whole codebase|all files|everything|\*|全仓|整个项目|所有文件|全部重构|无边界)",
-    re.IGNORECASE,
-)
-
-VERTICAL_SLICE_WEAK_PROSE_RE = re.compile(
-    r"(?:review says|review artifact|manual review|looks good|looks fine|prose|subjective|审查通过|人工审查|看起来可以|主观)",
-    re.IGNORECASE,
-)
-
-DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS = (
-    "## Product Success Contract",
-    "## PRD-lite",
-    "## Executable Acceptance",
-    "## Quality Budget",
-    "## Vertical Slice",
-    "## Demo Checklist",
-    "## Tooling",
-)
-
-DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS = QUALITY_BUDGET_DIMENSIONS
-
-DETERMINISTIC_SCAFFOLD_COMMAND_RE = re.compile(
-    r"(?m)^\s*-\s*`(?:(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|powershell|pwsh)\b|"
-    r"(?:\./|\.\\|skills/|skills\\|scripts/|scripts\\).+)",
-    re.IGNORECASE,
-)
-
-DETERMINISTIC_SCAFFOLD_SIGNAL_RE = re.compile(
-    r"(?:persona|jtbd|job to be done|non-goal|success metric|acceptance|quality budget|demo checklist|"
-    r"vertical slice|rollback|PRD-lite|用户|验收|质量预算|演示|切片)",
-    re.IGNORECASE,
-)
-
-DETERMINISTIC_SCAFFOLD_WEAK_RE = re.compile(
-    r"(?:review says|review passed|reviewer approved|approved.*prose|looks good|manual review only|"
-    r"ship it|whatever|\bTODO\b|\bTBD\b|\bTO_BE_DEFINED\b|待补|待定|占位)",
-    re.IGNORECASE,
-)
-
-DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE = re.compile(
-    r"(?:entire repository|whole repository|whole repo|full repo|entire repo|"
-    r"entire project|whole project|whole codebase|all files|everything|\*|全仓|整个项目|所有文件|全部重构|无边界)",
-    re.IGNORECASE,
-)
-
-DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS = {
-    "## Product Success Contract": (
-        r"(?:persona|用户|使用者)",
-        r"(?:jtbd|job to be done|desired outcome|用户任务)",
-        r"(?:non-goal|out of scope|非目标)",
-        r"(?:success metric|metric|成功指标)",
-    ),
-    "## PRD-lite": (
-        r"(?:problem|问题)",
-        r"(?:workflow|scenario|user-visible|用户可见|流程|场景)",
-    ),
-    "## Executable Acceptance": (
-        r"(?:expected output|exit code|pass|通过|预期输出)",
-        r"(?:demo evidence|evidence|artifact|证据)",
-    ),
-    "## Quality Budget": tuple(DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS),
-    "## Vertical Slice": (
-        r"(?:user-visible slice|user can|用户可见|用户)",
-        r"(?:demo path|demo|smoke|command|演示)",
-        r"(?:scope guard|scope|范围)",
-        r"(?:rollback|回滚)",
-    ),
-    "## Demo Checklist": (
-        r"(?:command|demo|evidence|exit code|artifact|演示|证据)",
-        r"(?:expected|visible|invalid|failure|result|预期|结果)",
-    ),
-    "## Tooling": (
-        r"(?:check-product-success-contracts|check-acceptance-contracts|check-quality-budget|check-vertical-slices|check-deterministic-scaffolds)",
-    ),
-}
-
-INTERRUPTION_POLICY_REQUIRED_PHRASES = (
-    "User Interruption Policy v2",
-    "critical-only",
-    "product intent",
-    "acceptance standard",
-    "irreversible",
-    "record_assumption",
-    "interruption_budget",
-)
-
-INTERRUPTION_POLICY_REQUIRED_TEMPLATE_PHRASES = (
-    "interruption_policy:",
-    "critical_triggers:",
-    "auto_execute:",
-    "assumption_record:",
-    "interruption_budget:",
-)
-
-INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS = (
-    "assumption",
-    "basis",
-    "reversibility",
-    "validation",
-    "rollback",
-)
-
-INTERRUPTION_POLICY_PLACEHOLDER_RE = re.compile(
-    r"(?:\b(?:todo|tbd|to_be_defined|n/?a|none|null|unknown)\b|待补|待定|暂无|占位)",
-    re.IGNORECASE,
-)
-
-INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS = (
-    "product_intent_unclear",
-    "acceptance_standard_unclear",
-    "irreversible",
-    "risk_acceptance",
-    "release_decision",
-    "external_dependency",
-    "mode_change",
-)
-
-INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS = (
-    "product intent",
-    "acceptance",
-    "irreversible",
-    "release",
-    "risk acceptance",
-    "external dependency",
-    "mode change",
-)
-
-INTERRUPTION_POLICY_DEFAULT_EXAMPLES = [
-    {
-        "id": "product-intent-ambiguity",
-        "expected_action": "ask_user",
-        "decision": {"product_intent_unclear": True, "reversible": True},
-    },
-    {
-        "id": "acceptance-standard-ambiguity",
-        "expected_action": "ask_user",
-        "decision": {"acceptance_standard_unclear": True, "reversible": True},
-    },
-    {
-        "id": "irreversible-file-delete",
-        "expected_action": "ask_user",
-        "decision": {"irreversible": True, "destructive": True},
-    },
-    {
-        "id": "risk-acceptance",
-        "expected_action": "ask_user",
-        "decision": {"risk_acceptance": True, "reversible": False},
-    },
-    {
-        "id": "release-go-no-go",
-        "expected_action": "ask_user",
-        "decision": {"release_decision": True, "reversible": False},
-    },
-    {
-        "id": "new-external-dependency",
-        "expected_action": "ask_user",
-        "decision": {"external_dependency": True, "reversible": True},
-    },
-    {
-        "id": "mode-change",
-        "expected_action": "ask_user",
-        "decision": {"mode_change": True, "reversible": True},
-    },
-    {
-        "id": "routine-file-edit",
-        "expected_action": "auto_execute",
-        "decision": {"routine_execution": True, "reversible": True, "known_scope": True},
-    },
-    {
-        "id": "local-validation",
-        "expected_action": "auto_execute",
-        "decision": {"local_validation": True, "reversible": True, "known_scope": True},
-    },
-    {
-        "id": "governance-record-update",
-        "expected_action": "auto_execute",
-        "decision": {"governance_record_update": True, "reversible": True, "known_scope": True},
-    },
-    {
-        "id": "normal-commit-push",
-        "expected_action": "auto_execute",
-        "decision": {"commit_push": True, "reversible": True, "known_scope": True},
-    },
-    {
-        "id": "reversible-default-assumption",
-        "expected_action": "record_assumption",
-        "decision": {
-            "routine_execution": True,
-            "reversible": True,
-            "known_scope": False,
-            "assumption_record": {
-                "assumption": "Use existing repository style for naming and structure.",
-                "basis": "Nearby files show the prevailing pattern.",
-                "reversibility": "Can be renamed or reverted in one focused commit.",
-                "validation": "Run the focused test or checker after the edit.",
-                "rollback": "Revert the focused change if validation fails.",
-            },
-        },
-    },
-]
-
-
 def _product_success_policy():
     from delivery_contract_checks import ProductSuccessPolicy
     return ProductSuccessPolicy(
@@ -3143,10 +2867,10 @@ def _product_success_policy():
 def _acceptance_policy():
     from delivery_contract_checks import AcceptancePolicy
     return AcceptancePolicy(
-        required_fields=ACCEPTANCE_CONTRACT_REQUIRED_FIELDS,
-        runnable_command=ACCEPTANCE_RUNNABLE_COMMAND_RE,
-        pass_statuses=ACCEPTANCE_PASS_STATUSES,
-        not_run_statuses=ACCEPTANCE_NOT_RUN_STATUSES,
+        required_fields=_product_policy("ACCEPTANCE_CONTRACT_REQUIRED_FIELDS"),
+        runnable_command=_product_policy("ACCEPTANCE_RUNNABLE_COMMAND_RE"),
+        pass_statuses=_product_policy("ACCEPTANCE_PASS_STATUSES"),
+        not_run_statuses=_product_policy("ACCEPTANCE_NOT_RUN_STATUSES"),
         placeholder=_host_policy("PRODUCT_SUCCESS_PLACEHOLDER_RE"),
     )
 
@@ -3155,11 +2879,11 @@ def _quality_budget_policy():
     from delivery_contract_checks import QualityBudgetPolicy
     return QualityBudgetPolicy(
         dimensions=QUALITY_BUDGET_DIMENSIONS,
-        pass_statuses=QUALITY_BUDGET_PASS_STATUSES,
-        pending_statuses=QUALITY_BUDGET_PENDING_STATUSES,
-        exempt_statuses=QUALITY_BUDGET_EXEMPT_STATUSES,
-        validation_signal=QUALITY_BUDGET_VALIDATION_SIGNAL_RE,
-        weak_prose=QUALITY_BUDGET_WEAK_PROSE_RE,
+        pass_statuses=_product_policy("QUALITY_BUDGET_PASS_STATUSES"),
+        pending_statuses=_product_policy("QUALITY_BUDGET_PENDING_STATUSES"),
+        exempt_statuses=_product_policy("QUALITY_BUDGET_EXEMPT_STATUSES"),
+        validation_signal=_product_policy("QUALITY_BUDGET_VALIDATION_SIGNAL_RE"),
+        weak_prose=_product_policy("QUALITY_BUDGET_WEAK_PROSE_RE"),
         placeholder=_host_policy("PRODUCT_SUCCESS_PLACEHOLDER_RE"),
         pending_task=_is_task_pending_status_allowed,
     )
@@ -3168,16 +2892,16 @@ def _quality_budget_policy():
 def _vertical_slice_policy():
     from delivery_contract_checks import VerticalSlicePolicy
     return VerticalSlicePolicy(
-        required_fields=VERTICAL_SLICE_REQUIRED_FIELDS,
-        pass_statuses=VERTICAL_SLICE_PASS_STATUSES,
-        pending_statuses=VERTICAL_SLICE_PENDING_STATUSES,
-        demo_signal=VERTICAL_SLICE_DEMO_SIGNAL_RE,
-        user_signal=VERTICAL_SLICE_USER_SIGNAL_RE,
-        behavior_signal=VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE,
-        tech_layer=VERTICAL_SLICE_TECH_LAYER_RE,
-        broad_scope=VERTICAL_SLICE_BROAD_SCOPE_RE,
-        weak_prose=VERTICAL_SLICE_WEAK_PROSE_RE,
-        weak_quality_prose=QUALITY_BUDGET_WEAK_PROSE_RE,
+        required_fields=_product_policy("VERTICAL_SLICE_REQUIRED_FIELDS"),
+        pass_statuses=_product_policy("VERTICAL_SLICE_PASS_STATUSES"),
+        pending_statuses=_product_policy("VERTICAL_SLICE_PENDING_STATUSES"),
+        demo_signal=_product_policy("VERTICAL_SLICE_DEMO_SIGNAL_RE"),
+        user_signal=_product_policy("VERTICAL_SLICE_USER_SIGNAL_RE"),
+        behavior_signal=_product_policy("VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE"),
+        tech_layer=_product_policy("VERTICAL_SLICE_TECH_LAYER_RE"),
+        broad_scope=_product_policy("VERTICAL_SLICE_BROAD_SCOPE_RE"),
+        weak_prose=_product_policy("VERTICAL_SLICE_WEAK_PROSE_RE"),
+        weak_quality_prose=_product_policy("QUALITY_BUDGET_WEAK_PROSE_RE"),
         placeholder=_host_policy("PRODUCT_SUCCESS_PLACEHOLDER_RE"),
         pending_task=_is_task_pending_status_allowed,
     )
@@ -3187,26 +2911,26 @@ def _scaffold_policy():
     from scaffold_contracts import ScaffoldPolicy
     return ScaffoldPolicy(
         types=DETERMINISTIC_SCAFFOLD_TYPES,
-        sections=DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS,
-        quality_dimensions=DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS,
-        command=DETERMINISTIC_SCAFFOLD_COMMAND_RE,
-        signal=DETERMINISTIC_SCAFFOLD_SIGNAL_RE,
-        weak=DETERMINISTIC_SCAFFOLD_WEAK_RE,
-        broad_scope=DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE,
-        section_signals=DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS,
+        sections=_product_policy("DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS"),
+        quality_dimensions=_product_policy("DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS"),
+        command=_product_policy("DETERMINISTIC_SCAFFOLD_COMMAND_RE"),
+        signal=_product_policy("DETERMINISTIC_SCAFFOLD_SIGNAL_RE"),
+        weak=_product_policy("DETERMINISTIC_SCAFFOLD_WEAK_RE"),
+        broad_scope=_product_policy("DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE"),
+        section_signals=_product_policy("DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS"),
     )
 
 
 def _interruption_policy():
     from interruption_contracts import InterruptionPolicy
     return InterruptionPolicy(
-        required_phrases=INTERRUPTION_POLICY_REQUIRED_PHRASES,
-        template_phrases=INTERRUPTION_POLICY_REQUIRED_TEMPLATE_PHRASES,
-        assumption_fields=INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS,
-        placeholder=INTERRUPTION_POLICY_PLACEHOLDER_RE,
-        critical_keys=INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS,
-        packet_signals=INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS,
-        examples=INTERRUPTION_POLICY_DEFAULT_EXAMPLES,
+        required_phrases=_product_policy("INTERRUPTION_POLICY_REQUIRED_PHRASES"),
+        template_phrases=_product_policy("INTERRUPTION_POLICY_REQUIRED_TEMPLATE_PHRASES"),
+        assumption_fields=_product_policy("INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS"),
+        placeholder=_product_policy("INTERRUPTION_POLICY_PLACEHOLDER_RE"),
+        critical_keys=_product_policy("INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS"),
+        packet_signals=_product_policy("INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS"),
+        examples=_product_policy("INTERRUPTION_POLICY_DEFAULT_EXAMPLES"),
     )
 
 
@@ -3217,7 +2941,7 @@ def _is_process_only_product_success_metric(value):
 
 def _is_task_pending_status_allowed(task):
     from delivery_contract_checks import _is_task_pending_status_allowed as judge
-    return judge(task, TASK_PENDING_STATUS_MARKERS)
+    return judge(task, _product_policy("TASK_PENDING_STATUS_MARKERS"))
 
 
 def _validate_product_success_contract(packet):
@@ -3284,7 +3008,7 @@ def check_deterministic_scaffolds(scaffold_dir=None):
 
 def classify_user_interruption(decision):
     from interruption_contracts import classify_user_interruption as classify
-    return classify(decision, INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS)
+    return classify(decision, _product_policy("INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS"))
 
 
 def _validate_interruption_policy_examples(examples):
@@ -3370,108 +3094,7 @@ def check_risk_mitigation_closure_with_archive(risk_content=None, task_status_ma
         resolve_refs=_resolve_archive_task_refs)
 
 
-# ── Check 10 M5 record-doc scope whitelist (FIX-295 / AUDIT-149 N6) ──
-# docs/release/** and docs/reviews/** are RECORD-class governance text —
-# release-queue adjudication tables and review reports that DESCRIBE past
-# events. Their ASCII "(a)/(b)/(c)" verification sub-clauses plus nearby
-# "选项/选择" vocabulary (e.g. "可选项") are factual citations, not agent
-# runtime instructions, but the Check 10 anti-pattern heuristic
-# (m5_option_list_no_auq: option list + choice context, no AskUserQuestion)
-# cannot tell a recorded list from an instructed menu, so it structurally
-# false-positives on them. Two live instances (AUDIT-149 §3 域 6 / §4 N6):
-#   - docs/release/queue-triage-0.78x.md:66 (queue task row citing 3 path-
-#     traversal test-case paths; "(a)/(b)/(c)" rationale sub-clauses)
-#   - docs/reviews/review-REL-074-RELEASE-R2.md:17 (R1-finding verification
-#     row; "(a)~(e)" mapping sub-clauses + "选项")
-# Same record-vs-runtime distinction as Check 29's session-snapshot
-# auto-discovery exclusion (FIX-178; AUDIT-149 cites this precedent family
-# as the "FIX-280 先例").
-#
-# FIX-348 extends the whitelist with docs/requirements/**: delivered design
-# documents (docs/requirements/*-design-*.md) are the same record class —
-# their "(a)/(b)" adjudication rows RECORD past disposition options plus a
-# recommendation left for the DEC record, not agent runtime instructions,
-# and m5_option_list_no_auq structurally false-positives on them the same
-# way (live instance: docs/requirements/dsh-compat-design-0.81.0.md:292,
-# the R1-expiry adjudication row). Same record-vs-runtime distinction, same
-# PATH-CLASSIFICATION-only boundary; docs/requirements design docs being
-# scanned-or-not does not change any other check's fact sourcing (the
-# docs/requirements paths consumed by Checks 1x/2x are read directly, not
-# routed through the M5 whitelist).
-#
-# Implementation: WRAPPER, not a base-scan edit — the FIX-294 precedent for
-# a scope held to verify_workflow.py + tests. The base
-# checks.review_domain.check_m5_compliance() stays byte-identical (scan
-# list + FIX-054 plugin-scope filter untouched); only the Check 10 gate
-# call site swaps to check_m5_compliance_with_record_scope(), which moves
-# issues whose file lives under a record-class directory enumerated in
-# M5_RECORD_DOC_DIRS into a disclosed exemption list (not counted).
-#
-# Fail-closed boundaries:
-#   - PATH CLASSIFICATION ONLY — explicit directory whitelist; directory-
-#     component match (exact dir or dir + "/"), never a bare string prefix
-#     ("docs/release-notes.md" is NOT exempt) and never content heuristics.
-#   - Everything else the base scans keeps FULL coverage: AGENTS.md,
-#     CLAUDE.md, .governance/CLAUDE.md, and every docs/ subtree OUTSIDE the
-#     whitelist (FIX-348 moved docs/requirements/** INTO the whitelist as
-#     record-class design docs; every other docs/ subtree — e.g.
-#     docs/other/** — stays scanned, and lookalike non-directory paths like
-#     "docs/requirements-notes.md" never match) — plus the M5 structural
-#     checks (bootstrap template / interaction-boundary / SELF-CHECK guard),
-#     whose issue files can never match the whitelist.
-#   - Exempt ≠ silent: every dropped issue is returned in
-#     record_scope_exempted and printed as [EXEMPT] (DEC-151-style
-#     disclosure, not counted into all_issues).
-
-M5_RECORD_DOC_DIRS = ("docs/release", "docs/reviews", "docs/requirements")
-
-
-def _is_m5_record_doc_path(rel_path):
-    """FIX-295: True when rel_path is inside an M5 record-class doc dir.
-
-    Directory-component whitelist match over M5_RECORD_DOC_DIRS: an entry
-    must equal the path or be a leading directory component — "docs/release"
-    matches "docs/release/x.md" and "docs/release/a/b.md" but NOT
-    "docs/release-notes.md" or "docs/other/release/x.md". Backslashes are
-    normalized. Fail-closed: anything not explicitly enumerated stays
-    scanned.
-    """
-    rp = str(rel_path).replace("\\", "/")
-    for record_dir in M5_RECORD_DOC_DIRS:
-        if rp == record_dir or rp.startswith(record_dir + "/"):
-            return True
-    return False
-
-
-def check_m5_compliance_with_record_scope():
-    """FIX-295 / AUDIT-149 N6: Check 10 gate entry with record-doc scope.
-
-    Thin wrapper over the UNCHANGED base ``check_m5_compliance()`` (FIX-294
-    wrapper pattern): pass 1 runs the base scan byte-for-byte; issues whose
-    ``file`` is under an M5_RECORD_DOC_DIRS directory (record-class text —
-    release/review documents and delivered design docs; see the module
-    comment above) are moved to
-    ``record_scope_exempted`` (disclosed, never counted); every other issue
-    — entry files, non-whitelisted docs/ subtrees, and all M5 structural
-    checks — passes through untouched.
-
-    Returns the base result dict extended with:
-      ``record_scope_exempted``: list of exempted issue dicts
-      ``record_scope_dirs``: the whitelist tuple (for disclosure)
-    Never raises; never broadens or narrows the base scan itself.
-    """
-    base = check_m5_compliance()
-    kept = []
-    exempted = []
-    for issue in base.get("issues", []):
-        if _is_m5_record_doc_path(str(issue.get("file", ""))):
-            exempted.append(issue)
-        else:
-            kept.append(issue)
-    base["issues"] = kept
-    base["record_scope_exempted"] = exempted
-    base["record_scope_dirs"] = M5_RECORD_DOC_DIRS
-    return base
+from checks.review_domain import M5_RECORD_DOC_DIRS, _is_m5_record_doc_path, check_m5_compliance_with_record_scope
 
 
 def check_decision_premise(governance_dir=None):
@@ -3793,7 +3416,7 @@ def _full_check_results(args):
     yield review.section_39_completion_gate(check_r1_completion_gate)
     yield review.section_41_priority_inversion(_provenance_rows_for_governance)
     yield review.section_42_discovery_closure(
-        _collect_session_closure_events, _DEFERRED_LEDGER_FILENAME,
+        _collect_session_closure_events, _product_policy("_DEFERRED_LEDGER_FILENAME"),
     )
     yield product.section_28u_dsh_smoke(
         product_gate_active, check_dsh_preset_smoke, _print_product_gate_skipped,
@@ -4165,160 +3788,7 @@ def cmd_gate_check(args):
     from governance_fact_cli import cmd_gate_check as run
     return run(args)
 
-def check_plugin_freshness():
-    """Compare the installed plugin record with the version of this package."""
-    import json
-    import subprocess
-    from resolve_entry import read_release_version
-
-    def plugin_record(path, *, allow_list=False):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return {}
-        if isinstance(data, dict):
-            data = data.get("plugins")
-        elif not allow_list:
-            return {}
-        if isinstance(data, list):
-            for plugin in data:
-                if isinstance(plugin, dict) and plugin.get("name") == "software-project-governance":
-                    return plugin
-        return {}
-
-    def registry_version(record):
-        version = record.get("version")
-        if isinstance(version, str) and re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", version):
-            return version
-        return "unknown"
-
-    result = {
-        "installed_version": "unknown",
-        "installed_commit": "unknown",
-        "installed_date": "unknown",
-        "source_version": "unknown",
-        "source_commit": "unknown",
-        "status": "UNKNOWN",
-        "commits_behind": 0,
-        "action": "",
-    }
-
-    # Read installed plugin info
-    installed_json = ROOT / ".claude-plugin" / "installed_plugins.json"
-    if not installed_json.exists():
-        # Try Claude's global installed_plugins.json
-        installed_json = Path.home() / ".claude" / "installed_plugins.json"
-
-    installed = plugin_record(installed_json, allow_list=True)
-    result["installed_version"] = registry_version(installed)
-    commit, date = installed.get("gitCommitSha"), installed.get("installedAt")
-    if isinstance(commit, str) and commit:
-        result["installed_commit"] = commit[:7]
-    if isinstance(date, str) and date:
-        result["installed_date"] = date[:10]
-
-    skill = ROOT / "skills/software-project-governance/SKILL.md"
-    if skill.exists():
-        result["source_version"] = read_release_version(skill) or "unknown"
-    else:
-        marketplace = ROOT / ".claude-plugin" / "marketplace.json"
-        result["source_version"] = registry_version(plugin_record(marketplace))
-
-    # Get source HEAD commit
-    try:
-        r = subprocess.run(
-            ["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-            cwd=str(ROOT), timeout=5
-        )
-        if r.returncode == 0:
-            result["source_commit"] = r.stdout.strip()[:7]
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
-
-    # Determine status
-    if result["installed_version"] == "unknown":
-        result["status"] = "UNKNOWN (plugin not installed via marketplace?)"
-        result["action"] = ("Check the plugin installation and its registered version."
-                            if installed_json.exists() else "Run /plugin marketplace add <path> to install.")
-    elif result["source_version"] == "unknown":
-        result["status"] = "UNKNOWN (source version unavailable)"
-        result["action"] = "Check the package SKILL.md version or the legacy marketplace version."
-    elif result["installed_version"] == result["source_version"]:
-        result["status"] = "UP TO DATE"
-        result["action"] = "No action needed."
-    else:
-        result["status"] = "OUTDATED"
-        result["action"] = "Run /plugin update software-project-governance  or  /reload-plugins"
-
-    return result
-
-
-def check_untracked_files():
-    """Check for untracked files in the working directory (FIX-057 Phase 2).
-
-    Runs ``git ls-files --others --exclude-standard`` and reports any
-    untracked files with heuristic classification suggestions.  Ordinary
-    scratch files are non-blocking; unignored root platform entry files are
-    actionable because they can change agent behavior outside versioned review.
-
-    FIX-270 (mixed-root): the git fact source is the HOST project root
-    (HOST_PROJECT_ROOT) — the project being governed — never the plugin
-    package root. In dogfood mode (host == plugin) this is unchanged.
-    """
-    import subprocess
-
-    result = {
-        "pass": True,
-        "untracked_count": 0,
-        "untracked_files": [],
-        "actionable_entry_files": [],
-        "suggest_archive": [],
-        "suggest_temp_script": [],
-        "suggest_manual": [],
-    }
-
-    try:
-        r = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
-            capture_output=True, text=True,
-            cwd=str(HOST_PROJECT_ROOT), timeout=10
-        )
-        if r.returncode != 0:
-            result["pass"] = None  # couldn't run
-            return result
-
-        files = [f.strip().replace("\\", "/") for f in r.stdout.splitlines() if f.strip()]
-        if not files:
-            return result  # PASS -- no untracked files
-
-        result["pass"] = False
-        result["untracked_count"] = len(files)
-        result["untracked_files"] = files
-
-        # Heuristic classification
-        for f in files:
-            # ── Root platform-native entry files affect active agent behavior ──
-            if "/" not in f and f in _product_policy("PLATFORM_ENTRY_FILES"):
-                result["actionable_entry_files"].append(f)
-                continue
-
-            # ── docs/** or project/references/** → suggest archive ──
-            if f.startswith("docs/") or f.startswith("project/references/"):
-                result["suggest_archive"].append(f)
-                continue
-
-            # ── *.py single file at repo root → possible temp script ──
-            if "/" not in f and f.endswith(".py"):
-                result["suggest_temp_script"].append(f)
-                continue
-
-            # ── Everything else needs human judgment ──
-            result["suggest_manual"].append(f)
-
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        result["pass"] = None
-
-    return result
+from workspace_checks import check_plugin_freshness, check_untracked_files
 
 
 def check_agent_locks_format():
@@ -4364,37 +3834,8 @@ def cmd_check_archive_integrity(_args):
 
 
 def cmd_check_plugin_freshness(_args):
-    """Check if installed plugin is up to date with source repository."""
-    result = check_plugin_freshness()
-
-    # Calculate behind count
-    import subprocess
-    try:
-        # Try to find installed commit in git log
-        r = subprocess.run(
-            ["git", "rev-list", "--count", f"{result['installed_commit']}..HEAD"],
-            capture_output=True, text=True, cwd=str(ROOT), timeout=5
-        )
-        if r.returncode == 0:
-            result["commits_behind"] = int(r.stdout.strip())
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ValueError):
-        pass
-
-    print()
-    print("=== Plugin Freshness Check ===")
-    print(f"  Installed: {result['installed_version']} (commit {result['installed_commit']}, {result['installed_date']})")
-    print(f"  Source:    {result['source_version']} (commit {result['source_commit']})")
-    print(f"  Status:    {result['status']}")
-    if result["commits_behind"] > 0:
-        print(f"  Behind:    {result['commits_behind']} commit(s)")
-    if result["action"]:
-        print(f"  Action:    {result['action']}")
-    print()
-
-    # Exit with error if outdated (for CI)
-    if result["status"] == "OUTDATED":
-        import sys
-        sys.exit(1)
+    from workspace_checks import cmd_check_plugin_freshness as run
+    return run(_args)
 
 
 def _e2e_command_matrix():
@@ -5120,24 +4561,11 @@ def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
 
 # ── FEAT-011 / G3 extension: Coordinator direct-write path guard ──────────
 
-# Evidence-log machine-written row families (uniform column contract). The
-# TRIAGE family is the DEC-168 authority (10 cols incl. the files cell,
-# change_triage._evidence_row); RECO rows are machine-written by
-# task-priority-analysis --evidence-task (same writer discipline). Manual
-# families (EVD/REVIEW legacy 9/10/11-col mix) stay in Check 14's WARN domain.
-_EVIDENCE_MACHINE_ROW_FAMILIES = ("TRIAGE", "RECO")
-
-_PLAN_TRACKER_ROW_EXPECTED_SHAPE = (
-    "| 优先级 | 任务ID | 标题 | 依赖 | 目标版本 | 闭环路径 | 状态 |"
-    "（优先级恰一列且居于任务ID 之前；末列为状态列且必须非空；"
-    "行尾不得追加空单元格——AUDIT-149 §4 M1）")
-
-
 def _plan_tracker_task_row_issues(content):
     from write_guard_records import _plan_tracker_task_row_issues as inspect_rows
     return inspect_rows(
         content,
-        expected_shape=_PLAN_TRACKER_ROW_EXPECTED_SHAPE,
+        expected_shape=_product_policy("_PLAN_TRACKER_ROW_EXPECTED_SHAPE"),
         task_id_pattern=_TASK_ID_CELL_RE,
         normalize_priority=_normalize_priority,
     )
@@ -5145,55 +4573,12 @@ def _plan_tracker_task_row_issues(content):
 
 def _evidence_machine_row_issues(content):
     from write_guard_records import _evidence_machine_row_issues as inspect_rows
-    return inspect_rows(content, machine_families=_EVIDENCE_MACHINE_ROW_FAMILIES)
-
-
-_WRITE_GUARD_STATE_FILENAME = ".write-guard-state.json"
-_WRITE_GUARD_STATE_SCHEMA_VERSION = 1
-_WRITE_GUARD_STATE_TOOL = "governance-write-guard/row-family-reconciliation"
-
-# Stable writer prefix of the governance_store provenance marker
-# (``（机器写入：governance-store evidence-append op-…；schema vN）`` /
-#  ``（机器写入：governance-store decision-append op-…；schema vN）`` —
-# governance_store._build_evidence_row / _build_decision_row).
-
-# FIX-390 (DEC-241 消解, 0.89.0) — the Check 18b machine-attestation
-# credential for DEC-168 machine row-family EVIDENCE rows: the writer's own
-# evidence-append marker with a well-formed op receipt anchor. Consumed, not
-# re-stated (FIX-292 lesson): the prefix comes from the constant above (its
-# drift is bound to really-built rows by the guard tests), and the op-anchor
-# shape mirrors the writer's ``op-<32hex>`` receipt id. Authenticity
-# enforcement (column shape + row-family reconciliation against the ops
-# ledger) lives in governance-write-guard faces 2/5 — Check 18b only consumes
-# the credential shape and never re-implements the ledger check. A marker
-# with a malformed/truncated op id (or a foreign writer's marker) does NOT
-# attest — 未知不猜.
+    return inspect_rows(content, machine_families=_product_policy("_EVIDENCE_MACHINE_ROW_FAMILIES"))
 
 
 def _row_has_governance_store_machine_credential(raw_line):
     from write_guard_records import _row_has_governance_store_machine_credential as has_receipt
     return has_receipt(raw_line, receipt_pattern=_host_policy("_EVIDENCE_MACHINE_CREDENTIAL_RE"))
-
-# ops-ledger receipt anchor: task_row_update receipt lines carry the
-# operation id under this key (task_row_update.RECEIPT_RECORD_KIND face).
-_OPS_LEDGER_RECEIPT_ANCHOR = "operation_id"
-
-_ROW_FAMILY_TEXT_SURFACES = ("evidence-log.md", "decision-log.md",
-                             "plan-tracker.md")
-
-# FEAT-081 / ADR-021 §3.2.1 B4: the M2 deferred-registration observation
-# ledger — a guard-owned artifact (same class as the state baseline /
-# violation ledger, FEAT-057/060 contract), append-only JSONL, written on
-# the guard CLI face ONLY (cmd_governance_write_guard — the post-commit
-# hook path; the converge/internal persist paths and probes never create
-# it, keeping the rel089 "converge writes only guard state artifacts"
-# compatibility contract byte-true). Three-key buckets:
-# 命中词 × 行族 × 否定语境命中 — the RT-5 container the WARN→FAIL flip
-# decision owes its false-positive report to. Judgement pieces live in
-# checks/loop_gate_processor.py (pure leaf; the "loop" there is the
-# discovery→closure loop of ADR-021 M2, NOT the ADR-014 PARO runtime
-# module of the same basename at infra/ level).
-_DEFERRED_LEDGER_FILENAME = ".write-guard-deferred-ledger.jsonl"
 
 
 def _write_guard_row_digest(text):
@@ -5217,7 +4602,7 @@ def _row_family_credential_ok(surface, row_key, row_text):
         surface, row_key, row_text,
         review_marker=REVIEW_MACHINE_ROW_MARKER,
         store_prefix=_host_policy("_GOVERNANCE_STORE_MARKER_PREFIX"),
-        operation_anchor=_OPS_LEDGER_RECEIPT_ANCHOR,
+        operation_anchor=_product_policy("_OPS_LEDGER_RECEIPT_ANCHOR"),
     )
 
 
@@ -5225,9 +4610,9 @@ def _load_write_guard_state(governance_dir):
     from write_guard_state import _load_write_guard_state as load_state
     return load_state(
         governance_dir,
-        filename=_WRITE_GUARD_STATE_FILENAME,
-        version=_WRITE_GUARD_STATE_SCHEMA_VERSION,
-        tool=_WRITE_GUARD_STATE_TOOL,
+        filename=_product_policy("_WRITE_GUARD_STATE_FILENAME"),
+        version=_product_policy("_WRITE_GUARD_STATE_SCHEMA_VERSION"),
+        tool=_product_policy("_WRITE_GUARD_STATE_TOOL"),
     )
 
 
@@ -5242,15 +4627,16 @@ def _reconcile_row_families(governance_dir, persist_state=False, detections_out=
         governance_dir, persist_state, detections_out, records_index_out, deferred_out,
         inspect=RowInspection(_extract_managed_row_records, _credential_index, _judge_row_delta),
         load_baseline=_load_write_guard_state, baseline_exists=state_path_seen,
-        surfaces=_ROW_FAMILY_TEXT_SURFACES, schema_version=_WRITE_GUARD_STATE_SCHEMA_VERSION,
-        tool=_WRITE_GUARD_STATE_TOOL, now=datetime.now,
+        surfaces=_product_policy("_ROW_FAMILY_TEXT_SURFACES"),
+        schema_version=_product_policy("_WRITE_GUARD_STATE_SCHEMA_VERSION"),
+        tool=_product_policy("_WRITE_GUARD_STATE_TOOL"), now=datetime.now,
     )
 
 
 def state_path_seen(governance_dir):
     """True when the reconciliation state file exists (surface seen even
     with all managed files gone — the state must shrink, not vanish)."""
-    return (governance_dir / _WRITE_GUARD_STATE_FILENAME).is_file()
+    return (governance_dir / _product_policy("_WRITE_GUARD_STATE_FILENAME")).is_file()
 
 
 def _write_guard_state_json(baseline_state):
@@ -5291,8 +4677,8 @@ def check_governance_write_shapes(*, persist_state=False, session_id=None, defer
     )
     return inspect(
         GOVERNANCE_DIR, SAMPLE_PATH, ROOT, checks=checks, pin_ledger=pin_ledger,
-        reconcile=_reconcile_row_families, state_filename=_WRITE_GUARD_STATE_FILENAME,
-        deferred_filename=_DEFERRED_LEDGER_FILENAME, encode_baseline=_write_guard_state_json,
+        reconcile=_reconcile_row_families, state_filename=_product_policy("_WRITE_GUARD_STATE_FILENAME"),
+        deferred_filename=_product_policy("_DEFERRED_LEDGER_FILENAME"), encode_baseline=_write_guard_state_json,
         persist_state=persist_state, session_id=session_id, deferred_ledger=deferred_ledger,
     )
 
@@ -5403,7 +4789,7 @@ def check_release_bootstrap_world():
     return inspect_world(
         governance_dir=GOVERNANCE_DIR,
         tool=_BOOTSTRAP_CHECK_TOOL,
-        baseline_filename=_WRITE_GUARD_STATE_FILENAME,
+        baseline_filename=_product_policy("_WRITE_GUARD_STATE_FILENAME"),
         load_baseline=_load_write_guard_state,
         reconcile=_reconcile_row_families)
 
@@ -5452,45 +4838,28 @@ def cmd_check_governance_pack_status(args):
 
 
 def cmd_check_product_success_contracts(args):
-    from delivery_contract_cli import run_contract_check
-    run_contract_check(
-        args, check_product_success_contracts, title="Product Success Contract Check",
-        count_label="Required active P0/P1 contract(s)", success="product success contracts are ready",
-    )
-    render_rb2_goal_contract_block()
+    from delivery_contract_cli import cmd_check_product_success_contracts as run
+    return run(args, check_product_success_contracts, lambda: render_rb2_goal_contract_block())
 
 
 def cmd_check_acceptance_contracts(args):
-    from delivery_contract_cli import run_contract_check
-    run_contract_check(
-        args, check_acceptance_contracts, title="Executable Acceptance Contract Check",
-        count_label="Required active P0/P1 acceptance contract(s)", success="executable acceptance contracts are ready",
-    )
+    from delivery_contract_cli import cmd_check_acceptance_contracts as run
+    return run(args, check_acceptance_contracts)
 
 
 def cmd_check_quality_budget(args):
-    from delivery_contract_cli import run_contract_check
-    run_contract_check(
-        args, check_quality_budget, title="Quality Budget Check",
-        count_label="Required active P0/P1 quality budget(s)", success="quality budgets are ready",
-    )
+    from delivery_contract_cli import cmd_check_quality_budget as run
+    return run(args, check_quality_budget)
 
 
 def cmd_check_vertical_slices(args):
-    from delivery_contract_cli import run_contract_check
-    run_contract_check(
-        args, check_vertical_slices, title="Vertical Slice Check",
-        count_label="Required active P0/P1 vertical slice(s)", success="vertical slice packets are ready",
-    )
+    from delivery_contract_cli import cmd_check_vertical_slices as run
+    return run(args, check_vertical_slices)
 
 
 def cmd_check_deterministic_scaffolds(args):
-    from delivery_contract_cli import run_contract_check
-    run_contract_check(
-        args, check_deterministic_scaffolds, title="Weak-LLM Deterministic Scaffold Check",
-        count_label="Required scaffold type(s)", success="deterministic scaffolds are ready",
-        required="required_types", entry_key="scaffold_type",
-    )
+    from delivery_contract_cli import cmd_check_deterministic_scaffolds as run
+    return run(args, check_deterministic_scaffolds)
 
 
 def cmd_check_interruption_policy(args):
@@ -5637,17 +5006,18 @@ def main(argv=None):
 
 _ENGINE_COMMAND_DEFAULTS = {cmd.__name__: cmd for cmd in (
     cmd_check_dsh_preset_smoke, cmd_check_dsh_preset_compat, cmd_check_dsh_boundary, cmd_dsh_doctor, cmd_gate_check,
+    check_plugin_freshness, cmd_check_plugin_freshness, check_untracked_files, check_m5_compliance_with_record_scope,
 )}
 
 
 def _effective_engine_command(name, native):
-    if name in _ENGINE_COMMAND_DEFAULTS:
-        if name not in globals():
-            raise AttributeError(name)
-        current = globals()[name]
-        if current is not _ENGINE_COMMAND_DEFAULTS[name]:
-            return current
-    return native
+    if name not in _ENGINE_COMMAND_DEFAULTS:
+        return native
+    if name != "check_plugin_freshness" and name not in globals():
+        raise AttributeError(name)
+    # The inner freshness call reads a Python global, including its native NameError.
+    current = check_plugin_freshness if name == "check_plugin_freshness" else globals()[name]
+    return native if current is _ENGINE_COMMAND_DEFAULTS[name] else current
 
 
 if __name__ in ("verify_workflow", "__main__"):
@@ -5677,6 +5047,15 @@ def _effective_release_command(name, native):
     return native
 
 
+
+_workspace_checks._product_root = lambda: ROOT
+_workspace_checks._platform_entries = lambda: _product_policy("PLATFORM_ENTRY_FILES")
+_workspace_checks.effective_entry = _effective_engine_command
+_review_checks._record_dirs = lambda: M5_RECORD_DOC_DIRS
+_review_checks._scan_for_record_scope = lambda: check_m5_compliance()
+_review_checks._record_path_matches = lambda path: _is_m5_record_doc_path(path)
+_review_checks.effective_m5_entry = _effective_engine_command
+
 try:
     from host_loader_probes import bind_workflow_dsh as _bind_workflow_dsh
 except ModuleNotFoundError as error:
@@ -5691,6 +5070,9 @@ else:
 
 # Standalone checks have native filesystem/contract readers. When this CLI is loaded,
 # independently imported checks must also see changes to its historical public bindings.
+_capability_registry._root = lambda: ROOT
+_capability_registry._display_path = lambda path, root=None: _display_path(path, root)
+_capability_registry._is_valid_string_list = lambda value: _is_valid_string_list(value)
 _evidence_domain._governance_directory = lambda: GOVERNANCE_DIR
 _evidence_domain._task_reference_source = lambda: (EVIDENCE_PATH, expand_task_ids)
 _evidence_domain._evidence_archive_reader = _archive_reader

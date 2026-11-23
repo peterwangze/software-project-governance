@@ -78,6 +78,132 @@ def _registered_owner_definition(path, registry, module, handler, namespace_call
     return function if _binds_explicit_call(namespace_call, function) else None
 
 
+def _path_origin(scope, expression):
+    """Both shipped path providers derive the product root from the file being inspected."""
+    if expression is None or ast.unparse(expression) != "Path(__file__).resolve().parents[3]":
+        return False
+    binding = _module_binding(scope, "Path")
+    return (isinstance(binding, ast.ImportFrom) and not binding.level and binding.module == "pathlib"
+            and any(item.name == "Path" and (item.asname or item.name) == "Path" for item in binding.names))
+
+
+def _workspace_root_available(path, scope, selected):
+    if isinstance(selected, ast.Lambda):
+        if not isinstance(selected.body, ast.Name):
+            return False
+        root = _module_binding(scope, selected.body.id)
+        return isinstance(root, ast.Assign) and _path_origin(scope[:scope.index(root)], root.value)
+    body = selected.body[1:] if ast.get_docstring(selected) else selected.body
+    if len(body) != 2 or not isinstance(body[0], ast.ImportFrom) or not isinstance(body[1], ast.Return):
+        return False
+    source, call = body[0], body[1].value
+    if (source.level or source.module != "project_paths" or len(source.names) != 1 or not isinstance(call, ast.Call)
+            or not isinstance(call.func, ast.Name) or call.func.id != (source.names[0].asname or source.names[0].name)):
+        return False
+    owner = _module_body(path, source.module)
+    provider = _local_definition(owner, source.names[0].name)
+    if not _binds_explicit_call(call, provider):
+        return False
+    body = provider.body[1:] if ast.get_docstring(provider) else provider.body
+    return len(body) == 1 and isinstance(body[0], ast.Return) and _path_origin(owner, body[0].value)
+
+
+def _workspace_selector_available(scope, selected):
+    """Prove the native identity route or the entry's shipped public-name override route."""
+    if len(selected.args.args) != 2:
+        return False
+    native = selected.args.args[1].arg
+    if isinstance(selected, ast.Lambda):
+        return isinstance(selected.body, ast.Name) and selected.body.id == native
+    body = selected.body[1:] if ast.get_docstring(selected) else selected.body
+    if len(body) == 1:
+        return isinstance(body[0], ast.Return) and isinstance(body[0].value, ast.Name) and body[0].value.id == native
+    # The public command and its inner reader take different missing-name paths.
+    # Prove their actual lookup and the table used to preserve the domain default.
+    if ([arg.arg for arg in selected.args.args] != ["name", "native"] or len(body) != 4
+            or ast.unparse(body[0]) != "if name not in _ENGINE_COMMAND_DEFAULTS:\n    return native"
+            or ast.unparse(body[1]) != "if name != 'check_plugin_freshness' and name not in globals():\n    raise AttributeError(name)"
+            or ast.unparse(body[2]) != "current = check_plugin_freshness if name == 'check_plugin_freshness' else globals()[name]"
+            or ast.unparse(body[3]) != "return native if current is _ENGINE_COMMAND_DEFAULTS[name] else current"):
+        return False
+    binding = _module_binding(scope, "check_plugin_freshness")
+    defaults = _module_binding(scope, "_ENGINE_COMMAND_DEFAULTS")
+    if (not isinstance(binding, ast.ImportFrom) or binding.level or binding.module != "workspace_checks"
+            or not any(item.name == (item.asname or item.name) == "check_plugin_freshness" for item in binding.names)
+            or not isinstance(defaults, ast.Assign) or not isinstance(defaults.value, ast.DictComp)):
+        return False
+    table = defaults.value
+    if (len(table.generators) != 1 or ast.unparse(table.key) != "cmd.__name__" or ast.unparse(table.value) != "cmd"):
+        return False
+    items = table.generators[0]
+    return (ast.unparse(items.target) == "cmd" and not items.ifs and not items.is_async
+            and isinstance(items.iter, (ast.Tuple, ast.List))
+            and {"check_plugin_freshness", "cmd_check_plugin_freshness"} <=
+            {item.id for item in items.iter.elts if isinstance(item, ast.Name)})
+
+
+def _workspace_port_accepts(path, engine, workspace, name, call):
+    """Follow the workspace import and the selected direct module attribute in the entry."""
+    scope = workspace
+    selected = _local_definition(scope, name)
+    aliases = set()
+    for index, statement in enumerate(engine):
+        if (isinstance(statement, ast.If) and ast.unparse(statement.test) == "__name__ == '__main__'"
+                and any(ast.unparse(node) == "sys.exit(main())" for node in statement.body)):
+            if scope is engine:
+                scope = engine[:index]
+            break
+        if isinstance(statement, ast.Import):
+            aliases.update(item.asname or item.name for item in statement.names if item.name == "workspace_checks")
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Delete)):
+            continue
+        targets = statement.targets if hasattr(statement, "targets") else [statement.target]
+        if not any(isinstance(target, ast.Attribute) and target.attr == name
+                   and isinstance(target.value, ast.Name) and target.value.id in aliases for target in targets):
+            continue
+        scope = engine
+        selected = getattr(statement, "value", None)
+        if isinstance(selected, ast.Name):
+            selected = _module_binding(engine[:index], selected.id)
+            if isinstance(selected, (ast.Assign, ast.AnnAssign)):
+                selected = selected.value
+    if not _binds_explicit_call(call, selected):
+        return False
+    if name == "_product_root":
+        return _workspace_root_available(path, scope, selected)
+    return _workspace_selector_available(scope, selected)
+
+
+def _workspace_freshness_dispatch(path, engine, registry, call):
+    """Verify the registered workspace command, its reader and its display provider."""
+    if not _dispatches_declared_handler(registry) or "workspace_checks" not in _final_registry_whitelist(registry):
+        return False
+    try:
+        workspace = ast.parse(path.with_name("workspace_checks.py").read_text(encoding="utf-8")).body
+        display = ast.parse(path.with_name("workspace_check_cli.py").read_text(encoding="utf-8")).body
+    except (OSError, SyntaxError, UnicodeError):
+        return False
+    entry = _local_definition(workspace, "cmd_check_plugin_freshness")
+    if not _binds_explicit_call(call, entry):
+        return False
+    body = entry.body[1:] if ast.get_docstring(entry) else entry.body
+    if [ast.unparse(node) for node in body] != [
+            "from workspace_check_cli import report_plugin_freshness",
+            "check = effective_entry('check_plugin_freshness', check_plugin_freshness)",
+            "result = check()",
+            "return report_plugin_freshness(result, _product_root)"]:
+        return False
+    report = _local_definition(display, "report_plugin_freshness")
+    if not _binds_explicit_call(body[3].value, report):
+        return False
+    root_calls = [c for c in ast.walk(report) if isinstance(c, ast.Call)
+                  and isinstance(c.func, ast.Name) and c.func.id == report.args.args[1].arg]
+    return (_workspace_port_accepts(path, engine, workspace, "effective_entry", body[1].value)
+            and _binds_explicit_call(body[2].value, _local_definition(workspace, "check_plugin_freshness"))
+            and bool(root_calls)
+            and all(_workspace_port_accepts(path, engine, workspace, "_product_root", c) for c in root_calls))
+
+
 def _dsh_owner_is_loadable(path, registry, module, handler, namespace_call):
     function = _registered_owner_definition(path, registry, module, handler, namespace_call)
     return bool(function) and _handler_source(path, function, depth=1)
@@ -216,8 +342,8 @@ def _release_provider_available(path, function):
     return bool(members)
 
 
-def _release_module_binding(engine, name):
-    """Find the last direct binding of a selected release collaborator."""
+def _module_binding(engine, name):
+    """Find the last direct module binding visible at this point."""
     for node in reversed(engine):
         if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name == name:
             return node
@@ -232,7 +358,7 @@ def _release_module_binding(engine, name):
 
 
 def _release_import_available(path, engine, name, kind):
-    binding = _release_module_binding(engine, name)
+    binding = _module_binding(engine, name)
     if isinstance(binding, kind):
         return True
     if not isinstance(binding, ast.ImportFrom) or binding.level:
@@ -250,12 +376,12 @@ def _release_policy_available(path, engine, expression):
             or not isinstance(lookup.args[0], ast.Constant) or not isinstance(lookup.args[0].value, str)):
         return False
     name = lookup.args[0].value
-    reader = _release_module_binding(engine, "_product_policy")
+    reader = _module_binding(engine, "_product_policy")
     if isinstance(reader, ast.Assign) and isinstance(reader.value, ast.Name):
         reader = _local_definition(engine, reader.value.id)
     if not isinstance(reader, ast.FunctionDef):
         return False
-    binding = _release_module_binding(engine, "_PRODUCT_POLICY_OWNERS")
+    binding = _module_binding(engine, "_PRODUCT_POLICY_OWNERS")
     if not isinstance(binding, ast.Assign) or not isinstance(binding.value, ast.Dict):
         return False
     owners = {key.value: value.value for key, value in zip(binding.value.keys, binding.value.values)
@@ -277,7 +403,7 @@ def _engine_release_inputs(path, engine, selected, keywords):
                 if not isinstance(member, ast.Lambda) or member.args.args or member.args.kwonlyargs:
                     return False
                 member = member.body
-            if not isinstance(member, ast.Name) or not isinstance(_release_module_binding(engine, member.id), ast.Assign):
+            if not isinstance(member, ast.Name) or not isinstance(_module_binding(engine, member.id), ast.Assign):
                 return False
         else:
             kind = ast.ClassDef if role == "repository_context" else ast.FunctionDef
@@ -436,6 +562,9 @@ def _has_dispatch(path, engine, statements, key, handler):
             if (key == "gate-check" and handler == "cmd_gate_check"
                     and matches == [(key, "governance_fact_cli.cmd_gate_check")]):
                 return _gate_owner_dispatch(path, registry, handler, call)
+            if (key == "check-plugin-freshness" and handler == "cmd_check_plugin_freshness"
+                    and matches == [(key, "workspace_checks.cmd_check_plugin_freshness")]):
+                return _workspace_freshness_dispatch(path, engine, registry, call)
             if _DSH_COMMANDS.get(key) == handler:
                 return _dsh_registered_dispatch(path, key, handler, matches, registry, call)
 
@@ -500,12 +629,16 @@ def _contains_yield(node):
 
 def _binds_explicit_call(call, definition):
     """Bind explicit arguments to a directly defined synchronous callable."""
-    if not isinstance(definition, ast.FunctionDef):
+    if isinstance(definition, ast.FunctionDef):
+        if definition.decorator_list or getattr(definition, "type_params", ()):
+            return False
+        body = definition.body
+    elif isinstance(definition, ast.Lambda):
+        body = [definition.body]
+    else:
         return False
     args = definition.args
-    if (definition.decorator_list or getattr(definition, "type_params", ())
-            or args.posonlyargs or args.vararg or args.kwarg
-            or any(_contains_yield(statement) for statement in definition.body)):
+    if args.posonlyargs or args.vararg or args.kwarg or any(_contains_yield(statement) for statement in body):
         return False
     if (len(call.args) > len(args.args) or any(isinstance(arg, ast.Starred) for arg in call.args)
             or any(keyword.arg is None for keyword in call.keywords)):

@@ -35,12 +35,12 @@ import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent
 _ENGINE_PATH = _INFRA_DIR / "verify_workflow.py"
-_REPO_ROOT = _ENGINE_PATH.parents[2]
+_REPO_ROOT = _ENGINE_PATH.parents[3]
+_COMMAND_CWD = _REPO_ROOT / "skills"
 SNAPSHOT_PATH = _HERE / "snapshots.json"
 GOLDEN_PATH = _HERE / "golden_samples.txt"
 SNAPSHOT_SCHEMA = "spg-contract-matrix/1"
@@ -48,8 +48,6 @@ TASK_ID = "FEAT-020"
 
 if str(_INFRA_DIR) not in sys.path:
     sys.path.insert(0, str(_INFRA_DIR))
-
-import verify_workflow as vw  # noqa: E402  (peer import; heavy but unavoidable)
 
 
 # ── Freeze declarations (task-mandated literals, NOT extracted data) ─────────
@@ -89,11 +87,16 @@ REPRESENTATIVE_RESULT_CALLS = (
 # ── Face 1: CLI dispatch key set (live argparse surface) ───────────────────────────
 
 
+def _public_workflow():
+    """Both the CLI and Result faces observe the installed public Python entry."""
+    import verify_workflow
+    return verify_workflow
+
+
 def extract_cli_dispatch() -> dict:
     """Observe public keys and alias groups on the engine's real argument parser and handler resolver."""
     import registry
-
-    _, commands = vw._build_cli_parser()
+    _, commands = _public_workflow()._build_cli_parser()
     by_handler = {}
     # Parser keys remain independent of declarations so R5 can report a
     # missing/extra row. Group only the handlers that can actually be called.
@@ -210,15 +213,6 @@ def type_signature(value, depth: int = 0):
     return type(value).__name__
 
 
-def _call_representative(name: str):
-    function = getattr(vw, name, None)
-    if function is None or not callable(function):
-        raise RuntimeError(
-            f"representative Result constructor {name!r} missing — "
-            "engine drift")
-    return function()
-
-
 def extract_result_shapes() -> dict:
     """Sign representative Results against one isolated initialized host.
 
@@ -226,6 +220,9 @@ def extract_result_shapes() -> dict:
     A local ignored .governance must not choose a different static contract
     than a clean checkout. The checks themselves still execute unchanged.
     """
+    from unittest.mock import patch
+
+    workflow = _public_workflow()
     shapes = {}
     with tempfile.TemporaryDirectory(prefix="contract-shapes-") as td:
         root = Path(td)
@@ -236,14 +233,14 @@ def extract_result_shapes() -> dict:
             "- **项目名称**: contract-matrix-fixture\n", encoding="utf-8")
         for filename in ("evidence-log.md", "risk-log.md", "decision-log.md"):
             (gov / filename).write_text("# Contract fixture\n", encoding="utf-8")
-        with patch.multiple(
-            vw, HOST_PROJECT_ROOT=root, GOVERNANCE_DIR=gov,
-            SAMPLE_PATH=gov / "plan-tracker.md",
-            EVIDENCE_PATH=gov / "evidence-log.md",
-            RISK_PATH=gov / "risk-log.md",
-        ):
+        with patch.multiple(workflow, HOST_PROJECT_ROOT=root, GOVERNANCE_DIR=gov,
+                            SAMPLE_PATH=gov / "plan-tracker.md", EVIDENCE_PATH=gov / "evidence-log.md",
+                            RISK_PATH=gov / "risk-log.md"):
             for name in REPRESENTATIVE_RESULT_CALLS:
-                shapes[name] = type_signature(_call_representative(name))
+                constructor = getattr(workflow, name, None)
+                if not callable(constructor):
+                    raise RuntimeError(f"representative Result constructor {name!r} missing — engine drift")
+                shapes[name] = type_signature(constructor())
     return shapes
 
 
@@ -308,7 +305,7 @@ def run_guard(project_root: Path) -> dict:
          "--project-root", str(project_root),
          "governance-write-guard"],
         capture_output=True, text=True, encoding="utf-8",
-        errors="replace", timeout=120, check=False, cwd=str(_REPO_ROOT),
+        errors="replace", timeout=120, check=False, cwd=str(_COMMAND_CWD),
     )
     return {
         "exit_code": completed.returncode,
@@ -418,7 +415,7 @@ def extract_contract_faces() -> dict:
 def _git_head() -> str:
     try:
         completed = subprocess.run(
-            ["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD"],
+            ["git", "-C", str(_COMMAND_CWD), "rev-parse", "HEAD"],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=15, check=False,
         )
@@ -553,7 +550,7 @@ def write_golden_samples(path: Path = GOLDEN_PATH) -> list[str]:
                 [sys.executable, str(_ENGINE_PATH)] + resolved,
                 capture_output=True, text=True, encoding="utf-8",
                 env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-                errors="replace", timeout=300, check=False, cwd=str(_REPO_ROOT),
+                errors="replace", timeout=300, check=False, cwd=str(_COMMAND_CWD),
             )
             sections.append(
                 f"### {title}\n"

@@ -193,6 +193,7 @@ implementation host is declared and the degradation is explicit here.
 LOADER_WHITELIST: Tuple[str, ...] = (
     ENGINE_MODULE,
     "governance_fact_cli",
+    "workspace_checks",
     "archguard_ratchet",
     "checks.capability_registry",
     "checks.ci_domain",
@@ -344,7 +345,7 @@ _COMMANDS: Tuple[Tuple[CommandKey, str], ...] = (
      "verify_workflow.cmd_check_mainstream_agent_loading"),
     ("check-manifest-consistency",
      "checks.manifest.cmd_check_manifest_consistency"),
-    ("check-plugin-freshness", "verify_workflow.cmd_check_plugin_freshness"),
+    ("check-plugin-freshness", "workspace_checks.cmd_check_plugin_freshness"),
     ("check-product-success-contracts",
      "verify_workflow.cmd_check_product_success_contracts"),
     ("check-projection-sync", "verify_workflow.cmd_check_projection_sync"),
@@ -437,7 +438,7 @@ _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("7", "verify_workflow.check_commit_task_references"),
     ("8", "checks.risk_domain.check_risk_escalation"),
     ("9", "verify_workflow.check_task_deadline"),
-    ("10", "verify_workflow.check_m5_compliance_with_record_scope"),
+    ("10", "checks.review_domain.check_m5_compliance_with_record_scope"),
     ("11", "checks.manifest.check_manifest_consistency"),
     ("12", "verify_workflow.check_cross_references"),
     ("13", "verify_workflow.check_sequential_ids"),
@@ -460,7 +461,7 @@ _SEGMENT_LOADERS: Tuple[Tuple[str, str], ...] = (
     ("22", "checks.review_domain.check_review_coverage"),
     ("23", "verify_workflow.check_profile_consistency"),
     ("24", "checks.version.check_version_consistency"),
-    ("25", "verify_workflow.check_untracked_files"),
+    ("25", "workspace_checks.check_untracked_files"),
     ("26", "verify_workflow.check_agent_lock_consistency"),
     ("27", "verify_workflow.check_archive_integrity"),
     ("28", "checks.review_domain.check_governance_review_fallback_policy"),
@@ -603,6 +604,13 @@ def resolve_loader(loader_path: str) -> Callable:
             binding = probes.effective_command
     elif loader_path == "governance_fact_cli.cmd_gate_check":
         binding = getattr(module, "effective_gate_command", None)
+    elif (module_name, attr) in (("workspace_checks", "check_untracked_files"),
+                                 ("workspace_checks", "cmd_check_plugin_freshness")):
+        workspace = sys.modules.get("workspace_checks")
+        if workspace is not None:
+            binding = workspace.effective_entry
+    elif module_name == "checks.review_domain" and attr == "check_m5_compliance_with_record_scope":
+        binding = module.effective_m5_entry
     try:
         if module_name == "release_validation_cli":
             effective = module.effective_command(attr, target)

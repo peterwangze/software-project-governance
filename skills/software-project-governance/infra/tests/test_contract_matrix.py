@@ -18,6 +18,7 @@ import copy
 import json
 import re
 import sys
+import tempfile
 import unittest
 from functools import lru_cache
 from pathlib import Path
@@ -205,9 +206,38 @@ class ResultShapesFaceTests(unittest.TestCase):
     def test_covers_all_representative_constructors(self):
         stored = _stored_snapshot()["faces"]["result_shapes"]
         self.assertEqual(sorted(stored), sorted(cmg.REPRESENTATIVE_RESULT_CALLS))
+        import verify_workflow as workflow
+        for name in stored:
+            self.assertTrue(callable(getattr(workflow, name)), f"{name} must remain invocable")
+
+    def test_every_shape_tracks_the_public_return_and_restores_the_host(self):
+        from unittest.mock import patch
+        import verify_workflow as workflow
+
+        original_host = workflow.HOST_PROJECT_ROOT
         for name in cmg.REPRESENTATIVE_RESULT_CALLS:
-            self.assertTrue(callable(getattr(cmg.vw, name, None)),
-                            f"{name} must remain invocable on the engine")
+            with self.subTest(name=name):
+                original = getattr(workflow, name)
+
+                def revised():
+                    self.assertNotEqual(workflow.HOST_PROJECT_ROOT, original_host)
+                    return {**original(), "contract_revision": 1}
+
+                with patch.object(workflow, name, revised):
+                    shape = cmg.extract_result_shapes()[name]
+                self.assertEqual(shape["$dict"]["contract_revision"], "int")
+                self.assertIs(workflow.HOST_PROJECT_ROOT, original_host)
+        self.assertEqual(cmg.extract_result_shapes(), _stored_snapshot()["faces"]["result_shapes"])
+
+    def test_guard_result_face_observes_the_python_constructor(self):
+        from unittest.mock import patch
+        import governance_write_shapes
+
+        with patch.object(governance_write_shapes, "check_governance_write_shapes",
+                          return_value={"changed_result": True}) as guard:
+            observed = cmg.extract_result_shapes()
+        guard.assert_called_once()
+        self.assertEqual(observed["check_governance_write_shapes"], {"$dict": {"changed_result": "bool"}})
 
 
 class GuardOutputPinTests(unittest.TestCase):

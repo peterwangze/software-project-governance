@@ -4,6 +4,132 @@ import re
 from typing import NamedTuple
 
 
+INTERRUPTION_POLICY_REQUIRED_PHRASES = (
+    "User Interruption Policy v2",
+    "critical-only",
+    "product intent",
+    "acceptance standard",
+    "irreversible",
+    "record_assumption",
+    "interruption_budget",
+)
+
+INTERRUPTION_POLICY_REQUIRED_TEMPLATE_PHRASES = (
+    "interruption_policy:",
+    "critical_triggers:",
+    "auto_execute:",
+    "assumption_record:",
+    "interruption_budget:",
+)
+
+INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS = (
+    "assumption",
+    "basis",
+    "reversibility",
+    "validation",
+    "rollback",
+)
+
+INTERRUPTION_POLICY_PLACEHOLDER_RE = re.compile(
+    r"(?:\b(?:todo|tbd|to_be_defined|n/?a|none|null|unknown)\b|待补|待定|暂无|占位)",
+    re.IGNORECASE,
+)
+
+INTERRUPTION_POLICY_CRITICAL_TRIGGER_KEYS = (
+    "product_intent_unclear",
+    "acceptance_standard_unclear",
+    "irreversible",
+    "risk_acceptance",
+    "release_decision",
+    "external_dependency",
+    "mode_change",
+)
+
+INTERRUPTION_POLICY_PACKET_CRITICAL_SIGNALS = (
+    "product intent",
+    "acceptance",
+    "irreversible",
+    "release",
+    "risk acceptance",
+    "external dependency",
+    "mode change",
+)
+
+INTERRUPTION_POLICY_DEFAULT_EXAMPLES = [
+    {
+        "id": "product-intent-ambiguity",
+        "expected_action": "ask_user",
+        "decision": {"product_intent_unclear": True, "reversible": True},
+    },
+    {
+        "id": "acceptance-standard-ambiguity",
+        "expected_action": "ask_user",
+        "decision": {"acceptance_standard_unclear": True, "reversible": True},
+    },
+    {
+        "id": "irreversible-file-delete",
+        "expected_action": "ask_user",
+        "decision": {"irreversible": True, "destructive": True},
+    },
+    {
+        "id": "risk-acceptance",
+        "expected_action": "ask_user",
+        "decision": {"risk_acceptance": True, "reversible": False},
+    },
+    {
+        "id": "release-go-no-go",
+        "expected_action": "ask_user",
+        "decision": {"release_decision": True, "reversible": False},
+    },
+    {
+        "id": "new-external-dependency",
+        "expected_action": "ask_user",
+        "decision": {"external_dependency": True, "reversible": True},
+    },
+    {
+        "id": "mode-change",
+        "expected_action": "ask_user",
+        "decision": {"mode_change": True, "reversible": True},
+    },
+    {
+        "id": "routine-file-edit",
+        "expected_action": "auto_execute",
+        "decision": {"routine_execution": True, "reversible": True, "known_scope": True},
+    },
+    {
+        "id": "local-validation",
+        "expected_action": "auto_execute",
+        "decision": {"local_validation": True, "reversible": True, "known_scope": True},
+    },
+    {
+        "id": "governance-record-update",
+        "expected_action": "auto_execute",
+        "decision": {"governance_record_update": True, "reversible": True, "known_scope": True},
+    },
+    {
+        "id": "normal-commit-push",
+        "expected_action": "auto_execute",
+        "decision": {"commit_push": True, "reversible": True, "known_scope": True},
+    },
+    {
+        "id": "reversible-default-assumption",
+        "expected_action": "record_assumption",
+        "decision": {
+            "routine_execution": True,
+            "reversible": True,
+            "known_scope": False,
+            "assumption_record": {
+                "assumption": "Use existing repository style for naming and structure.",
+                "basis": "Nearby files show the prevailing pattern.",
+                "reversibility": "Can be renamed or reverted in one focused commit.",
+                "validation": "Run the focused test or checker after the edit.",
+                "rollback": "Revert the focused change if validation fails.",
+            },
+        },
+    },
+]
+
+
 class InterruptionPolicy(NamedTuple):
     required_phrases: tuple
     template_phrases: tuple

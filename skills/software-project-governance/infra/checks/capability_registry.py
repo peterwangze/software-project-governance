@@ -1,48 +1,18 @@
-"""Capability-registry domain checks — extracted from verify_workflow.py in 0.61.1.
-
-Scope (DEC-083 Phase 2 / REQ-103): capability-registry.json schema validation
-(FIX-116). Same registry-schema-check pattern as the manifest domain
-(Phase 1). Shared helpers (_is_valid_string_list,
-_display_path, ROOT) are reached through a
-deferred module reference (the _vw() helper, same pattern as manifest.py) so
-that verify_workflow.py can import this module at load time without an import
-cycle. _manifest_artifact_entries is imported directly from the sibling
-checks.manifest module (Phase 1) since it is a cross-domain registry helper.
-
-See docs/requirements/verify-workflow-split-phase2-capability-registry-0.61.1.md
-for the design and the line-number baseline used during extraction.
-"""
-
-import sys
+"""Validate the external capability registry against its schema and product manifest."""
 import json
+import sys
 
-# NOTE: _manifest_artifact_entries is imported lazily inside the check function
-# (see check_capability_registry) rather than at module top level. The top-level
-# import was rejected during 0.61.1 because it triggered a circular import
-# (verify_workflow -> checks.capability_registry -> checks.manifest, while
-# verify_workflow was still initializing). Deferring it to call time breaks the
-# cycle, matching the _vw() deferred-access pattern already used here.
+from contracts import _is_valid_string_list
 
 
-# ── Shared-helper access (deferred to avoid import cycle) ──────────
-_VW_CACHE = None
+def _root():
+    from project_paths import package_root
+    return package_root()
 
 
-def _vw():
-    """Return the verify_workflow module (imported lazily, cached).
-
-    Cached so repeated calls reuse the same module reference (REVIEW-FIX-153 P2,
-    same pattern as checks.manifest).
-    """
-    global _VW_CACHE
-    if _VW_CACHE is None:
-        import verify_workflow  # noqa: WPS433 (deferred import on purpose)
-        _VW_CACHE = verify_workflow
-    return _VW_CACHE
-
-
-def _is_valid_string_list(value):
-    return _vw()._is_valid_string_list(value)
+def _display_path(path, root=None):
+    from project_paths import display_path
+    return display_path(path, root or _root())
 
 
 _GENERAL_NOUN_CLAIMS = (
@@ -86,26 +56,12 @@ def _line_has_scoped_claim_negation(line, phrase):
     return is_claim_negated(line, phrase, _GENERAL_NOUN_CLAIMS)
 
 
-def _display_path(path, root=None):
-    return _vw()._display_path(path, root)
-
-
-def _root():
-    return _vw().ROOT
-
-
 def _manifest_artifact_entries(manifest):
     """Lazy access to the cross-domain registry helper in checks.manifest."""
     from checks.manifest import _manifest_artifact_entries as _fn  # noqa: WPS433
     return _fn(manifest)
 
 
-# ── Domain-specific constants (migrated from verify_workflow.py) ───
-# All seven constants are capability-registry-only (verified by Explore survey
-# of 0.59.0 baseline). CAPABILITY_REGISTRY_PATH was a dead constant (defined,
-# never referenced) in verify_workflow.py; kept here as a plain string for
-# registry-constant-cluster completeness — NOT a Path, so it never touches
-# verify_workflow at import time (REQ-103 D1).
 CAPABILITY_REGISTRY_PATH = "skills/software-project-governance/core/capability-registry.json"
 
 CAPABILITY_REGISTRY_ALLOWED_KINDS = {

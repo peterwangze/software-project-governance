@@ -5,6 +5,77 @@ from typing import NamedTuple
 from pathlib import Path
 
 
+from contracts import QUALITY_BUDGET_DIMENSIONS
+
+
+DETERMINISTIC_SCAFFOLD_REQUIRED_SECTIONS = (
+    "## Product Success Contract",
+    "## PRD-lite",
+    "## Executable Acceptance",
+    "## Quality Budget",
+    "## Vertical Slice",
+    "## Demo Checklist",
+    "## Tooling",
+)
+
+DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS = QUALITY_BUDGET_DIMENSIONS
+
+DETERMINISTIC_SCAFFOLD_COMMAND_RE = re.compile(
+    r"(?m)^\s*-\s*`(?:(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|powershell|pwsh)\b|"
+    r"(?:\./|\.\\|skills/|skills\\|scripts/|scripts\\).+)",
+    re.IGNORECASE,
+)
+
+DETERMINISTIC_SCAFFOLD_SIGNAL_RE = re.compile(
+    r"(?:persona|jtbd|job to be done|non-goal|success metric|acceptance|quality budget|demo checklist|"
+    r"vertical slice|rollback|PRD-lite|用户|验收|质量预算|演示|切片)",
+    re.IGNORECASE,
+)
+
+DETERMINISTIC_SCAFFOLD_WEAK_RE = re.compile(
+    r"(?:review says|review passed|reviewer approved|approved.*prose|looks good|manual review only|"
+    r"ship it|whatever|\bTODO\b|\bTBD\b|\bTO_BE_DEFINED\b|待补|待定|占位)",
+    re.IGNORECASE,
+)
+
+DETERMINISTIC_SCAFFOLD_BROAD_SCOPE_RE = re.compile(
+    r"(?:entire repository|whole repository|whole repo|full repo|entire repo|"
+    r"entire project|whole project|whole codebase|all files|everything|\*|全仓|整个项目|所有文件|全部重构|无边界)",
+    re.IGNORECASE,
+)
+
+DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS = {
+    "## Product Success Contract": (
+        r"(?:persona|用户|使用者)",
+        r"(?:jtbd|job to be done|desired outcome|用户任务)",
+        r"(?:non-goal|out of scope|非目标)",
+        r"(?:success metric|metric|成功指标)",
+    ),
+    "## PRD-lite": (
+        r"(?:problem|问题)",
+        r"(?:workflow|scenario|user-visible|用户可见|流程|场景)",
+    ),
+    "## Executable Acceptance": (
+        r"(?:expected output|exit code|pass|通过|预期输出)",
+        r"(?:demo evidence|evidence|artifact|证据)",
+    ),
+    "## Quality Budget": tuple(DETERMINISTIC_SCAFFOLD_REQUIRED_QUALITY_DIMENSIONS),
+    "## Vertical Slice": (
+        r"(?:user-visible slice|user can|用户可见|用户)",
+        r"(?:demo path|demo|smoke|command|演示)",
+        r"(?:scope guard|scope|范围)",
+        r"(?:rollback|回滚)",
+    ),
+    "## Demo Checklist": (
+        r"(?:command|demo|evidence|exit code|artifact|演示|证据)",
+        r"(?:expected|visible|invalid|failure|result|预期|结果)",
+    ),
+    "## Tooling": (
+        r"(?:check-product-success-contracts|check-acceptance-contracts|check-quality-budget|check-vertical-slices|check-deterministic-scaffolds)",
+    ),
+}
+
+
 class ScaffoldPolicy(NamedTuple):
     types: tuple
     sections: tuple

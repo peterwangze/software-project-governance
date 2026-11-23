@@ -3788,6 +3788,22 @@ class CapabilityRegistryTests(unittest.TestCase):
         registry_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return registry_path
 
+    def test_preloaded_capability_check_uses_the_current_package_readers(self):
+        import registry
+        from checks import capability_registry
+
+        registered = registry.load_check("check-28k")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.object(vw, "ROOT", root), patch.object(vw, "_display_path", return_value="cap-at-host"):
+                self.assertEqual(registered(), ["cap-at-host: missing capability registry"])
+                self.assertEqual(capability_registry.check_capability_registry(), registered())
+                self.assertEqual(registered(_INFRA_DIR.parents[2]), [])
+            with patch.object(vw, "_is_valid_string_list", return_value=False):
+                issues = registered(_INFRA_DIR.parents[2])
+                self.assertTrue(any("no_overclaim_boundary must be a non-empty string list" in i for i in issues))
+        self.assertEqual(registered(_INFRA_DIR.parents[2]), [])
+
     def test_capability_registry_accepts_current_file(self):
         self.assertEqual(vw.check_capability_registry(vw.ROOT), [])
 
@@ -25601,6 +25617,58 @@ class ReleaseHookLocationTests(unittest.TestCase):
 
 
 class DeliveryContractBindingTests(unittest.TestCase):
+    def test_status_imports_no_delivery_check_or_persisted_guard_policy(self):
+        import subprocess
+        # Before any named or wildcard policy import, run the actual status command.
+        probe = """
+import contextlib, io, sys
+import verify_workflow as workflow
+cold = {"delivery_contract_checks", "scaffold_contracts", "interruption_contracts", "write_guard_contracts"}
+assert not cold.intersection(sys.modules)
+with contextlib.redirect_stdout(io.StringIO()):
+    try:
+        workflow.main(["status"])
+    except SystemExit as finished:
+        assert finished.code in (None, 0)
+assert not cold.intersection(sys.modules)
+from verify_workflow import ACCEPTANCE_PASS_STATUSES
+assert ACCEPTANCE_PASS_STATUSES is sys.modules["delivery_contract_checks"].ACCEPTANCE_PASS_STATUSES
+assert cold.intersection(sys.modules) == {"delivery_contract_checks"}
+name = "_WRITE_GUARD_STATE_FILENAME"
+delattr(workflow, name)
+assert "write_guard_contracts" not in sys.modules
+try:
+    workflow.state_path_seen(None)
+except NameError as error:
+    assert error.name == name
+else:
+    raise AssertionError("a deleted live policy must remain missing")
+"""
+        with tempfile.TemporaryDirectory() as host:
+            subprocess.run([sys.executable, "-B", "-c", probe], cwd=_INFRA_DIR, check=True,
+                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "HOME": host, "USERPROFILE": host})
+
+
+    def test_policy_names_can_be_removed_and_rebound_on_the_historical_module(self):
+        for name, builder in (
+            ("ACCEPTANCE_PASS_STATUSES", vw._acceptance_policy),
+            ("QUALITY_BUDGET_VALIDATION_SIGNAL_RE", vw._quality_budget_policy),
+            ("VERTICAL_SLICE_USER_SIGNAL_RE", vw._vertical_slice_policy),
+            ("DETERMINISTIC_SCAFFOLD_SECTION_SIGNALS", vw._scaffold_policy),
+            ("INTERRUPTION_POLICY_REQUIRED_ASSUMPTION_FIELDS", vw._interruption_policy),
+        ):
+            with self.subTest(name=name):
+                original = getattr(vw, name)
+                try:
+                    delattr(vw, name)
+                    with self.assertRaises(AttributeError):
+                        getattr(vw, name)
+                    with self.assertRaises(NameError):
+                        builder()
+                finally:
+                    setattr(vw, name, original)
+                self.assertIn(original, builder())
+
     def test_default_assets_and_explicit_paths_follow_the_original_reader_contract(self):
         import zipfile
 

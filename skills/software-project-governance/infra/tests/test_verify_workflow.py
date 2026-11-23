@@ -13613,6 +13613,81 @@ class WebConsoleGovernanceEntryTests(unittest.TestCase):
                 vw.cmd_web_console(args)
         return stdout.getvalue()
 
+    def test_web_probe_observes_http_client_deleted_before_first_access(self):
+        program = """
+import sys
+from types import SimpleNamespace
+from unittest.mock import Mock
+sys.path.insert(0, sys.argv[1])
+import verify_workflow as engine
+
+assert "urllib" in dir(engine) and "urllib" in engine.__all__
+assert "urllib" not in vars(engine)
+del engine.urllib
+assert "urllib" not in dir(engine) and not hasattr(engine, "urllib")
+assert engine._web_console_probe("fixture") == {"state": "not_running", "error": "name 'urllib' is not defined"}
+open_url = Mock(side_effect=ValueError("restored client"))
+engine.urllib = SimpleNamespace(request=SimpleNamespace(urlopen=open_url))
+assert engine._web_console_probe("fixture", timeout=2) == {"state": "not_running", "error": "restored client"}
+open_url.assert_called_once_with("fixture", timeout=2)
+"""
+        subprocess.run([sys.executable, "-I", "-B", "-c", program, str(Path(vw.__file__).parent)],
+                       check=True, capture_output=True, text=True)
+
+    def test_probe_honors_removal_and_restoration_of_the_public_http_client(self):
+        http = vw.urllib
+        try:
+            del vw.urllib
+            self.assertFalse(hasattr(vw, "urllib"))
+            self.assertEqual(vw._web_console_probe("fixture"), {
+                "state": "not_running", "error": "name 'urllib' is not defined",
+            })
+        finally:
+            vw.urllib = http
+        with patch.object(http.request, "urlopen", side_effect=ValueError("fixture")) as open_url:
+            self.assertEqual(vw._web_console_probe("fixture", 2), {"state": "not_running", "error": "fixture"})
+            open_url.assert_called_once_with("fixture", timeout=2)
+
+    def test_console_starts_its_api_with_the_roots_selected_during_probe(self):
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            first, selected = Path(tmp) / "first", Path(tmp) / "selected"
+            for root in (first, selected):
+                (root / "web/node_modules").mkdir(parents=True)
+                (root / "web/package.json").write_text("{}", encoding="utf-8")
+                (root / "web/server.py").touch()
+
+            def choose_root(_url):
+                vw.ROOT = vw.HOST_PROJECT_ROOT = selected
+                return {"state": "not_running"}
+
+            stack.enter_context(patch.object(vw, "ROOT", first))
+            stack.enter_context(patch.object(vw, "HOST_PROJECT_ROOT", first))
+            stack.enter_context(patch.object(vw, "_web_console_probe", side_effect=choose_root))
+            stack.enter_context(patch.object(vw, "_web_console_is_live", return_value=True))
+            stack.enter_context(patch.object(vw.shutil, "which", return_value="fixture-npm"))
+            spawn = stack.enter_context(patch.object(vw.subprocess, "Popen", return_value=argparse.Namespace(pid=42)))
+            with redirect_stdout(io.StringIO()):
+                vw.cmd_web_console(self._args(start=True))
+            api = spawn.call_args_list[0]
+            self.assertEqual(Path(api.args[0][1]), selected / "web/server.py")
+            self.assertEqual(Path(api.kwargs["cwd"]), selected)
+            self.assertEqual(api.args[0][-2:], ["--project-root", str(selected)])
+
+    def test_summary_does_not_consume_browser_after_public_binding_is_removed(self):
+        browser = vw.webbrowser
+        try:
+            del vw.webbrowser
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                (root / "web").mkdir()
+                (root / "web/package.json").write_text("{}", encoding="utf-8")
+                output = self._run(self._args(summary_link=True), root, {"state": "running"})
+                self.assertIn("optional local companion dashboard", output)
+                with self.assertRaisesRegex(NameError, "webbrowser"):
+                    self._run(self._args(start=True, open=True), root, {"state": "running"})
+        finally:
+            vw.webbrowser = browser
+
     def test_governance_entry_reuses_running_console(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -25722,7 +25797,10 @@ import sys
 from unittest.mock import patch
 import verify_workflow as v
 for name, owner in (("BLOCKING_LOCK_ISSUE_TYPES", "plugin_assets"),
-                    ("DSH_SMOKE_REAL_HOME_WRITES_RE", "host_loader_probes")):
+                    ("DSH_SMOKE_REAL_HOME_WRITES_RE", "host_loader_probes"),
+                    ("LIFECYCLE_REGISTRY_GATES", "lifecycle_rules"),
+                    ("GATE_EXECUTION_ALLOWED_SEVERITIES", "gate_consistency"),
+                    ("_SNAPSHOT_REF_RE", "recommendation_checks")):
     assert name not in vars(v)
     already_loaded = owner in sys.modules
     delattr(v, name)
@@ -25767,6 +25845,298 @@ for name, owner in (("BLOCKING_LOCK_ISSUE_TYPES", "plugin_assets"),
                                                                                   host_project_root=host)
                     self.assertEqual(report["summary"], direct["summary"])
                     self.assertEqual(report["summary"]["errors"], int(size > 3))
+
+
+class OperationalCheckInputTimingTests(unittest.TestCase):
+    def test_commands_load_only_the_operational_owners_they_use(self):
+        # Observe the actual __main__ registration and command in a fresh interpreter.
+        program = """
+import runpy
+import sys
+from pathlib import Path
+
+infra, host, command = sys.argv[1:]
+sys.path.insert(0, infra)
+sys.argv = [str(Path(infra) / "verify_workflow.py"), "--project-root", host, command]
+try:
+    runpy.run_path(sys.argv[0], run_name="__main__")
+except SystemExit as exit_status:
+    if exit_status.code not in (None, 0):
+        raise
+owners = {"lifecycle_rules", "gate_consistency", "recommendation_checks"}
+print("loaded=" + ",".join(sorted(owners.intersection(sys.modules))))
+"""
+        expected = {"status": ("duration:", ""), "check-lifecycle-registry": ("Result: PASSED", "gate_consistency,lifecycle_rules"),
+                    "next-candidates": ("FIX-811", "recommendation_checks")}
+        with tempfile.TemporaryDirectory() as host:
+            from loop_exit_bridge import CANDIDATES_FILENAME
+            governance = Path(host) / ".governance"
+            governance.mkdir()
+            (governance / CANDIDATES_FILENAME).write_text('{"candidates": ["FIX-811"]}', encoding="utf-8")
+            for command, (output, owners) in expected.items():
+                with self.subTest(command=command):
+                    result = subprocess.run(
+                        [sys.executable, "-I", "-B", "-X", "utf8", "-c", program,
+                         str(_INFRA_DIR), host, command], cwd=host, capture_output=True, encoding="utf-8")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(output, result.stdout)
+                    self.assertEqual(result.stdout.splitlines()[-1], "loaded=" + owners)
+
+    def test_operational_exports_keep_their_owner_identity_and_wildcard_visibility(self):
+        import gate_consistency
+        import lifecycle_rules
+        import recommendation_checks
+
+        groups = {
+            lifecycle_rules: ["LIFECYCLE_REGISTRY_" + suffix for suffix in (
+                "ACTIVE_MODE", "DYNAMIC_MODE", "GATES", "STAGE_IDS", "REQUIRED_PROJECT_TYPES", "REQUIRED_PRESET_FIELDS",
+                "GATE_POLICY_REQUIRED_FIELDS", "REQUIRED_GAME_STANDARDS", "REQUIRED_LIBRARY_STANDARDS",
+                "RISK_CLAIMS", "FORBIDDEN_OVERCLAIMS")],
+            gate_consistency: ["GATE_EXECUTION_" + suffix for suffix in (
+                "REGISTRY_REQUIRED_FIELDS", "REQUIRED_FIELDS", "CHECK_REQUIRED_FIELDS", "ALLOWED_SEVERITIES",
+                "ALLOWED_EXECUTORS", "ALLOWED_FUNCTIONS")],
+            recommendation_checks: ["REQ108_RECOMMENDATION_DATE", "RECO_ROW_MARKER", "_LEGACY_SNAPSHOT_MARKER",
+                                    "_RECO_TASK_ID_RE", "_SNAPSHOT_REF_RE"],
+        }
+        wildcard = {}
+        exec("from verify_workflow import *", wildcard)
+        for owner, names in groups.items():
+            named = {}
+            exec("from verify_workflow import " + ", ".join(names), named)
+            for name in names:
+                with self.subTest(name=name):
+                    self.assertIn(name, dir(vw))
+                    self.assertIs(named[name], getattr(owner, name))
+                    self.assertEqual(name in wildcard, not name.startswith("_"))
+                    if name in wildcard:
+                        self.assertIs(wildcard[name], named[name])
+
+    def test_recommendation_uses_the_current_published_effective_date(self):
+        from test_completion_recommendation import COMPLETION_ROW, _row
+
+        rows = [_row(COMPLETION_ROW)]
+        self.assertEqual(vw.check_completion_recommendation(rows)["verdict"], "FAIL")
+        with patch.object(vw, "REQ108_RECOMMENDATION_DATE", date.max):
+            self.assertEqual(vw.check_completion_recommendation(rows)["stats"]["completions_judged"], 0)
+            del vw.REQ108_RECOMMENDATION_DATE
+            with self.assertRaisesRegex(NameError, "REQ108_RECOMMENDATION_DATE"):
+                vw.check_completion_recommendation(rows)
+        self.assertEqual(vw.check_completion_recommendation(rows)["verdict"], "FAIL")
+
+    def test_manifest_can_update_the_gate_policy_and_the_later_checker(self):
+        import registry
+
+        manifest = vw._lifecycle_registry_manifest_issues
+        later = mock.Mock(return_value=["gate definition policy changed"])
+
+        def update(*args):
+            issues = manifest(*args)
+            vw.LIFECYCLE_REGISTRY_GATES = ()
+            vw._check_gate_execution_registry = later
+            return issues
+
+        with patch.multiple(vw, LIFECYCLE_REGISTRY_GATES=vw.LIFECYCLE_REGISTRY_GATES,
+                            _check_gate_execution_registry=vw._check_gate_execution_registry,
+                            _lifecycle_registry_manifest_issues=update):
+            issues = vw.check_lifecycle_registry()
+            self.assertTrue(any("invalid or empty local gates" in issue for issue in issues))
+            self.assertIn("gate definition policy changed", issues)
+            output = io.StringIO()
+            with redirect_stdout(output), self.assertRaises(SystemExit) as stopped:
+                registry.load_handler("check-lifecycle-registry")(SimpleNamespace(fail_on_issues=True))
+            self.assertEqual(stopped.exception.code, 1)
+            self.assertIn("Result: FAILED", output.getvalue())
+        self.assertEqual(vw.check_lifecycle_registry(), [])
+
+    def test_missing_gate_policy_is_read_only_if_execution_reaches_it(self):
+        with patch.object(vw, "LIFECYCLE_REGISTRY_GATES", vw.LIFECYCLE_REGISTRY_GATES):
+            del vw.LIFECYCLE_REGISTRY_GATES
+            issues = vw.check_lifecycle_registry(registry={"lifecycle_modes": []})
+            self.assertTrue(any("one executable lifecycle mode" in issue for issue in issues))
+            with self.assertRaisesRegex(NameError, "LIFECYCLE_REGISTRY_GATES"):
+                vw.check_lifecycle_registry()
+
+    def test_check_three_keeps_archive_but_reads_later_host_and_completeness(self):
+        import registry
+        from checks.loop_receipts import receipt_issues
+
+        with tempfile.TemporaryDirectory() as tmp:
+            first, second = (Path(tmp) / host / ".governance" for host in ("first", "second"))
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+            (second / "flow-unit-runtime.json").write_text('{"broken": true}', encoding="utf-8")
+            expected = receipt_issues(second.parent)
+            self.assertTrue(expected)
+            archived_plans = []
+
+            class SwitchAfterEvidence(vw.GovernanceDataSource):
+                def get_all_evidence_task_map(self):
+                    evidence = super().get_all_evidence_task_map()
+                    vw.GOVERNANCE_DIR = second
+                    vw.check_evidence_completeness = lambda: {"missing_evidence": ["FIX-811"]}
+                    return evidence
+
+                def get_all_task_ids(self):
+                    archived_plans.append(self.sample_path)
+                    return super().get_all_task_ids()
+
+            with patch.multiple(vw, GovernanceDataSource=SwitchAfterEvidence, GOVERNANCE_DIR=first,
+                                SAMPLE_PATH=first / "plan-tracker.md", EVIDENCE_PATH=first / "evidence-log.md",
+                                check_evidence_completeness=lambda: {"missing_evidence": []}):
+                result = registry.load_check("check-3")()
+            self.assertEqual([row["detail"] for row in result if row["type"] == "loop_receipt"], expected)
+            self.assertIn({"type": "completed_tasks_missing_evidence", "detail": ["FIX-811"]}, result)
+            self.assertEqual(archived_plans, [first / "plan-tracker.md"])
+
+    def test_locks_keep_selected_file_and_read_current_plan_and_severity(self):
+        import registry
+        from change_triage import acquire_dispatch_locks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            first, second = (Path(tmp) / host / ".governance" for host in ("first", "second"))
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+            (first / "plan-tracker.md").write_text("| P1 | FIX-811 | active |", encoding="utf-8")
+            (second / "plan-tracker.md").write_text("| P1 | FIX-812 | active |", encoding="utf-8")
+            (first.parent / "work.py").touch()
+            acquire_dispatch_locks(task_id="FIX-811", files=["work.py"], governance_dir=first, repo_root=first.parent)
+            original_format = vw.check_agent_locks_format
+
+            def change_plan():
+                issues = original_format()
+                vw.GOVERNANCE_DIR = second
+                vw.lock_issue_is_blocking = lambda issue: issue["type"] == "task_not_in_plan"
+                return issues
+
+            with patch.multiple(vw, GOVERNANCE_DIR=first, check_agent_locks_format=change_plan,
+                                lock_issue_is_blocking=lambda issue: False):
+                report = registry.load_check("check-26")()
+                self.assertEqual((report["active_task_count"], report["file_lock_count"]), (1, 1))
+                self.assertEqual([(issue["type"], issue["severity"]) for issue in report["issues"]],
+                                 [("task_not_in_plan", "BLOCKING")] * 2)
+                vw.GOVERNANCE_DIR = first
+                vw.lock_issue_is_blocking = lambda issue: False
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    registry.load_handler("check-locks")(SimpleNamespace())
+                self.assertIn("2 lock issue(s), 2 blocking", output.getvalue())
+                self.assertIn("Result: WARN", output.getvalue())
+
+
+class OperationalReviewBindingsTests(unittest.TestCase):
+    def test_tier_rules_use_current_roadmap_status_and_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = Path(tmp) / "plan-tracker.md"
+            plan.write_text("## 实施路线图（DEC-052）\nTier 0-A: delivery\n  FIX-801 (P1) — product\n", encoding="utf-8")
+            with patch.object(vw, "SAMPLE_PATH", plan), patch.object(vw, "parse_task_status_map",
+                    return_value={"FIX-801": "已完成"}), patch.object(vw, "parse_evidence_task_ids") as evidence:
+                evidence.return_value = set()
+                self.assertEqual(vw.parse_tier_definitions(), {"0-A": ["FIX-801"]})
+                missing = vw.check_tier_audit_completeness()
+                evidence.return_value = {"TIER-0-A-AUDIT"}
+                complete = vw.check_tier_audit_completeness()
+                self.assertNotEqual(missing, complete)
+                self.assertTrue(missing["completed_without_audit"])
+                self.assertFalse(complete["completed_without_audit"])
+
+    def test_next_candidates_emits_the_refreshed_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp)
+            expected = {"unblocked": [], "total": 0}
+            with patch.object(vw, "HOST_PROJECT_ROOT", host), patch(
+                    "loop_exit_bridge.refresh_candidates", return_value=expected) as refresh:
+                stream = io.StringIO()
+                with redirect_stdout(stream):
+                    vw.cmd_next_candidates(SimpleNamespace(refresh=True, top_n=3, write=False))
+            self.assertEqual(json.loads(stream.getvalue()), expected)
+            self.assertEqual(refresh.call_args.args[0], host)
+
+    def test_next_candidates_refreshes_the_current_host_after_a_cache_miss(self):
+        from loop_exit_bridge import CANDIDATES_FILENAME, read_candidates
+
+        with tempfile.TemporaryDirectory() as tmp:
+            first, second = (Path(tmp) / side for side in ("first", "second"))
+            governance = second / ".governance"
+            governance.mkdir(parents=True)
+            (governance / "plan-tracker.md").write_text("# plan\n", encoding="utf-8")
+
+            def read_then_switch(path):
+                self.assertEqual(path, first / ".governance" / CANDIDATES_FILENAME)
+                cached = read_candidates(path)
+                vw.HOST_PROJECT_ROOT = second
+                return cached
+
+            with patch.object(vw, "HOST_PROJECT_ROOT", first), patch("loop_exit_bridge.read_candidates", read_then_switch):
+                with redirect_stdout(io.StringIO()) as stream:
+                    vw.cmd_next_candidates(SimpleNamespace(refresh=False, write=False))
+            self.assertEqual(json.loads(stream.getvalue())["snapshot"], str(governance / CANDIDATES_FILENAME))
+            self.assertTrue((governance / CANDIDATES_FILENAME).is_file())
+            self.assertFalse(first.exists())
+
+    def test_priority_analysis_reads_paths_after_configuring_output(self):
+        before, after = Path("before"), Path("after")
+
+        def reconfigure(**options):
+            vw.SAMPLE_PATH, vw.GOVERNANCE_DIR, vw.EVIDENCE_PATH = after, after, after
+
+        system = SimpleNamespace(stdout=SimpleNamespace(reconfigure=reconfigure), exit=mock.Mock())
+        with patch.multiple(vw, sys=system, SAMPLE_PATH=before, GOVERNANCE_DIR=before, EVIDENCE_PATH=before):
+            with patch("task_priority.run_cli_analysis", return_value=2) as analyze:
+                vw.cmd_task_priority_analysis(SimpleNamespace())
+        self.assertEqual(analyze.call_args.args, (after, after, after))
+        system.exit.assert_called_once_with(2)
+
+    def test_public_review_classification_and_archive_reader_are_bound_at_call_time(self):
+        from checks import review_domain
+        sentinel = object()
+        with patch.object(vw, "_parse_iso_date", return_value=sentinel) as parse:
+            self.assertIs(review_domain._sources.parse_date("old receipt"), sentinel)
+            parse.assert_called_once_with("old receipt")
+        with patch.object(vw, "GovernanceDataSource", return_value=sentinel) as reader:
+            self.assertIs(review_domain._sources.archive_reader(evidence_path="fixture"), sentinel)
+            reader.assert_called_once_with(evidence_path="fixture")
+
+    def test_registry_and_direct_review_see_patched_and_deleted_evidence(self):
+        import registry
+        from checks import review_domain
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            evidence = root / "evidence.md"
+            plan = root / "plan.md"
+            plan.write_text("| P1 | FIX-811 | Widget |", encoding="utf-8")
+            evidence.write_text("| EVD-811 | FIX-811 | 2026-09-20 | 产品代码 | shipped | skills/widget.py |\n", encoding="utf-8")
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(vw, "GOVERNANCE_DIR", root))
+                stack.enter_context(patch.object(vw, "SAMPLE_PATH", plan))
+                stack.enter_context(patch.object(vw, "EVIDENCE_PATH", root / "empty.md"))
+                routes = (registry.load_check("check-21"), review_domain.check_review_debt, vw.check_review_debt)
+                for route in routes:
+                    self.assertEqual(route()["total_tasks"], 0)
+                vw.EVIDENCE_PATH = evidence
+                for route in routes:
+                    self.assertEqual(route()["total_tasks"], 1)
+                del vw.EVIDENCE_PATH
+                try:
+                    for route in routes:
+                        with self.assertRaises(AttributeError):
+                            route()
+                finally:
+                    vw.EVIDENCE_PATH = evidence
+                self.assertEqual(review_domain.check_review_debt()["total_tasks"], 1)
+
+    def test_direct_review_loader_runs_without_loading_the_engine(self):
+        program = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "import registry; handler = registry.load_check('check-21'); "
+            "result = handler(); assert result['total_tasks'] == 0; "
+            "from checks import review_domain; from pathlib import Path; "
+            "assert review_domain._sources.governance_dir() == Path.cwd() / '.governance'; "
+            "assert 'verify_workflow' not in sys.modules"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run([sys.executable, "-I", "-B", "-c", program, str(Path(vw.__file__).parent)],
+                           cwd=tmp, check=True, capture_output=True, text=True)
 
 
 if __name__ == "__main__":

@@ -16,25 +16,8 @@ added Check 29 (M5) and Check 30 (closure) plus hardened Check 21. Per ADR-016
 local), and the module-level L13842 duplicate moves here as the review-domain
 copy (the L11166 commit-scope copy stays in verify_workflow.py).
 
-Functions with cross-domain callers (`_is_review_evidence`,
-`_is_audit_or_review_type`, `_generic_reviewer_cells`,
-`_evidence_task_type_index`) STAY in verify_workflow.py and are reached via
-the deferred accessor — they are not duplicated here (ADR-016 §3.3 / §4.3
-KEEP rule).
-
-Shared helpers and constants still defined in verify_workflow.py
-(`EVIDENCE_PATH`, `GOVERNANCE_DIR`, `ROOT`, `SAMPLE_PATH`, `expand_task_ids`,
-`parse_completed_task_ids`, `_is_plugin_path`, `_is_audit_or_review_type`,
-`_task_priority_from_table_parts`, `_parse_iso_date`,
-`_evidence_task_type_index`) are reached through a deferred module reference
-rather than a top-level import, so verify_workflow.py can import this module
-at module load time without an import cycle.
-
-NOTE: `PRODUCT_CODE_PATTERNS` is OWNED by this module (the review-domain copy
-moves here per ADR-016 §3.3 — the commit-scope copy at the original v_w
-L11166 stays in verify_workflow.py). It is therefore NOT in `_SHARED_NAMES`;
-moved review functions reference it as a bare module-level name and it
-resolves to the constant defined in this module.
+ReviewSources supplies only the paths and predicates used by review checks. Standalone
+consumers resolve their host directly; the CLI binds its replaceable public readers.
 
 See docs/architecture/ADR-016-verify-phase5-extraction-0.70.0.md for the
 design and the line-number baseline used during extraction.
@@ -48,85 +31,129 @@ import sys
 from pathlib import Path
 from datetime import date, timedelta
 
-# ── Shared-helper access (deferred to avoid import cycle) ──────────
-# Same deferred-_vw() pattern as checks.manifest (Phase 1) and
-# checks.capability_registry (Phase 2). The shared names are resolved lazily
-# on the first call into this module (after verify_workflow has finished
-# loading) and cached in this module's globals for subsequent calls, so the
-# moved function bodies can reference them by bare name unchanged.
+def _read_task_type_index(evidence_path):
+    """FIX-174 R1 (P0-3): map task_id -> joined type+description text scanned
+    from the evidence-log, so _task_routing_exempt can heuristically infer a
+    task's type when the plan-tracker has no type column.
 
-_VW_CACHE = None
+    Only work-delivery rows (evd_id starting with EVD-) contribute. We
+    deliberately skip REVIEW-* rows: a REVIEW-{id} row's type cell carries the
+    *reviewer's* activity label (e.g. "代码审查"), not the task's own type, so
+    including it would mis-classify every reviewed task as a review-type task.
 
-
-def _vw():
-    """Return the verify_workflow module (imported lazily, cached).
-
-    Cached so repeated calls reuse the same module reference (REVIEW-FIX-153
-    P2, same pattern as checks.manifest / checks.capability_registry).
+    Returns dict task_id -> str (the concatenation of the row's type cell and
+    description cell, lowercased). Best-effort: returns {} on read failure.
     """
-    global _VW_CACHE
-    if _VW_CACHE is None:
-        import verify_workflow  # noqa: WPS433 (deferred import on purpose)
-        _VW_CACHE = verify_workflow
-    return _VW_CACHE
+    index = {}
+    if not evidence_path.is_file():
+        return index
+    try:
+        content = evidence_path.read_text(encoding="utf-8")
+    except (IOError, OSError):
+        return index
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        parts = [p.strip() for p in stripped.split("|")]
+        if len(parts) < 6:
+            continue
+        evd_id = parts[1]
+        # Skip review-evidence rows — their type cell is the reviewer activity,
+        # not the task's own type (see docstring).
+        if evd_id.upper().startswith("REVIEW-"):
+            continue
+        raw_ids = parts[2]
+        type_cell = parts[3] if len(parts) > 3 else ""
+        desc_cell = parts[4] if len(parts) > 4 else ""
+        for tid in re.findall(r"[A-Z]+-\d+", raw_ids):
+            blob = f"{type_cell} {desc_cell}".strip().lower()
+            if blob:
+                index.setdefault(tid, "")
+                if blob not in index[tid]:
+                    index[tid] = (index[tid] + " " + blob).strip()
+    return index
 
 
-# Shared names this domain reaches back into verify_workflow for. Refreshed
-# on every call into `_resolve_shared()` (NOT cached) so test-time monkey-
-# patching of verify_workflow attributes propagates, and so the moved
-# function bodies can reference them by bare name (byte-identical bodies,
-# per ADR-016 §5.3 "no behavioral change").
-_SHARED_NAMES = (
-    "EVIDENCE_PATH",
-    "GOVERNANCE_DIR",
-    "ROOT",
-    "SAMPLE_PATH",
-    "expand_task_ids",
-    "parse_completed_task_ids",
-    "_is_plugin_path",
-    "_is_audit_or_review_type",
-    "_task_priority_from_table_parts",
-    "_parse_iso_date",
-    "_evidence_task_type_index",
-    # FIX-278 F-1 (DESIGN R0): state-column terminal predicates for the live
-    # completed set — replaced the whole-row substring scan (BC-2 double
-    # divergence: "✅ 完成 (date)" cells missed / descriptions mentioning
-    # 已完成 marking ACTIVE tasks terminal). ``_status_is_completed_cell`` is
-    # the state-cell predicate (with active-marker exclusion); the row stream
-    # comes from task_priority.parse_task_dependencies (FIX-251-hardened:
-    # header tables AND the headerless 最近完成 window tables).
-    "_status_is_completed_cell",
-    # FEAT-076: the layered read entry — review coverage for COMPLETED
-    # tasks must see EVD/REVIEW rows that migrated to the cold layer.
-    "GovernanceDataSource",
-)
+def _in_plugin_scope(rel_path, scope_dirs):
+    """Check if a relative path is inside a plugin scope directory.
 
+    Plugin scope dirs (PLUGIN_SCOPE_DIRS) are matched as path components
+    anywhere in the path, not just as a prefix.  This catches nested
+    installations (e.g. project/e2e-test-project/skills/) and avoids
+    false positives from legitimate checklists in plugin SKILL.md files.
 
-def _resolve_shared():
-    """Refresh this module's globals with shared names from verify_workflow.
-
-    Re-fetches on EVERY call (not cached) so test-time monkey-patching of
-    verify_workflow attributes (e.g. `patch.object(vw, "EVIDENCE_PATH", ...)`,
-    `patch.object(vw, "SAMPLE_PATH", ...)`, or swapping `_is_plugin_path`)
-    propagates into this module's bare-name lookups. The cost is negligible:
-    these checks run once per CLI invocation, not in a hot loop, and `getattr`
-    on a cached module reference is cheap. This mirrors how checks.manifest
-    re-resolves `ROOT = _root()` inside each function body (Phase 1 precedent).
+    Semantics synced with cleanup.py _is_path_excluded() for directory
+    patterns (FIX-054).
     """
-    vw = _vw()
-    g = globals()
-    for _name in _SHARED_NAMES:
-        g[_name] = getattr(vw, _name)
-    # REVIEW_FALLBACK_POLICY_{REQUIRED,OPTIONAL}_FILES are derived from ROOT,
-    # which is now resolved. They cannot be defined at module load time
-    # (ROOT is unavailable then), so re-populate them on every call.
-    g["REVIEW_FALLBACK_POLICY_REQUIRED_FILES"] = [g["ROOT"] / "commands/governance-review.md"]
-    g["REVIEW_FALLBACK_POLICY_OPTIONAL_FILES"] = [
-        g["ROOT"] / "project/e2e-test-project/commands/governance-review.md",
-    ]
+    rel_path = rel_path.replace("\\", "/")
+    segments = rel_path.split("/")
+    for scope_dir in scope_dirs:
+        # Root-prefix match
+        if rel_path == scope_dir or rel_path.startswith(scope_dir + "/"):
+            return True
+        # Nested as a path component (e.g. project/e2e-test-project/skills/...)
+        if scope_dir in segments:
+            return True
+    return False
 
 
-# ── Domain constants and functions (moved verbatim from verify_workflow.py) ──
+
+
+class ReviewSources:
+    """The paths, readers and predicates consulted by the review rules."""
+
+    def product_root(self):
+        return Path(__file__).resolve().parents[4]
+
+    def governance_dir(self):
+        from resolve_entry import current_host_root
+        return Path(current_host_root()) / ".governance"
+
+    def plan_path(self):
+        return self.governance_dir() / "plan-tracker.md"
+
+    def evidence_path(self):
+        return self.governance_dir() / "evidence-log.md"
+
+    def archive_reader(self, **paths):
+        from governance_archive_data import GovernanceDataSource
+        return GovernanceDataSource(self.governance_dir(), **paths)
+
+    def expand_task_ids(self, raw):
+        from governance_archive_data import expand_task_ids
+        return expand_task_ids(raw)
+
+    def completed_task_ids(self):
+        from governance_archive_data import parse_completed_task_ids
+        return parse_completed_task_ids(plan_path=self.plan_path())
+
+    def is_plugin_path(self, path):
+        from cleanup import PLUGIN_SCOPE_DIRS
+        return _in_plugin_scope(path, PLUGIN_SCOPE_DIRS)
+
+    def is_audit_or_review_type(self, kind):
+        from checks.evidence_domain import _is_audit_or_review_type
+        return _is_audit_or_review_type(kind)
+
+    def task_priority(self, parts):
+        from plan_task_selection import _task_priority_from_table_parts
+        return _task_priority_from_table_parts(parts)
+
+    def parse_date(self, value):
+        from hot_governance_facts import _parse_iso_date
+        return _parse_iso_date(value)
+
+    def task_type_index(self):
+        return _read_task_type_index(self.evidence_path())
+
+    def is_completed(self, cell):
+        from plan_status import _status_is_completed_cell
+        return _status_is_completed_cell(cell)
+
+
+_sources = ReviewSources()
+
 
 def check_m5_compliance():
     """Check M5 AskUserQuestion compliance -- static anti-pattern detection (enhanced).
@@ -146,7 +173,8 @@ def check_m5_compliance():
     This CANNOT detect runtime M5 violations (actual inline questions in conversation).
     It catches the ROOT CAUSE: source files that teach or allow agents to use inline text.
     """
-    _resolve_shared()
+    ROOT = _sources.product_root()
+    _is_plugin_path = _sources.is_plugin_path
     issues = []
     skills_dir = ROOT / "skills" / "software-project-governance"
 
@@ -373,20 +401,17 @@ SELF_REVIEW_AUTHOR_MARKERS = (
 
 def _review_text_is_degraded(text):
     """Return True when a review-like row is only degraded/runtime evidence."""
-    _resolve_shared()
     if "DEGRADED_EVIDENCE" in text:
         return True
     return all(marker in text for marker in DEGRADED_REVIEW_MARKERS)
 
 
 def _review_text_has_reviewer_marker(text):
-    _resolve_shared()
     return any(marker in text for marker in REVIEWER_ROLE_MARKERS)
 
 
 def _review_entry_skip_reason(author, description, file_location, notes=""):
     """Classify review-like evidence that must not count as independent review."""
-    _resolve_shared()
     combined = " ".join([author, description, file_location, notes])
     if _review_text_is_degraded(combined):
         return "degraded evidence does not count as independent review"
@@ -413,7 +438,9 @@ def _cold_review_evidence_lines():
     globals (never its definition-time defaults) so test-time patching of
     EVIDENCE_PATH/SAMPLE_PATH propagates — fixture isolation preserved.
     """
-    _resolve_shared()
+    SAMPLE_PATH = _sources.plan_path()
+    EVIDENCE_PATH = _sources.evidence_path()
+    GovernanceDataSource = _sources.archive_reader
     try:
         ds = GovernanceDataSource(
             sample_path=SAMPLE_PATH, evidence_path=EVIDENCE_PATH)
@@ -437,7 +464,8 @@ def _parse_review_coverage_details(evidence_path=None, review_dir=None,
     C-1(b) query-equivalence condition). Fixture callers inject
     evidence_path and stay isolated from the live archive.
     """
-    _resolve_shared()
+    EVIDENCE_PATH = _sources.evidence_path()
+    expand_task_ids = _sources.expand_task_ids
     covered = {}
     ignored = []
     live_mode = evidence_path is None
@@ -531,7 +559,6 @@ def _parse_review_covered_tasks(evidence_path=None, review_dir=None):
 
     Returns dict: task_id -> list of review sources (evidence IDs or file names).
     """
-    _resolve_shared()
     covered, _ = _parse_review_coverage_details(evidence_path=evidence_path, review_dir=review_dir)
     return covered
 
@@ -550,7 +577,10 @@ def check_agent_team_review():
 
     Returns dict with total_tasks, reviewed, unreviewed, review_gap_tasks, pass.
     """
-    _resolve_shared()
+    EVIDENCE_PATH = _sources.evidence_path()
+    expand_task_ids = _sources.expand_task_ids
+    parse_completed_task_ids = _sources.completed_task_ids
+    _is_audit_or_review_type = _sources.is_audit_or_review_type
     PRODUCT_CODE_PATTERNS = [
         "skills/", "agents/", "infra/", "commands/",
         "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
@@ -655,7 +685,7 @@ def _parse_routing_post_review_table():
     SKILL.md § Agent dispatch routing as fallback. Em-dash "—" cells are preserved
     verbatim so callers can distinguish "no post review" (—) from absent rows.
     """
-    _resolve_shared()
+    ROOT = _sources.product_root()
     table = {}
     for rel in ROUTING_FILE_CANDIDATES:
         path = ROOT / rel
@@ -713,7 +743,6 @@ def _routing_post_review_for_task_type(task_type, routing_table=None):
     longest routing-table key that is contained in the task_type (or vice-versa)
     so multi-keyword types resolve correctly.
     """
-    _resolve_shared()
     if routing_table is None:
         routing_table = _parse_routing_post_review_table()
     if not task_type:
@@ -738,7 +767,6 @@ def _is_post_review_exempt(post_review_cell):
 
     Exempt cells are em-dash "—" (possibly with surrounding whitespace) or empty.
     """
-    _resolve_shared()
     if not post_review_cell:
         return True
     cell = post_review_cell.strip()
@@ -761,7 +789,6 @@ def _count_degraded_reviews_for_task(task_id, evidence_content):
 
     Per behavior-protocol.md M7.4 step 4.6 degraded limit + DEC-090.
     """
-    _resolve_shared()
     count = 0
     # Explicit-tag patterns: marker used as a structural label, not prose.
     explicit_tag_re = re.compile(
@@ -806,7 +833,10 @@ def check_review_debt():
 
     Returns dict with total_tasks, review_debt_count, review_debt_tasks, pass.
     """
-    _resolve_shared()
+    SAMPLE_PATH = _sources.plan_path()
+    EVIDENCE_PATH = _sources.evidence_path()
+    expand_task_ids = _sources.expand_task_ids
+    _is_audit_or_review_type = _sources.is_audit_or_review_type
     PRODUCT_CODE_PATTERNS = [
         "skills/", "agents/", "infra/", "commands/",
         "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
@@ -942,7 +972,6 @@ def check_review_spawn_gap(task_id, git_diff_paths, routing_post_review,
     Returns dict: {result, reason, source_a, source_b, source_c, degraded_count}
       result ∈ {"FAIL", "PASS"}
     """
-    _resolve_shared()
     product_code_patterns = [
         "skills/", "agents/", "infra/", "commands/",
         "adapters/", ".claude-plugin/", ".codex-plugin/", ".agents/",
@@ -1033,7 +1062,11 @@ def check_review_coverage():
     Returns dict with total_tasks, reviewed, unreviewed, unreviewed_tasks,
     coverage_pct, pass.
     """
-    _resolve_shared()
+    SAMPLE_PATH = _sources.plan_path()
+    EVIDENCE_PATH = _sources.evidence_path()
+    expand_task_ids = _sources.expand_task_ids
+    _is_audit_or_review_type = _sources.is_audit_or_review_type
+    _task_priority_from_table_parts = _sources.task_priority
     result = {
         "total_tasks": 0,
         "reviewed": 0,
@@ -1125,10 +1158,7 @@ def check_review_coverage():
 
 
 # ── FIX-061: governance-review Reviewer fallback policy ───────────
-# NOTE: REVIEW_FALLBACK_POLICY_REQUIRED_FILES / _OPTIONAL_FILES are derived
-# from ROOT, which is a deferred `_vw()`-resolved name (not available at
-# module load time). They are populated by `_resolve_shared()` on first
-# call into this module — see the special-case at the end of that function.
+# The fallback check resolves required and optional files from the current product root.
 REVIEW_FALLBACK_POLICY_REQUIRED_FILES = []
 
 REVIEW_FALLBACK_POLICY_OPTIONAL_FILES = []
@@ -1158,7 +1188,10 @@ def check_governance_review_fallback_policy(required_paths=None, optional_paths=
     runtime is available, the command may only block or emit degraded evidence
     that cannot count as independent review or unlock delivery.
     """
-    _resolve_shared()
+    ROOT = _sources.product_root()
+    global REVIEW_FALLBACK_POLICY_REQUIRED_FILES, REVIEW_FALLBACK_POLICY_OPTIONAL_FILES
+    REVIEW_FALLBACK_POLICY_REQUIRED_FILES = [ROOT / "commands/governance-review.md"]
+    REVIEW_FALLBACK_POLICY_OPTIONAL_FILES = [ROOT / "project/e2e-test-project/commands/governance-review.md"]
     result = {
         "files_checked": 0,
         "optional_skipped": [],
@@ -1273,7 +1306,6 @@ def _strip_code_fences_and_tables(text):
     Used by the M5 runtime scanner so question marks inside code/tables do
     not trip the T1 / T2 triggers (behavior-protocol.md M5.1b exemption zone).
     """
-    _resolve_shared()
     prose_lines = []
     in_fence = False
     for line in text.splitlines():
@@ -1303,7 +1335,6 @@ def _segment_final_prose(text):
     code/table/blank boundaries removed by _strip_code_fences_and_tables.
     The last paragraph is what M5.1b T1 inspects (final-segment question).
     """
-    _resolve_shared()
     prose_lines = _strip_code_fences_and_tables(text)
     if not prose_lines:
         return ""
@@ -1361,7 +1392,6 @@ def _t2_has_proximate_choice_context(prose_text):
 
     `prose_text` is the segment text with code fences/tables already stripped.
     """
-    _resolve_shared()
     if not prose_text:
         return False
     lines = prose_text.splitlines()
@@ -1417,7 +1447,7 @@ def check_m5_runtime_triggers(text=None, contains_askuserquestion=False,
     Returns dict: {verdict, reason, violations, warnings, scanned_segments}
       verdict ∈ {"FAIL", "PASS", "WARN", "no-verdict", "skip"}
     """
-    _resolve_shared()
+    EVIDENCE_PATH = _sources.evidence_path()
     result = {
         "verdict": "skip",
         "reason": "",
@@ -1661,7 +1691,6 @@ def _extract_review_conclusion_from_text(text):
     them ("UNKNOWN"/"aborted" occur in ordinary prose; a death state must
     be an explicit conclusion, never a stray word).
     """
-    _resolve_shared()
     upper = str(text or "").upper()
     status_pattern = r"(APPROVED_WITH_NOTES|APPROVED|NEEDS_CHANGES?|BLOCKED)"
     explicit_pattern = (
@@ -1898,7 +1927,6 @@ def _merge_unresolved_blocker_evidence(left, right):
     records that DID carry the machine token (0). Only when NEITHER side has a
     canonical token does the legacy annotation survive for L-B detection.
     """
-    _resolve_shared()
     left = left or _parse_unresolved_blockers_fields([])
     right = right or _parse_unresolved_blockers_fields([])
     if left["status"] == "missing":
@@ -1929,7 +1957,6 @@ def _merge_unresolved_blocker_evidence(left, right):
 
 def _entry_unresolved_blocker_evidence(entry):
     """Normalize fixture/live-entry blocker evidence into parser output."""
-    _resolve_shared()
     evidence = entry.get("blocker_evidence")
     if isinstance(evidence, dict) and "status" in evidence:
         return evidence
@@ -1952,7 +1979,6 @@ def _normalize_review_round(raw_id):
     Bare REVIEW-{id} → (id, 0). REVIEW-{id}-R{n} → (id, n).
     Returns (None, None) if the id does not match the canonical shape.
     """
-    _resolve_shared()
     if not raw_id:
         return (None, None)
     m = _REVIEW_ID_RE.match(raw_id.strip())
@@ -2104,7 +2130,7 @@ def _build_review_sequence(review_entries, legacy_files=None):
     consumes this view; every other rule keeps reading the task-global
     ``rounds`` table, so the composite key changes nothing else.
     """
-    _resolve_shared()
+    _parse_iso_date = _sources.parse_date
     sequences = {}
     for entry in review_entries or []:
         raw_id = entry.get("id", "")
@@ -2315,7 +2341,6 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
     Returns dict: {verdict, reason, violations, warnings, tasks_checked}
       verdict ∈ {"FAIL", "PASS", "WARN", "no-verdict"}
     """
-    _resolve_shared()
     result = {
         "verdict": "no-verdict",
         "reason": "",
@@ -2359,7 +2384,7 @@ def check_review_closure(review_sequence=None, plan_tracker_completed=None,
         # live-only gate (zero-regression path).
         try:
             # Second tracker scan (~1 ms) — same negligible-cost trade-off as
-            # ``_resolve_shared`` re-fetching on every call, and this runs once
+            # reading the current host on each check, and this runs once
             # per check invocation.
             _live_done, live_active = _live_task_completion_sets()
             if live_active is None:
@@ -2830,7 +2855,7 @@ def _task_routing_exempt(task_id, routing_table):
 
     Returns True if the inferred task type matches an exempt routing key.
     """
-    _resolve_shared()
+    _evidence_task_type_index = _sources.task_type_index
     if not routing_table:
         return False
     # Collect the exempt routing keys (post-review cell == —).
@@ -2888,7 +2913,8 @@ def _live_task_completion_sets():
     a fragile tracker, whereas the pre-FIX-355 fail-safe keeps such findings
     as FAIL (nothing is downgraded when the tracker cannot be read).
     """
-    _resolve_shared()
+    SAMPLE_PATH = _sources.plan_path()
+    _status_is_completed_cell = _sources.is_completed
     if not SAMPLE_PATH.is_file():
         return None, None
     try:
@@ -2969,7 +2995,8 @@ def _archived_completed_task_ids():
     live-tracker set — i.e. pre-FIX-355 behavior. Read-only: the archive index
     is never written.
     """
-    _resolve_shared()
+    GOVERNANCE_DIR = _sources.governance_dir()
+    _status_is_completed_cell = _sources.is_completed
     if not GOVERNANCE_DIR.is_dir():
         return set()
     index_path = GOVERNANCE_DIR / "archive" / "index.md"
@@ -3022,7 +3049,9 @@ def _collect_live_review_sequences():
     ``check_review_closure``, and only into the terminal-state EXEMPTION gate
     (``closed``, FIX-355); the V1 breach arm keeps consuming this live-only set.
     """
-    _resolve_shared()
+    GOVERNANCE_DIR = _sources.governance_dir()
+    SAMPLE_PATH = _sources.plan_path()
+    EVIDENCE_PATH = _sources.evidence_path()
     review_entries = []
     legacy_files = []
     completed = set()
@@ -3442,7 +3471,8 @@ def check_review_machine_provenance(review_rows=None, review_files=None,
     reason, violations (FAIL tier: V7/V8/EXEMPTION-SIDE-RECORD),
     warnings (WARN tier: V6d undated), stats}. Never raises.
     """
-    _resolve_shared()
+    GOVERNANCE_DIR = _sources.governance_dir()
+    EVIDENCE_PATH = _sources.evidence_path()
     result = {
         "verdict": "no-verdict",
         "reason": "",
@@ -3873,7 +3903,7 @@ def check_review_machine_provenance(review_rows=None, review_files=None,
 
 def check_loop_wiring_call_sites(roots=None):
     """Require one scoped verdict writer and its review, command and delivery consumers."""
-    _resolve_shared()
+    ROOT = _sources.product_root()
     files = set()
     for entry in roots if roots is not None else [ROOT / "skills/software-project-governance/infra"]:
         path = Path(entry)
@@ -3931,7 +3961,6 @@ def check_loop_wiring_call_sites(roots=None):
 
 def cmd_check_review_debt(args):
     """Run Check 21: Review Debt independently."""
-    _resolve_shared()
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     except Exception:

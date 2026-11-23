@@ -20,7 +20,9 @@ Run:
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
@@ -178,6 +180,70 @@ class Check34FixtureTests(unittest.TestCase):
         self.assertEqual(r["warnings"], [])
         self.assertEqual(r["verdict"], "PASS")
 
+    def test_live_paths_and_date_are_selected_again_after_each_reader(self):
+        import registry
+
+        effective = vw.REQ108_RECOMMENDATION_DATE
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            evidence, snapshot = root / "evidence.md", root / "snapshot.md"
+            evidence.write_text(_row(COMPLETION_ROW), encoding="utf-8")
+            snapshot.write_text("## 下次会话优先级\n- EVD-888888", encoding="utf-8")
+            for route in (vw.check_completion_recommendation, registry.load_check("check-34")):
+                events = []
+
+                class SnapshotPath(type(root)):
+                    def is_file(self):
+                        events.append("snapshot exists")
+                        vw.SESSION_SNAPSHOT_PATH = snapshot
+                        return True
+
+                class EvidencePath(type(root)):
+                    def read_text(self, **kwargs):
+                        text = super().read_text(**kwargs)
+                        events.append("read evidence")
+                        vw.REQ108_RECOMMENDATION_DATE = effective
+                        vw.SESSION_SNAPSHOT_PATH = SnapshotPath(root / "unused-snapshot.md")
+                        return text
+
+                class SelectEvidence(type(root)):
+                    def is_file(self):
+                        events.append("evidence exists")
+                        vw.EVIDENCE_PATH = EvidencePath(evidence)
+                        return True
+
+                with mock.patch.multiple(vw, EVIDENCE_PATH=SelectEvidence(root / "unused-evidence.md"),
+                                         SESSION_SNAPSHOT_PATH=root / "no-snapshot.md",
+                                         REQ108_RECOMMENDATION_DATE=date.max):
+                    result = route()
+                    self.assertEqual(events, ["evidence exists", "read evidence", "snapshot exists"])
+                    self.assertEqual([v["rule"] for v in result["violations"]], ["S1", "S3"])
+
+    def test_row_fixture_skips_live_paths_and_unused_patterns(self):
+        names = ("EVIDENCE_PATH", "SESSION_SNAPSHOT_PATH", "RECO_ROW_MARKER", "_SNAPSHOT_REF_RE", "_RECO_TASK_ID_RE")
+        with mock.patch.multiple(vw, **{name: getattr(vw, name) for name in names}):
+            for name in names:
+                delattr(vw, name)
+            for snapshot in ("", None):
+                result = vw.check_completion_recommendation([_row(COMPLETION_ROW)], snapshot)
+                self.assertEqual([v["rule"] for v in result["violations"]], ["S1"])
+            with self.assertRaisesRegex(NameError, "RECO_ROW_MARKER"):
+                vw.check_completion_recommendation([_row(MACHINE_SNAPSHOT_ROW)], "")
+
+    def test_date_parser_is_looked_up_after_the_public_matcher(self):
+        import re
+
+        parser = mock.Mock(return_value=date.min)
+        def match(pattern, value):
+            vw.date = SimpleNamespace(fromisoformat=parser)
+            return re.match(pattern, value)
+
+        with mock.patch.multiple(vw, date=date, re=SimpleNamespace(match=match)):
+            result = vw.check_completion_recommendation([_row(COMPLETION_ROW)], "")
+            self.assertEqual(result["verdict"], "no-verdict")
+            parser.assert_called_once()
+        self.assertEqual(vw.check_completion_recommendation([_row(COMPLETION_ROW)], "")["verdict"], "FAIL")
+
     def test_live_mode_reads_patched_paths(self):
         """Live mode (no fixtures) reads EVIDENCE_PATH/SESSION_SNAPSHOT_PATH."""
         with tempfile.TemporaryDirectory() as td:
@@ -218,6 +284,16 @@ class RecommendationSnapshotWriteTests(unittest.TestCase):
         self.assertIn("2026-08-22", text)
         self.assertEqual(len([c for c in text.split("|")]) - 2, 10)
         self.assertTrue(text.endswith("|\n"))
+
+    def test_explicit_write_does_not_require_a_default_evidence_path(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(vw, "EVIDENCE_PATH", vw.EVIDENCE_PATH):
+            target = Path(tmp) / "evidence.md"
+            target.write_text("# evidence\n", encoding="utf-8")
+            del vw.EVIDENCE_PATH
+            vw._write_recommendation_snapshot("FIX-300", self._report(), evidence_path=target)
+            self.assertIn("| RECO-FIX-300 |", target.read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(NameError, "EVIDENCE_PATH"):
+                vw._write_recommendation_snapshot("FIX-300", self._report())
 
     def test_write_appends_row_and_returns_summary(self):
         with tempfile.TemporaryDirectory() as td:

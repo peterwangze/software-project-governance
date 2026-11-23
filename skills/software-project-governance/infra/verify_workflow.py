@@ -129,7 +129,6 @@ import hashlib
 import tempfile
 import fnmatch
 import time
-import urllib.request
 import webbrowser
 from datetime import datetime, date
 
@@ -319,26 +318,7 @@ from checks.manifest import PLUGIN_SCOPE_DIRS
 
 
 def _is_plugin_path(rel_path: str) -> bool:
-    """Check if a relative path is inside a plugin scope directory.
-
-    Plugin scope dirs (PLUGIN_SCOPE_DIRS) are matched as path components
-    anywhere in the path, not just as a prefix.  This catches nested
-    installations (e.g. project/e2e-test-project/skills/) and avoids
-    false positives from legitimate checklists in plugin SKILL.md files.
-
-    Semantics synced with cleanup.py _is_path_excluded() for directory
-    patterns (FIX-054).
-    """
-    rel_path = rel_path.replace("\\", "/")
-    segments = rel_path.split("/")
-    for scope_dir in PLUGIN_SCOPE_DIRS:
-        # Root-prefix match
-        if rel_path == scope_dir or rel_path.startswith(scope_dir + "/"):
-            return True
-        # Nested as a path component (e.g. project/e2e-test-project/skills/...)
-        if scope_dir in segments:
-            return True
-    return False
+    return _review_checks._in_plugin_scope(rel_path, PLUGIN_SCOPE_DIRS)
 
 
 def _git_files(args):
@@ -556,7 +536,8 @@ if __name__ in ("verify_workflow", "__main__"):
 # `check-review-debt` argparse subcommand, and the FIX-18*/FIX-21*/FIX-29*/
 # FIX-30* test suites) working unchanged. Cross-domain helpers
 # (_is_review_evidence, _is_audit_or_review_type, _generic_reviewer_cells,
-# _evidence_task_type_index) stay here and are reached via `_vw()`.
+# _evidence_task_type_index) remain available through the legacy public bindings.
+from checks import review_domain as _review_checks
 from checks.review_domain import (  # noqa: E402
     DEGRADED_REVIEW_MARKERS,
     REVIEWER_ROLE_MARKERS,
@@ -621,6 +602,49 @@ from checks.review_domain import (  # noqa: E402
 )
 
 
+
+def _review_input(name):
+    """Read the old public binding, including the normal missing-attribute error."""
+    try:
+        return globals()[name]
+    except KeyError:
+        return __getattr__(name)
+
+
+def _review_reader(name):
+    return property(lambda self: _review_input(name))
+
+
+class _LegacyReviewSources(_review_checks.ReviewSources):
+    """Bind only the individual published paths and callbacks the review rules read."""
+
+    def product_root(self):
+        return _review_input("ROOT")
+
+    def governance_dir(self):
+        return _review_input("GOVERNANCE_DIR")
+
+    def plan_path(self):
+        return _review_input("SAMPLE_PATH")
+
+    def evidence_path(self):
+        return _review_input("EVIDENCE_PATH")
+
+    archive_reader = _review_reader("GovernanceDataSource")
+    expand_task_ids = _review_reader("expand_task_ids")
+    completed_task_ids = _review_reader("parse_completed_task_ids")
+    is_plugin_path = _review_reader("_is_plugin_path")
+    is_audit_or_review_type = _review_reader("_is_audit_or_review_type")
+    task_priority = _review_reader("_task_priority_from_table_parts")
+    parse_date = _review_reader("_parse_iso_date")
+    task_type_index = _review_reader("_evidence_task_type_index")
+    is_completed = _review_reader("_status_is_completed_cell")
+
+
+if __name__ in ("verify_workflow", "__main__"):
+    _review_checks._sources = _LegacyReviewSources()
+
+
 # ── Change-control triage domain (checks/triage_domain.py in 0.73.0) ────────
 # FIX-237.4 / ADR-017 §4.4: Check 32 — mandatory change-control triage for
 # product-code task intake (CLI wiring + record validity + no-record FAIL).
@@ -650,6 +674,10 @@ def check_snippets():
 
 
 _HOST_POLICY_OWNERS = {
+    **dict.fromkeys((
+        'REQ108_RECOMMENDATION_DATE', 'RECO_ROW_MARKER', '_LEGACY_SNAPSHOT_MARKER',
+        '_RECO_TASK_ID_RE', '_SNAPSHOT_REF_RE',
+    ), 'recommendation_checks'),
     **dict.fromkeys(('_MARKDOWN_BOLD_SPAN_RE', '_TOO_BROAD_SCOPE_PHRASE_RE'), 'execution_packet_checks'),
     **dict.fromkeys(('_COMPLETED_STATUS_PREFIX', '_HOT_STATUS_STATE_COMMITTED', '_HOT_STATUS_STATE_LEGACY',
                      '_NONACTIVE_SUBSECTION_MARKERS'), 'plan_task_selection'),
@@ -730,6 +758,20 @@ _HOST_POLICY_OWNERS = {
 
 
 _PRODUCT_POLICY_OWNERS = {
+    **dict.fromkeys((
+        "LIFECYCLE_REGISTRY_ACTIVE_MODE", "LIFECYCLE_REGISTRY_DYNAMIC_MODE",
+        "LIFECYCLE_REGISTRY_GATES", "LIFECYCLE_REGISTRY_STAGE_IDS",
+        "LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES", "LIFECYCLE_REGISTRY_REQUIRED_PRESET_FIELDS",
+        "LIFECYCLE_REGISTRY_GATE_POLICY_REQUIRED_FIELDS",
+        "LIFECYCLE_REGISTRY_REQUIRED_GAME_STANDARDS",
+        "LIFECYCLE_REGISTRY_REQUIRED_LIBRARY_STANDARDS", "LIFECYCLE_REGISTRY_RISK_CLAIMS",
+        "LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS",
+    ), "lifecycle_rules"),
+    **dict.fromkeys((
+        "GATE_EXECUTION_REGISTRY_REQUIRED_FIELDS", "GATE_EXECUTION_REQUIRED_FIELDS",
+        "GATE_EXECUTION_CHECK_REQUIRED_FIELDS", "GATE_EXECUTION_ALLOWED_SEVERITIES",
+        "GATE_EXECUTION_ALLOWED_EXECUTORS", "GATE_EXECUTION_ALLOWED_FUNCTIONS",
+    ), "gate_consistency"),
     "probe_quality_tools": "release.quality",
     "ARCHGUARD_DEFAULT_ROOT_RESIDUE": "architecture_diagnostics",
     "ARCHGUARD_HOOKS_REL": "architecture_diagnostics",
@@ -753,6 +795,7 @@ _PRODUCT_POLICY_OWNERS = {
 }
 
 
+_LAZY_PUBLIC_NAMES = _HOST_POLICY_OWNERS.keys() | _PRODUCT_POLICY_OWNERS.keys() | {"urllib"}
 _DELETED_POLICIES = set()
 
 
@@ -760,6 +803,10 @@ def __getattr__(name):
     """Load the historical public policy or archive class on first access."""
     if name == "GovernanceDataSource":
         return _archive_reader_class()
+    if name == "urllib" and name not in _DELETED_POLICIES:
+        import urllib.request
+        globals()[name] = urllib
+        return urllib
     owner = _HOST_POLICY_OWNERS.get(name) or _PRODUCT_POLICY_OWNERS.get(name)
     if owner is None or name in _DELETED_POLICIES:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -772,7 +819,7 @@ def __getattr__(name):
 
 
 def __dir__():
-    policies = (_HOST_POLICY_OWNERS.keys() | _PRODUCT_POLICY_OWNERS.keys()) - _DELETED_POLICIES
+    policies = _LAZY_PUBLIC_NAMES - _DELETED_POLICIES
     return sorted(globals().keys() | policies | {"GovernanceDataSource"})
 
 
@@ -780,7 +827,7 @@ class _WorkflowModule(type(sys)):
     def __delattr__(self, name):
         # These were real module attributes before the owners became lazy. Deleting
         # one before the first read must work without importing that owner.
-        if name in _HOST_POLICY_OWNERS or name in _PRODUCT_POLICY_OWNERS:
+        if name in _LAZY_PUBLIC_NAMES:
             if name in self.__dict__ or name in _DELETED_POLICIES:
                 super().__delattr__(name)
             _DELETED_POLICIES.add(name)
@@ -804,7 +851,7 @@ _product_policy = _host_policy
 def check_loop_role_skill_consistency(root=None):
     from team_activation import check_loop_role_skill_consistency as run
     return run(
-        root, package_root=ROOT, lifecycle_registry_gates=LIFECYCLE_REGISTRY_GATES,
+        root, package_root=ROOT, lifecycle_registry_gates=_product_policy("LIFECYCLE_REGISTRY_GATES"),
         loop_role_skill_contracts=_host_policy('LOOP_ROLE_SKILL_CONTRACTS'), display_path=_display_path,
         markdown_section_by_prefix=_markdown_section_by_prefix, read_text_normalized=_read_text_normalized,
     )
@@ -900,141 +947,7 @@ def _run_version_command(command):
 
 
 LIFECYCLE_REGISTRY_PATH = ROOT / "skills/software-project-governance/core/lifecycle-registry.json"
-LIFECYCLE_REGISTRY_ACTIVE_MODE = "classic-phase-gate"
-LIFECYCLE_REGISTRY_DYNAMIC_MODE = "dynamic-flow-gate"
 FLOW_UNIT_RUNTIME_STATE_REL = Path(".governance/flow-unit-runtime.json")
-LIFECYCLE_REGISTRY_GATES = [f"G{i}" for i in range(1, 12)]
-LIFECYCLE_REGISTRY_STAGE_IDS = [
-    "initiation",
-    "research",
-    "selection",
-    "infrastructure",
-    "architecture",
-    "development",
-    "testing",
-    "ci-cd",
-    "release",
-    "operations",
-    "maintenance",
-]
-LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES = {
-    "game",
-    "web-app",
-    "mobile-app",
-    "library",
-    "cli-tool",
-    "ai-agent-plugin",
-    "internal-script",
-}
-LIFECYCLE_REGISTRY_REQUIRED_PRESET_FIELDS = {
-    "profile_intensity_boundary",
-    "default_packs",
-    "quality_budget",
-    "acceptance_templates",
-    "release_checks",
-    "gate_policy",
-    "gate_standards",
-}
-LIFECYCLE_REGISTRY_GATE_POLICY_REQUIRED_FIELDS = {
-    "can_skip_stages",
-    "can_merge_stages",
-    "stage_skip_requires",
-    "blocked_dependency_rule",
-    "sibling_completion_rule",
-}
-LIFECYCLE_REGISTRY_REQUIRED_GAME_STANDARDS = {
-    "chapter",
-    "level",
-    "asset",
-    "narrative",
-    "playability",
-}
-LIFECYCLE_REGISTRY_REQUIRED_LIBRARY_STANDARDS = {
-    "api",
-    "semver",
-    "docs",
-    "downstream-tests",
-}
-LIFECYCLE_REGISTRY_RISK_CLAIMS = [
-    ("risk-036 closed", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosed\b")),
-    ("risk-036 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-036\b")),
-    ("risk-036 closure achieved", re.compile(r"\brisk-036\b[^\n.;|]{0,48}\bclosure\s+achieved\b")),
-    ("risk-037 closed", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosed\b")),
-    ("risk-037 closed", re.compile(r"\bclosed\b[^\n.;|]{0,48}\brisk-037\b")),
-    ("risk-037 closure achieved", re.compile(r"\brisk-037\b[^\n.;|]{0,48}\bclosure\s+achieved\b")),
-    ("1.0.0 production-ready", re.compile(r"\b1\.0\.0\s+production-ready\b")),
-]
-LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS = [
-    (
-        "declarative gate engine active",
-        re.compile(r"\bdeclarative\s+gate\s+engine\s+(?:is\s+)?active\b"),
-    ),
-    (
-        "declarative gate engine active",
-        re.compile(r"\bdeclarative\s+gate\s+engine\s+activated\b"),
-    ),
-    (
-        "declarative gate engine active",
-        re.compile(r"\b(?:activate|activates|activated|activating)\s+(?:the\s+)?declarative\s+gate\s+engine\b"),
-    ),
-    (
-        "dynamic-flow-gate default",
-        re.compile(r"\bdynamic-flow-gate\s+(?:is\s+)?(?:now\s+)?(?:the\s+)?default(?:\s+lifecycle\s+mode)?\b"),
-    ),
-    (
-        "dynamic-flow-gate default",
-        re.compile(r"\b(?:make|makes|made|making)\s+dynamic-flow-gate\s+(?:the\s+)?default(?:\s+lifecycle\s+mode)?\b"),
-    ),
-    (
-        "dynamic-flow-gate default",
-        re.compile(r"\bdefault\s+lifecycle\s+mode\s+(?:is\s+|now\s+)?dynamic-flow-gate\b"),
-    ),
-]
-GATE_EXECUTION_REGISTRY_REQUIRED_FIELDS = {
-    "status", "execution_scope", "automation_commands_are_metadata_only", "gate_checks",
-}
-GATE_EXECUTION_REQUIRED_FIELDS = {
-    "gate_id",
-    "required_artifacts",
-    "checks",
-    "evidence_query",
-    "automation_command",
-    "human_confirmation_policy",
-    "severity",
-    "project_type_overrides",
-}
-GATE_EXECUTION_CHECK_REQUIRED_FIELDS = {
-    "check_id",
-    "label",
-    "executor",
-    "severity",
-}
-GATE_EXECUTION_ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
-GATE_EXECUTION_ALLOWED_EXECUTORS = {
-    "function",
-    "file_exists",
-    "snippet_in_file",
-    "completed_ratio",
-    "research_doc_count",
-    "constant_result",
-    "evidence_mentions",
-}
-GATE_EXECUTION_ALLOWED_FUNCTIONS = {
-    "check_quantifiable_metrics",
-    "check_scope_boundary",
-    "check_stakeholders",
-    "check_out_of_scope",
-    "check_all_required_files_exist",
-    "check_g10_real_operation_data",
-    "check_g10_feedback_archived_classified",
-    "check_g10_issue_list_severity_status",
-    "check_g10_executable_optimization_items",
-    "check_g11_retro_complete",
-    "check_g11_rules_templates_backfilled",
-    "check_g11_next_round_direction",
-    "check_risk_has_closed",
-    "check_version_consistency_heuristic",
-}
 GOVERNANCE_CONTEXT_REQUIRED_FIELDS = [
     "status",
     "detected_item",
@@ -1224,459 +1137,82 @@ def _is_valid_string_list(value):
 # re-exported via the top-level import.
 
 
+class _LifecycleRegistryInputs:
+    """Read each published lifecycle setting or callback at its original use site."""
+
+    product_root = property(lambda self: ROOT)
+    gates = property(lambda self: _product_policy("LIFECYCLE_REGISTRY_GATES"))
+    required_project_types = property(lambda self: _product_policy("LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES"))
+    required_preset_fields = property(lambda self: _product_policy("LIFECYCLE_REGISTRY_REQUIRED_PRESET_FIELDS"))
+    gate_policy_required_fields = property(lambda self: _product_policy("LIFECYCLE_REGISTRY_GATE_POLICY_REQUIRED_FIELDS"))
+    required_game_standards = property(lambda self: _product_policy("LIFECYCLE_REGISTRY_REQUIRED_GAME_STANDARDS"))
+    required_library_standards = property(lambda self: _product_policy("LIFECYCLE_REGISTRY_REQUIRED_LIBRARY_STANDARDS"))
+    forbidden_overclaims = property(lambda self: _product_policy("LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS"))
+    risk_claims = property(lambda self: _product_policy("LIFECYCLE_REGISTRY_RISK_CLAIMS"))
+    display_path = property(lambda self: _display_path)
+    load_lifecycle_registry = property(lambda self: _load_lifecycle_registry)
+    lifecycle_registry_manifest_issues = property(lambda self: _lifecycle_registry_manifest_issues)
+    manifest_artifact_entries = property(lambda self: _manifest_artifact_entries)
+    is_valid_string_list = property(lambda self: _is_valid_string_list)
+    read_text_normalized = property(lambda self: _read_text_normalized)
+    check_gate_execution_registry = property(lambda self: _check_gate_execution_registry)
+    lifecycle_registry_text_values = property(lambda self: _lifecycle_registry_text_values)
+    line_has_scoped_claim_negation = property(lambda self: _line_has_scoped_claim_negation)
+
+
+_lifecycle_registry_inputs = _LifecycleRegistryInputs()
+
+
+class _GateDefinitionInputs:
+    """Read the policies and checkers used to validate a gate definition."""
+
+    allowed_executors = property(lambda self: _product_policy("GATE_EXECUTION_ALLOWED_EXECUTORS"))
+    allowed_functions = property(lambda self: _product_policy("GATE_EXECUTION_ALLOWED_FUNCTIONS"))
+    allowed_severities = property(lambda self: _product_policy("GATE_EXECUTION_ALLOWED_SEVERITIES"))
+    check_required_fields = property(lambda self: _product_policy("GATE_EXECUTION_CHECK_REQUIRED_FIELDS"))
+    registry_required_fields = property(lambda self: _product_policy("GATE_EXECUTION_REGISTRY_REQUIRED_FIELDS"))
+    required_fields = property(lambda self: _product_policy("GATE_EXECUTION_REQUIRED_FIELDS"))
+    is_valid_string_list = property(lambda self: _is_valid_string_list)
+    gate_execution_check_definition_issues = property(lambda self: _gate_execution_check_definition_issues)
+    check_gate_execution_registry = property(lambda self: _check_gate_execution_registry)
+
+
+_gate_definition_inputs = _GateDefinitionInputs()
+
+
 def _lifecycle_registry_text_values(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _lifecycle_registry_text_values(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _lifecycle_registry_text_values(item)
+    from lifecycle_rules import _lifecycle_registry_text_values as read
+    return read(value, inputs=_lifecycle_registry_inputs)
 
 
 def _load_lifecycle_registry(root=None):
-    root = root or ROOT
-    registry_path = root / "skills/software-project-governance/core/lifecycle-registry.json"
-    display = _display_path(registry_path, root)
-    try:
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None, [f"{display}: missing lifecycle registry"]
-    except json.JSONDecodeError as exc:
-        return None, [f"{display}: invalid JSON: {exc}"]
-    except (ValueError, OSError, RecursionError) as exc:
-        return None, [f"{display}: unreadable lifecycle registry: {exc}"]
-    if not isinstance(registry, dict):
-        return None, [f"{display}: lifecycle registry root must be an object"]
-    return registry, []
+    from lifecycle_rules import _load_lifecycle_registry as read
+    return read(root, inputs=_lifecycle_registry_inputs)
 
 
 def _lifecycle_registry_manifest_issues(root, registry_path, display):
-    manifest_path = root / "skills/software-project-governance/core/manifest.json"
-    if not manifest_path.exists():
-        return [f"{display}: core/manifest.json is required to make the lifecycle registry a canonical product artifact"]
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return [f"{_display_path(manifest_path, root)}: invalid JSON: {exc}"]
-    artifact_entries = _manifest_artifact_entries(manifest)
-    registry_artifacts = [
-        entry for entry in artifact_entries
-        if isinstance(entry, dict)
-        and entry.get("id") == "lifecycle-registry"
-        and entry.get("path") == "skills/software-project-governance/core/lifecycle-registry.json"
-    ]
-    if not registry_artifacts:
-        return [f"{display}: core/manifest.json must declare lifecycle-registry as a canonical product artifact"]
-    return []
+    from lifecycle_rules import _lifecycle_registry_manifest_issues as read
+    return read(root, registry_path, display, inputs=_lifecycle_registry_inputs)
 
 
 def _gate_execution_check_definition_issues(check, check_label):
-    failures = []
-    if not isinstance(check, dict):
-        return [f"{check_label} must be an object"]
-    missing_check_fields = sorted(GATE_EXECUTION_CHECK_REQUIRED_FIELDS - set(check))
-    for field in missing_check_fields:
-        failures.append(f"{check_label}: missing required field `{field}`")
-    if not isinstance(check.get("check_id"), str) or not check.get("check_id", "").strip():
-        failures.append(f"{check_label}.check_id must be a non-empty string")
-    if not isinstance(check.get("label"), str) or not check.get("label", "").strip():
-        failures.append(f"{check_label}.label must be a non-empty string")
-    executor = check.get("executor")
-    if executor not in GATE_EXECUTION_ALLOWED_EXECUTORS:
-        failures.append(f"{check_label}.executor has unknown value `{executor}`")
-    if check.get("severity") not in GATE_EXECUTION_ALLOWED_SEVERITIES:
-        failures.append(f"{check_label}.severity must be one of {sorted(GATE_EXECUTION_ALLOWED_SEVERITIES)}")
-    if executor == "function" and check.get("function") not in GATE_EXECUTION_ALLOWED_FUNCTIONS:
-        failures.append(f"{check_label}.function has unknown value `{check.get('function')}`")
-    if executor in {"file_exists", "snippet_in_file"} and not isinstance(check.get("path"), str):
-        failures.append(f"{check_label}.path must be declared for {executor}")
-    if executor == "snippet_in_file" and not isinstance(check.get("snippet"), str):
-        failures.append(f"{check_label}.snippet must be declared for snippet_in_file")
-    if executor == "completed_ratio" and not isinstance(check.get("min_ratio"), (int, float)):
-        failures.append(f"{check_label}.min_ratio must be numeric for completed_ratio")
-    if executor == "research_doc_count" and not isinstance(check.get("min_count"), int):
-        failures.append(f"{check_label}.min_count must be integer for research_doc_count")
-    if executor == "constant_result":
-        if check.get("result") not in {"PASS", "FAIL", "NEEDS_HUMAN"}:
-            failures.append(f"{check_label}.result must be PASS/FAIL/NEEDS_HUMAN")
-        if not isinstance(check.get("message"), str) or not check.get("message", "").strip():
-            failures.append(f"{check_label}.message must be a non-empty string")
-    if executor == "evidence_mentions" and not isinstance(check.get("keyword"), str):
-        failures.append(f"{check_label}.keyword must be declared for evidence_mentions")
-    return failures
+    from gate_consistency import _gate_execution_check_definition_issues as read
+    return read(check, check_label, inputs=_gate_definition_inputs)
 
 
 def _check_gate_execution_registry(registry, display, gate_id_set, project_type_hooks):
-    failures = []
-    gate_execution_registry = registry.get("gate_execution_registry")
-    if not isinstance(gate_execution_registry, dict):
-        return [f"{display}: gate_execution_registry must be an object"]
-
-    missing_fields = sorted(GATE_EXECUTION_REGISTRY_REQUIRED_FIELDS - set(gate_execution_registry))
-    for field in missing_fields:
-        failures.append(f"{display}: gate_execution_registry missing required field `{field}`")
-    if gate_execution_registry.get("status") != "unit-scoped":
-        failures.append(f"{display}: gate_execution_registry.status must be unit-scoped")
-    if gate_execution_registry.get("execution_scope") != "flow-unit":
-        failures.append(f"{display}: gate_execution_registry.execution_scope must be flow-unit")
-    if gate_execution_registry.get("automation_commands_are_metadata_only") is not True:
-        failures.append(f"{display}: gate_execution_registry.automation_commands_are_metadata_only must be true")
-    gate_checks = gate_execution_registry.get("gate_checks")
-    if not isinstance(gate_checks, list):
-        failures.append(f"{display}: gate_execution_registry.gate_checks must be a list")
-        gate_checks = []
-    gate_ids = [item.get("gate_id") for item in gate_checks if isinstance(item, dict)]
-    if not all(isinstance(gate, str) for gate in gate_ids) or set(gate_ids) != gate_id_set or len(gate_ids) != len(gate_id_set):
-        failures.append(f"{display}: gate_checks must define each referenced gate exactly once")
-
-    project_type_keys = set(project_type_hooks) if isinstance(project_type_hooks, dict) else set()
-    for gate_entry in gate_checks:
-        if not isinstance(gate_entry, dict):
-            failures.append(f"{display}: gate_execution_registry.gate_checks entries must be objects")
-            continue
-        gate_id = gate_entry.get("gate_id", "<missing>")
-        gate_label = f"{display}: gate_execution_registry.{gate_id}"
-        missing = sorted(GATE_EXECUTION_REQUIRED_FIELDS - set(gate_entry))
-        for field in missing:
-            failures.append(f"{gate_label}: missing required field `{field}`")
-        if gate_id not in gate_id_set:
-            failures.append(f"{gate_label}: gate_id must reference gate_references")
-        if not _is_valid_string_list(gate_entry.get("required_artifacts")):
-            failures.append(f"{gate_label}.required_artifacts must be a non-empty string list")
-        evidence = gate_entry.get("evidence_query")
-        if (not isinstance(evidence, dict) or not evidence.get("source")
-                or not _is_valid_string_list(evidence.get("fields"))):
-            failures.append(f"{gate_label}.evidence_query must declare its source and evidence fields")
-        automation_command = gate_entry.get("automation_command")
-        if not isinstance(automation_command, dict):
-            failures.append(f"{gate_label}.automation_command must be metadata object")
-            automation_command = {}
-        else:
-            command_text = automation_command.get("command")
-            if not isinstance(command_text, str) or not command_text.strip():
-                failures.append(f"{gate_label}.automation_command.command must be a non-empty metadata string")
-            if automation_command.get("execution_policy") != "metadata-only-not-executed-by-gate-judgment":
-                failures.append(f"{gate_label}.automation_command.execution_policy must be metadata-only-not-executed-by-gate-judgment")
-        human_policy = gate_entry.get("human_confirmation_policy")
-        if not isinstance(human_policy, dict):
-            failures.append(f"{gate_label}.human_confirmation_policy must be an object")
-            human_policy = {}
-        else:
-            if "needs_human_when" not in human_policy:
-                failures.append(f"{gate_label}.human_confirmation_policy missing `needs_human_when`")
-            if not isinstance(human_policy.get("confirmation_required_for_override", False), bool):
-                failures.append(f"{gate_label}.human_confirmation_policy.confirmation_required_for_override must be boolean")
-        if gate_entry.get("severity") not in GATE_EXECUTION_ALLOWED_SEVERITIES:
-            failures.append(f"{gate_label}.severity must be one of {sorted(GATE_EXECUTION_ALLOWED_SEVERITIES)}")
-
-        checks = gate_entry.get("checks")
-        if not isinstance(checks, list) or not checks:
-            failures.append(f"{gate_label}.checks must be a non-empty list")
-            checks = []
-        seen_check_ids = []
-        for check in checks:
-            if not isinstance(check, dict):
-                failures.append(f"{gate_label}.checks entries must be objects")
-                continue
-            check_id = check.get("check_id", "<missing>")
-            seen_check_ids.append(check_id)
-            check_label = f"{gate_label}.checks.{check_id}"
-            failures.extend(_gate_execution_check_definition_issues(check, check_label))
-        duplicate_checks = sorted({check_id for check_id in seen_check_ids if seen_check_ids.count(check_id) > 1})
-        for check_id in duplicate_checks:
-            failures.append(f"{gate_label}.checks duplicate check_id `{check_id}`")
-
-        overrides = gate_entry.get("project_type_overrides")
-        if not isinstance(overrides, dict):
-            failures.append(f"{gate_label}.project_type_overrides must be an object")
-            overrides = {}
-        unknown_overrides = sorted(set(overrides) - project_type_keys)
-        for project_type in unknown_overrides:
-            failures.append(f"{gate_label}.project_type_overrides unknown project type `{project_type}`")
-        for project_type, override in overrides.items():
-            override_label = f"{gate_label}.project_type_overrides.{project_type}"
-            if not isinstance(override, dict):
-                failures.append(f"{override_label} must be an object")
-                continue
-            if "additional_required_artifacts" in override and not isinstance(override.get("additional_required_artifacts"), list):
-                failures.append(f"{override_label}.additional_required_artifacts must be a string list")
-            elif "additional_required_artifacts" in override and not _is_valid_string_list(override.get("additional_required_artifacts")):
-                failures.append(f"{override_label}.additional_required_artifacts must be a non-empty string list")
-            if "additional_checks" in override:
-                additional_checks = override.get("additional_checks")
-                if not isinstance(additional_checks, list):
-                    failures.append(f"{override_label}.additional_checks must be a list")
-                else:
-                    for index, check in enumerate(additional_checks):
-                        if not isinstance(check, dict):
-                            failures.append(f"{override_label}.additional_checks entries must be objects")
-                            continue
-                        check_id = check.get("check_id", f"index_{index}")
-                        failures.extend(_gate_execution_check_definition_issues(
-                            check,
-                            f"{override_label}.additional_checks.{check_id}",
-                        ))
-            if "severity_override" in override and override.get("severity_override") not in GATE_EXECUTION_ALLOWED_SEVERITIES:
-                failures.append(f"{override_label}.severity_override must be one of {sorted(GATE_EXECUTION_ALLOWED_SEVERITIES)}")
-
-    return failures
+    from gate_consistency import _check_gate_execution_registry as read
+    return read(registry, display, gate_id_set, project_type_hooks, inputs=_gate_definition_inputs)
 
 
 def _gate_execution_registry_contract_issues(registry, display):
-    gate_references = registry.get("gate_references")
-    if isinstance(gate_references, list):
-        gate_id_set = {
-            gate.get("gate_id")
-            for gate in gate_references
-            if isinstance(gate, dict) and isinstance(gate.get("gate_id"), str)
-        }
-    else:
-        gate_id_set = set()
-    project_type_hooks = registry.get("project_type_hooks")
-    if not isinstance(project_type_hooks, dict):
-        project_type_hooks = {}
-    return _check_gate_execution_registry(registry, display, gate_id_set, project_type_hooks)
+    from gate_consistency import _gate_execution_registry_contract_issues as read
+    return read(registry, display, inputs=_gate_definition_inputs)
 
 
 def check_lifecycle_registry(root=None, registry=None):
-    """Resolve the active workflow, tier routes, local evidence contracts and project presets."""
-    import loop_engine
-    from loop_workflow import TIERS
-
-    root = Path(root or ROOT)
-    core = root / "skills/software-project-governance/core"
-    path = core / "lifecycle-registry.json"
-    display = _display_path(path, root)
-    if registry is None:
-        registry, issues = _load_lifecycle_registry(root)
-        if issues:
-            return issues
-
-    failures = _lifecycle_registry_manifest_issues(root, path, display)
-    if registry.get("workflow") != "software-project-governance" or registry.get("source_of_truth") is not True:
-        failures.append(f"{display}: invalid workflow or source_of_truth")
-    if registry.get("registry_mode") != "loop-unit-gates":
-        failures.append(f"{display}: registry_mode must be loop-unit-gates")
-    for key in ("active_lifecycle_mode", "default_lifecycle_mode"):
-        if registry.get(key) != "loop-engineering":
-            failures.append(f"{display}: {key} must be loop-engineering")
-    activation = registry.get("runtime_activation")
-    for key in ("flow_unit_status_runtime", "unit_scoped_gate_execution"):
-        if not isinstance(activation, dict) or activation.get(key) is not True:
-            failures.append(f"{display}: runtime_activation.{key} must be true")
-    modes = registry.get("lifecycle_modes")
-    if not isinstance(modes, list) or len(modes) != 1 or not isinstance(modes[0], dict):
-        return failures + [f"{display}: exactly one executable lifecycle mode is required"]
-    mode = modes[0]
-    if (mode.get("id") != "loop-engineering" or mode.get("active") is not True
-            or mode.get("default") is not True or mode.get("runtime_command") != "loop"):
-        failures.append(f"{display}: lifecycle_modes must select the loop command")
-    if mode.get("workflow_source") != "lifecycle.md" or not (core / "lifecycle.md").is_file():
-        failures.append(f"{display}: missing lifecycle.md workflow source")
-    policy = registry.get("loop_policy")
-    if not isinstance(policy, dict) or policy.get("scope") != "per-flow-unit" or policy.get("runtime_activation") is not True:
-        failures.append(f"{display}: loop_policy must activate per-flow-unit execution")
-        policy = policy if isinstance(policy, dict) else {}
-    if policy.get("read_command") != "loop status --unit <id> --json":
-        failures.append(f"{display}: loop_policy.read_command must select the unit")
-    if any(item.get("topology_source") != "loop-engineering-registry.json" for item in (mode, policy)):
-        failures.append(f"{display}: workflow and policy must reference the runtime topology")
-    topology, topology_issues = loop_engine.load_loop_registry(core.parent)
-    failures.extend(topology_issues)
-    topology = topology if isinstance(topology, dict) else {}
-    if topology.get("registry_mode") != "native-loop-execution" or topology.get("workflow_model") != "loop-engineering":
-        failures.append(f"{display}: runtime topology must declare native loop execution")
-    paths = topology.get("iteration_paths")
-    if not isinstance(paths, dict) or set(paths) != set(TIERS):
-        failures.append(f"{display}: every executable tier needs an iteration path")
-        paths = paths if isinstance(paths, dict) else {}
-    gates = set(LIFECYCLE_REGISTRY_GATES)
-    consumed = {"G1"}  # explicit one-time project decision at setup intake
-    for tier, route in paths.items():
-        if not _is_valid_string_list(route) or not set(route) <= gates or len(route) != len(set(route)):
-            failures.append(f"{display}: {tier} has invalid or empty local gates")
-        else:
-            consumed.update(route)
-    if gates != consumed:
-        failures.append(f"{display}: unconsumed local gates: {sorted(gates - consumed)}")
-    targets = topology.get("rework_targets")
-    if not isinstance(targets, dict):
-        failures.append(f"{display}: topology must declare rework targets")
-    else:
-        for gate, pair in targets.items():
-            if (gate not in gates or not isinstance(pair, list) or len(pair) != 2
-                    or not isinstance(pair[0], str) or not isinstance(paths.get(pair[0]), list)
-                    or pair[1] not in paths[pair[0]]):
-                failures.append(f"{display}: invalid rework target for {gate}")
-
-    activities = registry.get("stage_vocabulary") or []
-    activity_gates = {a["id"]: a.get("related_gate") for a in activities
-                      if isinstance(a, dict) and isinstance(a.get("id"), str)}
-    refs = registry.get("gate_references")
-    if not isinstance(refs, list):
-        return failures + [f"{display}: missing gate_references"]
-    catalog = core / "stage-gates.md"
-    headings = set(re.findall(r"^##\s+(G\d+)\b", _read_text_normalized(catalog), re.M)) if catalog.is_file() else set()
-    gate_id_set = set()
-    for ref in refs:
-        if not isinstance(ref, dict) or not isinstance(ref.get("gate_id"), str):
-            failures.append(f"{display}: invalid gate reference")
-            continue
-        gate = ref["gate_id"]
-        if gate in gate_id_set or gate not in gates:
-            failures.append(f"{display}: duplicate or unknown gate reference {gate}")
-        gate_id_set.add(gate)
-        if (not isinstance(ref.get("activity"), str) or activity_gates.get(ref["activity"]) != gate
-                or ref.get("source") != f"skills/software-project-governance/core/stage-gates.md#{gate}"
-                or gate not in headings):
-            failures.append(f"{display}: {gate} must resolve to its activity and gate evidence catalog section")
-    if gate_id_set != gates:
-        failures.append(f"{display}: missing gate reference {sorted(gates - gate_id_set)}")
-    project_type_hooks = registry.get("project_type_hooks")
-    if not isinstance(project_type_hooks, dict):
-        failures.append(f"{display}: project_type_hooks must be an object")
-        project_type_hooks = {}
-    missing_hook_project_types = sorted(LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES - set(project_type_hooks))
-    if missing_hook_project_types:
-        failures.append(f"{display}: missing project_type_hooks for {', '.join(missing_hook_project_types)}")
-
-    project_type_gate_presets = registry.get("project_type_gate_presets")
-    if not isinstance(project_type_gate_presets, dict):
-        failures.append(f"{display}: project_type_gate_presets must be an object")
-        project_type_gate_presets = {}
-    missing_preset_project_types = sorted(LIFECYCLE_REGISTRY_REQUIRED_PROJECT_TYPES - set(project_type_gate_presets))
-    if missing_preset_project_types:
-        failures.append(f"{display}: missing project_type_gate_presets for {', '.join(missing_preset_project_types)}")
-    if set(project_type_gate_presets) != set(project_type_hooks):
-        failures.append(f"{display}: project_type_gate_presets keys must match project_type_hooks keys")
-
-    failures.extend(_check_gate_execution_registry(registry, display, gate_id_set, project_type_hooks))
-
-    for project_type, hooks in project_type_hooks.items():
-        hook_label = f"{display}: project_type_hooks.{project_type}"
-        if not isinstance(hooks, dict):
-            failures.append(f"{hook_label} must be an object")
-            continue
-        unit_templates = hooks.get("unit_templates")
-        if not _is_valid_string_list(unit_templates):
-            failures.append(f"{hook_label}.unit_templates must be a non-empty string list")
-            continue
-        default_flow_unit_type = hooks.get("default_flow_unit_type")
-        if default_flow_unit_type not in unit_templates:
-            failures.append(
-                f"{hook_label}.default_flow_unit_type must be included in unit_templates"
-            )
-    for project_type, preset in project_type_gate_presets.items():
-        preset_label = f"{display}: project_type_gate_presets.{project_type}"
-        hooks = project_type_hooks.get(project_type, {})
-        if not isinstance(preset, dict):
-            failures.append(f"{preset_label} must be an object")
-            continue
-        missing_fields = sorted(LIFECYCLE_REGISTRY_REQUIRED_PRESET_FIELDS - set(preset))
-        for field in missing_fields:
-            failures.append(f"{preset_label}: missing required field `{field}`")
-
-        boundary_text = preset.get("profile_intensity_boundary")
-        if not isinstance(boundary_text, str) or not boundary_text.strip():
-            failures.append(f"{preset_label}.profile_intensity_boundary must be a non-empty string")
-        else:
-            lowered_boundary = boundary_text.lower()
-            if "project type" not in lowered_boundary or "profile" not in lowered_boundary or "orthogonal" not in lowered_boundary:
-                failures.append(
-                    f"{preset_label}.profile_intensity_boundary must state project type and profile are orthogonal"
-                )
-
-        for field in ("default_packs", "acceptance_templates", "release_checks"):
-            if not _is_valid_string_list(preset.get(field)):
-                failures.append(f"{preset_label}.{field} must be a non-empty string list")
-        if "governance-core" not in preset.get("default_packs", []):
-            failures.append(f"{preset_label}.default_packs must include governance-core")
-
-        quality_budget = preset.get("quality_budget")
-        if not isinstance(quality_budget, dict) or not quality_budget:
-            failures.append(f"{preset_label}.quality_budget must be a non-empty object")
-        else:
-            for key, value in quality_budget.items():
-                if not isinstance(key, str) or not key.strip() or not isinstance(value, str) or not value.strip():
-                    failures.append(f"{preset_label}.quality_budget entries must be non-empty strings")
-
-        gate_policy = preset.get("gate_policy")
-        if not isinstance(gate_policy, dict):
-            failures.append(f"{preset_label}.gate_policy must be an object")
-            gate_policy = {}
-        for field in sorted(LIFECYCLE_REGISTRY_GATE_POLICY_REQUIRED_FIELDS):
-            if field not in gate_policy:
-                failures.append(f"{preset_label}.gate_policy missing `{field}`")
-        if not isinstance(gate_policy.get("can_skip_stages", []), list):
-            failures.append(f"{preset_label}.gate_policy.can_skip_stages must be a list")
-        if not isinstance(gate_policy.get("can_merge_stages", []), list):
-            failures.append(f"{preset_label}.gate_policy.can_merge_stages must be a list")
-        for field in ("stage_skip_requires", "blocked_dependency_rule", "sibling_completion_rule"):
-            if not isinstance(gate_policy.get(field), str) or not gate_policy.get(field, "").strip():
-                failures.append(f"{preset_label}.gate_policy.{field} must be a non-empty string")
-
-        preset_unit_templates = preset.get("unit_templates")
-        if not _is_valid_string_list(preset_unit_templates):
-            failures.append(f"{preset_label}.unit_templates must be a non-empty string list")
-            preset_unit_templates = []
-        elif isinstance(hooks, dict) and _is_valid_string_list(hooks.get("unit_templates")) and preset_unit_templates != hooks.get("unit_templates"):
-            failures.append(f"{preset_label}.unit_templates must match project_type_hooks.{project_type}.unit_templates")
-        default_flow_unit_type = preset.get("default_flow_unit_type")
-        if isinstance(hooks, dict) and hooks.get("default_flow_unit_type") and default_flow_unit_type != hooks.get("default_flow_unit_type"):
-            failures.append(f"{preset_label}.default_flow_unit_type must match project_type_hooks.{project_type}.default_flow_unit_type")
-        if default_flow_unit_type not in preset_unit_templates:
-            failures.append(f"{preset_label}.default_flow_unit_type must be included in unit_templates")
-        gate_standards = preset.get("gate_standards")
-        if not isinstance(gate_standards, list) or not gate_standards:
-            failures.append(f"{preset_label}.gate_standards must be a non-empty list")
-            gate_standards = []
-        standard_ids = set()
-        for standard in gate_standards:
-            if not isinstance(standard, dict):
-                failures.append(f"{preset_label}.gate_standards entries must be objects")
-                continue
-            standard_id = standard.get("standard_id")
-            if not isinstance(standard_id, str) or not standard_id.strip():
-                failures.append(f"{preset_label}.gate_standards entry missing standard_id")
-            else:
-                standard_ids.add(standard_id)
-            gate_refs = standard.get("gate_references")
-            if not _is_valid_string_list(gate_refs):
-                failures.append(f"{preset_label}.gate_standards.{standard_id}.gate_references must be a non-empty string list")
-            else:
-                for gate_id in gate_refs:
-                    if gate_id not in gate_id_set:
-                        failures.append(f"{preset_label}.gate_standards.{standard_id}: unknown gate reference `{gate_id}`")
-            if not _is_valid_string_list(standard.get("required_evidence")):
-                failures.append(f"{preset_label}.gate_standards.{standard_id}.required_evidence must be a non-empty string list")
-        if project_type == "game":
-            missing_standards = sorted(LIFECYCLE_REGISTRY_REQUIRED_GAME_STANDARDS - standard_ids)
-            if missing_standards:
-                failures.append(
-                    f"{preset_label}.gate_standards missing game standards: {', '.join(missing_standards)}"
-                )
-        if project_type == "library":
-            missing_standards = sorted(LIFECYCLE_REGISTRY_REQUIRED_LIBRARY_STANDARDS - standard_ids)
-            if missing_standards:
-                failures.append(
-                    f"{preset_label}.gate_standards missing library standards: {', '.join(missing_standards)}"
-                )
-
-    for text in _lifecycle_registry_text_values(registry):
-        lowered = text.lower()
-        for label, pattern in LIFECYCLE_REGISTRY_FORBIDDEN_OVERCLAIMS:
-            for match in pattern.finditer(lowered):
-                matched_text = text[match.start():match.end()]
-                if not _line_has_scoped_claim_negation(text, matched_text):
-                    failures.append(f"{display}: forbidden lifecycle overclaim `{label}`")
-                    break
-        for label, pattern in LIFECYCLE_REGISTRY_RISK_CLAIMS:
-            if pattern.search(lowered) and not _line_has_scoped_claim_negation(text, label):
-                failures.append(f"{display}: forbidden lifecycle overclaim `{label}`")
-
-    return failures
+    from lifecycle_rules import check_lifecycle_registry as read
+    return read(root, registry, inputs=_lifecycle_registry_inputs)
 
 
 def _flow_unit_runtime_path(root=None):
@@ -2689,264 +2225,25 @@ def expand_task_ids(raw_text):
 
 
 def check_gate_consistency():
-    """Check the evidence actually consumed by each unit, plus task closure references."""
-    from checks.loop_receipts import receipt_issues
-
-    ds = _archive_reader()
-    evidenced = ds.get_all_evidence_task_map()
-    issues = [{"type": "loop_receipt", "detail": issue} for issue in receipt_issues(GOVERNANCE_DIR.parent)]
-
-    # Check for tasks marked 已完成 in plan-tracker but no evidence.
-    # Uses GovernanceDataSource to cover both hot files + archive files.
-    completeness = check_evidence_completeness()
-    tasks_without_evidence = completeness["missing_evidence"]
-    if tasks_without_evidence:
-        issues.append({
-            "type": "completed_tasks_missing_evidence",
-            "detail": tasks_without_evidence,
-        })
-    if completeness.get("historical_missing_evidence"):
-        issues.append({
-            "type": "historical_completed_tasks_missing_evidence",
-            "detail": completeness["historical_missing_evidence"],
-        })
-
-    # Check for evidence entries referencing non-existent tasks.
-    # Uses GovernanceDataSource to include archived tasks.
-    all_tasks = ds.get_all_task_ids()
-
-    orphan_evidence = set(evidenced.keys()) - all_tasks
-    if orphan_evidence:
-        issues.append({
-            "type": "orphan_evidence",
-            "detail": sorted(orphan_evidence),
-        })
-
-    return issues
+    from gate_consistency import check_gate_consistency as read
+    return read(
+        current_governance_dir=lambda: GOVERNANCE_DIR, archive_reader=lambda: _archive_reader(),
+        check_evidence_completeness=lambda: check_evidence_completeness(),
+    )
 
 
 def check_protocol_compliance():
-    """Check protocol compliance: DRI assignment, evidence format, conditional pass tracking.
-
-    This is the external validation counterpart to M8 agent self-check.
-    It independently detects structural protocol violations from governance records.
-    """
-    issues = {
-        "dri_violations": [],       # Tasks without unique DRI
-        "evidence_format": [],      # Evidence entries with missing required fields
-        "conditional_pass": [],     # passed-with-conditions without corrective tasks
-    }
-
-    plan_content = SAMPLE_PATH.read_text(encoding="utf-8")
-
-    # ── DRI Check: tasks with missing/multi-valued/ambiguous Owner ──
-    task_rows = []
-    in_table = False
-    for line in plan_content.split("\n"):
-        line = line.strip()
-        if "## 样例跟踪表" in line:
-            in_table = True
-            continue
-        if in_table and line.startswith("## "):
-            break
-        if in_table and line.startswith("|") and not "---" in line:
-            parts = [p.strip() for p in line.split("|")]
-            # Skip header row
-            if parts[1] == "ID" or not re.match(r"[A-Z]+-\d+", parts[1]):
-                continue
-            task_rows.append(parts)
-
-    dri_violations = []
-    for parts in task_rows:
-        if len(parts) < 11:
-            continue
-        task_id = parts[1]
-        status = parts[10] if len(parts) > 10 else ""
-        owner = parts[7] if len(parts) > 7 else ""
-
-        # Only check active tasks — FIX-479: shared terminal predicate
-        # (_status_is_terminal_cell; emoji-prefixed terminal shapes like
-        # 「✅ 已完成」 are terminal too, same source as Check 9)
-        if _status_is_terminal_cell(status):
-            continue
-
-        # Check for DRI violations
-        violations = []
-        if not owner or owner == "":
-            violations.append("Owner is empty")
-        elif any(sep in owner for sep in ("+", "/", "、", "&", ",")):
-            violations.append(f"Owner is multi-valued: '{owner}'")
-        elif owner in ("待定", "多人", "TBD", "N/A", "未分配"):
-            violations.append(f"Owner is ambiguous: '{owner}'")
-
-        if violations:
-            dri_violations.append({
-                "task_id": task_id,
-                "status": status,
-                "owner": owner,
-                "violations": violations,
-            })
-
-    issues["dri_violations"] = dri_violations
-
-
-
-    # ── Evidence Format Check: evidence entries with missing required fields ──
-    evidence_path = GOVERNANCE_DIR / "evidence-log.md"
-    if evidence_path.is_file():
-        ev_content = evidence_path.read_text(encoding="utf-8")
-        for line in ev_content.split("\n"):
-            line = line.strip()
-            if not line.startswith("| EVD-"):
-                continue
-            # FIX-372 (review-FIX-368-CODE-R0 P2-1): validate the LIVE
-            # evidence-log column layout (FIX-368). _governance_table_cells
-            # strips the leading/trailing empties and preserves pipes inside
-            # JSON/code-span cells, so cells are pure data cells:
-            #   LIVE 10-cell rows: 0=EVD, 1=TaskID, 2=Type, 3=Description,
-            #     4=fact basis, 5=Location, 6=EntryMethod(录入方式), 7=Date,
-            #     8=Gate, 9=Notes
-            #   9-cell historical rows (no separate file column): 0=EVD,
-            #     1=TaskID, 2=Type, 3=Description, 4=fact basis, 5=Author,
-            #     6=Date, 7=Gate, 8=Notes
-            # The pre-fix check validated the legacy Stage-column offsets
-            # (3=Stage/4=Type/5=Description), reading the LIVE fact-basis
-            # column as Description (false "missing Description" when the
-            # fact cell was empty) and flagging 9-cell historical rows as
-            # short rows. The Stage requirement is dropped: the LIVE layout
-            # has no Stage column. 9-cell rows are validated against their
-            # own offsets (Author/Date) instead of being rejected. FIX-374:
-            # a date-shaped cells[6] proves the historical Date cell is
-            # present; a 9-cell row failing that shape test is a truncated
-            # LIVE row (Date cell lost) and is validated against the LIVE
-            # offsets with Date reported missing (review-FIX-372-CODE-R0 F-1).
-            cells = _governance_table_cells(line)
-            if len(cells) < 9:
-                issues["evidence_format"].append(
-                    f"{cells[0] if cells else '???'}: only {len(cells)} data fields (expected ≥9)"
-                )
-                continue
-
-            evd_id = cells[0]
-            missing = []
-            if not cells[1]:
-                missing.append("TaskID")
-            if not cells[2]:
-                missing.append("Type")
-            if not cells[3]:
-                missing.append("Description")
-            if len(cells) >= 10:
-                # LIVE 10-cell shape
-                if not cells[5]:
-                    missing.append("Location")
-                if not cells[6]:
-                    missing.append("EntryMethod")
-                if not cells[7]:
-                    missing.append("Date")
-            else:
-                # FIX-374 (review-FIX-372-CODE-R0 F-1): a 9-cell row is
-                # ambiguous — either a genuine historical row (Author in
-                # cells[5], Date in cells[6]) or a truncated LIVE row that
-                # lost its Date cell (the EntryMethod text then sits in
-                # cells[6], and the pre-fix branch read Location/
-                # EntryMethod as Author/Date, silently passing a genuinely
-                # missing Date — fail-blind). Disambiguate by content
-                # shape (_EVIDENCE_DATE_SHAPE_RE): a date-shaped cells[6]
-                # proves the historical Date cell is present; anything
-                # else contradicts the historical Date semantics and is
-                # validated as a truncated LIVE row.
-                #
-                # FIX-382 (review-FIX-374 F-2② combo criterion): within
-                # the non-date cells[6] face, a date-shaped cells[7]
-                # proves the real Date cell survived at its shifted LIVE
-                # offset — the row lost a TRAILING cell (Gate or Notes),
-                # not Date, so "missing Date" there was a false positive;
-                # report the trailing loss instead. Issue count is
-                # unchanged (still flagged, fail-noisy) — only the
-                # message becomes accurate. Residual face kept open by
-                # decision (explicit no-fix + ledger disclosure): losing
-                # a cell BEFORE Date (fact/Location/EntryMethod) is
-                # content-indistinguishable from a genuine historical row
-                # (identical Date/Gate/Notes tail; free-text middle
-                # cells) — criteria extension would false-positive on the
-                # historical exemption face.
-                if _EVIDENCE_DATE_SHAPE_RE.match(cells[6]):
-                    # Historical shape: the Date cell is date-shaped (and
-                    # thus non-empty) by construction.
-                    if not cells[5]:
-                        missing.append("Author")
-                elif _EVIDENCE_DATE_SHAPE_RE.match(cells[7]):
-                    # Truncated LIVE, trailing loss (Gate or Notes): the
-                    # Date cell is present at cells[7]; Location/
-                    # EntryMethod emptiness stays validated at their
-                    # unshifted offsets (an empty cell and a lost trailing
-                    # cell can coexist).
-                    if not cells[5]:
-                        missing.append("Location")
-                    if not cells[6]:
-                        missing.append("EntryMethod")
-                    missing.append(
-                        "Gate/Notes (trailing LIVE cell lost"
-                        " — Date present at shifted offset)"
-                    )
-                else:
-                    # Truncated LIVE with a genuinely lost Date cell (or a
-                    # historical row with an empty/non-separator Date cell
-                    # — fail-noisy either way): validate the LIVE columns
-                    # at their real offsets and report the lost Date cell.
-                    if not cells[5]:
-                        missing.append("Location")
-                    if not cells[6]:
-                        missing.append("EntryMethod")
-                    missing.append("Date")
-
-            if missing:
-                issues["evidence_format"].append(
-                    f"{evd_id}: missing fields — {', '.join(missing)}"
-                )
-
-    return issues
+    from gate_consistency import check_protocol_compliance as read
+    return read(
+        governance_dir=GOVERNANCE_DIR, plan_path=SAMPLE_PATH, date_shape=_EVIDENCE_DATE_SHAPE_RE,
+        governance_table_cells=_governance_table_cells,
+        status_is_terminal_cell=_status_is_terminal_cell,
+    )
 
 
 def parse_tier_definitions():
-    """Parse Tier definitions from plan-tracker's DEC-052 implementation roadmap.
-
-    Returns: dict mapping tier_id (e.g., "0-A") -> list of task IDs.
-    """
-    content = SAMPLE_PATH.read_text(encoding="utf-8")
-    lines = content.split("\n")
-
-    in_roadmap = False
-    tiers = {}
-    current_tier = None
-
-    for line in lines:
-        # Detect start of implementation roadmap section
-        if line.strip() == "## 实施路线图（DEC-052）":
-            in_roadmap = True
-            continue
-        # Stop at next top-level section
-        if in_roadmap and line.startswith("## "):
-            break
-
-        if not in_roadmap:
-            continue
-
-        # Detect Tier header: "Tier 0-A: description"
-        tier_match = re.match(r"^Tier (\d+-[A-Z]):", line)
-        if tier_match:
-            current_tier = tier_match.group(1)
-            tiers[current_tier] = []
-            continue
-
-        # Collect task IDs within current tier
-        # Format: "  AUDIT-XXX (PX) — description" or "  MAINT-XXX (PX) — description"
-        if current_tier:
-            task_match = re.match(r"^\s+([A-Z]+-\d+)\s+\(P\d\)", line)
-            if task_match:
-                tiers[current_tier].append(task_match.group(1))
-
-    return tiers
+    from gate_consistency import parse_tier_definitions as read
+    return read(SAMPLE_PATH)
 
 
 def parse_task_status_map():
@@ -2974,66 +2271,8 @@ def parse_task_status_map():
 
 
 def check_tier_audit_completeness():
-    """Check that each completed Tier has a corresponding TIER-X-Y-AUDIT evidence entry.
-
-    Per DEC-052 execution discipline rule #3: every completed Tier MUST have an audit.
-    Audit evidence uses task ID format: TIER-<layer>-<tier>-AUDIT (e.g., TIER-0-C-AUDIT).
-
-    Returns: dict with tier details and issue lists.
-    """
-    tiers = parse_tier_definitions()
-    status_map = parse_task_status_map()
-    evidence_task_ids = parse_evidence_task_ids()
-
-    completed_without_audit = []
-    completed_with_audit = []
-    incomplete_tiers = []
-    all_details = []
-
-    for tier_id, task_ids in tiers.items():
-        if not task_ids:
-            continue
-
-        # Check status of each task in this tier
-        task_statuses = {}
-        all_completed = True
-        completed_count = 0
-        for tid in task_ids:
-            status = status_map.get(tid, "未找到")
-            task_statuses[tid] = status
-            if status == "已完成":
-                completed_count += 1
-            else:
-                all_completed = False
-
-        # Check for TIER audit evidence
-        audit_evidence_id = f"TIER-{tier_id}-AUDIT"
-        has_audit = audit_evidence_id in evidence_task_ids
-
-        detail = {
-            "tier_id": tier_id,
-            "task_count": len(task_ids),
-            "completed_count": completed_count,
-            "task_statuses": task_statuses,
-            "all_completed": all_completed,
-            "has_audit": has_audit,
-            "audit_evidence_id": audit_evidence_id,
-        }
-        all_details.append(detail)
-
-        if all_completed and not has_audit:
-            completed_without_audit.append(detail)
-        elif all_completed and has_audit:
-            completed_with_audit.append(detail)
-        elif not all_completed:
-            incomplete_tiers.append(detail)
-
-    return {
-        "completed_without_audit": completed_without_audit,
-        "completed_with_audit": completed_with_audit,
-        "incomplete_tiers": incomplete_tiers,
-        "all_details": all_details,
-    }
+    from gate_consistency import check_tier_audit_completeness as read
+    return read(parse_tier_definitions, parse_task_status_map, parse_evidence_task_ids)
 
 
 def check_version_consistency():
@@ -4108,47 +3347,7 @@ def check_profile_consistency():
     from team_activation import check_profile_consistency as run
     return run(plan_path=SAMPLE_PATH)
 def _evidence_task_type_index():
-    """FIX-174 R1 (P0-3): map task_id -> joined type+description text scanned
-    from the evidence-log, so _task_routing_exempt can heuristically infer a
-    task's type when the plan-tracker has no type column.
-
-    Only work-delivery rows (evd_id starting with EVD-) contribute. We
-    deliberately skip REVIEW-* rows: a REVIEW-{id} row's type cell carries the
-    *reviewer's* activity label (e.g. "代码审查"), not the task's own type, so
-    including it would mis-classify every reviewed task as a review-type task.
-
-    Returns dict task_id -> str (the concatenation of the row's type cell and
-    description cell, lowercased). Best-effort: returns {} on read failure.
-    """
-    index = {}
-    if not EVIDENCE_PATH.is_file():
-        return index
-    try:
-        content = EVIDENCE_PATH.read_text(encoding="utf-8")
-    except (IOError, OSError):
-        return index
-    for line in content.split("\n"):
-        stripped = line.strip()
-        if not stripped.startswith("|"):
-            continue
-        parts = [p.strip() for p in stripped.split("|")]
-        if len(parts) < 6:
-            continue
-        evd_id = parts[1]
-        # Skip review-evidence rows — their type cell is the reviewer activity,
-        # not the task's own type (see docstring).
-        if evd_id.upper().startswith("REVIEW-"):
-            continue
-        raw_ids = parts[2]
-        type_cell = parts[3] if len(parts) > 3 else ""
-        desc_cell = parts[4] if len(parts) > 4 else ""
-        for tid in re.findall(r"[A-Z]+-\d+", raw_ids):
-            blob = f"{type_cell} {desc_cell}".strip().lower()
-            if blob:
-                index.setdefault(tid, "")
-                if blob not in index[tid]:
-                    index[tid] = (index[tid] + " " + blob).strip()
-    return index
+    return _review_checks._read_task_type_index(EVIDENCE_PATH)
 
 
 # Legacy entry points bind the host paths and collaborators used by Check 36.
@@ -5114,318 +4313,16 @@ def check_untracked_files():
 
 
 def check_agent_locks_format():
-    """Validate .governance/agent-locks.json existence, JSON validity, and schema integrity.
-
-    Returns a list of WARN-level issue dicts.  Empty list = clean.
-    This check is informational-only (WARN) -- format corruption does not block commit.
-    Used as a helper by check_agent_lock_consistency() (Check 26, FIX-056 Phase 2).
-    Phase 1 format-only check has been subsumed into the full Check 26.
-    """
-    import json
-
-    issues = []
-    locks_path = GOVERNANCE_DIR / "agent-locks.json"
-
-    # ── Existence check ──
-    if not locks_path.is_file():
-        issues.append({
-            "type": "missing",
-            "detail": ".governance/agent-locks.json not found. Run governance init or create with: {\"active_tasks\": {}, \"file_locks\": {}}"
-        })
-        return issues
-
-    # ── JSON validity ──
-    try:
-        with open(locks_path, "r", encoding="utf-8") as f:
-            raw = f.read()
-        if not raw.strip():
-            issues.append({
-                "type": "empty",
-                "detail": ".governance/agent-locks.json is empty"
-            })
-            return issues
-        data = json.loads(raw)
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        issues.append({
-            "type": "invalid_json",
-            "detail": f".governance/agent-locks.json is not valid JSON: {e}"
-        })
-        return issues
-    except IOError as e:
-        issues.append({
-            "type": "io_error",
-            "detail": f".governance/agent-locks.json read error: {e}"
-        })
-        return issues
-
-    # ── Schema check ──
-    if not isinstance(data, dict):
-        issues.append({
-            "type": "not_dict",
-            "detail": ".governance/agent-locks.json root must be a JSON object (dict)"
-        })
-        return issues
-
-    # Required top-level keys
-    required_keys = ["active_tasks", "file_locks"]
-    for key in required_keys:
-        if key not in data:
-            issues.append({
-                "type": "missing_key",
-                "detail": f".governance/agent-locks.json missing required key: '{key}'"
-            })
-
-    # active_tasks must be a dict
-    if "active_tasks" in data and not isinstance(data["active_tasks"], dict):
-        issues.append({
-            "type": "type_error",
-            "detail": ".governance/agent-locks.json 'active_tasks' must be a JSON object (dict), got " + type(data["active_tasks"]).__name__
-        })
-
-    # file_locks must be a dict
-    if "file_locks" in data and not isinstance(data["file_locks"], dict):
-        issues.append({
-            "type": "type_error",
-            "detail": ".governance/agent-locks.json 'file_locks' must be a JSON object (dict), got " + type(data["file_locks"]).__name__
-        })
-
-    # ── active_tasks entry schema check ──
-    if "active_tasks" in data and isinstance(data["active_tasks"], dict):
-        for task_id, entry in data["active_tasks"].items():
-            if not isinstance(entry, dict):
-                issues.append({
-                    "type": "schema_violation",
-                    "detail": f"agent-locks.json active_tasks['{task_id}'] must be a dict"
-                })
-                continue
-            required_entry_keys = ["spawned_at", "coordinator_session", "target_files"]
-            for rk in required_entry_keys:
-                if rk not in entry:
-                    issues.append({
-                        "type": "schema_violation",
-                        "detail": f"agent-locks.json active_tasks['{task_id}'] missing required field: '{rk}'"
-                    })
-            if "target_files" in entry and not isinstance(entry["target_files"], list):
-                issues.append({
-                    "type": "schema_violation",
-                    "detail": f"agent-locks.json active_tasks['{task_id}'].target_files must be a list"
-                })
-
-    # ── file_locks entry schema check ──
-    if "file_locks" in data and isinstance(data["file_locks"], dict):
-        for file_path, entry in data["file_locks"].items():
-            if not isinstance(entry, dict):
-                issues.append({
-                    "type": "schema_violation",
-                    "detail": f"agent-locks.json file_locks['{file_path}'] must be a dict"
-                })
-                continue
-            required_entry_keys = ["locked_by", "locked_at", "ttl_seconds", "ttl_reason"]
-            for rk in required_entry_keys:
-                if rk not in entry:
-                    issues.append({
-                        "type": "schema_violation",
-                        "detail": f"agent-locks.json file_locks['{file_path}'] missing required field: '{rk}'"
-                    })
-            if "ttl_seconds" in entry and not isinstance(entry["ttl_seconds"], (int, float)):
-                issues.append({
-                    "type": "schema_violation",
-                    "detail": f"agent-locks.json file_locks['{file_path}'].ttl_seconds must be a number"
-                })
-            # FEAT-013 (RISK-046): optional expected_new flag — the
-            # pre-created-file exemption declared at acquire time
-            # (agent-locks-acquire --expected-new). Absent = regular
-            # existing-file lock (backward compatible: legacy locks PASS).
-            if "expected_new" in entry and not isinstance(entry["expected_new"], bool):
-                issues.append({
-                    "type": "schema_violation",
-                    "detail": f"agent-locks.json file_locks['{file_path}'].expected_new must be a boolean when present (FEAT-013 pre-created-file declaration)",
-                })
-
-    return issues
+    from collaboration_checks import check_agent_locks_format as read
+    return read(governance_dir=GOVERNANCE_DIR)
 
 
 def check_agent_lock_consistency():
-    """Comprehensive agent lock consistency check (FIX-056 Phase 2).
-
-    Checks:
-      - Format/schema validity (delegates to check_agent_locks_format)
-      - Task existence: locked_by task_ids must exist in plan-tracker
-      - Orphan locks: file_locks referencing task_ids not in active_tasks
-      - Expired locks: locked_at + ttl_seconds < now
-      - Multi-lock conflict: same file locked by multiple active tasks
-
-    Returns a dict with keys:
-      - skipped: str if check was skipped (agent-locks.json missing), else None
-      - active_task_count: number of active_tasks entries
-      - file_lock_count: number of file_locks entries
-      - issues: list of WARN-level issue dicts (type + detail)
-    """
-    import json
-    from datetime import datetime, timezone
-
-    result = {
-        "skipped": None,
-        "active_task_count": 0,
-        "file_lock_count": 0,
-        "issues": [],
-    }
-
-    locks_path = GOVERNANCE_DIR / "agent-locks.json"
-
-    # ── Format check (Phase 1, reused) ──
-    fmt_issues = check_agent_locks_format()
-    for fi in fmt_issues:
-        result["issues"].append({
-            "type": f"format_{fi['type']}",
-            "detail": fi["detail"],
-        })
-
-    # If format is broken, skip consistency checks (can't parse data)
-    if not locks_path.is_file():
-        result["skipped"] = "agent-locks.json not found — lock consistency check skipped."
-        return result
-
-    try:
-        with open(locks_path, "r", encoding="utf-8") as f:
-            raw = f.read()
-        if not raw.strip():
-            result["skipped"] = "agent-locks.json is empty — lock consistency check skipped."
-            return result
-        data = json.loads(raw)
-    except (json.JSONDecodeError, IOError, UnicodeDecodeError):
-        result["skipped"] = "agent-locks.json is unparseable — lock consistency check skipped."
-        return result
-
-    if not isinstance(data, dict):
-        result["skipped"] = "agent-locks.json root is not a dict — lock consistency check skipped."
-        return result
-
-    active_tasks = data.get("active_tasks", {})
-    file_locks = data.get("file_locks", {})
-
-    if not isinstance(active_tasks, dict):
-        active_tasks = {}
-    if not isinstance(file_locks, dict):
-        file_locks = {}
-
-    result["active_task_count"] = len(active_tasks)
-    result["file_lock_count"] = len(file_locks)
-
-    # If nothing active, skip consistency checks
-    if not active_tasks and not file_locks:
-        return result
-
-    # ── Load plan-tracker task IDs ──
-    plan_task_ids = set()
-    try:
-        pt_path = GOVERNANCE_DIR / "plan-tracker.md"
-        if pt_path.is_file():
-            pt_content = pt_path.read_text(encoding="utf-8")
-            # Match task IDs in any table cell.  Active task tables often use
-            # a priority first column, e.g. | **P1** | FIX-066 | ...
-            for line in pt_content.split("\n"):
-                if not line.lstrip().startswith("|"):
-                    continue
-                for task_id in re.findall(r"\b([A-Z]+-\d+)\b", line):
-                    plan_task_ids.add(task_id)
-    except Exception:
-        pass  # Can't read plan-tracker — skip task-existence check
-
-    now = datetime.now(timezone.utc)
-
-    # ── Check 1: Task existence — every locked_by / active_tasks key must be in plan-tracker ──
-    all_lock_task_ids = set()
-
-    for task_id in active_tasks.keys():
-        all_lock_task_ids.add(task_id)
-        if plan_task_ids and task_id not in plan_task_ids:
-            result["issues"].append({
-                "type": "task_not_in_plan",
-                "detail": f"active_tasks['{task_id}'] is not found in plan-tracker.md — lock references an unregistered task.",
-            })
-
-    for file_path, entry in file_locks.items():
-        if isinstance(entry, dict):
-            locker = entry.get("locked_by", "")
-            if locker:
-                all_lock_task_ids.add(locker)
-                if plan_task_ids and locker not in plan_task_ids:
-                    result["issues"].append({
-                        "type": "task_not_in_plan",
-                        "detail": f"file_locks['{file_path}'].locked_by='{locker}' is not found in plan-tracker.md.",
-                    })
-
-    # ── Check 2: Orphan locks — file_locks.locked_by not in active_tasks ──
-    active_task_ids = set(active_tasks.keys())
-    for file_path, entry in file_locks.items():
-        if isinstance(entry, dict):
-            locker = entry.get("locked_by", "")
-            if locker and locker not in active_task_ids:
-                result["issues"].append({
-                    "type": "orphan_lock",
-                    "detail": f"file_locks['{file_path}'] is locked by '{locker}' which has no active_tasks entry (orphan lock).",
-                })
-
-    # ── Check 3: Expired locks ──
-    for file_path, entry in file_locks.items():
-        if not isinstance(entry, dict):
-            continue
-        locked_at_str = entry.get("locked_at", "")
-        ttl = entry.get("ttl_seconds", 0)
-        if locked_at_str and ttl:
-            try:
-                locked_at = datetime.fromisoformat(locked_at_str.replace("Z", "+00:00"))
-                expiry = locked_at.timestamp() + float(ttl)
-                if now.timestamp() > expiry:
-                    locker = entry.get("locked_by", "unknown")
-                    elapsed = int(now.timestamp() - locked_at.timestamp())
-                    result["issues"].append({
-                        "type": "expired_lock",
-                        "detail": (f"file_locks['{file_path}'] expired (locked by '{locker}', "
-                                   f"TTL {ttl}s, elapsed {elapsed}s) — stale lock should be cleaned up."),
-                    })
-            except (ValueError, TypeError, OverflowError):
-                pass
-
-    # Also check active_tasks expiry (based on spawned_at + max TTL 600s)
-    for task_id, entry in active_tasks.items():
-        if not isinstance(entry, dict):
-            continue
-        spawned_at_str = entry.get("spawned_at", "")
-        if spawned_at_str:
-            try:
-                spawned_at = datetime.fromisoformat(spawned_at_str.replace("Z", "+00:00"))
-                # Use 600s as max reasonable TTL for any task
-                if (now - spawned_at).total_seconds() > 600:
-                    result["issues"].append({
-                        "type": "expired_task",
-                        "detail": (f"active_tasks['{task_id}'] spawned at {spawned_at_str} "
-                                   f"({int((now - spawned_at).total_seconds())}s ago) — may be stale."),
-                    })
-            except (ValueError, TypeError, OverflowError):
-                pass
-
-    # ── Check 4: Multi-lock conflict — same file locked by multiple active tasks ──
-    file_to_lockers = {}
-    for file_path, entry in file_locks.items():
-        if isinstance(entry, dict):
-            locker = entry.get("locked_by", "")
-            if locker and locker in active_task_ids:
-                file_to_lockers.setdefault(file_path, set()).add(locker)
-
-    for file_path, lockers in file_to_lockers.items():
-        if len(lockers) > 1:
-            result["issues"].append({
-                "type": "multi_lock_conflict",
-                "detail": (f"file_locks['{file_path}'] is locked by multiple active tasks: "
-                           f"{sorted(lockers)} — potential concurrent write conflict."),
-            })
-
-    for issue in result["issues"]:
-        issue["severity"] = "BLOCKING" if lock_issue_is_blocking(issue) else "WARN"
-
-    return result
+    from collaboration_checks import check_agent_lock_consistency as read
+    return read(
+        current_governance_dir=lambda: GOVERNANCE_DIR, check_agent_locks_format=lambda: check_agent_locks_format(),
+        lock_issue_is_blocking=lambda issue: lock_issue_is_blocking(issue),
+    )
 
 
 # ── SYSGAP-030: Archive Integrity Check ────────────────────────────
@@ -5445,27 +4342,11 @@ def check_archive_integrity():
 
 
 def cmd_check_agent_locks(_args):
-    """Standalone subcommand: check-locks — run agent lock consistency check."""
-    result = check_agent_lock_consistency()
-
-    if result.get("skipped"):
-        print(f"[INFO] {result['skipped']}")
-        return
-
-    print(f"Active tasks: {result['active_task_count']}")
-    print(f"File locks:   {result['file_lock_count']}")
-
-    issues = result.get("issues", [])
-    if not issues:
-        print("Result: PASS — agent-locks.json is clean.")
-    else:
-        blocking = [i for i in issues if lock_issue_is_blocking(i)]
-        print(f"\n{len(issues)} lock issue(s), {len(blocking)} blocking:")
-        for issue in issues:
-            severity = "BLOCKING" if lock_issue_is_blocking(issue) else "WARN"
-            print(f"  [{severity}:{issue['type']}] {issue['detail']}")
-        result_label = "WARN" if blocking else "INFO"
-        print(f"\nResult: {result_label} — {len(issues)} lock consistency issue(s).")
+    from collaboration_checks import cmd_check_agent_locks as run
+    return run(
+        _args, check_agent_lock_consistency=lambda: check_agent_lock_consistency(),
+        lock_issue_is_blocking=lambda issue: lock_issue_is_blocking(issue),
+    )
 
 
 def cmd_check_archive_integrity(_args):
@@ -6071,40 +4952,16 @@ def cmd_check_governance_packs(args):
 
 
 def cmd_check_lifecycle_registry(args):
-    """Run dynamic lifecycle registry schema-only consistency guard."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    registry, load_issues = _load_lifecycle_registry()
-    active_mode = registry.get("active_lifecycle_mode", "<unreadable>") if isinstance(registry, dict) else "<unreadable>"
-    default_mode = registry.get("default_lifecycle_mode", "<unreadable>") if isinstance(registry, dict) else "<unreadable>"
-    issues = load_issues or check_lifecycle_registry(registry=registry)
-    print("\n=== Lifecycle Registry Check ===")
-    print(f"  Active lifecycle mode: {active_mode}")
-    print(f"  Default lifecycle mode: {default_mode}")
-    if issues:
-        print(f"  Result: FAILED — {len(issues)} issue(s)")
-        for issue in issues[:20]:
-            print(f"    - {issue}")
-        if len(issues) > 20:
-            print(f"    ... and {len(issues) - 20} more")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-    else:
-        print("  Result: PASSED — work-unit routes and evidence requirements resolve")
-    print()
+    from lifecycle_rules import cmd_check_lifecycle_registry as run
+    return run(
+        args, load_lifecycle_registry=lambda: _load_lifecycle_registry(),
+        check_lifecycle_registry=lambda registry: check_lifecycle_registry(registry=registry),
+    )
 
 
 def cmd_check_flow_unit_runtime(args):
-    """Validate the same project snapshot consumed by the session and dashboard."""
-    from governance_readers import loop_state
-    fixture = getattr(args, "fixture", None)
-    root = (ROOT / Path(fixture)) if fixture else HOST_PROJECT_ROOT
-    report = loop_state(root)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    if report["state"] == "invalid":
-        sys.exit(2)
+    from loop_commands import cmd_check_flow_unit_runtime as run
+    return run(args, host_root=HOST_PROJECT_ROOT, product_root=ROOT)
 
 
 def cmd_check_host_capability_context(args):
@@ -6147,419 +5004,104 @@ def cmd_check_architecture_health(args):
 
 
 def cmd_check_loop_health(args):
-    """Thin entry — delegates to infra/loop_health.py (0.65.0 loop-engineering)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    from loop_health import check_loop_health
-    result = check_loop_health(getattr(args, "target", None) or HOST_PROJECT_ROOT)
-    print("\n=== Loop Health Check (pause-point declarations) ===")
-    findings = result.get("findings", [])
-    for f in findings[:25]:
-        print(f"  [{f.get('severity','?')}] {f.get('pause_point','')}: {f.get('message','')}")
-    blocking = [f for f in findings if f.get("severity") == "FAIL"]
-    print(f"\n  Result: {len(blocking)} BLOCKING, {len(findings)-len(blocking)} advisory")
-    telemetry = result["telemetry"]
-    print(f"  Loop observations: {telemetry['status']} (loop-telemetry --json)")
-    if blocking and getattr(args, "fail_on_issues", False):
-        sys.exit(1)
+    from loop_commands import cmd_check_loop_health as run
+    return run(args, host_root=HOST_PROJECT_ROOT)
 
 
 def _format_rollup(result):
-    from bootstrap_aggregate import format_loop_lines
-
-    print("\n".join(format_loop_lines(result)))
+    from loop_commands import _format_rollup as read
+    return read(result)
 def _format_telemetry(report, json_out=False):
-    from dataclasses import asdict
-    if json_out:
-        write_cli_json(asdict(report), indent=2)
-        return
-    print(f"Loop Telemetry ({report.window}): {report.units_considered} units, "
-          f"{report.event_count} events")
-    for name, metric in report.flow.items():
-        value = f"{metric.value} {metric.unit}" if metric.status == "measured" else f"unknown ({metric.reason})"
-        print(f"  {name}: {value}")
-    for observation in report.observations:
-        if "resolved_at" in observation and observation["resolved_at"] is None:
-            print(f"  Waiting: {observation['unit_id']} since {observation['timestamp']}")
-    print(report.scope_note)
+    from loop_commands import _format_telemetry as read
+    return read(report, json_out, write_json=write_cli_json)
 
 
 def cmd_loop_rollup(args):
-    """Thin entry — delegates to loop_engine.rollup_loop_state (FX-193)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    from loop_engine import rollup_loop_state
-    view = rollup_loop_state(getattr(args, "target", None) or HOST_PROJECT_ROOT)
-    _format_rollup(view)
-    if view.get("state") == "invalid":
-        sys.exit(2)
+    from loop_commands import cmd_loop_rollup as run
+    return run(args, host_root=HOST_PROJECT_ROOT, format_rollup=_format_rollup)
 
 
 def write_cli_json(payload, *, indent=None):
-    """Write one JSON response from a governance command."""
-    json.dump(payload, sys.stdout, ensure_ascii=False, indent=indent)
-    sys.stdout.write("\n")
+    from loop_commands import write_cli_json as read
+    return read(payload, indent=indent)
 
 
 def cmd_loop(args):
-    from loop_workflow import run
-    try:
-        result = run(HOST_PROJECT_ROOT, args)
-    except (OSError, ValueError) as exc:
-        write_cli_json({"error": str(exc)})
-        sys.exit(2)
-    write_cli_json(result, indent=2)
-    if result.get("state") == "invalid" or (args.action in ("verify", "accept") and result["decision"] in ("iterate", "escalate")):
-        sys.exit(2)
+    from loop_commands import cmd_loop as run
+    return run(args, host_root=HOST_PROJECT_ROOT, write_json=write_cli_json)
 
 
 def cmd_loop_telemetry(args):
-    """Thin entry — delegates to infra/loop_telemetry.py (0.69.0 telemetry).
-
-    Reads the event log via loop_event_log.read_events (RISK-040 HOST_PROJECT_ROOT,
-    never PLUGIN_HOME) and delegates to loop_telemetry.compute_metrics. All logic
-    lives in the pure module; this entry is argparse glue + 2 delegated calls
-    (RISK-039 thin-entry discipline).
-    """
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    from loop_event_log import read_events
-    from loop_telemetry import compute_metrics
-    root = getattr(args, "target", None) or HOST_PROJECT_ROOT
-    log_path = Path(root) / ".governance" / "loop-event-log.jsonl" if root else None
-    events = read_events(log_path=log_path) if log_path else []
-    win = getattr(args, "window", None)
-    # "all" maps to None (all-time) for the pure compute_metrics API.
-    window = None if win in (None, "all") else win
-    report = compute_metrics(events, window=window)
-    _format_telemetry(report, json_out=getattr(args, "json", False))
+    from loop_commands import cmd_loop_telemetry as run
+    return run(args, host_root=HOST_PROJECT_ROOT, format_telemetry=_format_telemetry)
 
 
 # ── FIX-262 / REQ-108: completion-recommendation machine closure ─────────────
 # Effective date: completion rows dated BEFORE this are legacy (the ~145
 # completed tasks have no recommendation-snapshot association) and are never
 # judged — same pattern as Check 30c's REQ107_MACHINE_PROVENANCE_DATE.
-REQ108_RECOMMENDATION_DATE = date(2026, 8, 22)
-
-# Machine-source marker (mirrors the review-record/change-triage precedent:
-# the unforgeable-ish machine row is the trusted association anchor). Mirror
-# of the canonical task_priority.RECO_ROW_MARKER (FEAT-012 G5 moved the
-# writer there; this copy feeds Check 34's consumer logic).
-RECO_ROW_MARKER = "task-priority-analysis 机器写入完成必推荐调用快照"
-_LEGACY_SNAPSHOT_MARKER = "完成必推荐调用快照"
-_RECO_TASK_ID_RE = re.compile(r"^[A-Z]+-\d+$")
-_SNAPSHOT_REF_RE = re.compile(r"(?:RECO-[A-Z]+-\d+|EVD-\d+)")
 from hot_governance_facts import _TASK_ID_IN_REF_RE, _TASK_ID_CELL_RE, _EVIDENCE_DATE_SHAPE_RE
+
+class _CompletionRecommendationInputs:
+    """Read Check 34 facts only when its current row or snapshot branch needs them."""
+
+    evidence_path = property(lambda self: EVIDENCE_PATH)
+    snapshot_path = property(lambda self: SESSION_SNAPSHOT_PATH)
+    effective_date = property(lambda self: _host_policy("REQ108_RECOMMENDATION_DATE"))
+    machine_marker = property(lambda self: _host_policy("RECO_ROW_MARKER"))
+    legacy_marker = property(lambda self: _host_policy("_LEGACY_SNAPSHOT_MARKER"))
+    snapshot_pattern = property(lambda self: _host_policy("_SNAPSHOT_REF_RE"))
+    task_id_pattern = property(lambda self: _TASK_ID_IN_REF_RE)
+    match = property(lambda self: re.match)
+    parse_date = property(lambda self: date.fromisoformat)
+
+
+class _RecommendationCommandInputs:
+    """Keep the original command bindings live across reads, refreshes and writes."""
+
+    evidence_path = property(lambda self: EVIDENCE_PATH)
+    governance_dir = property(lambda self: GOVERNANCE_DIR)
+    plan_path = property(lambda self: SAMPLE_PATH)
+    host_root = property(lambda self: HOST_PROJECT_ROOT)
+    load_execution_packets = property(lambda self: _load_execution_packets)
+    premise_tracker = property(lambda self: premise_tracker)
+    stdout = property(lambda self: sys.stdout)
+    exit = property(lambda self: sys.exit)
+    dumps = property(lambda self: json.dumps)
+
+
+_completion_recommendation_inputs = _CompletionRecommendationInputs()
+_recommendation_command_inputs = _RecommendationCommandInputs()
 
 
 def _recommendation_snapshot_row_text(task_id, report, date_str):
-    """FIX-262 row text — thin alias; canonical home is
-    task_priority.recommendation_snapshot_row_text (moved there by FEAT-012
-    G5 so the writer, duplicate detector and row schema live in one module;
-    alias kept for existing engine/test consumers)."""
-    from task_priority import recommendation_snapshot_row_text
-    return recommendation_snapshot_row_text(task_id, report, date_str)
+    from recommendation_checks import _recommendation_snapshot_row_text as read
+    return read(task_id, report, date_str)
 
 
 def _write_recommendation_snapshot(task_id, report, evidence_path=None):
-    """FIX-262 append — thin alias; canonical home is
-    task_priority.write_recommendation_snapshot (FEAT-012 G5). Supplies the
-    rebinding-aware EVIDENCE_PATH default the pure module cannot know."""
-    from task_priority import write_recommendation_snapshot
-    return write_recommendation_snapshot(
-        task_id, report,
-        evidence_path if evidence_path is not None else EVIDENCE_PATH)
+    from recommendation_checks import _write_recommendation_snapshot as read
+    return read(task_id, report, evidence_path, inputs=_recommendation_command_inputs)
 
 
 def check_completion_recommendation(evidence_rows=None, snapshot_text=None):
-    """FIX-262 / REQ-108: Check 34 — completion-recommendation closure.
-
-    S1 (core, FAIL): a product-code COMPLETION evidence row (id ``EVD-*``,
-    type ``产品代码``) dated on/after ``REQ108_RECOMMENDATION_DATE`` whose
-    task has no associated recommendation-snapshot row. Association = a
-    machine ``RECO-{task}`` row (marker ``task-priority-analysis 机器写入``)
-    OR a legacy snapshot row (description marker ``完成必推荐调用快照``)
-    whose task_ref column or “{task} 完成触发” description binds the task.
-
-    S2 (WARN, gradual): the session-snapshot ``## 下次会话优先级`` section
-    has entries but references no snapshot id (``RECO-*`` / ``EVD-*``) —
-    the section is not verifiably derived from a snapshot (signal 4).
-
-    S3 (FAIL): a referenced snapshot id does not exist in the evidence log
-    (dangling derivation anchor).
-
-    Returns ``{verdict, reason, violations, warnings, stats}``; verdict ∈
-    PASS / WARN / FAIL / no-verdict. Never raises.
-    """
-    result = {
-        "verdict": "no-verdict",
-        "reason": "",
-        "violations": [],
-        "warnings": [],
-        "stats": {"completions_judged": 0, "snapshots_machine": 0,
-                  "snapshots_legacy": 0, "snapshot_section": "absent"},
-    }
-
-    rows = evidence_rows
-    if rows is None:
-        rows = []
-        if EVIDENCE_PATH.is_file():
-            try:
-                content = EVIDENCE_PATH.read_text(encoding="utf-8")
-            except (IOError, OSError):
-                content = ""
-            rows = [ln for ln in content.split("\n") if ln.strip().startswith("|")]
-
-    if snapshot_text is None:
-        snapshot_text = ""
-        # Live snapshot read ONLY in full live mode (evidence_rows also None):
-        # a rows-fixture run without an explicit snapshot_text means "no
-        # snapshot section to judge", not "read the repo's live snapshot".
-        if evidence_rows is None and SESSION_SNAPSHOT_PATH.is_file():
-            try:
-                snapshot_text = SESSION_SNAPSHOT_PATH.read_text(encoding="utf-8")
-            except (IOError, OSError):
-                snapshot_text = ""
-
-    def _row_date(parts):
-        for part in parts[3:]:
-            if re.match(r"^\d{4}-\d{2}-\d{2}$", part):
-                try:
-                    return date.fromisoformat(part)
-                except ValueError:
-                    return None
-        return None
-
-    # Pass 1: collect snapshot associations + evidence ids.
-    known_ids = set()
-    assoc = set()  # task ids that have a snapshot association
-    for raw in rows:
-        parts = [p.strip() for p in str(raw or "").split("|")]
-        if len(parts) < 5:
-            continue
-        row_id = parts[1]
-        if row_id:
-            known_ids.add(row_id)
-        desc = parts[4] if len(parts) > 4 else ""
-        is_machine = row_id.startswith("RECO-") and RECO_ROW_MARKER in desc
-        is_legacy = _LEGACY_SNAPSHOT_MARKER in desc
-        if not (is_machine or is_legacy):
-            continue
-        if is_machine:
-            result["stats"]["snapshots_machine"] += 1
-        else:
-            result["stats"]["snapshots_legacy"] += 1
-        # task_ref column binding (parts[2]) — may carry "FIX-260, FIX-261".
-        for tid in _TASK_ID_IN_REF_RE.findall(parts[2] or ""):
-            assoc.add(tid)
-        # description trigger binding（"FIX-256 完成触发" — EVD-898 pattern).
-        for tid in _TASK_ID_IN_REF_RE.findall(desc):
-            if "{0} 完成触发".format(tid) in desc:
-                assoc.add(tid)
-        # machine row id binding: RECO-{task}.
-        if is_machine:
-            m = re.match(r"^RECO-([A-Z]+-\d+)$", row_id)
-            if m:
-                assoc.add(m.group(1))
-
-    # Pass 2: completion rows → S1.
-    for raw in rows:
-        parts = [p.strip() for p in str(raw or "").split("|")]
-        if len(parts) < 5:
-            continue
-        row_id = parts[1]
-        if not row_id.startswith("EVD-"):
-            continue  # REVIEW-/TRIAGE-/RECO- rows are not completion rows.
-        if (parts[3] if len(parts) > 3 else "") != "产品代码":
-            continue
-        row_date = _row_date(parts)
-        if row_date is None or row_date < REQ108_RECOMMENDATION_DATE:
-            continue
-        result["stats"]["completions_judged"] += 1
-        for tid in _TASK_ID_IN_REF_RE.findall(parts[2] or ""):
-            if tid not in assoc:
-                result["violations"].append({
-                    "rule": "S1",
-                    "task_id": tid,
-                    "reason": "completed product-code task {0} (evidence "
-                              "{1}, {2}) has no recommendation-snapshot "
-                              "row — M7.4 step 6 requires the "
-                              "task-priority-analysis snapshot (machine "
-                              "RECO row via --evidence-task, or a "
-                              "完成必推荐调用快照 row)".format(
-                                  tid, row_id, row_date.isoformat()),
-                })
-
-    # Signal 4: snapshot section derivation (S2/S3).
-    section_lines = []
-    in_section = False
-    for line in (snapshot_text or "").split("\n"):
-        if line.strip().startswith("## "):
-            in_section = line.strip() == "## 下次会话优先级"
-            continue
-        if in_section and line.strip():
-            section_lines.append(line.strip())
-    if section_lines:
-        result["stats"]["snapshot_section"] = "present"
-        blob = "\n".join(section_lines)
-        refs = set(_SNAPSHOT_REF_RE.findall(blob))
-        if not refs:
-            result["warnings"].append({
-                "rule": "S2",
-                "task_id": "",
-                "reason": "session-snapshot ## 下次会话优先级 has entries but "
-                          "references no snapshot id (RECO-*/EVD-*) — not "
-                          "verifiably derived from a recommendation snapshot "
-                          "(REQ-108 signal 4; gradual WARN)",
-            })
-        else:
-            dangling = sorted(r for r in refs if r not in known_ids)
-            if dangling:
-                result["violations"].append({
-                    "rule": "S3",
-                    "task_id": "",
-                    "reason": "snapshot section references missing evidence "
-                              "id(s): {0} — dangling derivation anchor".format(
-                                  ", ".join(dangling)),
-                })
-
-    if result["violations"]:
-        result["verdict"] = "FAIL"
-        result["reason"] = "{0} completion-recommendation violation(s)".format(
-            len(result["violations"]))
-    elif result["warnings"]:
-        result["verdict"] = "WARN"
-        result["reason"] = "{0} derivation warning(s)".format(
-            len(result["warnings"]))
-    elif result["stats"]["completions_judged"] == 0:
-        result["verdict"] = "no-verdict"
-        result["reason"] = (
-            "no product-code completion row dated on/after {0} — Check 34 "
-            "has nothing to judge".format(
-                REQ108_RECOMMENDATION_DATE.isoformat()))
-    else:
-        result["verdict"] = "PASS"
-        result["reason"] = (
-            "{0} completion(s) all carry recommendation snapshots".format(
-                result["stats"]["completions_judged"]))
-    return result
+    from recommendation_checks import check_completion_recommendation as read
+    return read(evidence_rows, snapshot_text, inputs=_completion_recommendation_inputs)
 
 
 def cmd_task_priority_analysis(args):
-    """Thin entry — delegates to infra/task_priority.py (FIX-226 / FEAT-012 G5).
-
-    Reads .governance paths via HOST_PROJECT_ROOT (never PLUGIN_HOME;
-    RISK-040 dual-root discipline) and delegates the WHOLE flow — parse →
-    compute → format, the FIX-262 RECO snapshot append, cycle tolerance
-    (FIX-237.3: default exit 0 + WARNING banner; ``--strict`` restores the
-    fail-closed exit 1), and the FEAT-012 G5 same-session duplicate-run
-    suppression (same-day + unchanged-tracker runs reuse the cached report
-    「复用上次分析（--force 重跑）」; a duplicate same-day RECO row is not
-    re-appended; FIRST-TIME closures are never suppressed — FIX-262 /
-    REQ-108) — to the pure task_priority module. This entry is argparse
-    glue only (RISK-039 thin-entry discipline + ArchGuard R1 main-file
-    budget). Exits 2 on a missing plan-tracker or a parse error.
-    """
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    from task_priority import run_cli_analysis
-    code = run_cli_analysis(
-        SAMPLE_PATH, GOVERNANCE_DIR, EVIDENCE_PATH,
-        evidence_task=getattr(args, "evidence_task", None),
-        force=bool(getattr(args, "force", False)),
-        strict=bool(getattr(args, "strict", False)),
-    )
-    if code:
-        sys.exit(code)
+    from recommendation_checks import cmd_task_priority_analysis as run
+    return run(args, inputs=_recommendation_command_inputs)
 
 
 def cmd_review_record(args):
-    """Thin entry — review-record CLI (FIX-236.1 / ADR-017 §3.4 Wiring A).
-
-    Delegates to infra/review_record.py: the single machine-written
-    review-conclusion persistence path (review-{id}-R{n}.md + evidence-log
-    row) + best-effort process_gate_result wiring. Prints the JSON summary;
-    exits 2 on a fail-closed input error (the record was not written).
-    """
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    from review_record import write_review_record
-    summary = write_review_record(
-        task_id=args.task,
-        round_n=args.round,
-        result=args.result,
-        report_path=args.report,
-        reviewer=args.reviewer,
-        unit_id=args.unit,
-        gate_id=args.gate,
-        scope=getattr(args, "scope", "full"),
-        delta_base=getattr(args, "delta_base", None),
-        bind_files=getattr(args, "bind_file", None) or (), bind_tree=getattr(args, "bind_tree", None),
-        abort_reason=getattr(args, "abort_reason", None),
-        root=HOST_PROJECT_ROOT,
-        require_loop=True, record_only=getattr(args, "record_only", False),
-    )
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
-    if summary.get("error"):
-        sys.exit(2)
+    from review_record import cmd_review_record as run
+    return run(args, host_root=HOST_PROJECT_ROOT)
 
 
 def cmd_next_candidates(args):
-    """Read goal-scoped recommendations or the legacy loop_exit snapshot."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    # Goal mode reads the live sources. The legacy path below may persist a
-    # recommendation snapshot based on loop-exit events.
-    if getattr(args, "goal", None) is not None:
-        from goal_planning import run_goal_candidates
-        return run_goal_candidates(args, project_root=HOST_PROJECT_ROOT, load_packets=_load_execution_packets)
-    from loop_exit_bridge import (
-        CANDIDATES_FILENAME,
-        read_candidates,
-        refresh_candidates,
-    )
-    snapshot = HOST_PROJECT_ROOT / ".governance" / CANDIDATES_FILENAME
-    report = None
-    if not getattr(args, "refresh", False):
-        report = read_candidates(snapshot)
-    if report is None:
-        report = refresh_candidates(
-            HOST_PROJECT_ROOT,
-            top_n=getattr(args, "top_n", 3) or 3,
-            candidate_path=snapshot if getattr(args, "write", False) else None,
-        )
-    # FIX-463: inject the collapsed-premise verdict (read-only; DEC-368②
-    # class) — a collapsed decision must surface in the next-unit bridge
-    # too, not only in the full TPA report. Additive key: consumers that
-    # do not know it are unaffected.
-    try:
-        _dec_log = HOST_PROJECT_ROOT / ".governance" / "decision-log.md"
-        _decls = premise_tracker.collect_premise_declarations(
-            _dec_log.read_text(encoding="utf-8")
-            if _dec_log.is_file() else "")
-        if _decls:
-            _events = premise_tracker.load_events(
-                HOST_PROJECT_ROOT / ".governance")
-            _status = premise_tracker.premise_status(_decls, _events)
-            if isinstance(report, dict):
-                report["collapsed_premises"] = [
-                    dict(_status["detail"][d], decision_id=d)
-                    for d in _status["collapsed"]]
-    except (OSError, ValueError, TypeError):
-        pass  # the bridge stays additive — never block the candidate read
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    from recommendation_checks import cmd_next_candidates as run
+    return run(args, inputs=_recommendation_command_inputs)
 
 
 def _triage_write_structure_guard(evidence_path, record_path, record_id=None):
@@ -6766,22 +5308,11 @@ def cmd_demand_source_revise(args):
 
 
 def cmd_agent_locks_acquire(args):
-    """Thin entry — agent-locks-acquire CLI (FEAT-013 / RISK-046 root fix).
-
-    All validation and writing live in
-    :func:`change_triage.acquire_dispatch_locks` (RISK-039 thin-entry
-    discipline): pre-write path existence + expected-new exemption +
-    same-day change-triage files cross-check (mismatch WARN-disclosed,
-    never blocking). This glue injects the host paths and the Check 26
-    post-write self-validation — the writer proves its own output
-    against the SAME schema the FEAT-011 write guard consumes (no second
-    schema definition). Exit 0 = written (WARNs may accompany on stderr);
-    exit 2 = fail-closed refusal (nothing written).
-    """
-    from change_triage import agent_locks_acquire_cli
-    agent_locks_acquire_cli(
-        args, governance_dir=GOVERNANCE_DIR, repo_root=HOST_PROJECT_ROOT,
-        post_write_check=check_agent_locks_format)
+    from collaboration_checks import cmd_agent_locks_acquire as run
+    return run(
+        args, governance_dir=GOVERNANCE_DIR, host_root=HOST_PROJECT_ROOT,
+        check_agent_locks_format=check_agent_locks_format,
+    )
 
 
 # ── FEAT-096 (0.98.0): execution-isolation engine thin entries ─────────
@@ -6963,8 +5494,13 @@ def cmd_generate_deterministic_scaffold(args):
     generate_scaffold(args, render_deterministic_scaffold)
 
 
+def _web_console_open_url(url, *, timeout):
+    return _host_policy("urllib").request.urlopen(url, timeout=timeout)
+
+
 def _web_console_url(host="127.0.0.1", port=5173):
-    return f"http://{host}:{port}/"
+    from web_console import _web_console_url as read
+    return read(host, port)
 
 
 _WEB_INSTALL_TIMEOUT_DEFAULT = 120
@@ -6972,296 +5508,49 @@ _WEB_INSTALL_TIMEOUT_ENV = "SPG_WEB_INSTALL_TIMEOUT"
 
 
 def _resolve_positive_timeout(raw, default):
-    """Shared FIX-234-style env-var timeout resolution.
-
-    Positive integer seconds win; absent/invalid values fall back to the
-    supplied default (never crashes the caller).
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        return default
-    return value if value > 0 else default
+    from operational_cli import _resolve_positive_timeout as read
+    return read(raw, default)
 
 
 def _resolve_web_install_timeout(raw):
-    """FIX-238.4: resolve the web-console npm install timeout.
-
-    SPG_WEB_INSTALL_TIMEOUT (positive integer seconds, default 120s) with
-    invalid values falling back to the default (FIX-234 precedent).
-    """
-    return _resolve_positive_timeout(raw, _WEB_INSTALL_TIMEOUT_DEFAULT)
+    from web_console import _resolve_web_install_timeout as read
+    return read(
+        raw, default_seconds=_WEB_INSTALL_TIMEOUT_DEFAULT,
+        positive_timeout=_resolve_positive_timeout,
+    )
 
 
 def _web_console_is_live(url, timeout=1.5):
-    return _web_console_probe(url, timeout=timeout)["state"] == "running"
+    from web_console import _web_console_is_live as read
+    return read(url, timeout, web_console_probe=_web_console_probe)
 
 
 def _web_console_probe(url, timeout=1.5):
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
-            body = response.read(65536).decode("utf-8", errors="replace")
-            if 'name="spg-web-console"' in body and "software-project-governance" in body:
-                return {"state": "running", "status": response.status}
-            return {"state": "occupied", "status": response.status}
-    except Exception as exc:
-        return {"state": "not_running", "error": str(exc)}
+    from web_console import _web_console_probe as read
+    return read(url, timeout, open_url=_web_console_open_url)
 
 
 def _web_console_paths():
-    web_dir = ROOT / "web"
-    return {
-        "web_dir": web_dir,
-        "package_json": web_dir / "package.json",
-        "node_modules": web_dir / "node_modules",
-        "log": web_dir / "web-dev.log",
-        "pid": web_dir / ".spg-web-console.pid",
-    }
+    from web_console import _web_console_paths as read
+    return read(product_root=ROOT)
 
 
 def _write_web_console_process(paths, process):
-    try:
-        paths["pid"].write_text(str(process.pid), encoding="utf-8")
-    except OSError:
-        pass
+    from web_console import _write_web_console_process as read
+    return read(paths, process)
 
 
 def cmd_web_console(args):
-    """Expose the optional local Web console through the primary CLI/client path."""
-    paths = _web_console_paths()
-    url = _web_console_url(args.host, args.port)
-    if getattr(args, "governance_entry", False):
-        args.start = True
-
-    print("Software Project Governance Web Console")
-    print("Role: optional local companion dashboard")
-    print("Primary interface remains: CLI / agent client")
-    print(f"URL: {url}")
-    print(f"Web directory: {_display_path(paths['web_dir'])}")
-    probe = _web_console_probe(url)
-
-    if args.summary_link and args.start:
-        print("\nStatus: blocked")
-        print("Reason: --summary-link is read-only and cannot be combined with a start path.")
-        print("Boundary: summaries may report Web console status, while manual /governance uses --governance-entry to start or reuse it.")
-        if args.fail_on_issues:
-            sys.exit(1)
-        return
-
-    if not paths["package_json"].is_file():
-        print("\nStatus: unavailable")
-        print("Reason: web/package.json is missing in this checkout.")
-        print("Boundary: this command does not replace /governance or run agent tasks.")
-        if args.fail_on_issues:
-            sys.exit(1)
-        return
-
-    if args.summary_link:
-        if probe["state"] == "running":
-            print(f"\nWeb console: {url} (optional local companion dashboard)")
-        elif probe["state"] == "occupied":
-            print(f"\nWeb console: unavailable at {url} (port is occupied by a non-SPG service).")
-            print("Manual start command: python skills/software-project-governance/infra/verify_workflow.py web-console --start --port <free-port>")
-            if args.fail_on_issues:
-                sys.exit(1)
-        else:
-            print("\nWeb console: not running.")
-            print("Manual start command: python skills/software-project-governance/infra/verify_workflow.py web-console --start")
-        print("Boundary: summary link only; no Web service was started.")
-        return
-
-    if args.status and not args.start:
-        if probe["state"] == "occupied":
-            print("\nStatus: port occupied by a non-SPG service")
-            print("Action: choose another port with --port, or stop the service using this port.")
-            if args.fail_on_issues:
-                sys.exit(1)
-            return
-        print("\nStatus:", "running" if probe["state"] == "running" else "not running")
-        print("\nManual start command:")
-        print(
-            "python skills/software-project-governance/infra/verify_workflow.py "
-            "web-console --start"
-        )
-        print("\nFirst run with dependency install:")
-        print(
-            "python skills/software-project-governance/infra/verify_workflow.py "
-            "web-console --start --install"
-        )
-        print("\n/governance entry command:")
-        print(
-            "python skills/software-project-governance/infra/verify_workflow.py "
-            "web-console --governance-entry"
-        )
-        print("\nBoundary: manual /governance starts or reuses the Web console for follow-up UI interaction; task/session summaries remain read-only with --summary-link.")
-        return
-
-    if not args.start:
-        if probe["state"] == "occupied":
-            print("\nStatus: port occupied by a non-SPG service")
-            print("Use --port to select another local port.")
-            if args.fail_on_issues:
-                sys.exit(1)
-            return
-        print("\nStatus:", "running" if probe["state"] == "running" else "not running")
-        print("Manual start command: python skills/software-project-governance/infra/verify_workflow.py web-console --start")
-        return
-
-    if probe["state"] == "occupied":
-        print("\nStatus: blocked")
-        print("Reason: the target port is serving a non-SPG page.")
-        print("Action: use --port to select another local port, or stop the other service.")
-        if args.fail_on_issues:
-            sys.exit(1)
-        return
-
-    if probe["state"] == "running":
-        print("\nStatus: already running")
-        if getattr(args, "governance_entry", False):
-            print("Entry: manual /governance reused the running Web console.")
-        if args.open:
-            webbrowser.open(url)
-        return
-
-    npm = shutil.which("npm")
-    if not npm:
-        print("\nStatus: blocked")
-        print("Reason: npm was not found on PATH.")
-        if args.fail_on_issues:
-            sys.exit(1)
-        return
-
-    if not paths["node_modules"].is_dir():
-        if not args.install:
-            print("\nStatus: blocked")
-            print("Reason: web/node_modules is missing.")
-            print("First run command:")
-            print(
-                "python skills/software-project-governance/infra/verify_workflow.py "
-                "web-console --start --install"
-            )
-            if getattr(args, "governance_entry", False):
-                print("Governance entry: default start attempted; dependency install still requires explicit --install.")
-            if args.fail_on_issues:
-                sys.exit(1)
-            return
-        print("\nInstalling web dependencies with npm install...")
-        install_timeout = _resolve_web_install_timeout(
-            os.environ.get(_WEB_INSTALL_TIMEOUT_ENV, "")
-        )
-        try:
-            install_result = subprocess.run(
-                [npm, "install"], cwd=paths["web_dir"], timeout=install_timeout
-            )
-        except subprocess.TimeoutExpired:
-            print("Status: blocked")
-            print(
-                f"Reason: npm install timed out after {install_timeout}s "
-                f"(SPG_WEB_INSTALL_TIMEOUT); raise the value or inspect the npm log."
-            )
-            if args.fail_on_issues:
-                sys.exit(124)
-            return
-        if install_result.returncode != 0:
-            print("Status: blocked")
-            print(f"Reason: npm install exited {install_result.returncode}.")
-            if args.fail_on_issues:
-                sys.exit(install_result.returncode)
-            return
-
-    api_server_script = ROOT / "web" / "server.py"
-    api_port = args.port + 1 if args.port != 5173 else 5174
-    api_started = False
-    if api_server_script.is_file():
-        api_log = paths["web_dir"] / ".api-server.log"
-        api_log_handle = api_log.open("a", encoding="utf-8")
-        api_log_handle.write(
-            f"\n--- api-server start {datetime.now().isoformat(timespec='seconds')} ---\n"
-        )
-        api_log_handle.flush()
-        api_popen_kwargs = {
-            "cwd": str(ROOT),
-            "stdout": api_log_handle,
-            "stderr": subprocess.STDOUT,
-            "stdin": subprocess.DEVNULL,
-        }
-        if os.name == "nt":
-            api_popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            api_popen_kwargs["start_new_session"] = True
-        try:
-            api_process = subprocess.Popen(
-                [sys.executable, str(api_server_script), "--port", str(api_port), "--project-root", str(HOST_PROJECT_ROOT)],
-                **api_popen_kwargs,
-            )
-            api_started = True
-            (paths["web_dir"] / ".api-server.pid").write_text(str(api_process.pid), encoding="utf-8")
-        except Exception as exc_api:  # pragma: no cover - defensive
-            print(f"\nNote: local API server could not start ({exc_api}); the dashboard will run without live data.")
-        finally:
-            api_log_handle.close()
-    else:
-        print("\nNote: web/server.py not found; the dashboard will run without live data.")
-
-    command = [
-        npm,
-        "run",
-        "dev",
-        "--",
-        "--host",
-        args.host,
-        "--port",
-        str(args.port),
-    ]
-
-    if args.foreground:
-        print("\nStatus: starting in foreground")
-        print("Stop with Ctrl+C.")
-        os.execvpe(command[0], command, os.environ)
-
-    log_handle = paths["log"].open("a", encoding="utf-8")
-    log_handle.write(f"\n--- web-console start {datetime.now().isoformat(timespec='seconds')} ---\n")
-    log_handle.flush()
-
-    popen_kwargs = {
-        "cwd": paths["web_dir"],
-        "stdout": log_handle,
-        "stderr": subprocess.STDOUT,
-        "stdin": subprocess.DEVNULL,
-    }
-    if os.name == "nt":
-        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        popen_kwargs["start_new_session"] = True
-
-    try:
-        process = subprocess.Popen(command, **popen_kwargs)
-    finally:
-        log_handle.close()
-    _write_web_console_process(paths, process)
-
-    for _ in range(30):
-        if _web_console_is_live(url):
-            print("\nStatus: running")
-            print(f"PID: {process.pid}")
-            print(f"Log: {_display_path(paths['log'])}")
-            if api_started:
-                print(f"Local API server: http://127.0.0.1:{api_port}/api/governance (live governance data)")
-                print(f"API PID: {api_process.pid} (stop: taskkill /PID {api_process.pid} /F on Windows)")
-            if args.open:
-                webbrowser.open(url)
-            return
-        time.sleep(0.5)
-
-    print("\nStatus: starting")
-    print(f"PID: {process.pid}")
-    print(f"Log: {_display_path(paths['log'])}")
-    print("The server did not respond within 15 seconds; check the log above.")
-    if args.fail_on_issues:
-        sys.exit(1)
+    from web_console import cmd_web_console as run
+    return run(
+        args, host_root=lambda: HOST_PROJECT_ROOT, product_root=lambda: ROOT,
+        install_timeout=lambda: _resolve_web_install_timeout(os.environ.get(_WEB_INSTALL_TIMEOUT_ENV, "")),
+        display_path=lambda path: _display_path(path), web_console_is_live=lambda url: _web_console_is_live(url),
+        web_console_paths=lambda: _web_console_paths(), web_console_probe=lambda url: _web_console_probe(url),
+        web_console_url=lambda host, port: _web_console_url(host, port),
+        write_web_console_process=lambda paths, process: _write_web_console_process(paths, process),
+        open_browser=lambda url: webbrowser.open(url), now=lambda: datetime.now(),
+    )
 
 
 # ── resolve-entry thin wrapper (FIX-238.3, ADR-017 §2) ────────────────
@@ -7281,72 +5570,29 @@ _RESOLVE_EXIT_STORE_STUB = 5
 
 
 def _resolve_resolve_timeout(raw):
-    """FIX-238.3: resolve the resolve_entry timeout from an env-var value.
-
-    SPG_RESOLVE_TIMEOUT (positive integer seconds, default 15s); invalid
-    values fall back to the default (FIX-234 precedent) instead of crashing.
-    """
-    return _resolve_positive_timeout(raw, _RESOLVE_TIMEOUT_DEFAULT)
+    from entry_resolution_cli import _resolve_resolve_timeout as read
+    return read(
+        raw, default_seconds=_RESOLVE_TIMEOUT_DEFAULT,
+        positive_timeout=_resolve_positive_timeout,
+    )
 
 
 def cmd_resolve_entry(args):
-    """Thin bounded invocation of resolve_entry.py with classified
-    fail-closed diagnostics (file-not-found / timeout / python-missing /
-    store-stub). Prints the JSON envelope on stdout on success."""
-    script = ROOT / _RESOLVE_ENTRY_REL
-    if not script.is_file():
-        print(
-            f"spg-bootstrap-error: file-not-found — resolve_entry.py missing at {script}",
-            file=sys.stderr,
-        )
-        sys.exit(_RESOLVE_EXIT_FILE_NOT_FOUND)
-    try:
-        content = script.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        print(
-            f"spg-bootstrap-error: file-not-found — cannot read {script}: {exc}",
-            file=sys.stderr,
-        )
-        sys.exit(_RESOLVE_EXIT_FILE_NOT_FOUND)
-    if _RESOLVE_ENTRY_CANONICAL_MARKER not in content:
-        print(
-            "spg-bootstrap-error: store-stub — resolve_entry.py exists but is not "
-            "the canonical resolver (missing FX-130 marker); reinstall the plugin",
-            file=sys.stderr,
-        )
-        sys.exit(_RESOLVE_EXIT_STORE_STUB)
-    timeout = _resolve_resolve_timeout(os.environ.get(_RESOLVE_TIMEOUT_ENV, ""))
-    command = [sys.executable, str(script), "--json"]
-    if getattr(args, "project_root", None):
-        command += ["--project-root", args.project_root]
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        print(
-            f"spg-bootstrap-error: timeout — resolve_entry did not finish within "
-            f"{timeout}s (SPG_RESOLVE_TIMEOUT); raise the value or inspect the host",
-            file=sys.stderr,
-        )
-        sys.exit(_RESOLVE_EXIT_TIMEOUT)
-    except FileNotFoundError as exc:
-        print(f"spg-bootstrap-error: python-missing — {exc}", file=sys.stderr)
-        sys.exit(_RESOLVE_EXIT_PYTHON_MISSING)
-    if completed.returncode != 0:
-        print(
-            f"spg-bootstrap-error: resolve_entry exited {completed.returncode}",
-            file=sys.stderr,
-        )
-        if completed.stderr:
-            sys.stderr.write(completed.stderr)
-        sys.exit(_RESOLVE_EXIT_OTHER)
-    sys.stdout.write(completed.stdout)
+    from entry_resolution_cli import ResolverPolicy, cmd_resolve_entry as run
+    policy = ResolverPolicy(
+        canonical_marker=_RESOLVE_ENTRY_CANONICAL_MARKER,
+        resolver_relative_path=_RESOLVE_ENTRY_REL,
+        timeout_env=_RESOLVE_TIMEOUT_ENV,
+        resolve_exit_other=_RESOLVE_EXIT_OTHER,
+        resolve_exit_python_missing=_RESOLVE_EXIT_PYTHON_MISSING,
+        resolve_exit_file_not_found=_RESOLVE_EXIT_FILE_NOT_FOUND,
+        resolve_exit_timeout=_RESOLVE_EXIT_TIMEOUT,
+        resolve_exit_store_stub=_RESOLVE_EXIT_STORE_STUB,
+    )
+    return run(
+        args, definition_policy=policy, product_root=ROOT,
+        resolve_resolve_timeout=_resolve_resolve_timeout,
+    )
 
 
 def _build_cli_parser(parser_argv=()):

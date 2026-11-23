@@ -17891,156 +17891,21 @@ def _archguard_load_schema(root=None):
         return None, f"invalid schema {schema_path}: {exc}"
 
 
-def _archguard_severity(count, warn, error):
-    if error is not None and count >= error:
-        return "ERROR"
-    if warn is not None and count >= warn:
-        return "WARN"
-    return None
-
-
-def _archguard_exclusion_match(rel_path, exclusions):
-    """Return the first exclusion entry matching rel_path, or None.
-
-    Single matching implementation for every ArchGuard scan face (FIX-350):
-    fnmatch on the posix form, supports ``**`` segments. Callers that only
-    need the boolean verdict use :func:`_archguard_excluded`; callers that
-    must disclose WHICH rule fired (DEC-151: 豁免必披露) take the entry's
-    ``reason`` from here.
-    """
-    posix = str(rel_path).replace("\\", "/")
-    for entry in exclusions or []:
-        pat = entry.get("path") if isinstance(entry, dict) else entry
-        if not pat:
-            continue
-        # Support a leading **/ by also matching the basename segment.
-        if fnmatch.fnmatch(posix, pat):
-            return entry
-        if pat.startswith("**/"):
-            base = pat[3:]
-            if fnmatch.fnmatch(Path(posix).name, base):
-                return entry
-            if fnmatch.fnmatch(posix, base):
-                return entry
-        # segment-agnostic match: any path containing a segment matching the bare glob
-        bare = pat.replace("**/", "").replace("/**", "")
-        if bare and any(fnmatch.fnmatch(seg, bare) for seg in posix.split("/")):
-            return entry
-    return None
-
-
-def _archguard_excluded(rel_path, exclusions):
-    """True if rel_path matches any exclusion glob (fnmatch, supports ** segments)."""
-    return _archguard_exclusion_match(rel_path, exclusions) is not None
-
-
-def _archguard_iter_code_files(root, extensions=(".py", ".js", ".ts")):
-    """Yield (rel_path, abs_path) for code files under root, skipping noise dirs."""
-    root = Path(root)
-    skip_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", ".pytest_cache"}
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-        for name in filenames:
-            if name.endswith(extensions):
-                abs_path = Path(dirpath) / name
-                yield abs_path.relative_to(root), abs_path
+from checks.architecture_health import (
+    _archguard_excluded, _archguard_exclusion_match, _archguard_iter_code_files, _archguard_severity,
+)
 
 
 def check_architecture_health(root=None, schema=None):
-    """REQ-101 ArchGuard check 1: module/function/constant size + duplicate constants."""
+    """Check the plugin (or a supplied fixture root) with its original policy."""
+    from checks.architecture_health import scan_architecture
+
     root = Path(root) if root is not None else ROOT
     if schema is None:
         schema, err = _archguard_load_schema(root)
         if schema is None:
             return {"error": err, "findings": [], "summary": {"errors": 0, "warnings": 0}}
-    ms = schema.get("module_size", {})
-    fs = schema.get("function_size", {})
-    mc = schema.get("module_constants", {})
-    gate = schema.get("gate_integration", {})
-    exclusions = ms.get("exclusions", [])
-    ms_warn, ms_error = ms.get("warn_lines"), ms.get("error_lines")
-    fn_warn, fn_error = fs.get("warn_lines"), fs.get("error_lines")
-    c_warn, c_error = mc.get("warn_count"), mc.get("error_count")
-    detect_dup = bool(mc.get("detect_duplicates"))
-
-    findings = []
-    const_re = re.compile(r"^[A-Z][A-Z0-9_]+ *=")
-
-    for rel, abs_path in _archguard_iter_code_files(root):
-        try:
-            text = abs_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        lines = text.splitlines()
-        n_lines = len(lines)
-
-        # FIX-350: the exclusion gate covers every scan face, not only
-        # module_size — function_size / module_constants / duplicate_constant
-        # honor the same schema `module_size.exclusions` list (module_size
-        # semantics unchanged; a schema with no exclusions behaves as before).
-        excluded = _archguard_excluded(rel, exclusions)
-
-        # module size (only when not excluded)
-        if not excluded:
-            sev = _archguard_severity(n_lines, ms_warn, ms_error)
-            if sev:
-                findings.append({
-                    "check": "module_size", "severity": sev,
-                    "path": str(rel), "lines": n_lines,
-                })
-
-        # Python-only: function size via ast + module constants + duplicate constants
-        if str(rel).endswith(".py") and not excluded:
-            # function sizes
-            try:
-                tree = ast.parse(text)
-            except SyntaxError:
-                tree = None
-            if tree is not None:
-                for node in ast.walk(tree):
-                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.end_lineno:
-                        fn_lines = node.end_lineno - node.lineno + 1
-                        sev = _archguard_severity(fn_lines, fn_warn, fn_error)
-                        if sev:
-                            findings.append({
-                                "check": "function_size", "severity": sev,
-                                "path": str(rel), "name": node.name,
-                                "lines": fn_lines, "lineno": node.lineno,
-                            })
-            # module constants + duplicates
-            const_names = {}  # name -> first line
-            dup_names = {}    # name -> list of lines
-            for idx, line in enumerate(lines, start=1):
-                m = const_re.match(line)
-                if not m:
-                    continue
-                name = m.group(0).split("=")[0].strip()
-                if name not in const_names:
-                    const_names[name] = idx
-                else:
-                    dup_names.setdefault(name, [const_names[name]]).append(idx)
-            if const_names:
-                sev = _archguard_severity(len(const_names), c_warn, c_error)
-                if sev:
-                    findings.append({
-                        "check": "module_constants", "severity": sev,
-                        "path": str(rel), "count": len(const_names),
-                    })
-            if detect_dup:
-                for name, ln_list in dup_names.items():
-                    findings.append({
-                        "check": "duplicate_constant", "severity": "ERROR",
-                        "path": str(rel), "name": name, "lines": ln_list,
-                    })
-
-    errors = sum(1 for f in findings if f["severity"] == "ERROR")
-    warnings = sum(1 for f in findings if f["severity"] == "WARN")
-    return {
-        "findings": findings,
-        "summary": {"errors": errors, "warnings": warnings},
-        "schema_version": schema.get("version"),
-        "fatal_on_error": bool(gate.get("fatal_on_error", False)),
-    }
+    return scan_architecture(root, schema)
 
 
 def _archguard_normalized_lines(text, normalize_le=True, ignore_ws=True):
@@ -19950,26 +19815,10 @@ def _archguard_print_findings(title, result, hint_key="check"):
 
 
 def cmd_check_architecture_health(args):
-    """Run REQ-101 ArchGuard module/function/constant-size guard (advisory in 0.58.0)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    result = check_architecture_health()
-    print("\n=== Architecture Health Check (ArchGuard) ===")
-    if result.get("error"):
-        print(f"  [ERROR] {result['error']}")
-        if getattr(args, "fail_on_issues", False):
-            sys.exit(1)
-        print()
-        return
-    errors, warnings = _archguard_print_findings("Architecture Health", result)
-    fatal = bool(result.get("fatal_on_error"))
-    print(f"\n  Result: ISSUES FOUND — {errors} ERROR, {warnings} WARN"
-          + (" (advisory — does not block release)" if not fatal else ""))
-    if getattr(args, "fail_on_issues", False) and fatal and errors > 0:
-        sys.exit(1)
-    print()
+    from checks.architecture_health import run_architecture_health
+
+    run_architecture_health(args, HOST_PROJECT_ROOT, PLUGIN_ROOT, PLUGIN_ROOT / ARCHGUARD_SCHEMA_REL,
+                            check_architecture_health, _archguard_print_findings)
 
 
 def cmd_check_loop_health(args):
@@ -23550,6 +23399,10 @@ def _build_cli_parser(parser_argv=()):
         "check-architecture-health",
         help="ArchGuard: module/function/constant-size + duplicate-constant guard (advisory in 0.58.0)",
     )
+    cah_p.add_argument("--scope", choices=("plugin", "host"), default="plugin",
+                       help="Scan the installed plugin (default), or host .py/.js/.ts source under --project-root or cwd")
+    cah_p.add_argument("--policy", metavar="JSON",
+                       help="Host scope only: explicitly override installed thresholds, exclusions or gating; relative paths start at the host root")
     cah_p.add_argument("--fail-on-issues", action="store_true",
                        help="Exit non-zero only if gate_integration.fatal_on_error is true and ERRORs found")
 

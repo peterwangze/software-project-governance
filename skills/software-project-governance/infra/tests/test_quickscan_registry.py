@@ -192,10 +192,13 @@ _PYTHON_SOURCES = None
 
 
 def _python_sources():
-    """Engine + ``checks/*.py`` source text: the symbol universe C3 cites."""
+    """Read the context, path and gate definitions used by the four adjudicated sections."""
     global _PYTHON_SOURCES
     if _PYTHON_SOURCES is None:
-        parts = [_engine_source()]
+        parts = [(_INFRA_DIR / filename).read_text(encoding="utf-8") for filename in (
+            "workflow_context_bindings.py", "workflow_project_roots.py", "workflow_report_selection.py",
+            "capability_context.py",
+        )]
         parts.extend(
             path.read_text(encoding="utf-8")
             for path in sorted((_INFRA_DIR / "checks").glob("*.py"))
@@ -263,23 +266,28 @@ class Acceptance1CoverageTests(unittest.TestCase):
 
         with _sandbox_tmp() as tmp:
             engine = Path(tmp) / ENGINE.name
-            shutil.copyfile(_INFRA_DIR / "full_check_runner.py", engine.with_name("full_check_runner.py"))
-            for owner in _INFRA_DIR.glob("health_*_sections.py"):
-                shutil.copyfile(owner, engine.with_name(owner.name))
-            source = _engine_source()
+            shutil.copytree(_INFRA_DIR, engine.parent, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("tests", "__pycache__"))
+            selector = engine.with_name("workflow_report_selection.py")
+            source = selector.read_text(encoding="utf-8")
             call = "    yield product.section_28w_dsh_boundary(product_gate_active, _print_product_gate_skipped)"
             self.assertEqual(source.count(call), 1)
             for replacement, error in ((call + "\n" + call, "duplicate"),
                                        ("    return\n" + call, "sequence"),
-                                       (call.replace("dsh_boundary", "missing_report"), "missing report")):
-                engine.write_text(source.replace(call, replacement), encoding="utf-8")
+                                       (call.replace("dsh_boundary", "missing_report"), "missing report"),
+                                       ("", "product-gate declarations")):
+                selector.write_text(source.replace(call, replacement), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, error):
                     qr.discover_engine_segment_ids(engine)
-            engine.write_text(source.replace(call, ""), encoding="utf-8")
-            self.assertNotIn("28w", qr.discover_engine_segment_ids(engine))
+            # A report outside the product-gate set can disappear without changing
+            # either gate declaration. Both observers must still report its absence.
+            nongate = next(line for line in source.splitlines() if "yield review.section_39_" in line)
+            selector.write_text(source.replace(nongate, ""), encoding="utf-8")
+            self.assertNotIn("39", qr.discover_engine_segment_ids(engine))
             with patch.object(generator, "_ENGINE_PATH", engine):
-                self.assertNotIn("28w", generator.extract_check_segments()["ids"])
-
+                self.assertNotIn("39", generator.extract_check_segments()["ids"])
+            selector.write_text(source, encoding="utf-8")
+            self.assertEqual(set(qr.discover_engine_segment_ids(engine)), set(_snapshot_ids()))
 
     def test_quick_observes_fresh_source_when_its_accelerator_cannot_load(self):
         from types import SimpleNamespace
@@ -817,7 +825,8 @@ class CarrierDisciplineTests(unittest.TestCase):
         selector 的接线面被逐字符钉死（唯一一行、缩进在分支内、模块名与导入名
         精确）——任何新增的引擎侧选择/编排逻辑都会打穿它。
         """
-        source = _engine_source()
+        source = (_INFRA_DIR / "governance_check_cli.py").read_text(encoding="utf-8")
+        self.assertNotIn("quickscan_registry", _engine_source())
         self.assertNotIn("quickscan_registry", source)
         wiring = [line for line in source.splitlines() if "quickscan" in line]
         self.assertEqual(len(wiring), 1, wiring)

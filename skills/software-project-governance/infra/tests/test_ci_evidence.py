@@ -542,11 +542,26 @@ class Check38ContractTests(unittest.TestCase):
         self.assertTrue(hasattr(vw, "check_ci_evidence"))
 
     def test_check38_import_export_placed_with_domain_imports(self):
-        src = (_INFRA_DIR / "verify_workflow.py").read_text(encoding="utf-8")
-        self.assertIn("from checks.ci_domain import (", src)
-        idx_import = src.index("from checks.ci_domain import (")
-        idx_block = src.index("yield delivery.section_38_ci_evidence(")
-        self.assertLess(idx_import, idx_block)
+        import ast
+        import inspect
+        import registry
+        from checks.ci_domain import check_ci_evidence
+
+        selector = vw._full_check_results
+        owner = inspect.getmodule(selector)
+        self.assertIs(owner.check_ci_evidence, check_ci_evidence)
+        self.assertIs(registry.load_check("38"), check_ci_evidence)
+        module = ast.parse(inspect.getsource(owner))
+        imported = [node.lineno for node in module.body if isinstance(node, ast.ImportFrom)
+                    and node.module == "checks.ci_domain"
+                    and any(alias.name == "check_ci_evidence" for alias in node.names)]
+        section = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+                       and node.name == selector.__name__)
+        calls = [node.lineno for node in ast.walk(section) if isinstance(node, ast.Yield)
+                 and ast.unparse(node.value) == "delivery.section_38_ci_evidence(check_ci_evidence)"]
+        self.assertEqual(len(imported), 1)
+        self.assertEqual(len(calls), 1)
+        self.assertLess(imported[0], calls[0])
 
 
 if __name__ == "__main__":

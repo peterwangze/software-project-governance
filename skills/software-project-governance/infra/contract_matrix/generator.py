@@ -87,16 +87,12 @@ REPRESENTATIVE_RESULT_CALLS = (
 # ── Face 1: CLI dispatch key set (live argparse surface) ───────────────────────────
 
 
-def _public_workflow():
-    """Both the CLI and Result faces observe the installed public Python entry."""
-    import verify_workflow
-    return verify_workflow
-
-
 def extract_cli_dispatch() -> dict:
     """Observe public keys and alias groups on the engine's real argument parser and handler resolver."""
     import registry
-    _, commands = _public_workflow()._build_cli_parser()
+    from workflow_cli import build_runtime_parser
+
+    _, commands = build_runtime_parser()
     by_handler = {}
     # Parser keys remain independent of declarations so R5 can report a
     # missing/extra row. Group only the handlers that can actually be called.
@@ -129,15 +125,15 @@ def _segment_sort_key(segment_id: str):
 
 def extract_check_segments() -> dict:
     """Read titles from executable report bodies or historical engine banners."""
-    from full_check_sources import bound_report_sources, parse_module_source
+    from full_check_sources import full_check_layout, parse_module_source
 
     source = _ENGINE_PATH.read_text(encoding="utf-8")
     tree = parse_module_source(_ENGINE_PATH, source)
-    reports = bound_report_sources(_ENGINE_PATH, source, tree=tree)
+    reports, declarations, _ = full_check_layout(_ENGINE_PATH, source, tree=tree)
     titles: dict[str, str] = {}
     registry_ids: set[str] = set()
     registry_labels: dict[str, str] = {}
-    for node in tree.body:
+    for node in declarations.body:
         if not isinstance(node, ast.Assign):
             continue
         if not any(isinstance(t, ast.Name) and t.id in _REGISTRY_ASSIGNS
@@ -220,9 +216,10 @@ def extract_result_shapes() -> dict:
     A local ignored .governance must not choose a different static contract
     than a clean checkout. The checks themselves still execute unchanged.
     """
-    from unittest.mock import patch
+    from workflow_composition import ensure_installed
+    from workflow_public_api import public_binding, temporary_public_host
 
-    workflow = _public_workflow()
+    ensure_installed()
     shapes = {}
     with tempfile.TemporaryDirectory(prefix="contract-shapes-") as td:
         root = Path(td)
@@ -233,11 +230,12 @@ def extract_result_shapes() -> dict:
             "- **项目名称**: contract-matrix-fixture\n", encoding="utf-8")
         for filename in ("evidence-log.md", "risk-log.md", "decision-log.md"):
             (gov / filename).write_text("# Contract fixture\n", encoding="utf-8")
-        with patch.multiple(workflow, HOST_PROJECT_ROOT=root, GOVERNANCE_DIR=gov,
-                            SAMPLE_PATH=gov / "plan-tracker.md", EVIDENCE_PATH=gov / "evidence-log.md",
-                            RISK_PATH=gov / "risk-log.md"):
+        with temporary_public_host(root):
             for name in REPRESENTATIVE_RESULT_CALLS:
-                constructor = getattr(workflow, name, None)
+                try:
+                    constructor = public_binding(name)
+                except AttributeError:
+                    constructor = None
                 if not callable(constructor):
                     raise RuntimeError(f"representative Result constructor {name!r} missing — engine drift")
                 shapes[name] = type_signature(constructor())

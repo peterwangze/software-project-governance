@@ -29,7 +29,31 @@ import os
 import re
 import sys
 from pathlib import Path
+from contextlib import contextmanager
+from functools import lru_cache
 from datetime import date, timedelta
+
+# Each check owns one parser for its current evidence text. Readers already
+# holding it can finish after scope exit. Copied contexts see the detached slot.
+_review_context = {}
+
+
+@contextmanager
+def _task_type_scope():
+    # Standalone startup and checks which never read this index need no contextvars import.
+    from contextvars import ContextVar
+
+    state = _review_context.get("task_types")
+    if state is None:
+        state = _review_context.setdefault("task_types", ContextVar("review_task_types", default=None))
+    slot = [lru_cache(maxsize=1)(_parse_task_type_index)]
+    token = state.set(slot)
+    try:
+        yield
+    finally:
+        slot[0] = None
+        state.reset(token)
+
 
 def _read_task_type_index(evidence_path):
     """FIX-174 R1 (P0-3): map task_id -> joined type+description text scanned
@@ -44,13 +68,22 @@ def _read_task_type_index(evidence_path):
     Returns dict task_id -> str (the concatenation of the row's type cell and
     description cell, lowercased). Best-effort: returns {} on read failure.
     """
-    index = {}
     if not evidence_path.is_file():
-        return index
+        return {}
     try:
         content = evidence_path.read_text(encoding="utf-8")
     except (IOError, OSError):
-        return index
+        return {}
+    state = _review_context.get("task_types")
+    slot = state.get() if state is not None else None
+    parse = slot[0] if slot is not None else None
+    if parse is None:
+        return _parse_task_type_index(content)
+    return parse(content).copy()
+
+
+def _parse_task_type_index(content):
+    index = {}
     for line in content.split("\n"):
         stripped = line.strip()
         if not stripped.startswith("|"):
@@ -2321,6 +2354,7 @@ def _terminal_exemption_cause_clause(task_id, closed, completed):
         _terminal_exemption_source(task_id, closed, completed)]
 
 
+@_task_type_scope()
 def check_review_closure(review_sequence=None, plan_tracker_completed=None,
                          routing_table=None, legacy_files=None):
     """FIX-174 (DEC-094): Check 30 — review closure state-machine validation.

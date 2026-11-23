@@ -505,5 +505,35 @@ def main(argv=None):
     return 0
 
 
+def _dispatch_bootstrap_if_selected(argv):
+    """Dispatch the standalone bootstrap handler before loading the workflow engine.
+    Unrecognized arguments stay with the full parser, which owns global usage.
+    """
+    try:
+        explicit, remaining = extract_project_root_arg(argv)
+    except ValueError:
+        return  # main renders the historical extraction error
+    if remaining[:1] != ["governance-bootstrap"]:
+        return
+    import argparse
+    import registry
+    from bootstrap_aggregate import add_arguments
+    parser = argparse.ArgumentParser(prog="verify_workflow governance-bootstrap")
+    add_arguments(parser)
+    args, unknown = parser.parse_known_args(remaining[1:])
+    if unknown:
+        return
+    args.command = remaining[0]
+    args.project_root = explicit
+    if explicit is not None:
+        host, error = validate_project_root(explicit)
+        if error is not None:
+            display = str(explicit) if explicit else "<empty>"
+            print(f"verify_workflow: error: invalid-project-root — {display} ({error})", file=sys.stderr)
+            sys.exit(2)
+        args._validated_host_root = host
+    sys.exit(registry.load_handler(args.command, parsed_args=True)(args))
+
+
 if __name__ == "__main__":
     sys.exit(main())

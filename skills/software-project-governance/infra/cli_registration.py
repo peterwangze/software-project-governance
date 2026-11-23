@@ -2,6 +2,8 @@
 
 import ast
 import sys
+from contextvars import ContextVar
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -17,6 +19,19 @@ _DSH_CALL_OWNERS = {"dsh_doctor", "dsh_compat", "host_validation_cli", "host_loa
                     "checks.dsh_smoke", "checks.dsh_boundary"}
 
 
+# All helpers reached from one split-shell observation share its source bytes.
+# Legacy layouts continue to use the original UTF-8 reader.
+_observation = ContextVar("cli_registration_sources", default=None)
+
+
+def _sibling_body(entry, module):
+    sources = _observation.get()
+    if sources is not None:
+        return sources.syntax(module)[2].body
+    source = entry.parent.joinpath(*module.split(".")).with_suffix(".py")
+    return ast.parse(source.read_text(encoding="utf-8"), filename=str(source)).body
+
+
 def _handler_source(path, definition, depth=0, *, owners=_DSH_CALL_OWNERS):
     """Follow the handler's directly imported adapters in the inspected installation."""
     calls = [node for node in ast.walk(definition)
@@ -26,9 +41,8 @@ def _handler_source(path, definition, depth=0, *, owners=_DSH_CALL_OWNERS):
             continue
         if node.level:
             return False
-        source = path.parent.joinpath(*node.module.split(".")).with_suffix(".py")
         try:
-            statements = ast.parse(source.read_text(encoding="utf-8"), filename=str(source)).body
+            statements = _sibling_body(path, node.module)
         except (OSError, UnicodeError, SyntaxError):
             return False
         for alias in node.names:
@@ -69,9 +83,8 @@ def _final_registry_whitelist(registry):
 def _registered_owner_definition(path, registry, module, handler, namespace_call):
     if module not in _final_registry_whitelist(registry):
         return None
-    source = path.with_name(module + ".py")
     try:
-        statements = ast.parse(source.read_text(encoding="utf-8"), filename=str(source)).body
+        statements = _sibling_body(path, module)
     except (OSError, UnicodeError, SyntaxError):
         return False
     function = _local_definition(statements, handler)
@@ -89,9 +102,14 @@ def _path_origin(scope, expression):
 
 def _workspace_root_available(path, scope, selected):
     if isinstance(selected, ast.Lambda):
-        if not isinstance(selected.body, ast.Name):
-            return False
-        root = _module_binding(scope, selected.body.id)
+        if isinstance(selected.body, ast.Name):
+            binding = scope, selected.body.id
+        else:
+            binding = _qualified_module_member(path, scope, selected.body)
+            if not binding:
+                return False
+        scope, name = binding
+        root = _module_binding(scope, name)
         return isinstance(root, ast.Assign) and _path_origin(scope[:scope.index(root)], root.value)
     body = selected.body[1:] if ast.get_docstring(selected) else selected.body
     if len(body) != 2 or not isinstance(body[0], ast.ImportFrom) or not isinstance(body[1], ast.Return):
@@ -108,7 +126,7 @@ def _workspace_root_available(path, scope, selected):
     return len(body) == 1 and isinstance(body[0], ast.Return) and _path_origin(owner, body[0].value)
 
 
-def _workspace_selector_available(scope, selected):
+def _workspace_selector_available(path, scope, selected):
     """Prove the native identity route or the entry's shipped public-name override route."""
     if len(selected.args.args) != 2:
         return False
@@ -118,6 +136,28 @@ def _workspace_selector_available(scope, selected):
     body = selected.body[1:] if ast.get_docstring(selected) else selected.body
     if len(body) == 1:
         return isinstance(body[0], ast.Return) and isinstance(body[0].value, ast.Name) and body[0].value.id == native
+    if (len(body) == 2 and isinstance(body[0], ast.ImportFrom) and body[0].level == 0
+            and body[0].module == "workflow_public_api" and len(body[0].names) == 1):
+        item = body[0].names[0]
+        returned = body[1].value if isinstance(body[1], ast.Return) else None
+        if (not isinstance(returned, ast.Call) or not isinstance(returned.func, ast.Name)
+                or returned.func.id != (item.asname or item.name) or returned.keywords
+                or [ast.unparse(arg) for arg in returned.args] != [arg.arg for arg in selected.args.args]):
+            return False
+        public = _module_body(path, body[0].module)
+        selector = _local_definition(public, item.name)
+        if not _binds_explicit_call(returned, selector):
+            return False
+        steps = [ast.unparse(node) for node in selector.body]
+        table = _module_binding(public, "_REGISTERED_OVERRIDES")
+        return (steps == [
+            "if name in _DELETED:\n    if name == 'check_plugin_freshness':\n"
+            "        raise NameError(f\"name '{name}' is not defined\", name=name)\n    raise AttributeError(name)",
+            "if name in _OVERRIDES and _OVERRIDES[name] is not _ORIGINAL_COMMANDS.get(name):\n    return _OVERRIDES[name]",
+            "return native",
+        ] and isinstance(table, ast.Assign) and isinstance(table.value, ast.Set)
+                and {"check_plugin_freshness", "cmd_check_plugin_freshness"} <=
+                {value.value for value in table.value.elts if isinstance(value, ast.Constant)})
     # The public command and its inner reader take different missing-name paths.
     # Prove their actual lookup and the table used to preserve the domain default.
     if ([arg.arg for arg in selected.args.args] != ["name", "native"] or len(body) != 4
@@ -142,36 +182,66 @@ def _workspace_selector_available(scope, selected):
             {item.id for item in items.iter.elts if isinstance(item, ast.Name)})
 
 
-def _workspace_port_accepts(path, engine, workspace, name, call):
-    """Follow the workspace import and the selected direct module attribute in the entry."""
-    scope = workspace
-    selected = _local_definition(scope, name)
-    aliases = set()
-    for index, statement in enumerate(engine):
-        if (isinstance(statement, ast.If) and ast.unparse(statement.test) == "__name__ == '__main__'"
-                and any(ast.unparse(node) == "sys.exit(main())" for node in statement.body)):
-            if scope is engine:
-                scope = engine[:index]
-            break
+def _workspace_writes(scope, statements, *, at_import):
+    """Yield immediate writes in their own module namespace and evaluation order."""
+    aliases = {a.asname or a.name for node in (() if at_import else scope) if isinstance(node, ast.Import)
+               for a in node.names if a.name == "workspace_checks"}
+    for index, statement in enumerate(statements):
         if isinstance(statement, ast.Import):
-            aliases.update(item.asname or item.name for item in statement.names if item.name == "workspace_checks")
+            aliases.update(a.asname or a.name for a in statement.names if a.name == "workspace_checks")
         if not isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Delete)):
             continue
         targets = statement.targets if hasattr(statement, "targets") else [statement.target]
-        if not any(isinstance(target, ast.Attribute) and target.attr == name
-                   and isinstance(target.value, ast.Name) and target.value.id in aliases for target in targets):
+        for target in targets:
+            if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id in aliases:
+                yield index, (target.attr, getattr(statement, "value", None), scope[:index] if at_import else scope)
+
+
+def _workspace_binding_sequence(path, engine):
+    layout = _release_installation(path, engine)
+    if layout is None:
+        return None
+    module, installed, split = layout
+    # Include an ordinary entry-level write only if it executes before main.
+    active = []
+    for statement in engine:
+        branch = _main_guard_branch(statement)
+        active.extend([statement] if branch is None else branch)
+        if any(ast.unparse(st) == "sys.exit(main())" for st in branch or ()):
+            break
+    entry_writes = {}
+    for index, write in _workspace_writes(active, active, at_import=True):
+        entry_writes.setdefault(index, []).append(write)
+    if not split:
+        return [write for group in entry_writes.values() for write in group]
+    writes = []
+    for index, step in enumerate(active):
+        if isinstance(step, ast.ImportFrom) and step.module == "workflow_composition" and not step.level:
+            writes.extend(write for _, write in _workspace_writes(module, module, at_import=True))
+        if (isinstance(step, ast.Expr) and isinstance(step.value, ast.Call)
+                and isinstance(step.value.func, ast.Name)
+                and _direct_import(engine, step.value.func.id, "workflow_composition") is not None):
+            writes.extend(write for _, write in _workspace_writes(module, installed, at_import=False))
+        writes.extend(entry_writes.get(index, ()))
+    return writes
+
+
+def _workspace_port_accepts(path, writes, workspace, name, call):
+    scope = workspace
+    selected = _local_definition(scope, name)
+    for attr, expression, declaration in writes:
+        if attr != name:
             continue
-        scope = engine
-        selected = getattr(statement, "value", None)
+        scope, selected = declaration, expression
         if isinstance(selected, ast.Name):
-            selected = _module_binding(engine[:index], selected.id)
+            selected = _module_binding(scope, selected.id)
             if isinstance(selected, (ast.Assign, ast.AnnAssign)):
                 selected = selected.value
     if not _binds_explicit_call(call, selected):
         return False
     if name == "_product_root":
         return _workspace_root_available(path, scope, selected)
-    return _workspace_selector_available(scope, selected)
+    return _workspace_selector_available(path, scope, selected)
 
 
 def _workspace_freshness_dispatch(path, engine, registry, call):
@@ -179,8 +249,8 @@ def _workspace_freshness_dispatch(path, engine, registry, call):
     if not _dispatches_declared_handler(registry) or "workspace_checks" not in _final_registry_whitelist(registry):
         return False
     try:
-        workspace = ast.parse(path.with_name("workspace_checks.py").read_text(encoding="utf-8")).body
-        display = ast.parse(path.with_name("workspace_check_cli.py").read_text(encoding="utf-8")).body
+        workspace = _sibling_body(path, "workspace_checks")
+        display = _sibling_body(path, "workspace_check_cli")
     except (OSError, SyntaxError, UnicodeError):
         return False
     entry = _local_definition(workspace, "cmd_check_plugin_freshness")
@@ -198,10 +268,13 @@ def _workspace_freshness_dispatch(path, engine, registry, call):
         return False
     root_calls = [c for c in ast.walk(report) if isinstance(c, ast.Call)
                   and isinstance(c.func, ast.Name) and c.func.id == report.args.args[1].arg]
-    return (_workspace_port_accepts(path, engine, workspace, "effective_entry", body[1].value)
+    writes = _workspace_binding_sequence(path, engine)
+    if writes is None:
+        return False
+    return (_workspace_port_accepts(path, writes, workspace, "effective_entry", body[1].value)
             and _binds_explicit_call(body[2].value, _local_definition(workspace, "check_plugin_freshness"))
             and bool(root_calls)
-            and all(_workspace_port_accepts(path, engine, workspace, "_product_root", c) for c in root_calls))
+            and all(_workspace_port_accepts(path, writes, workspace, "_product_root", c) for c in root_calls))
 
 
 def _dsh_owner_is_loadable(path, registry, module, handler, namespace_call):
@@ -311,9 +384,8 @@ _RELEASE_ADAPTERS = {
 def _module_body(path, module):
     if not isinstance(module, str) or not all(part.isidentifier() for part in module.split(".")):
         return ()
-    source = path.parent.joinpath(*module.split(".")).with_suffix(".py")
     try:
-        return ast.parse(source.read_text(encoding="utf-8"), filename=str(source)).body
+        return _sibling_body(path, module)
     except (OSError, UnicodeError, SyntaxError):
         return ()
 
@@ -372,7 +444,13 @@ def _release_policy_available(path, engine, expression):
             or not isinstance(expression.func, ast.Call)):
         return False
     lookup = expression.func
-    if (ast.unparse(lookup.func) != "_product_policy" or lookup.keywords or len(lookup.args) != 1
+    policy = ast.unparse(lookup.func)
+    if isinstance(lookup.func, ast.Attribute):
+        target = _qualified_module_member(path, engine, lookup.func)
+        if target is None:
+            return False
+        engine, policy = target
+    if (policy != "_product_policy" or lookup.keywords or len(lookup.args) != 1
             or not isinstance(lookup.args[0], ast.Constant) or not isinstance(lookup.args[0].value, str)):
         return False
     name = lookup.args[0].value
@@ -403,7 +481,9 @@ def _engine_release_inputs(path, engine, selected, keywords):
                 if not isinstance(member, ast.Lambda) or member.args.args or member.args.kwonlyargs:
                     return False
                 member = member.body
-            if not isinstance(member, ast.Name) or not isinstance(_module_binding(engine, member.id), ast.Assign):
+            target = (_qualified_module_member(path, engine, member) if isinstance(member, ast.Attribute)
+                      else (engine, member.id) if isinstance(member, ast.Name) else None)
+            if target is None or not isinstance(_module_binding(*target), ast.Assign):
                 return False
         else:
             kind = ast.ClassDef if role == "repository_context" else ast.FunctionDef
@@ -412,9 +492,84 @@ def _engine_release_inputs(path, engine, selected, keywords):
     return True
 
 
+def _main_guard_branch(node):
+    if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+        return None
+    test = node.test
+    if ast.unparse(test.left) != "__name__" or len(test.ops) != 1:
+        return None
+    literal = test.comparators[0]
+    if isinstance(test.ops[0], ast.In) and isinstance(literal, (ast.Tuple, ast.List, ast.Set)):
+        if not all(isinstance(item, ast.Constant) for item in literal.elts):
+            return None
+        active = any(item.value == "__main__" for item in literal.elts)
+    elif isinstance(test.ops[0], ast.Eq) and isinstance(literal, ast.Constant):
+        active = literal.value == "__main__"
+    else:
+        return None
+    return node.body if active else node.orelse
+
+
+def _release_installation(path, engine):
+    """Follow the actual CLI bootstrap to the module that binds the release inputs."""
+    # Historical releases declare the bindings at the entry's top level.
+    if not any(isinstance(st, ast.ImportFrom) and st.module == "workflow_composition" for st in engine):
+        return engine, engine, False
+    source = _module_body(path, "workflow_composition")
+    for node in engine:
+        branch = _main_guard_branch(node)
+        if branch is None:
+            continue
+        for statement in branch:
+            if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+                continue
+            call = statement.value
+            if not isinstance(call.func, ast.Name):
+                continue
+            func_name = _direct_import(engine, call.func.id, "workflow_composition")
+            if func_name is None:
+                return None
+            definition = _local_definition(source, func_name)
+            if not _binds_explicit_call(call, definition):
+                return None
+            if func_name == "ensure_installed":
+                lock = next((st for st in definition.body if isinstance(st, ast.With)), None)
+                if (lock is None or len(lock.items) != 1
+                        or ast.unparse(lock.items[0].context_expr) != "_install_lock"):
+                    return None
+                guard = next((st for st in lock.body if isinstance(st, ast.If)), None)
+                if (guard is None or ast.unparse(guard.test) != "not _installed"
+                        or not guard.body or ast.unparse(guard.body[0]) != "install()"
+                        or not isinstance(_module_binding(source, "_installed"), ast.Assign)
+                        or ast.unparse(_module_binding(source, "_installed").value) != "False"):
+                    return None
+                definition = _local_definition(source, "install")
+                if definition is None:
+                    return None
+            return source, definition.body, True
+    return source, (), True
+
+
+def _qualified_module_member(path, scope, expression):
+    if not isinstance(expression, ast.Attribute) or not isinstance(expression.value, ast.Name):
+        return None
+    local = expression.value.id
+    binding = _module_binding(scope, local)
+    if not isinstance(binding, ast.Import):
+        return None
+    module = next((item.name for item in binding.names if (item.asname or item.name) == local), None)
+    if module not in {"workflow_project_roots", "workflow_policy_bindings"}:
+        return None
+    return _module_body(path, module), expression.attr
+
+
 def _selected_release_inputs(path, engine, owner, provider, keywords):
     """The owner defaults apply unless the target actually binds other inputs for __main__."""
-    for block in engine:
+    installation = _release_installation(path, engine)
+    if installation is None:
+        return False
+    engine, blocks, assembled = installation
+    for block in blocks:
         if not isinstance(block, ast.Try) or not block.body or not isinstance(block.body[0], ast.ImportFrom):
             continue
         imported = block.body[0]
@@ -426,21 +581,12 @@ def _selected_release_inputs(path, engine, owner, provider, keywords):
             return False
         binder = binding.asname or binding.name
         for guard in block.orelse:
-            if not isinstance(guard, ast.If) or not isinstance(guard.test, ast.Compare):
-                return False
-            test = guard.test
-            if ast.unparse(test.left) != "__name__" or len(test.ops) != 1:
-                return False
-            literal = test.comparators[0]
-            if isinstance(test.ops[0], ast.In) and isinstance(literal, (ast.Tuple, ast.List, ast.Set)):
-                if not all(isinstance(item, ast.Constant) for item in literal.elts):
-                    return False
-                active = any(item.value == "__main__" for item in literal.elts)
-            elif isinstance(test.ops[0], ast.Eq) and isinstance(literal, ast.Constant):
-                active = literal.value == "__main__"
+            if assembled and isinstance(guard, ast.Expr):
+                branch = [guard]
             else:
-                return False
-            branch = guard.body if active else guard.orelse
+                branch = _main_guard_branch(guard)
+                if branch is None:
+                    return False
             if not branch:
                 continue
             if len(branch) != 1 or not isinstance(branch[0], ast.Expr):
@@ -531,7 +677,7 @@ def _release_handler_is_loadable(path, engine, function):
     return _release_owner_accepts(path, engine, function.name, result.value)
 
 
-def _has_dispatch(path, engine, statements, key, handler):
+def _has_dispatch(path, engine, statements, key, handler, *, composition=None):
     args_parsed = any(
         isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "args" for t in node.targets)
         and isinstance(node.value, ast.Call) and ast.unparse(node.value.func) == "parser.parse_args"
@@ -553,8 +699,7 @@ def _has_dispatch(path, engine, statements, key, handler):
     target = call.func
     if ast.unparse(target) == "registry.load_handler(args.command or 'verify', parsed_args=True)":
         try:
-            source = path.with_name("registry.py").read_text(encoding="utf-8")
-            registry = ast.parse(source).body
+            registry = _sibling_body(path, "registry")
             rows = next(node.value for node in registry
                         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
                         and node.target.id == "_COMMANDS")
@@ -573,6 +718,10 @@ def _has_dispatch(path, engine, statements, key, handler):
                 return ("release_validation_cli" in _final_registry_whitelist(registry)
                         and _dispatches_declared_handler(registry)
                         and _release_owner_accepts(path, engine, handler, call))
+            if composition is not None and len(matches) == 1:
+                module, _, name = matches[0][1].rpartition(".")
+                return (name == handler and _dispatches_declared_handler(registry)
+                        and bool(_registered_owner_definition(path, registry, module, name, call)))
             return matches == [(key, f"verify_workflow.{handler}")]
         except (OSError, UnicodeError, SyntaxError, StopIteration, IndexError, KeyError, TypeError, ValueError):
             return False
@@ -663,6 +812,11 @@ def _binds_schema_call(call, definition, *, wrapper=False):
                                  and isinstance(args.defaults[0], ast.Tuple) and not args.defaults[0].elts)
 
 
+# Split schema nodes come from immutable, content-keyed source trees.
+# A supplied legacy entry AST can be edited by its caller and stays uncached.
+_composed_schema_call = lru_cache(maxsize=128)(_binds_schema_call)
+
+
 def _local_definition(statements, name, kind=ast.FunctionDef):
     """Read the final direct definition; a later replacement is not that callable."""
     for node in reversed(statements):
@@ -678,29 +832,67 @@ def _local_definition(statements, name, kind=ast.FunctionDef):
     return None
 
 
-def _schema_declares_parser(path, wrapper, invocation, key):
+def _runtime_factory_inputs(path, body, schema, wrapper, installed):
+    """Resolve the factory's direct imports and actual argument reads without importing the target."""
+    modules = {}
+    for node in body[:-1]:
+        if not isinstance(node, ast.Import):
+            return False
+        for alias in node.names:
+            if not installed.available(alias.name):
+                return False
+            source = _module_body(path, alias.name)
+            if not source:
+                return False
+            modules[alias.asname or alias.name] = source
+    arguments = body[-1].value
+    if (not wrapper.args.args or len(arguments.args) != 1
+            or ast.unparse(arguments.args[0]) != wrapper.args.args[0].arg):
+        return False
+    for item in arguments.keywords:
+        value = item.value
+        if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name):
+            binding = _module_binding(modules.get(value.value.id, ()), value.attr)
+        elif isinstance(value, ast.Name):
+            binding = _module_binding(schema, value.id)
+            if isinstance(binding, ast.ImportFrom) and binding.level == 0:
+                imported = next(alias.name for alias in binding.names if (alias.asname or alias.name) == value.id)
+                binding = _module_binding(_module_body(path, binding.module), imported)
+        else:
+            return False
+        if not isinstance(binding, (ast.Assign, ast.FunctionDef)):
+            return False
+    return True
+
+
+def _schema_declares_parser(path, wrapper, invocation, key, *, runtime_schema=None, installed=None):
     """Follow the shipped wrapper and its called families in this checkout only."""
+    binds = _binds_schema_call if runtime_schema is None else _composed_schema_call
     body = wrapper.body
     if ast.get_docstring(wrapper) is not None:
         body = body[1:]
-    if (len(body) != 2 or not _binds_schema_call(invocation, wrapper, wrapper=True)
-            or ast.unparse(body[0]) != "from workflow_cli import build_cli_parser"
-            or not isinstance(body[1], ast.Return) or not isinstance(body[1].value, ast.Call)
-            or ast.unparse(body[1].value.func) != "build_cli_parser"):
+    if not binds(invocation, wrapper, wrapper=True):
+        return False
+    if (not body or not isinstance(body[-1], ast.Return) or not isinstance(body[-1].value, ast.Call)
+            or ast.unparse(body[-1].value.func) != "build_cli_parser"):
+        return False
+    if runtime_schema is None:
+        if len(body) != 2 or ast.unparse(body[0]) != "from workflow_cli import build_cli_parser":
+            return False
+    elif not _runtime_factory_inputs(path, body, runtime_schema, wrapper, installed):
         return False
 
     def read_schema(name):
-        source = path.with_name(name + ".py")
         try:
-            return ast.parse(source.read_text(encoding="utf-8"), filename=str(source)).body
+            return _sibling_body(path, name)
         except (OSError, UnicodeError, SyntaxError):
             return None
 
-    schema = read_schema("workflow_cli")
+    schema = read_schema("workflow_cli") if runtime_schema is None else runtime_schema
     if schema is None:
         return False
     builder = _local_definition(schema, "build_cli_parser")
-    if (not builder or not _binds_schema_call(body[1].value, builder)
+    if (not builder or not binds(body[-1].value, builder)
             or ast.unparse(builder.body[-1]) != "return (parser, subparsers)"):
         return False
     # Only the schema siblings are part of this static proof. An unconditional
@@ -731,7 +923,7 @@ def _schema_declares_parser(path, wrapper, invocation, key):
         if module not in sources or not name.startswith("register_"):
             return False
         family = _local_definition(sources[module], name)
-        if (family is None or not _binds_schema_call(call, family) or not call.args
+        if (family is None or not binds(call, family) or not call.args
                 or ast.unparse(call.args[0]) != "subparsers" or not family.args.args
                 or family.args.args[0].arg != "subparsers"):
             return False
@@ -740,9 +932,23 @@ def _schema_declares_parser(path, wrapper, invocation, key):
     return found
 
 
-def _delegates_to_owner(definition, module, owner_body, positional, keywords, setup=()):
+def _delegates_to_owner(definition, module, owner_body, positional, keywords, setup=(), *, path_provider=None):
     """Recognize a direct, unconditional import and return in the shipped adapters."""
     body = definition.body[1:] if ast.get_docstring(definition) is not None else definition.body
+    if path_provider is not None and body and isinstance(body[0], ast.Import):
+        roots = body[0].names
+        if len(roots) != 1 or roots[0].name != "workflow_project_roots":
+            return False
+        local = roots[0].asname or roots[0].name
+        targets = _module_body(path_provider, roots[0].name)
+        keywords = dict(keywords)
+        for key in ("plugin_root", "display_path"):
+            if key in keywords:
+                name = keywords[key]
+                if _module_binding(targets, name) is None:
+                    return False
+                keywords[key] = local + "." + name
+        body = body[1:]
     if len(body) != len(setup) + 2:
         return False
     dependency, *assignments, result = body
@@ -778,7 +984,7 @@ def _delegates_to_owner(definition, module, owner_body, positional, keywords, se
     return not (set(aliases.values()) & (names | set(setup)))
 
 
-def _has_capability_handler(path, functions):
+def _has_capability_handler(path, functions, *, composed=False, owner_body=()):
     """Observe the historical inline handler or the three current adapter calls."""
     handler = functions.get("cmd_capability_context")
     if handler is None:
@@ -800,22 +1006,29 @@ def _has_capability_handler(path, functions):
         return False
     owners = {}
     for module in ("status_cli", "capability_context"):
-        sibling = path.with_name(module + ".py")
         try:
-            body = ast.parse(sibling.read_text(encoding="utf-8"), filename=str(sibling)).body
+            body = _sibling_body(path, module)
         except (OSError, UnicodeError, SyntaxError):
             return False
         owners[module] = body
+    root_names = {"plugin_root": "ROOT", "display_path": "_display_path"}
+    if composed and isinstance(_module_binding(owner_body, "paths"), ast.Import):
+        roots = _module_binding(owner_body, "paths")
+        if not any(item.name == "workflow_project_roots" and item.asname == "paths" for item in roots.names):
+            return False
+        actual = _module_body(path, "workflow_project_roots")
+        if any(_module_binding(actual, name) is None for name in root_names.values()):
+            return False
+        root_names = {key: "paths." + value for key, value in root_names.items()}
     paths = {"requirements_path": "CAPABILITY_CONTEXT_DOC_PATH", "tools_path": "CAPABILITY_CONTEXT_TOOLS_PATH"}
     return (
         _delegates_to_owner(handler, "status_cli", owners["status_cli"], [handler.args.args[0].arg],
-                              {"plugin_root": "ROOT", "discover": discover, "validate": validate,
-                               "display_path": "_display_path"})
+                              {**root_names, "discover": discover, "validate": validate}, path_provider=path if composed else None)
         and _delegates_to_owner(functions[discover], "capability_context", owners["capability_context"],
                                   ["_context_root(root)"], {**paths, "check_registry": "check_capability_registry"})
         and _delegates_to_owner(functions[validate], "capability_context", owners["capability_context"],
-                                  ["root", "context"], {**paths, "policy": "policy", "display_path": "_display_path"},
-                                  setup=("root", "context", "policy"))
+                                  ["root", "context"], {**paths, "policy": "policy", "display_path": root_names["display_path"]},
+                                  setup=("root", "context", "policy"), path_provider=path if composed else None)
     )
 
 
@@ -824,39 +1037,119 @@ def inspect_cli_registration(path: Path, key: str, handler: str) -> dict:
     source = path.read_text(encoding="utf-8")
     parse = getattr(sys.modules.get("engine_source"), "parse_engine_source", None)
     tree = parse(path, source) if callable(parse) else ast.parse(source, filename=str(path))
+    return inspect_cli_registration_tree(path, tree, key, handler)
+
+
+def _direct_import(body, local, module):
+    binding = _module_binding(body, local)
+    if isinstance(binding, ast.ImportFrom) and binding.level == 0 and binding.module == module:
+        return next((item.name for item in binding.names if (item.asname or item.name) == local), None)
+    return None
+
+
+def inspect_cli_registration_tree(path, tree, key, handler):
+    """Inspect an already-read entry AST from the same installation."""
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    installed = None
+    if "main" not in functions and _direct_import(tree.body, "main", "workflow_cli") == "main":
+        from cli_startup_source import InstalledSources
+
+        installed = InstalledSources(path, share_syntax=True)
+    token = _observation.set(installed)
+    try:
+        return _registration_facts(path, tree, key, handler, functions, installed)
+    finally:
+        _observation.reset(token)
+
+
+def _registration_facts(path, tree, key, handler, functions, installed):
+    composed = False
     main = functions.get("main")
+    schema = None
+    if installed is not None:
+        # The shell must actually invoke the imported callable for script runs.
+        dispatch_index = next((index for index, item in enumerate(tree.body)
+                               if any(ast.unparse(st) == "sys.exit(main())"
+                                      for st in (_main_guard_branch(item) or ()))), None)
+        if dispatch_index is not None:
+            schema = _module_body(path, "workflow_cli")
+            main = _local_definition(schema, "main")
+            composed = main is not None
+            if composed:
+                from cli_startup_source import split_startup_sources
+
+                startup = tree.body[:dispatch_index + 1]
+                installed = split_startup_sources(installed, startup, _release_installation(path, startup))
+                if installed is None:
+                    return dict.fromkeys(("main", "handler", "argparse", "dispatch"), False)
     statements = main.body if main else []
     parser_body = statements
     schema_parser = False
     for node in statements:
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-            if ast.unparse(node.value.func) == "_build_cli_parser":
+            if ast.unparse(node.value.func) in {"_build_cli_parser", "build_runtime_parser"}:
                 builder = functions.get("_build_cli_parser")
                 parser_body = builder.body if builder else ()
                 if builder is not None:
                     schema_parser = _schema_declares_parser(path, builder, node.value, key)
+                elif composed:
+                    # Observe the name used by the reached main. A shell may also
+                    # export the same factory for Python callers under a different name.
+                    factory = _local_definition(schema, ast.unparse(node.value.func))
+                    if factory is not None:
+                        schema_parser = _schema_declares_parser(
+                            path, factory, node.value, key, runtime_schema=schema, installed=installed)
                 break
     has_parser = _declares_parser(parser_body, key) or schema_parser
+    if composed:
+        # A newly composed CLI declares actual handler owners in the registry.
+        registry = _module_body(path, "registry")
+        bindings = _module_binding(registry, "_COMMANDS")
+        try:
+            matches = [target for command, target in ast.literal_eval(bindings.value) if command == key]
+        except (AttributeError, ValueError, TypeError):
+            matches = []
+        if len(matches) == 1:
+            module, _, attr = matches[0].rpartition(".")
+            if key == "dsh-doctor" and matches[0] == "dsh_doctor.main":
+                module, attr = "host_validation_cli", "cmd_dsh_doctor"
+            if not installed.available(module):
+                return {"main": True, "handler": False, "argparse": has_parser, "dispatch": False}
+            definitions = _module_body(path, module)
+            names = [handler] if attr == handler else []
+            if names and handler == "cmd_capability_context":
+                names.extend(("discover_capability_context", "check_capability_context"))
+            functions = {name: definition for name in names
+                         if (definition := _local_definition(definitions, name)) is not None}
+        else:
+            functions = {}
     has_handler = handler in functions
+    if composed and has_handler:
+        dispatch = statements[-1].value if statements and isinstance(statements[-1], ast.Return) else None
+        has_handler = isinstance(dispatch, ast.Call) and _binds_explicit_call(dispatch, functions[handler])
     if key == "gate-check" and handler == "cmd_gate_check":
-        definition = _local_definition(tree.body, handler)
-        has_handler = definition is not None
+        definition = functions.get(handler)
+        has_handler = has_handler and definition is not None
         if has_handler and any(isinstance(node, ast.ImportFrom) and node.module == "governance_fact_cli"
                                for node in definition.body):
             try:
-                owner = ast.parse(path.with_name("governance_fact_cli.py").read_text(encoding="utf-8")).body
+                owner = _sibling_body(path, "governance_fact_cli")
                 has_handler = (not definition.decorator_list and len(definition.args.args) == 1
                                and _delegates_to_owner(definition, "governance_fact_cli", owner,
                                                          [definition.args.args[0].arg], {}))
             except (OSError, SyntaxError, UnicodeError):
                 has_handler = False
     elif handler == "cmd_capability_context":
-        has_handler = _has_capability_handler(path, functions)
+        has_handler = _has_capability_handler(path, functions, composed=composed,
+                                              owner_body=definitions if composed and matches else ())
     elif has_handler and _DSH_COMMANDS.get(key) == handler:
-        definition = _local_definition(tree.body, handler)
+        definition = functions.get(handler)
         has_handler = definition is not None and _handler_source(path, definition)
     elif _RELEASE_COMMANDS.get(key) == handler:
-        has_handler = _release_handler_is_loadable(path, tree.body, _local_definition(tree.body, handler))
+        if composed and functions.get(handler) is not None:
+            call = next((st.value for st in reversed(statements) if isinstance(st, ast.Return)), None)
+            has_handler = isinstance(call, ast.Call) and _release_owner_accepts(path, tree.body, handler, call)
+        else:
+            has_handler = _release_handler_is_loadable(path, tree.body, functions.get(handler))
     return {"main": main is not None, "handler": has_handler,
-            "argparse": has_parser, "dispatch": _has_dispatch(path, tree.body, statements, key, handler)}
+            "argparse": has_parser, "dispatch": _has_dispatch(path, tree.body, statements, key, handler, composition=composed or None)}

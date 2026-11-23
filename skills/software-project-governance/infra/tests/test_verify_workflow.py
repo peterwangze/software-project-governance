@@ -25739,6 +25739,7 @@ else:
 
 class HostContractBindingTests(unittest.TestCase):
     def test_dsh_registration_requires_the_final_owner_to_accept_the_dispatched_namespace(self):
+        import ast
         from cli_registration import inspect_cli_registration
 
         owners = {
@@ -25749,13 +25750,8 @@ class HostContractBindingTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            for relative in ("verify_workflow.py", "workflow_cli.py", "workflow_cli_checks.py",
-                             "workflow_cli_operations.py", "registry.py", "dsh_doctor.py",
-                             "checks/dsh_boundary.py", "checks/dsh_smoke.py",
-                             *(module + ".py" for module in set(owners.values()))):
-                target = root / relative
-                target.parent.mkdir(exist_ok=True, parents=True)
-                shutil.copyfile(_INFRA_DIR / relative, target)
+            shutil.copytree(_INFRA_DIR, root, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("tests", "__pycache__", "*.pyc"))
             for key, module in owners.items():
                 handler = "cmd_" + key.replace("-", "_")
                 owner = root / (module + ".py")
@@ -25766,10 +25762,11 @@ class HostContractBindingTests(unittest.TestCase):
                     ("healthy", original, True),
                     ("required positional", original.replace(signature, signature + ", policy"), False),
                     ("optional positional", original.replace(signature, signature + ", policy=None"), True),
-                    ("final non-callable", original + "\\n" + handler + " = None\\n", False),
+                    ("final non-callable", original + "\n" + handler + " = None\n", False),
                     ("restored", original, True),
                 ):
                     with self.subTest(key=key, state=label):
+                        ast.parse(source)
                         owner.write_text(source, encoding="utf-8")
                         facts = inspect_cli_registration(root / "verify_workflow.py", key, handler)
                         self.assertEqual(facts, {"main": True, "handler": usable,
@@ -25997,6 +25994,24 @@ print("loaded=" + ",".join(sorted(owners.intersection(sys.modules))))
             with self.assertRaisesRegex(NameError, "REQ108_RECOMMENDATION_DATE"):
                 vw.check_completion_recommendation(rows)
         self.assertEqual(vw.check_completion_recommendation(rows)["verdict"], "FAIL")
+
+    def test_lifecycle_command_reads_the_checker_after_loading_the_registry(self):
+        import registry
+
+        document = {"active_lifecycle_mode": "fixture"}
+        initial = mock.Mock(return_value=[])
+        revised = mock.Mock(return_value=["checker replaced during registry load"])
+
+        def load():
+            vw.check_lifecycle_registry = revised
+            return document, []
+
+        with patch.multiple(vw, _load_lifecycle_registry=load, check_lifecycle_registry=initial):
+            with redirect_stdout(io.StringIO()) as output:
+                registry.load_handler("check-lifecycle-registry")(SimpleNamespace())
+        initial.assert_not_called()
+        revised.assert_called_once_with(registry=document)
+        self.assertIn("checker replaced during registry load", output.getvalue())
 
     def test_manifest_can_update_the_gate_policy_and_the_later_checker(self):
         import registry

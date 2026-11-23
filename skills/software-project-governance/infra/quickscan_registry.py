@@ -837,16 +837,19 @@ def discover_engine_segment_ids(engine_path=None):
 
 
 def discover_product_gate_ids(engine_path=None):
-    """FIX-270 product-gate declaration as read from the engine source (25 ids).
+    """Read the installed product-gate IDs in declaration order.
 
-    实现口径 = 源码**文本**解析（``frozenset({…})`` 块 + ``"Check <ID>"`` 字面量，
-    **not AST**）；两条 fail-closed 分支：锚点缺失即抛，锚点在而条目形态变化
-    导致零命中亦抛——退化静默返回 ``()`` 会把全部插件面段误报为「未受
-    product-gate 管辖」（过度披露方向），故与兄弟 ``load_frozen_snapshot_ids``
-    的 count 校验同族：结果为空即拒绝回答（FIX-304 F-2）。
+    The split layout checks actual report calls, predicates and skip branches.
+    Historical installations use a text parse (not AST) of their frozenset.
+    Both formats are fail-closed when the supporting evidence is absent.
     """
     path = Path(engine_path) if engine_path is not None else _default_engine_path()
     source = path.read_text(encoding="utf-8")
+    if "build_runtime_parser" in source or "workflow_composition" in source:
+        from full_check_sources import full_check_layout
+        _, _, gated = full_check_layout(path, source)
+        if gated is not None:
+            return gated
     anchor = "_PLUGIN_PRODUCT_CHECK_IDS = frozenset({"
     if anchor not in source:
         raise ValueError(f"{path}: {anchor!r} declaration not found")

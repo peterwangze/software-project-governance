@@ -138,6 +138,68 @@ class CliDispatchFaceTests(unittest.TestCase):
         self.assertNotEqual(observed, frozen)
         self.assertEqual(observed["alias_groups"]["cmd_status"], [alias, "status"])
 
+    def test_dispatch_observation_uses_the_runtime_parser_without_loading_the_compatibility_shell(self):
+        import subprocess
+
+        script = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from contract_matrix.generator import extract_cli_dispatch; "
+            "face = extract_cli_dispatch(); "
+            "assert face['key_count'] == 105 and 'verify_workflow' not in sys.modules; "
+            "from workflow_cli import build_runtime_parser; "
+            "import verify_workflow; assert verify_workflow._build_cli_parser is build_runtime_parser"
+        )
+        run = subprocess.run([sys.executable, "-I", "-B", "-c", script, str(_INFRA_DIR)],
+                             capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_an_explicit_compatibility_parser_replacement_reaches_both_consumers(self):
+        from unittest.mock import patch
+        import verify_workflow
+
+        def replaced(*args):
+            raise ValueError("caller replaced parser")
+
+        with patch.object(verify_workflow, "_build_cli_parser", replaced):
+            for consume in (cmg.extract_cli_dispatch, lambda: verify_workflow.main(["--help"])):
+                with self.assertRaisesRegex(ValueError, "caller replaced parser"):
+                    consume()
+        original = verify_workflow._build_cli_parser
+        try:
+            del verify_workflow._build_cli_parser
+            with self.assertRaises(ImportError):
+                cmg.extract_cli_dispatch()
+            with self.assertRaises(NameError):
+                verify_workflow.main(["--help"])
+        finally:
+            verify_workflow._build_cli_parser = original
+        self.assertEqual(cmg.extract_cli_dispatch(), _stored_snapshot()["faces"]["cli_dispatch"])
+
+    def test_alias_groups_require_the_same_callable_and_accept_different_export_names(self):
+        from dataclasses import replace
+        from importlib import import_module
+        from unittest.mock import patch
+        import registry
+
+        alias = "check-scaffold-templates"
+        real = registry.command_spec
+        module_name, _, attr = real(alias).handler.rpartition(".")
+        owner = import_module(module_name)
+        target = getattr(owner, attr)
+        second_name = "matrix_test_scaffold"
+        spec = replace(real(alias), handler=f"{module_name}.{second_name}")
+        with patch.object(registry, "command_spec", side_effect=lambda k: spec if k == alias else real(k)):
+            with patch.object(owner, second_name, target, create=True):
+                self.assertEqual(cmg.extract_cli_dispatch(), _stored_snapshot()["faces"]["cli_dispatch"])
+            def different(args):
+                return target(args)
+            different.__name__ = target.__name__
+            with patch.object(owner, second_name, different, create=True):
+                self.assertNotIn(target.__name__, cmg.extract_cli_dispatch()["alias_groups"])
+            with patch.object(owner, second_name, None, create=True):
+                with self.assertRaises(registry.LoaderResolutionError):
+                    cmg.extract_cli_dispatch()
+
     def test_keys_match_snapshot(self):
         current = cmg.extract_cli_dispatch()
         stored = _stored_snapshot()["faces"]["cli_dispatch"]
@@ -175,6 +237,54 @@ class CheckSegmentsFaceTests(unittest.TestCase):
         self.assertEqual(current, stored,
                          "Check segment contract drifted — regenerate "
                          "deliberately and explain the change")
+
+    def test_split_observers_follow_the_installed_command_selector_gates_and_return(self):
+        import shutil
+        from unittest.mock import patch
+        import quickscan_registry
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shutil.copytree(_INFRA_DIR, root, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("tests", "__pycache__"))
+            engine = root / "verify_workflow.py"
+            mutations = (
+                ("workflow_public_api", "class PublicModule(ModuleType):", "class DetachedModule(ModuleType):"),
+                ("workflow_guard_bindings", "class _LegacyReviewSources(", "class _DetachedReviewSources("),
+                ("host_check_bindings", "def check_agent_activation(", "def detached_activation("),
+                ("host_check_bindings", "def check_agent_activation(", "def broken syntax("),
+                ("registry", "governance_check_cli.cmd_check_governance", "governance_check_cli.wrong_command"),
+                ("governance_check_cli", "else:\n        all_issues = _run_full_engine_checks(args)",
+                 "else:\n        all_issues = 0"),
+                ("governance_check_cli", "from workflow_report_selection import _full_check_results",
+                 "from another_install import _full_check_results"),
+                ("full_check_runner", "sum(section_results)", "next(iter(section_results))"),
+                ("workflow_report_selection", "return _product_gate_active(args)", "return True"),
+                ("workflow_report_selection", "return host != plugin", "return False"),
+                ("workflow_report_selection", "return bool(getattr(args, \"product_gates\", False))", "return True"),
+                ("workflow_report_selection", "section_28w_dsh_boundary(product_gate_active,",
+                 "section_28w_dsh_boundary(lambda: True,"),
+                ("workflow_report_selection", '"Check 28w",', '"Check 99",'),
+                ("health_review_sections", "if product_gate_active():", "if True:"),
+                ("health_review_sections", "if product_gate_active():", "return 0\n    if product_gate_active():"),
+                ("health_product_sections", '_print_product_gate_skipped("Check 28w")',
+                 '_print_product_gate_skipped("Check 28u")'),
+            )
+            with patch.object(cmg, "_ENGINE_PATH", engine):
+                for owner, before, after in mutations:
+                    path = root / (owner + ".py")
+                    original = path.read_text(encoding="utf-8")
+                    with self.subTest(owner=owner, change=after):
+                        self.assertIn(before, original)
+                        path.write_text(original.replace(before, after, 1), encoding="utf-8")
+                        try:
+                            with self.assertRaises(ValueError):
+                                cmg.extract_check_segments()
+                            with self.assertRaises(ValueError):
+                                quickscan_registry.discover_product_gate_ids(engine)
+                        finally:
+                            path.write_text(original, encoding="utf-8")
+                self.assertEqual(cmg.extract_check_segments(), _stored_snapshot()["faces"]["check_segments"])
 
     def test_freeze_point_count(self):
         stored = _stored_snapshot()["faces"]["check_segments"]

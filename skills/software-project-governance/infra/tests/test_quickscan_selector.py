@@ -740,20 +740,32 @@ class CarrierDisciplineTests(unittest.TestCase):
 
     def test_engine_imports_the_selector_lazily_inside_the_quick_branch(self):
         """R2/R6 discipline: the selector import stays in-branch (no top-level import)."""
-        source = ENGINE.read_text(encoding="utf-8")
-        found = [line for line in source.splitlines()
-                 if "import quickscan_selector" in line or "from quickscan_selector" in line]
-        self.assertTrue(found, "engine must wire the selector")
-        for line in found:
-            self.assertNotEqual(line, line.lstrip(),
-                                "selector import must stay an indented in-branch import")
+        import inspect
+        import registry
+
+        handler = registry.load_handler("check-governance")
+        self.assertIs(handler, vw.cmd_check_governance)
+        owner = inspect.getmodule(handler)
+        source = inspect.getsource(owner)
+        found = [line for line in source.splitlines() if "import quickscan_selector" in line
+                 or "from quickscan_selector" in line]
+        self.assertTrue(found, "the registered command must import the quick selector")
+        self.assertTrue(all(line != line.lstrip() for line in found))
+        args = _args(quick=True)
+        with mock.patch.object(qs, "run_quick_checks", return_value=(0, "")) as quick, redirect_stdout(io.StringIO()):
+            handler(args)
+        quick.assert_called_once_with(args, vw._run_full_engine_checks)
 
     def test_engine_source_has_no_second_selection_path(self):
         """ALT-2：quick 复用同一引擎——不得新增平行的选择/编排体。"""
-        source = ENGINE.read_text(encoding="utf-8")
-        self.assertNotIn("quickscan_selector.render", source.replace(
-            "quickscan_selector import render_quick_output", ""))
-        self.assertIn('_PLUGIN_PRODUCT_CHECK_IDS', source)
+        import inspect
+        import registry
+
+        command = registry.load_handler("check-governance")
+        self.assertNotIn("quickscan_selector.render", inspect.getsource(command))
+        executed = set(qr.discover_product_gate_ids(ENGINE))
+        self.assertTrue(executed)
+        self.assertEqual(executed, {label.removeprefix("Check ") for label in vw._PLUGIN_PRODUCT_CHECK_IDS})
 
 
 if __name__ == "__main__":

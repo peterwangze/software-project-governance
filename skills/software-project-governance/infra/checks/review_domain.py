@@ -3903,9 +3903,10 @@ def check_review_machine_provenance(review_rows=None, review_files=None,
 
 def check_loop_wiring_call_sites(roots=None):
     """Require one scoped verdict writer and its review, command and delivery consumers."""
-    ROOT = _sources.product_root()
+    if roots is None:
+        roots = [_sources.product_root() / "skills/software-project-governance/infra"]
     files = set()
-    for entry in roots if roots is not None else [ROOT / "skills/software-project-governance/infra"]:
+    for entry in roots:
         path = Path(entry)
         files.update([path] if path.is_file() else path.rglob("*.py"))
     sites, consumers, issues = [], [], []
@@ -3991,3 +3992,70 @@ def cmd_check_review_debt(args):
     )
     if args.fail_on_issues and has_fail:
         sys.exit(1)
+
+
+M5_RECORD_DOC_DIRS = ("docs/release", "docs/reviews", "docs/requirements")
+
+
+def _record_dirs():
+    return M5_RECORD_DOC_DIRS
+
+
+def effective_m5_entry(name, native):
+    return native
+
+
+def _scan_for_record_scope():
+    return check_m5_compliance()
+
+
+def _record_path_matches(path):
+    return _is_m5_record_doc_path(path)
+
+
+def _is_m5_record_doc_path(rel_path):
+    """FIX-295: True when rel_path is inside an M5 record-class doc dir.
+
+    Directory-component whitelist match over M5_RECORD_DOC_DIRS: an entry
+    must equal the path or be a leading directory component — "docs/release"
+    matches "docs/release/x.md" and "docs/release/a/b.md" but NOT
+    "docs/release-notes.md" or "docs/other/release/x.md". Backslashes are
+    normalized. Fail-closed: anything not explicitly enumerated stays
+    scanned.
+    """
+    rp = str(rel_path).replace("\\", "/")
+    for record_dir in _record_dirs():
+        if rp == record_dir or rp.startswith(record_dir + "/"):
+            return True
+    return False
+
+
+def check_m5_compliance_with_record_scope():
+    """FIX-295 / AUDIT-149 N6: Check 10 gate entry with record-doc scope.
+
+    Thin wrapper over the UNCHANGED base ``check_m5_compliance()`` (FIX-294
+    wrapper pattern): pass 1 runs the base scan byte-for-byte; issues whose
+    ``file`` is under an M5_RECORD_DOC_DIRS directory (record-class text —
+    release/review documents and delivered design docs; see the module
+    comment above) are moved to
+    ``record_scope_exempted`` (disclosed, never counted); every other issue
+    — entry files, non-whitelisted docs/ subtrees, and all M5 structural
+    checks — passes through untouched.
+
+    Returns the base result dict extended with:
+      ``record_scope_exempted``: list of exempted issue dicts
+      ``record_scope_dirs``: the whitelist tuple (for disclosure)
+    Never raises; never broadens or narrows the base scan itself.
+    """
+    base = _scan_for_record_scope()
+    kept = []
+    exempted = []
+    for issue in base.get("issues", []):
+        if _record_path_matches(str(issue.get("file", ""))):
+            exempted.append(issue)
+        else:
+            kept.append(issue)
+    base["issues"] = kept
+    base["record_scope_exempted"] = exempted
+    base["record_scope_dirs"] = _record_dirs()
+    return base

@@ -37,6 +37,119 @@ PRODUCT_SUCCESS_RUNNABLE_RE = re.compile(
 )
 
 
+ACCEPTANCE_CONTRACT_REQUIRED_FIELDS = {
+    "scenario": str,
+    "command": str,
+    "expected_output": str,
+    "last_run": dict,
+    "demo_evidence": str,
+}
+
+ACCEPTANCE_RUNNABLE_COMMAND_RE = re.compile(
+    r"^\s*(?:(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|cmd|powershell|pwsh)\b|"
+    r"(?:\./|\.\\|skills/|skills\\|scripts/|scripts\\).+)",
+    re.IGNORECASE,
+)
+
+ACCEPTANCE_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
+
+ACCEPTANCE_NOT_RUN_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
+
+QUALITY_BUDGET_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
+
+QUALITY_BUDGET_PENDING_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
+
+QUALITY_BUDGET_EXEMPT_STATUSES = {"exempt", "exception", "waived", "not_applicable", "n/a", "豁免", "不适用"}
+
+QUALITY_BUDGET_VALIDATION_SIGNAL_RE = re.compile(
+    r"(?:"
+    r"python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|cmd|powershell|pwsh|"
+    r"test|check|scan|lint|audit|metric|score|coverage|threshold|budget|lighthouse|axe|"
+    r"latency|p95|error rate|vulnerability|security|a11y|accessibility|maintainability|"
+    r"测试|检查|扫描|指标|分数|覆盖率|阈值|预算|延迟|错误率|漏洞|安全|可访问|可维护"
+    r")",
+    re.IGNORECASE,
+)
+
+QUALITY_BUDGET_WEAK_PROSE_RE = re.compile(
+    r"(?:"
+    r"quality is okay|quality is ok|looks fine|looks good|good enough|review says|review artifact|"
+    r"manual reviewer|manual review|prose|subjective|"
+    r"质量还行|看起来可以|人工看看|人工审查|审查通过|主观"
+    r")",
+    re.IGNORECASE,
+)
+
+# FIX-475: single shared vocabulary + predicate for the Check 18f/18g
+# pending allowance — no second semantic source (FIX-292 lesson). Markers
+# substring-match the lowercased plan-tracker status cell, so live emoji
+# forms (「📋 规划中 (…)」/「🚧 派发中 (…)」) match via the text marker.
+# Terminal words (✅/完成/completed/…) must never join this whitelist;
+# terminal tasks are already excluded upstream by
+# _active_execution_packet_tasks -> _is_incomplete_task_status.
+TASK_PENDING_STATUS_MARKERS = (
+    "规划中",
+    "待实施",
+    "pending",
+    "planned",
+    "派发中",
+    "进行中",
+    "开发中",
+    "in progress",
+    "in_progress",
+    "wip",
+)
+
+VERTICAL_SLICE_REQUIRED_FIELDS = (
+    "user_visible_slice",
+    "demo_path",
+    "scope_guard",
+    "rollback_plan",
+    "status",
+    "evidence",
+)
+
+VERTICAL_SLICE_PASS_STATUSES = {"pass", "passed", "ok", "success", "通过"}
+
+VERTICAL_SLICE_PENDING_STATUSES = {"not_run_yet", "not run yet", "pending", "planned", "待运行", "未运行"}
+
+VERTICAL_SLICE_DEMO_SIGNAL_RE = re.compile(
+    r"(?:"
+    r"\b(?:python|pytest|node|npm|pnpm|yarn|uv|bash|sh|make|go|cargo|npx|powershell|pwsh|"
+    r"test|check|smoke|e2e|demo|browser|screenshot)\b|localhost|https?://|"
+    r"测试|检查|冒烟|演示|截图|浏览器|验收"
+    r")",
+    re.IGNORECASE,
+)
+
+VERTICAL_SLICE_USER_SIGNAL_RE = re.compile(
+    r"(?:user|persona|customer|operator|viewer|admin|用户|客户|使用者|操作者|可见|页面|命令输出|行为|场景)",
+    re.IGNORECASE,
+)
+
+VERTICAL_SLICE_BEHAVIOR_SIGNAL_RE = re.compile(
+    r"(?:\b(?:run|observe|see|click|open|use|complete|display|command output|scenario|page|form|result|pass)\b|"
+    r"运行|观察|看到|点击|打开|使用|完成|显示|命令输出|场景|页面|表单|结果|通过)",
+    re.IGNORECASE,
+)
+
+VERTICAL_SLICE_TECH_LAYER_RE = re.compile(
+    r"(?:repository|service layer|abstraction|refactor|backend|database|schema|dao|model layer|internal|"
+    r"技术层|服务层|抽象|重构|后端|数据库|数据表|内部)",
+    re.IGNORECASE,
+)
+
+VERTICAL_SLICE_BROAD_SCOPE_RE = re.compile(
+    r"(?:entire project|whole project|whole codebase|all files|everything|\*|全仓|整个项目|所有文件|全部重构|无边界)",
+    re.IGNORECASE,
+)
+
+VERTICAL_SLICE_WEAK_PROSE_RE = re.compile(
+    r"(?:review says|review artifact|manual review|looks good|looks fine|prose|subjective|审查通过|人工审查|看起来可以|主观)",
+    re.IGNORECASE,
+)
+
+
 class ProductSuccessPolicy(NamedTuple):
     required_fields: dict
     placeholder: re.Pattern

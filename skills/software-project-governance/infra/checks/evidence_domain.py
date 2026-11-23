@@ -323,7 +323,7 @@ def _hot_task_shape_warnings(sample_path):
     return warnings
 
 
-def check_evidence_completeness():
+def check_evidence_completeness(*, governance_dir=None):
     """Check that every completed task has at least one evidence entry.
 
     Uses GovernanceDataSource to transparently aggregate hot files + archive
@@ -337,7 +337,11 @@ def check_evidence_completeness():
     (the python_game 0.54-era host previously got a silent
     ``Completed tasks: 0`` PASS for 34 completed tasks).
     """
-    ds = _evidence_archive_reader()
+    if governance_dir is None:
+        ds = _evidence_archive_reader()
+    else:
+        from governance_archive_data import GovernanceDataSource
+        ds = GovernanceDataSource(governance_dir)
     completed_entries = ds.get_all_completed_task_entries()
     completed = {entry["id"] for entry in completed_entries}
     evidenced = ds.get_all_evidence_task_ids()

@@ -174,6 +174,10 @@ __all__ = [
     "require_task_transition",
 ]
 
+def _is_valid_string_list(value):
+    return isinstance(value, list) and bool(value) and all(isinstance(item, str) and item.strip() for item in value)
+
+
 # ── Frozen vocabulary and identifier forms (§3.5 / §3.6) ────────────────────
 
 CheckID = str

@@ -19707,7 +19707,9 @@ def cmd_check_dsh_preset_compat(args):
     """
     from dsh_compat import run_cli
 
-    return run_cli(fail_on_issues=getattr(args, "fail_on_issues", False))
+    return run_cli(fail_on_issues=getattr(args, "fail_on_issues", False),
+                   isolated_home=getattr(args, "isolated_home", None),
+                   use_host_profile=getattr(args, "use_host_profile", False))
 
 
 def cmd_check_dsh_boundary(args):
@@ -23502,6 +23504,11 @@ def _build_cli_parser(parser_argv=()):
              "dsh's own Config schemas (loader YAML dialect + loader evaluate "
              "+ cordis resolveConfig); NOT_RUN when no node / no dsh install",
     )
+    profiles = cdpc_p.add_mutually_exclusive_group()
+    profiles.add_argument("--isolated-home", metavar="DIR",
+                          help="use the temporary profile directory assigned to this run")
+    profiles.add_argument("--use-host-profile", action="store_true",
+                          help="deliberately read the configured host profile")
     cdpc_p.add_argument("--fail-on-issues", action="store_true",
                         help="Exit with non-zero code if a row is rejected by the installed schemas")
 

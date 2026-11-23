@@ -1732,3 +1732,46 @@ def run_guard_management_cli(action, args, *, governance_dir, now=None):
         history = (ledger or {}).get("break_glass_history") or []
         print("  历史窗口: {0} 条".format(len(history)))
     return 0
+
+
+def _load_write_guard_state(governance_dir, *, filename, version, tool):
+    """Load the reconciliation baseline → ``(state_dict, load_issue)``.
+
+    ``load_issue`` is None when a valid state file was loaded OR no state
+    file exists (first run); a corrupt/foreign-schema state file yields a
+    WARN-class issue and an empty baseline (rebuild, never silent).
+    """
+    state_path = governance_dir / filename
+    if not state_path.is_file():
+        return {"schema_version": version,
+                "tool": tool, "files": {}}, None
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, IOError, OSError,
+            ValueError) as exc:
+        return {"schema_version": version,
+                "tool": tool, "files": {}}, {
+            "type": "row_family_state_unreadable",
+            "file": ".governance/" + filename,
+            "line": None,
+            "task_id": "",
+            "detail": "对账状态基线不可读（{0}）——按首跑重建基线，本轮差异"
+                      "窗口视为丢失（响亮披露，不静默）".format(exc),
+            "expected": "JSON object（schema_version={0}, files 键）".format(
+                version),
+        }
+    if not isinstance(state, dict) \
+            or state.get("schema_version") != version \
+            or not isinstance(state.get("files"), dict):
+        return {"schema_version": version,
+                "tool": tool, "files": {}}, {
+            "type": "row_family_state_unreadable",
+            "file": ".governance/" + filename,
+            "line": None,
+            "task_id": "",
+            "detail": "对账状态基线 schema 不识别——按首跑重建基线，本轮差异"
+                      "窗口视为丢失（响亮披露，不静默）",
+            "expected": "schema_version={0} 的状态对象".format(
+                version),
+        }
+    return state, None

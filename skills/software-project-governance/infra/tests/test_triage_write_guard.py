@@ -2927,5 +2927,79 @@ class Feat061CompositionBlockTests(unittest.TestCase):
             self._assert_zero_decision_detections(result)
 
 
+class WriteGuardBindingTests(unittest.TestCase):
+    def test_prewarmed_guard_uses_live_evidence_reader(self):
+        import governance_readers
+
+        default_reader = governance_readers.markdown_table_cells
+
+        def read_escaped_pipes(line):
+            cells = default_reader(line.replace(r"\|", "\0"))
+            return [cell.replace("\0", "|") for cell in cells]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            gov = Path(tmp)
+            standard = _evidence_row_10("TRIAGE-FIX-111", "FIX-111")
+            escaped = _evidence_row_10("TRIAGE-FIX-112", "FIX-112").replace("实现", r"标题 A\|B")
+            (gov / "evidence-log.md").write_text(standard + escaped, encoding="utf-8")
+
+            def evidence_status():
+                return _guard_run(gov, persist_state=False)["evidence_log"]["status"]
+
+            self.assertEqual(evidence_status(), "FAIL")
+            with mock.patch.object(governance_readers, "markdown_table_cells", wraps=read_escaped_pipes) as reader:
+                self.assertEqual(evidence_status(), "PASS")
+                self.assertEqual([call.args[0] for call in reader.call_args_list],
+                                 [standard.strip(), escaped.strip()])
+            self.assertEqual(evidence_status(), "FAIL")
+
+    def test_prewarmed_guard_uses_live_plan_reader_across_hosts(self):
+        import governance_readers
+
+        with tempfile.TemporaryDirectory() as tmp:
+            hosts = []
+            for task in ("FIX-110", "FIX-111"):
+                gov = Path(tmp) / task
+                gov.mkdir()
+                row = f"| **P1** | {task} | 文档 | — | 0.1.0 | closure | 已完成 |"
+                (gov / "plan-tracker.md").write_text(row + "\n", encoding="utf-8")
+                hosts.append((gov, row))
+
+            self.assertEqual(_guard_run(hosts[0][0], persist_state=False)["plan_tracker"]["status"], "PASS")
+            with mock.patch.object(governance_readers, "governance_table_cells",
+                                   wraps=governance_readers.governance_table_cells) as reader:
+                for gov, row in hosts:
+                    with self.subTest(host=gov.name):
+                        reader.reset_mock()
+                        self.assertEqual(_guard_run(gov, persist_state=False)["plan_tracker"]["status"], "PASS")
+                        self.assertEqual([call.args[0] for call in reader.call_args_list], [row, row])
+
+    def test_rebound_baseline_and_writer_marker_reach_guard_and_release(self):
+        from datetime import datetime
+
+        class RecordedTime(datetime):
+            @classmethod
+            def now(cls):
+                return cls(2026, 9, 24, 10, 12, 30)
+
+        with tempfile.TemporaryDirectory() as td:
+            row_fixture = RowFamilyReconciliationTests()
+            gov = row_fixture._seed_gov(td)
+            with mock.patch.object(vw, "GOVERNANCE_DIR", gov), \
+                 mock.patch.object(vw, "SAMPLE_PATH", gov / "plan-tracker.md"), \
+                 mock.patch.object(vw, "_WRITE_GUARD_STATE_FILENAME", "custom-baseline.json"), \
+                 mock.patch.object(vw, "REVIEW_MACHINE_ROW_MARKER", "custom-review-receipt"), \
+                 mock.patch.object(vw, "datetime", RecordedTime):
+                result = vw.check_governance_write_shapes(persist_state=True)
+                self.assertEqual(result["row_families"]["status"], "PASS")
+                self.assertTrue(vw.check_release_bootstrap_world()["converged"])
+                self.assertEqual(vw._load_write_guard_state(gov)[0]["updated_at"], "2026-09-24T10:12:30")
+                with (gov / "evidence-log.md").open("a", encoding="utf-8") as stream:
+                    stream.write("| REVIEW-FEAT-532-R0 | FEAT-532 | custom-review-receipt |\n")
+                self.assertEqual(row_fixture._row_family_issues(vw.check_governance_write_shapes()), [])
+                self.assertTrue((gov / "custom-baseline.json").is_file())
+                self.assertFalse((gov / ".write-guard-state.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

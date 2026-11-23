@@ -15,25 +15,10 @@ Aggregated faces (single output, ≤2K token / ≤8KB projection):
                   plan-tracker record). Never executes a migration.
 * ``project`` / ``loops`` / ``tasks`` / ``risks`` / ``recent`` — a LEAN
                   status projection parsed line-wise from the hot governance
-                  files. Configuration and overview share the pure CLI readers. Other
-                  regexes/table shapes deliberately MIRROR the
-                  proven engine calibers (``parse_project_config`` /
-                  ``parse_active_risks`` /
-                  ``parse_recent_decisions`` and resolve_entry's plan-tracker
-                  version regex) the same way resolve_entry mirrors the
-                  engine — disclosed here so the two readers stay in sync by
-                  review, not by import (see the R2 note below). Since
-                  FIX-397④ the risks face carries ONE declared caliber
-                  divergence from ``parse_active_risks`` — its ``open`` count
-                  is the risk-log's NON-CLOSED rows (see
-                  ``parse_risk_summary``). R0 P0-1
-                  lesson (0.84.0 R1): review-only sync demonstrably failed on
-                  live-shaped files, so the table scanner now mirrors the
-                  engine's ``_status_table_stream`` LINE FOR LINE
-                  (separator-validated headers; blank lines tolerated INSIDE
-                  a table, never terminators) and a bidirectional
-                  differential test against the engine stream guards the
-                  mirror (``SegmentedTableMirrorTests``).
+                  files. Configuration, overview and risk rows share pure
+                  readers with the engine. Recent decisions mirror the engine's
+                  date ranking. The table scanner accepts separator-validated
+                  headers and blank lines inside tables.
 * ``candidates``— the task-priority-analysis LIGHT path reused verbatim via
                   ``import task_priority`` (pure-stdlib peer leaf:
                   parse_task_dependencies + compute_unblocked_tasks). Empty
@@ -89,6 +74,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from risk_rows import (iter_active_risks, iter_positional_tables as _iter_positional_tables,
+                       resolve_status as _resolve_risk_status, status_bucket as _risk_status_bucket)
 import resolve_entry  # peer leaf — the dual-root authority (DEC-096)
 import task_priority  # peer leaf — pure dependency analysis (FIX-226)
 
@@ -133,12 +120,6 @@ PROFILE_CAPS = {
 _PLAN_TRACKER_VERSION_RE = re.compile(r"工作流版本[**:\s]+(\d+\.\d+\.\d+)")
 
 _ID_TOKEN_RE = re.compile(r"^[A-Z]+-\d+$")
-
-#: Engine-identical separator-row shape (``_status_table_stream``): the ONLY
-#: table validator — a ``|`` row without a separator row below it is prose
-#: with pipes (or a continuation data row), never a table header.
-_SEPARATOR_ROW_RE = re.compile(r"^\|[\s:\-|]+\|$")
-
 
 class _BudgetExhausted(Exception):
     """Internal control flow: the wall-clock deadline has passed."""
@@ -236,175 +217,39 @@ def parse_overview_row(text):
     return overview_from_lines(line.strip() for line in lines)
 
 
-#: Bootstrap-local risk status caliber (FIX-397④) — the CLOSED vocabulary
-#: of the risk-log ``当前状态`` column for this count face, matched by
-#: PREFIX after a whitespace/backtick/emphasis strip: live cells carry bold
-#: markers and dated/parenthetical annotations ("**已关闭** (2026-05-05)",
-#: "打开（登记观察）", "**缓解中（2026-09-08 M-0 复评转…）**〔原：已接受…〕").
-#: DECLARED DIVERGENCE from the engine mirror set: the engine's canonical
-#: active-set predicate (checks/risk_domain.is_risk_status_open — exactly
-#: ``打开``, FIX-270 R0 F3; not importable here, engine-free boundary)
-#: answers "which risks do the engine's watchdogs see", while the FIX-397④
-#: charter rules that the bootstrap's active-risk count must equal the
-#: risk-log's NON-CLOSED rows — ``缓解中`` (mitigation in flight) and
-#: annotated ``打开`` forms count as open; ``已关闭`` / ``关闭`` /
-#: ``缓解完成`` never do. Unifying the engine predicate is a Coordinator
-#: decision, not this module's call.
-#:
-#: FIX-422 closed-family extension — the live risk-log also carries
-#: CLOSED forms written as "bold head token + space/full-width
-#: parenthetical + date annotation": ``**已缓解** (2026-09-28 FIX-401
-#: 收窄…)``, ``**降级** (2026-05-05)``, ``**已收窄**（…）``. Under the
-#: strip-then-prefix discipline the leading ``**`` is already gone, so
-#: these are plain new head tokens (``已缓解`` / ``降级`` / ``已收窄``).
-#: Pre-FIX-422 they bucketed ``unknown`` — counted as open AND disclosed
-#: (the fail-closed direction held), but they inflated the open face and
-#: buried the genuinely unclassifiable rows in noise (live 2026-10-03:
-#: unknown_count=4, all annotated closed forms, RISK-026/027/048/061).
-#: Forms still outside the vocabulary stay ``unknown`` (fail-closed
-#: counted-as-open disposition unchanged).
-_RISK_OPEN_STATE_PREFIXES = ("打开", "缓解中")
-_RISK_CLOSED_STATE_PREFIXES = (
-    "已关闭", "关闭", "缓解完成", "已缓解", "已收窄", "降级")
-
-#: Unknown status tokens: counted as open (fail-closed conservative
-#: direction — an unclassifiable risk row must stay visible as an active
-#: risk, never silently absorbed) and disclosed. The disclosure list is
-#: bounded for the ≤8KB projection; ``unknown_count`` carries the truth.
 _RISK_UNKNOWN_DISCLOSURE_CAP = 5
-
-#: FIX-422 — a deadline cell participates in the overdue/soon judgment
-#: ONLY when it is a PURE ISO date (``YYYY-MM-DD``; surrounding whitespace
-#: is already stripped by the caller). Anything else — a re-review stream
-#: carrying several historical dates plus narrative, a multi-date cell, a
-#: long text — yields NO deadline signal: the fail-safe direction (never
-#: a fabricated overdue). The pre-fix ``deadline[:10]`` read parsed the
-#: FIRST historical date out of re-review prose and fabricated three
-#: overdue escalations (RISK-044/047/048, verified 2026-10-03).
-_PURE_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-def _risk_status_bucket(status_cell):
-    """Bucket a risk status cell for the count face (caliber above)."""
-    s = (status_cell or "").strip().strip("`*").strip()
-    if s.startswith(_RISK_OPEN_STATE_PREFIXES):
-        return "open"
-    if s.startswith(_RISK_CLOSED_STATE_PREFIXES):
-        return "closed"
-    return "unknown"
-
-
-def _resolve_risk_status(cells, status_pos):
-    """Positional-first status resolution, unique-vocabulary-anchor fallback.
-
-    FIX-397④ live-shape tolerance: 8 live rows (RISK-052~059) carry their
-    ``打开`` one column LEFT of the header position (semantic column drift —
-    a missing cell before the status column, balanced by a filler cell
-    after, leaves the row at full width but shifted), so the positional
-    read lands on the mitigation prose and the row silently dropped out of
-    every count. When — and only when — the positional cell matches NO
-    vocabulary token, the row's cells are scanned for vocabulary forms:
-    EXACTLY ONE match anchors the row (mechanical, not a guess); zero or
-    ≥2 matches leave the row ``unknown`` (counted as open + disclosed). A
-    positional cell that DOES match the vocabulary is never overridden.
-    """
-    status = cells[status_pos]
-    bucket = _risk_status_bucket(status)
-    if bucket != "unknown":
-        return status, bucket
-    matches = [(i, _risk_status_bucket(cell))
-               for i, cell in enumerate(cells)
-               if _risk_status_bucket(cell) != "unknown"]
-    if len(matches) == 1:
-        return cells[matches[0][0]], matches[0][1]
-    return status, "unknown"
 
 
 def parse_risk_summary(text, today=None, *, include_rows=False):
-    """The risks face: risk-log NON-CLOSED row count + escalation recency.
-
-    FIX-397④ caliber — the vocabulary and tolerance contracts live in the
-    module constants (``_RISK_OPEN_STATE_PREFIXES`` /
-    ``_RISK_CLOSED_STATE_PREFIXES``) and ``_resolve_risk_status``. The
-    pre-fix mirror of the engine's exact-``打开`` predicate undercounted
-    the live risk-log in two independent ways (bootstrap reported 4 vs 18
-    actual non-closed rows on 2026-09-27): annotated forms
-    ("打开（登记观察）", "**缓解中（…）**") failed the exact match, and the
-    8 shape-drifted rows were skipped outright. Unknown status tokens are
-    COUNTED as open and disclosed via ``unknown_count`` + a bounded
-    ``unknown_statuses`` list — the charter's fail-closed disposition
-    (计入并 WARN), never a silent drop. Escalation recency stays positional
-    on the header ``截止日期`` column: an anchored row's positional
-    deadline cell may read a filler ("—") and then yields NO escalation
-    signal — the fail-safe direction (never a fabricated overdue).
-
-    FIX-422 deadline caliber — the deadline cell participates in the
-    overdue/soon judgment ONLY when it is a PURE ISO date
-    (``YYYY-MM-DD``; at most surrounding whitespace, already stripped).
-    Live risk-log deadline cells have been repurposed as free-text
-    re-review streams (several historical dates plus narrative — the
-    RISK-044/047/048 shapes verified 2026-10-03), and the pre-fix
-    ``deadline[:10]`` read grabbed the FIRST historical date out of that
-    prose, fabricating overdue escalations — a direct violation of this
-    face's own fail-safe contract above. A non-pure cell (re-review
-    stream / multi-date / long text) yields NO deadline signal: fail
-    toward silence, never a fabricated overdue. A pure PAST date still
-    reports overdue honestly — the fix must not swallow real
-    escalations either.
-    """
+    """Count non-closed rows, including unknown statuses, and date exceptions."""
     today = today or date.today()
     summary = {"open": 0, "escalation_overdue": 0, "escalation_soon": 0,
-               "overdue_ids": [], "unknown_count": 0,
-               "unknown_statuses": []}
+               "overdue_ids": [], "unknown_count": 0, "unknown_statuses": [],
+               "no_deadline": 0, "invalid_deadline": 0}
     if include_rows:
         summary["rows"] = []
-    for header, rows in _iter_positional_tables(text):
-        if "编号" not in header or "当前状态" not in header:
-            continue
-        id_pos = header.index("编号")
-        status_pos = header.index("当前状态")
-        deadline_pos = header.index("截止日期") if "截止日期" in header else None
-        width = max(p for p in (id_pos, status_pos, deadline_pos)
-                    if p is not None)
-        for cells in rows:
-            if len(cells) <= width:
-                continue
-            status, bucket = _resolve_risk_status(cells, status_pos)
-            if bucket == "closed":
-                continue
-            rid = cells[id_pos].strip()
-            if not rid:
-                continue
-            summary["open"] += 1
-            if bucket == "unknown":
-                summary["unknown_count"] += 1
-                if len(summary["unknown_statuses"]) < \
-                        _RISK_UNKNOWN_DISCLOSURE_CAP:
-                    summary["unknown_statuses"].append(
-                        {"id": rid, "status": _clip(status.strip(), 40)})
-            deadline = (cells[deadline_pos].strip()
-                        if deadline_pos is not None else "")
-            if include_rows:
-                description = cells[header.index("风险/阻塞描述")] if "风险/阻塞描述" in header else rid
-                summary["rows"].append({"id": rid, "description": description,
-                                        "status": status, "deadline": deadline})
-            days_left = None
-            # FIX-422: only a PURE ISO date participates — a re-review
-            # stream / multi-date / long-text cell yields no deadline
-            # signal (fail-safe; the pre-fix [:10] read fabricated
-            # overdues out of the first historical date in the prose).
-            if _PURE_ISO_DATE_RE.match(deadline):
-                try:
-                    days_left = (date.fromisoformat(deadline) - today).days
-                except ValueError:
-                    days_left = None
-            if days_left is not None:
-                if days_left < 0:
-                    summary["escalation_overdue"] += 1
-                    if len(summary["overdue_ids"]) < 3:
-                        summary["overdue_ids"].append(rid)
-                if days_left <= 3:
-                    summary["escalation_soon"] += 1
+    for row in iter_active_risks(text):
+        summary["open"] += 1
+        if row.bucket == "unknown":
+            summary["unknown_count"] += 1
+            if len(summary["unknown_statuses"]) < _RISK_UNKNOWN_DISCLOSURE_CAP:
+                summary["unknown_statuses"].append(
+                    {"id": row.id, "status": _clip(row.status, 40)})
+        if include_rows:
+            summary["rows"].append({"id": row.id, "description": row.description or row.id,
+                                    "status": row.status, "deadline": row.deadline})
+        if row.deadline_kind == "none":
+            summary["no_deadline"] += 1
+        elif row.deadline_kind == "invalid":
+            summary["invalid_deadline"] += 1
+        else:
+            days_left = row.days_left(today)
+            if days_left < 0:
+                summary["escalation_overdue"] += 1
+                if len(summary["overdue_ids"]) < 3:
+                    summary["overdue_ids"].append(row.id)
+            if days_left <= 3:
+                summary["escalation_soon"] += 1
     return summary
 
 
@@ -466,59 +311,6 @@ def parse_recent_decisions(text, limit=3):
 
     rows.sort(key=_sort_key, reverse=True)
     return rows[:limit]
-
-
-def _iter_positional_tables(text):
-    """Yield (header_cell_list, [data_cell_lists]) per markdown table.
-
-    R0 P0-1 fix: LINE-FOR-LINE mirror of the engine's
-    ``_status_table_stream`` (verify_workflow.py). The previous local
-    scanner diverged on live-shaped files — a blank line inside a table
-    terminated it (every later row landed in a ghost table headed by a
-    data row, then was dropped) and any leading ``|`` row became a header
-    without a separator check. Mirrored semantics:
-
-    * a table starts at a ``|`` row whose next NON-BLANK row is the
-      ``---`` separator — a ``|`` row without a separator below is NOT a
-      header (data rows can never masquerade as headers / ghost tables);
-    * blank lines INSIDE a table are tolerated, never terminators (the
-      live plan-tracker/risk-log insert them between sub-groups);
-    * a non-``|`` line ends the table.
-
-    Guarded against drift by the bidirectional differential test against
-    the engine stream (``SegmentedTableMirrorTests``).
-    """
-    lines = text.split("\n")
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i].strip()
-        if not line.startswith("|"):
-            i += 1
-            continue
-        header = [c.strip() for c in line.split("|")[1:-1]]
-        j = i + 1
-        while j < n and not lines[j].strip():
-            j += 1
-        if j >= n or not _SEPARATOR_ROW_RE.match(lines[j].strip()):
-            i += 1
-            continue
-        k = j + 1
-        rows = []
-        while k < n:
-            r = lines[k].strip()
-            if not r:
-                k += 1
-                continue
-            if not r.startswith("|"):
-                break
-            if _SEPARATOR_ROW_RE.match(r):
-                k += 1
-                continue
-            rows.append([c.strip() for c in r.split("|")[1:-1]])
-            k += 1
-        yield header, rows
-        i = k
 
 
 def plan_tracker_version(text):
@@ -1191,6 +983,9 @@ def format_text(payload):
     if risks:
         lines.append("risks: open %s (overdue %s, soon %s)"
                      % (risks.get("open"), risks.get("escalation_overdue"), risks.get("escalation_soon")))
+    if risks.get("no_deadline") or risks.get("invalid_deadline"):
+        lines.append("risk deadlines: none %s, invalid %s"
+                     % (risks.get("no_deadline", 0), risks.get("invalid_deadline", 0)))
     if risks.get("unknown_count"):
         disclosed = ", ".join(
             u.get("id", "?") for u in (risks.get("unknown_statuses") or []))

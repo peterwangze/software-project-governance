@@ -1143,6 +1143,7 @@ from checks.risk_domain import (  # noqa: E402
     _parse_context_open_risks,
     is_risk_status_open,
     parse_open_risks,
+    parse_active_risks,
     check_risk_staleness,
     check_risk_escalation,
     check_risk_mitigation_closure,  # FIX-265 / REQ-145.3 (Check 36)
@@ -9104,64 +9105,6 @@ def parse_recent_completed_tasks(rows, n=5):
     return done[:n]
 
 
-def parse_active_risks(risk_content=None):
-    """Parse risk-log active rows with escalation-deadline markers.
-
-    Returns rows for risks whose status is OPEN — the risk domain's canonical
-    predicate :func:`is_risk_status_open` (the SAME judgement Check 2/8 and
-    ``parse_open_risks`` use; FIX-270 R0 F3 — no parallel marker sets). Each
-    row carries ``escalation_soon`` (deadline within 3 days, incl. overdue)
-    and ``escalation_overdue`` (deadline passed). No deadline → both False.
-    """
-    content = risk_content if risk_content is not None else (
-        RISK_PATH.read_text(encoding="utf-8") if RISK_PATH.is_file() else ""
-    )
-    today = date.today()
-    out = []
-    for header, rows in _status_table_stream(content):
-        idx = {}
-        for pos, name in enumerate(header):
-            key = _status_col_name(name)
-            if key in ("编号", "日期", "风险/阻塞描述", "当前状态", "截止日期", "严重级别", "owner"):
-                idx.setdefault(key, pos)
-        if "编号" not in idx or "当前状态" not in idx:
-            continue
-        for cells in rows:
-            if len(cells) <= max(idx.values()):
-                continue
-            def cell(key):
-                pos = idx.get(key)
-                return _status_clean_cell(cells[pos]) if pos is not None and pos < len(cells) else ""
-            status = cell("当前状态")
-            if not is_risk_status_open(status):
-                continue
-            rid = cell("编号")
-            if not rid:
-                continue
-            deadline_text = cell("截止日期")
-            deadline = _status_iso_date(deadline_text)
-            days_left = None
-            if deadline:
-                try:
-                    days_left = (date.fromisoformat(deadline) - today).days
-                except ValueError:
-                    days_left = None
-            out.append({
-                "id": rid,
-                "opened_date": cell("日期"),
-                "description": cell("风险/阻塞描述")[:60] or "",
-                "severity": cell("严重级别"),
-                "owner": cell("owner"),
-                "status": status,
-                "deadline": deadline_text,
-                "deadline_date": deadline,
-                "days_left": days_left,
-                "escalation_soon": days_left is not None and days_left <= 3,
-                "escalation_overdue": days_left is not None and days_left < 0,
-            })
-    return out
-
-
 def parse_recent_decisions(n=5, decision_content=None):
     """Last ``n`` decision-log rows ordered by (date, id) descending.
 
@@ -13414,12 +13357,17 @@ def _run_full_engine_checks(args):
     fresh = risk_result["fresh"]
     if stale:
         all_issues += len(stale)
-        print(f"│  [WARN] {len(stale)} stale risk(s):")
+        print(f"│  [WARN] {len(stale)} risk(s) registered more than 7 days ago:")
         for risk_id, date_str, age in stale:
-            age_label = f"{age}d ago" if age >= 0 else "invalid date"
-            print(f"│    - {risk_id} ({date_str}, {age_label})")
-    else:
-        print(f"│  [PASS] No stale risks.")
+            print(f"│    - {risk_id} (registered {date_str}, {age}d ago)")
+    elif not risk_result["unknown_registration"]:
+        print("│  [PASS] No risks registered more than 7 days ago.")
+    for risk_id, raw_date in risk_result["unknown_registration"]:
+        all_issues += 1
+        print(f"│  [WARN] {risk_id}: registration date unavailable ({raw_date or 'empty'})")
+    for risk_id in risk_result["unknown_status_ids"]:
+        all_issues += 1
+        print(f"│  [WARN] {risk_id}: unrecognized status, counted as active")
     if fresh:
         print(f"│  Fresh open risks ({len(fresh)}):")
         for risk_id, date_str, age in fresh:
@@ -13616,8 +13564,13 @@ def _run_full_engine_checks(args):
         print(f"│  [WARN] {len(escalated)} open risk(s) with escalation deadline passed:")
         for r in escalated:
             print(f"│    - {r['risk_id']}: deadline {r['deadline']} ({r['days_overdue']}d overdue)")
-    else:
-        print(f"│  [PASS] No open risks with passed escalation deadlines.")
+    elif not re_result["invalid_deadline_ids"]:
+        print("│  [PASS] No dated open risks with passed escalation deadlines.")
+    for risk_id in re_result["invalid_deadline_ids"]:
+        all_issues += 1
+        print(f"│  [WARN] {risk_id}: escalation deadline is not a valid ISO date")
+    if re_result["no_deadline_ids"]:
+        print("│  Open risks without a deadline: " + ", ".join(re_result["no_deadline_ids"]))
     print(f"│  Total open risks: {re_result['total_open']}")
     print("└──────────────────────────────────────────────────────┘")
 

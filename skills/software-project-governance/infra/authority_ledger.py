@@ -1049,15 +1049,12 @@ def parse_hot_zone(plan_text, risk_text=""):
     """Parse the plan-tracker hot zone (task tables + Gate table) and the
     risk log into row inventories + canonical counts.
 
-    Table calibers are SINGLE-SOURCED from the engine-free peer leaf
-    ``bootstrap_aggregate`` (function-local import — the anti-drift
-    choice): positional tables line-for-line mirror the engine's
-    ``_status_table_stream``; gate/risk bucketing reuses the live
-    implementations.  Gate parsing is section-scoped to ``## Gate 状态跟踪``
-    (the bootstrap gate face's own caliber).
+    Positional task/gate tables and risk rows use the same readers as
+    bootstrap. The ledger retains every risk, including closed ones.
+    Gate parsing stays scoped to ``## Gate 状态跟踪``.
     """
-    from bootstrap_aggregate import (_iter_positional_tables,
-                                     _resolve_risk_status)
+    from bootstrap_aggregate import _iter_positional_tables
+    from risk_rows import iter_risk_rows
 
     task_rows = []
     gate_rows = []
@@ -1107,23 +1104,9 @@ def parse_hot_zone(plan_text, risk_text=""):
                               "status": cells[status_pos].strip(),
                               "bucket": _gate_bucket_of(
                                   cells[status_pos])})
-    risk_rows = []
-    for header, rows in _iter_positional_tables(risk_text or ""):
-        if "编号" not in header or "当前状态" not in header:
-            continue
-        id_pos = header.index("编号")
-        status_pos = header.index("当前状态")
-        for cells in rows:
-            if len(cells) <= max(id_pos, status_pos):
-                continue
-            rid = cells[id_pos].strip()
-            if not rid:
-                continue
-            status, bucket = _resolve_risk_status(cells, status_pos)
-            # bootstrap's count face skips closed rows; the LEDGER keeps
-            # every row (zero-loss migration) and buckets it instead.
-            risk_rows.append({"risk_id": rid, "status": status.strip(),
-                              "bucket": bucket})
+    # Migrations retain closed and unknown records as distinct ledger buckets.
+    risk_rows = [{"risk_id": row.id, "status": row.status, "bucket": row.bucket}
+                 for row in iter_risk_rows(risk_text)]
     return {
         "task_rows": task_rows,
         "gate_rows": gate_rows,

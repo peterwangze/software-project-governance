@@ -107,7 +107,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 **2. 任务短包**。按本文件「AI Execution Packet」读取当前任务的范围、证据和完成条件。
 
-**3. 归档证据**。热账缺少某条证据时，按 `.governance/archive/index.md` 中的 ID 和路径核对原件。归档证据同样有效。
+**3. 归档证据**。首次接入按[接入规程](core/onboarding.md)建立 `.governance/README.md` 作为材料总入口。产生独立材料时，沿用项目的归档约定（缺省见[入口模板](core/templates/governance-readme.md)），在对应任务的证据记录中写结论并引用原件。收口时沿引用复核。热账缺少某条证据时，按 `.governance/archive/index.md` 中的 ID 和路径核对原件。归档证据同样有效。
 
 **4. 会话恢复**。快照须含 `session_date` 与 `carry_over_tasks`。24 小时内可继续，超过 24 小时但在 7 天内先标注快照年龄，与计划核对后仍可继续，超过 7 天或缺必要字段则展示当前状态。首次交互呈现恢复选项，实际修改前按 §B2 核对遗留任务、待确认决策和 Gate，到期风险立即升级。完整安装的[会话恢复规程](../../commands/governance/scenario-d.md)提供面板。上次复盘超过七天、有新提交且计划未更新时提醒检查。根据同次 `resolve.hooks_installed` 提示缺失的 hook 和 `<plugin_home>/infra/hooks/` 安装位置，由用户安装。
 

@@ -14,12 +14,15 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/e2e/test_governance_init.py -v
 """
 
+import re
+import shutil
 import sys
 import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import unquote, urlsplit
 
 _HERE = Path(__file__).resolve().parent
 _INFRA_DIR = _HERE.parent.parent
@@ -93,6 +96,33 @@ class ProjectSkeleton:
 
     def __enter__(self): return self
     def __exit__(self, *_): self._td.cleanup()
+
+
+class MaterialNavigationTests(unittest.TestCase):
+
+    def test_both_init_routes_install_a_navigable_materials_entry(self):
+        skill = _INFRA_DIR.parent
+        template = skill / "core/templates/governance-readme.md"
+        routes = (skill.parents[1] / "commands/governance-init.md", skill / "core/onboarding.md")
+        links = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+        for route in routes:
+            with self.subTest(route=route):
+                instructions = route.read_text(encoding="utf-8")
+                self.assertIn(".governance/README.md", instructions)
+                sources = [source for source in links.findall(instructions) if source.endswith(template.name)]
+                self.assertIn(template, [(route.parent / source).resolve() for source in sources])
+
+        with ProjectSkeleton() as project:
+            entry = project.gov / "README.md"
+            shutil.copyfile(template, entry)
+            files = set()
+            for target in links.findall(entry.read_text(encoding="utf-8")):
+                link = urlsplit(target)
+                if not link.scheme and not link.netloc and link.path:
+                    path = entry.parent / unquote(link.path)
+                    self.assertTrue(path.exists(), target)
+                    files.add(path.resolve())
+            self.assertLessEqual({project._plan.resolve(), project._evidence.resolve()}, files)
 
 
 # ────────────────────────────────────────────────────────────

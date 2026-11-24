@@ -6297,6 +6297,28 @@ class ProjectionSyncTests(unittest.TestCase):
 class E2ECommandMatrixTests(unittest.TestCase):
     """FIX-060: e2e-check must execute real command proxies."""
 
+    def test_source_proxies_use_installed_cli_from_the_runner_package_root(self):
+        import workflow_project_roots as paths
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            relocated = Path(temp_dir)
+            with patch.object(paths, "ROOT", relocated):
+                entries = vw._e2e_command_matrix()
+                with patch.object(subprocess, "run") as run:
+                    vw._run_e2e_subprocess(entries[0]["command"])
+                self.assertEqual(Path(run.call_args.kwargs["cwd"]), relocated)
+            expected = relocated / "skills/software-project-governance/infra"
+            self.assertEqual(len(entries), 6)
+            for entry in entries:
+                with self.subTest(label=entry["label"]):
+                    script = "cleanup.py" if entry["label"] == "/governance-cleanup" else "verify_workflow.py"
+                    self.assertEqual(entry["command"][:2], [sys.executable, str(expected / script)])
+
+    def test_source_gates_proxy_executes_the_product_cli(self):
+        entry = next(item for item in vw._e2e_command_matrix() if item["label"] == "/governance-gates")
+        result = vw._evaluate_e2e_command(entry)
+        self.assertEqual(result["status"], "PASS", result)
+
     def _status_stdout(self, permission_mode="maximum-autonomy"):
         return json.dumps({
             "project": {"permission_mode": permission_mode},

@@ -99,7 +99,7 @@ description: 软件项目治理工作流——加载后主 agent 即 Coordinator
 
 ### B1 Step 1 规程明细（读 plan-tracker + 跨会话恢复）
 
-**1. 读取运行状态。** 从宿主注入位置运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。同次启动复用已验证的结果。退出失败、JSON 无效、`resolve.resolved_root_ok` 不为 true 时停止并展示诊断。按 `loops` 恢复目标、单元、层级、当前轮次、最新判定与待办。数据缺失时按[多层循环](core/lifecycle.md)登记第一项实际工作，内容损坏时保留原件。`loop status --unit <id> --json` 可独立复读同一状态。
+**1. 读取运行状态。** `<plugin_home>` 取本次宿主技能清单中本技能 `SKILL.md` 的父目录或本技能的 resourceBase。仅给插件包根时取其 `skills/software-project-governance` 子目录。核实技能名和脚本存在，将绝对路径代入并保持用户项目根为工作目录，运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。同次启动复用已验证的结果。退出失败、JSON 无效、`resolve.resolved_root_ok` 不为 true 时停止并展示诊断。按 `loops` 恢复目标、单元、层级、当前轮次、最新判定与待办。数据缺失时按[多层循环](core/lifecycle.md)登记第一项实际工作，内容损坏时保留原件。`loop status --unit <id> --json` 可独立复读同一状态。
 
 从 `root_contract` 核对用户原话、来源及原验收，子项的 `acceptance` 只描述本地操作。旧单元读取既有 `intent` 和来源。成品任务用 `--criteria` 登记用户能复验的结果，待契约就绪后用 `loop bind-product` 绑定。已有可复现失败时先从用户入口重现，直接验证能解决问题的最小修改；同一制品的既有证据在输入、判据和证据仍有效时可复用。只有新观察会改变取舍时，才用 `loop learn --kind decision` 登记候选、受影响判据与复验方法，一般观察可用 `--kind note`。交付时汇报成品通过和未通过的操作、证据及代价。把有依据的后续方向与成功条件记为 `opportunity`，选定后在授权范围内开后继单元。工作流自身的改动也用真实失败任务和正常对照重放。[参数及实测示例](core/lifecycle.md)
 

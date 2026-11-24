@@ -6,10 +6,12 @@
 
 ## 命令
 
+独立调用时先按本次加载的主技能 `software-project-governance` §B1 或同一插件包的[入口定位](governance/bootstrap.md) 确认 `<plugin_home>`，以下命令从用户项目根运行。
+
 以下以可复现的 CLI 缺陷为例。按本次事务替换任务编号、路径和验收条件。
 
 ```powershell
-python skills/software-project-governance/infra/verify_workflow.py change-triage `
+python "<plugin_home>/infra/verify_workflow.py" change-triage `
   --task FIX-241 --title "保留重复传入的候选来源" --priority P2 `
   --files "skills/software-project-governance/infra/verify_workflow.py" `
   --demand-source active-defect --acceptance "传入两次 --prior-art，记录按输入顺序保留两条"

@@ -27,7 +27,7 @@ canonical manifest 是**单一事实源**：声明"当前版本应该有哪些�
 
 ### Step 1: 检测（dry-run）
 
-从本次安装信息确认工作流独占的 `<plugin_root>`。宿主工作目录或共享技能父目录不能用来推定目标。归属不明时跳过清理。用同一显式目标预演并展示清单：
+按本次加载的主技能 `software-project-governance` §B1 或同一插件包的[入口定位](governance/bootstrap.md) 确认 `<plugin_home>`。另从本次安装信息确认工作流独占的 `<plugin_root>`。宿主工作目录或共享技能父目录不能用来推定目标。归属不明时跳过清理。用同一显式目标预演并展示清单：
 
 ```bash
 python "<plugin_home>/infra/cleanup.py" --target "<plugin_root>" --dry-run

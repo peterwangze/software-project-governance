@@ -2,7 +2,7 @@
 
 ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
 
-> @bootstrap-version: 0.101.0
+> @bootstrap-version: 0.101.1
 
 主入口 `CLAUDE.md` 承接完整规则，或加载 `skills/software-project-governance/SKILL.md`。
 

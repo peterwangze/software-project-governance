@@ -30,7 +30,7 @@ Claude 选 `CLAUDE.md`，Codex 和读取 AGENTS 指引的宿主选 `AGENTS.md`�
 ```markdown
 ## Governance Bootstrap（由 software-project-governance 插件注入）
 
-> @bootstrap-version: 0.101.0
+> @bootstrap-version: 0.101.1
 
 ### 每次会话第一动作
 
@@ -55,7 +55,7 @@ always-on 显示本次目标、工作单元、循环层、轮次及尚需的验�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.101.0
+> @bootstrap-version: 0.101.1
 
 **SELF-CHECK**：先核实根、工作单元、目标、父子关系、轮次和证据。缺少事实则标为待验证。需要用户取舍时使用 AskUserQuestion。
 
@@ -124,7 +124,7 @@ always-on 显示本次目标、工作单元、循环层、轮次及尚需的验�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
 
-> @bootstrap-version: 0.101.0
+> @bootstrap-version: 0.101.1
 
 主入口 `{PRIMARY_ENTRY}` 承接完整规则，或加载 `skills/software-project-governance/SKILL.md`。
 

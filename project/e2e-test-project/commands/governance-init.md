@@ -8,7 +8,7 @@
 
 ### Step 0: 定位项目与已安装技能
 
-复用同次启动、同一项目的结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 Claude 从插件根定位技能，Codex 使用技能文件位置，其他宿主使用已加载的资源根。整个初始化在已确认的宿主根执行。
+复用同次启动、同一项目的结果。首次运行时把 `<plugin_home>` 换成本次宿主技能清单中主技能 `software-project-governance` 的 `SKILL.md` 所在绝对目录；仅给插件包根时取其 `skills/software-project-governance` 子目录。确认技能名和脚本存在，从用户项目根运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。
 
 ### Step 1: 创建项目记录
 
@@ -30,11 +30,11 @@ Claude 选 `CLAUDE.md`，Codex 和读取 AGENTS 指引的宿主选 `AGENTS.md`�
 ```markdown
 ## Governance Bootstrap（由 software-project-governance 插件注入）
 
-> @bootstrap-version: 0.101.0
+> @bootstrap-version: 0.101.1
 
 ### 每次会话第一动作
 
-复用同次启动、同一项目的结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 仅当旧 CLI 明报未知子命令才用 `resolve_entry.py --json` 定位安装根。根或运行记录无效时停止并显示诊断。 从 `loops` 找到本次目标、单元及父单元、层级、轮次、最新裁决和证据。无单元时从用户的第一项交付登记工作；数据损坏或目标有歧义时保留原件并报告。
+复用同次启动、同一项目的结果。首次运行时把 `<plugin_home>` 换成本次宿主技能清单中主技能 `software-project-governance` 的 `SKILL.md` 所在绝对目录；仅给插件包根时取其 `skills/software-project-governance` 子目录。确认技能名和脚本存在，从用户项目根运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 仅当旧 CLI 明报未知子命令才用 `resolve_entry.py --json` 定位安装根。根或运行记录无效时停止并显示诊断。 从 `loops` 找到本次目标、单元及父单元、层级、轮次、最新裁决和证据。无单元时从用户的第一项交付登记工作；数据损坏或目标有歧义时保留原件并报告。
 
 always-on 显示本次目标、工作单元、循环层、轮次及尚需的验收或裁决；on-demand 按用户请求展开；silent-track 仅在阻塞、权限边界或风险到期时打断。 从 `project` 读取权限模式。已授权的日常执行沿同一单元继续。关键方向、范围、架构、风险接受及发布决策使用 AskUserQuestion。`health.state="deferred"` 显示「待检查」；会话摘要用 `check-governance --summary-only --scope quick`，实质推进前按主技能执行 full 深检。
 
@@ -55,13 +55,13 @@ always-on 显示本次目标、工作单元、循环层、轮次及尚需的验�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.101.0
+> @bootstrap-version: 0.101.1
 
 **SELF-CHECK**：先核实根、工作单元、目标、父子关系、轮次和证据。缺少事实则标为待验证。需要用户取舍时使用 AskUserQuestion。
 
 ### Step 0: 确定双维度模式与工作单元
 
-复用同次启动、同一项目的结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 仅当旧 CLI 明报未知子命令才用 `resolve_entry.py --json` 定位安装根。根或运行记录无效时停止并显示诊断。 always-on 显示本次目标、工作单元、循环层、轮次及尚需的验收或裁决；on-demand 按用户请求展开；silent-track 仅在阻塞、权限边界或风险到期时打断。 `project` 确定权限模式。`GOVERNANCE_LEGACY_BEHAVIOR=1` 仅调整性能行为；异常披露、升级确认、真实环境防护、独立复审和 fail-closed 持续有效。
+复用同次启动、同一项目的结果。首次运行时把 `<plugin_home>` 换成本次宿主技能清单中主技能 `software-project-governance` 的 `SKILL.md` 所在绝对目录；仅给插件包根时取其 `skills/software-project-governance` 子目录。确认技能名和脚本存在，从用户项目根运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 仅当旧 CLI 明报未知子命令才用 `resolve_entry.py --json` 定位安装根。根或运行记录无效时停止并显示诊断。 always-on 显示本次目标、工作单元、循环层、轮次及尚需的验收或裁决；on-demand 按用户请求展开；silent-track 仅在阻塞、权限边界或风险到期时打断。 `project` 确定权限模式。`GOVERNANCE_LEGACY_BEHAVIOR=1` 仅调整性能行为；异常披露、升级确认、真实环境防护、独立复审和 fail-closed 持续有效。
 
 ### Step 0.5: Agent Team 激活
 
@@ -124,13 +124,13 @@ always-on 显示本次目标、工作单元、循环层、轮次及尚需的验�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
 
-> @bootstrap-version: 0.101.0
+> @bootstrap-version: 0.101.1
 
 主入口 `{PRIMARY_ENTRY}` 承接完整规则，或加载 `skills/software-project-governance/SKILL.md`。
 
 ### 最小存活检查（第一动作）
 
-复用同次启动、同一项目的结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 仅当旧 CLI 明报未知子命令才用 `resolve_entry.py --json` 定位安装根。根或运行记录无效时停止并显示诊断。 从 `loops` 找到本次目标、单元及父单元、层级、轮次、最新裁决和证据。无单元时从用户的第一项交付登记工作；数据损坏或目标有歧义时保留原件并报告。
+复用同次启动、同一项目的结果。首次运行时把 `<plugin_home>` 换成本次宿主技能清单中主技能 `software-project-governance` 的 `SKILL.md` 所在绝对目录；仅给插件包根时取其 `skills/software-project-governance` 子目录。确认技能名和脚本存在，从用户项目根运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 仅当旧 CLI 明报未知子命令才用 `resolve_entry.py --json` 定位安装根。根或运行记录无效时停止并显示诊断。 从 `loops` 找到本次目标、单元及父单元、层级、轮次、最新裁决和证据。无单元时从用户的第一项交付登记工作；数据损坏或目标有歧义时保留原件并报告。
 
 ### SELF-CHECK
 

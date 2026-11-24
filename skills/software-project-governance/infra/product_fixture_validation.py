@@ -11,7 +11,7 @@ import tempfile
 
 
 def _e2e_command_matrix(
-        *, validate_e2e_cleanup, validate_e2e_gate_g99, validate_e2e_gates, validate_e2e_governance_proxy,
+        *, package_root, validate_e2e_cleanup, validate_e2e_gate_g99, validate_e2e_gates, validate_e2e_governance_proxy,
         validate_e2e_status, validate_e2e_verify_known_failure,
 ):
     """Return the source-root CLI proxy matrix used by cmd_e2e_check().
@@ -20,7 +20,7 @@ def _e2e_command_matrix(
     derives its data paths from the source tree. They are CLI execution
     proxies, not full external-project cwd execution.
     """
-    verify_py = Path(__file__).resolve()
+    verify_py = package_root / "skills/software-project-governance/infra/verify_workflow.py"
     cleanup_py = verify_py.with_name("cleanup.py")
     python = sys.executable
     return [

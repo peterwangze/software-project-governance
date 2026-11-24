@@ -11,6 +11,7 @@ import webbrowser
 def _e2e_command_matrix():
     from product_fixture_validation import _e2e_command_matrix as run
     return run(
+        package_root=paths.ROOT,
         validate_e2e_cleanup=_validate_e2e_cleanup, validate_e2e_gate_g99=_validate_e2e_gate_g99,
         validate_e2e_gates=_validate_e2e_gates, validate_e2e_governance_proxy=_validate_e2e_governance_proxy,
         validate_e2e_status=_validate_e2e_status,

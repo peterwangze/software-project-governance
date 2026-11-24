@@ -6297,6 +6297,28 @@ class ProjectionSyncTests(unittest.TestCase):
 class E2ECommandMatrixTests(unittest.TestCase):
     """FIX-060: e2e-check must execute real command proxies."""
 
+    def test_source_proxies_use_installed_cli_from_the_runner_package_root(self):
+        import workflow_project_roots as paths
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            relocated = Path(temp_dir)
+            with patch.object(paths, "ROOT", relocated):
+                entries = vw._e2e_command_matrix()
+                with patch.object(subprocess, "run") as run:
+                    vw._run_e2e_subprocess(entries[0]["command"])
+                self.assertEqual(Path(run.call_args.kwargs["cwd"]), relocated)
+            expected = relocated / "skills/software-project-governance/infra"
+            self.assertEqual(len(entries), 6)
+            for entry in entries:
+                with self.subTest(label=entry["label"]):
+                    script = "cleanup.py" if entry["label"] == "/governance-cleanup" else "verify_workflow.py"
+                    self.assertEqual(entry["command"][:2], [sys.executable, str(expected / script)])
+
+    def test_source_gates_proxy_executes_the_product_cli(self):
+        entry = next(item for item in vw._e2e_command_matrix() if item["label"] == "/governance-gates")
+        result = vw._evaluate_e2e_command(entry)
+        self.assertEqual(result["status"], "PASS", result)
+
     def _status_stdout(self, permission_mode="maximum-autonomy"):
         return json.dumps({
             "project": {"permission_mode": permission_mode},
@@ -14358,6 +14380,59 @@ class EntryBootstrapTemplateTests(unittest.TestCase):
         for name in ("bootstrap.sh", "bootstrap.cmd"):
             self.assertIn(name, recovery)
             self.assertTrue((_INFRA_DIR / name).is_file(), name)
+
+    def test_first_commands_run_from_an_unrelated_consumer(self):
+        router = governance_doc(GOVERNANCE_ROUTER_DOC)
+        pattern = r'`python "([^"]+)" (governance-bootstrap --format json)`'
+        commands = re.findall(pattern, router)
+        self.assertEqual([path.split("/")[0] for path, _ in commands],
+                         ["<plugin_home>", "<plugin_root>"])
+        self.assertLess(router.index("software-project-governance:software-project-governance"),
+                        router.index(commands[0][0]))
+        with tempfile.TemporaryDirectory(prefix="governance installs ") as tmp:
+            root = Path(tmp).resolve()
+            host = root / "consumer project"
+            host.mkdir()
+            package = root / "custom marketplace" / "pinned version"
+            packaged_skill = package / "skills/software-project-governance"
+            standalone = root / "direct skill installation"
+            shutil.copytree(_INFRA_DIR.parent, standalone,
+                            ignore=shutil.ignore_patterns("tests", "__pycache__"))
+            for (path, args), anchor, skill in zip(commands, (standalone, package),
+                                                   (standalone, packaged_skill)):
+                with self.subTest(entry=path):
+                    if skill == packaged_skill:
+                        skill.parent.mkdir(parents=True)
+                        standalone.rename(skill)
+                    entry = anchor / path.split("/", 1)[1]
+                    result = subprocess.run(
+                        [sys.executable, "-X", "utf8", str(entry), *args.split()],
+                        cwd=host, capture_output=True, encoding="utf-8", timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    facts = json.loads(result.stdout)["resolve"]
+                    self.assertIs(facts["resolved_root_ok"], True)
+                    self.assertEqual(Path(facts["host_project_root"]), host)
+                    self.assertEqual(Path(facts["plugin_home"]), skill)
+                    self.assertEqual(facts["scenario_hint"], "A")
+            # The previous installation has moved. An active source that goes
+            # missing cannot silently select its valid sibling or another cache.
+            missing_entry = standalone / commands[0][0].split("/", 1)[1]
+            result = subprocess.run([sys.executable, str(missing_entry), *commands[0][1].split()],
+                                    cwd=host, capture_output=True, timeout=30)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b"")
+
+    def test_project_entry_profiles_bind_the_skill_before_bootstrap(self):
+        from sync_entry_projection import extract_canonical_templates
+
+        templates = extract_canonical_templates(governance_doc("commands/governance-init.md"))
+        for profile, template in templates.items():
+            with self.subTest(profile=profile):
+                before_command = template.split('python "<plugin_home>/infra/verify_workflow.py"', 1)[0]
+                self.assertNotEqual(before_command, template)
+                self.assertIn("SKILL.md", before_command)
+                self.assertIn("skills/software-project-governance", before_command)
+
 
     def test_init_registers_and_reopens_project_work_from_the_validated_root(self):
         text = governance_doc("commands/governance-init.md")

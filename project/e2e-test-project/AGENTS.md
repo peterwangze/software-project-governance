@@ -2,13 +2,13 @@
 
 ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
 
-> @bootstrap-version: 0.101.0
+> @bootstrap-version: 0.101.1
 
 主入口 `CLAUDE.md` 承接完整规则，或加载 `skills/software-project-governance/SKILL.md`。
 
 ### 最小存活检查（第一动作）
 
-复用同次启动、同一项目的结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 仅当旧 CLI 明报未知子命令才用 `resolve_entry.py --json` 定位安装根。根或运行记录无效时停止并显示诊断。 从 `loops` 找到本次目标、单元及父单元、层级、轮次、最新裁决和证据。无单元时从用户的第一项交付登记工作；数据损坏或目标有歧义时保留原件并报告。
+复用同次启动、同一项目的结果。首次运行时把 `<plugin_home>` 换成本次宿主技能清单中主技能 `software-project-governance` 的 `SKILL.md` 所在绝对目录；仅给插件包根时取其 `skills/software-project-governance` 子目录。确认技能名和脚本存在，从用户项目根运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。须成功退出、JSON 有效且 `resolve.resolved_root_ok == true`，否则 MUST STOP 并显示诊断。 仅当旧 CLI 明报未知子命令才用 `resolve_entry.py --json` 定位安装根。根或运行记录无效时停止并显示诊断。 从 `loops` 找到本次目标、单元及父单元、层级、轮次、最新裁决和证据。无单元时从用户的第一项交付登记工作；数据损坏或目标有歧义时保留原件并报告。
 
 ### SELF-CHECK
 

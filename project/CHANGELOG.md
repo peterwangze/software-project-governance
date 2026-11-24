@@ -2,6 +2,12 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.101.1]
+
+- FIX-547 修复首次运行 `/governance` 的脚本定位。入口优先使用本次宿主加载的治理技能目录；仅给插件包根时，使用包内的 `skills/software-project-governance`。市场安装和独立技能安装都从用户的项目目录启动。[ZCode 安装及排错](../docs/marketplace/zcode-marketplace-install.md)
+- 验证器将 CLI 分发与审查、治理读写、宿主和发布检查拆开；显式安装和消费项目分别提供工具及项目数据。风险计数、历史回执的 Git 查询、写入中断恢复和冲突审查证据的处理纳入对应回归。
+- 包内补齐健康检查用的能力契约，发布账本报告其所属项目或插件，DSH 显式安装验证沿用指定的宿主配置。[自 v0.101.0 起的累计范围](../docs/release/version-plan-0.101.1.md)
+
 ## [0.101.0]
 
 本次次版本以 `v0.100.0` 为比较起点。目标是让接受一项局部改动的人仍能核对用户最初要求的整件交付。[版本范围及验收条件](../docs/release/version-plan-0.101.0.md)

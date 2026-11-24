@@ -53,7 +53,12 @@
 
 ## 决策树（自动分类——deterministic，DEC-096）
 
-**第一动作（fail-closed）**：复用同次启动、同项目的聚合结果，否则运行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。仅旧 CLI 明确报告未知子命令时改用 `python <plugin_home>/infra/resolve_entry.py --json`，成功判根后读取运行记录；无可用能力就报告诊断。其余非零退出、无效 JSON 或 `resolve.resolved_root_ok != true` → MUST STOP 并展示诊断。详见 `commands/governance/bootstrap.md`。
+**第一动作（fail-closed）**：复用同次启动、同项目的聚合结果。否则保持用户项目根为工作目录，按本次加载来源选择一条命令。先把占位符替换为绝对路径，核实技能的 `SKILL.md` 声明 `name: software-project-governance` 且脚本存在。
+
+- **有技能目录时优先使用**：从本次宿主技能清单取本插件主技能 `software-project-governance`（ZCode 全名 `software-project-governance:software-project-governance`）。其 `SKILL.md` 文件所在目录或该技能的资源根就是 `<plugin_home>`。执行 `python "<plugin_home>/infra/verify_workflow.py" governance-bootstrap --format json`。
+- **只有插件包位置时**：`<plugin_root>` 取宿主提供的本插件安装目录，或本次已加载的源文件 `commands/governance.md` 的上两级目录。Claude 可用命令正文中已展开的 `${CLAUDE_PLUGIN_ROOT}`。执行 `python "<plugin_root>/skills/software-project-governance/infra/verify_workflow.py" governance-bootstrap --format json`。包内 `commands/…` 文档也从此次安装读取。
+
+未提供绝对位置时，查询宿主列出的当前插件资源；显式安装配置及平台示例见 `commands/governance/bootstrap.md`。来源无法确定、匹配有歧义或缺文件时停止并列出所查位置，不遍历缓存版本或相邻项目。成功后沿用 `resolve.plugin_home`。仅旧 CLI 明确报告未知子命令时改用同一技能目录下的 `resolve_entry.py --json`；其余非零退出、无效 JSON 或 `resolve.resolved_root_ok != true` → MUST STOP 并展示诊断。
 
 **首次交互**。从已定位的 `loops` 说明目标、工作单元、所属层、本轮裁决和下一项可验证动作。有多个可执行单元时根据用户原意和依赖选择；需要改变范围或接受风险时使用 AskUserQuestion。首次使用且记录为空时，进入[初始化](governance-init.md)，以真实工作登记第一项。
 

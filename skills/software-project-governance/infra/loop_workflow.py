@@ -90,7 +90,7 @@ def _validate_gate(gate, tier):
     return gate
 
 
-def _unfinished(root, state, unit, children=False):
+def _unfinished(root, state, unit, children=False, *, published_scan=None):
     """Check the exit receipts being consumed, including their prerequisites."""
     from checks.loop_receipts import verify_attempt
     from loop_alignment import acceptance_successors
@@ -115,7 +115,7 @@ def _unfinished(root, state, unit, children=False):
             continue
         history = required["gate_history"]
         try:
-            verify_attempt(Path(root), required, history[-1], len(history) - 1)
+            verify_attempt(Path(root), required, history[-1], len(history) - 1, published_scan=published_scan)
             historical = uid == unit.get("continues_contract") and unit.get("previous_evidence_ref") == history[-1]["evidence_ref"]
             if uid == unit.get("continues_scope") or uid in successors:
                 historical = True
@@ -345,6 +345,8 @@ def start(root, *, unit_id, goal, tier, gate=None, acceptance=None, parent=None,
 
 
 def release_issues(root, unit_id, version):
+    from checks.loop_receipts import PublishedReceiptScan
+
     try:
         state = _payload(runtime_path(root))
         units = [unit for unit in state["flow_units"] if unit["gate_state"]["gate_id"] == "G9"
@@ -355,7 +357,9 @@ def release_issues(root, unit_id, version):
         unit = units[0]
         if unit["runtime_status"] != "completed" or unit["gate_state"]["status"] != "passed" or not unit["gate_state"]["evidence_refs"]:
             return [f"{unit['flow_unit_id']}: release review for {version} is pending"]
-        if waiting := _unfinished(root, state, unit, children=True):
+        scan = PublishedReceiptScan(u["gate_history"][-1]["evidence_ref"] for u in state["flow_units"]
+                                    if u["runtime_status"] == "completed" and u.get("gate_history"))
+        if waiting := _unfinished(root, state, unit, children=True, published_scan=scan):
             return [f"unresolved release work: {', '.join(waiting)}"]
         if issue := loop_revalidation.exit_issue(root, unit, loop_revalidation.owner_for(state, unit)):
             return [issue]
@@ -528,7 +532,8 @@ def review_binding(root, task, unit_id=None, gate=None, *, allowed_gates=None):
     return binding
 
 
-def _review_receipt(root, unit, gate, review_id, *, published=False, ledger=None, review_objects=None):
+def _review_receipt(root, unit, gate, review_id, *, published=False, ledger=None, review_objects=None,
+                    published_scan=None):
     """Match the machine record to its committed review transaction and pinned report."""
     from authority_ledger import LedgerWriter
     from review_record import verify_review_trust
@@ -567,6 +572,8 @@ def _review_receipt(root, unit, gate, review_id, *, published=False, ledger=None
     actual_pins = set(re.findall(r"^- snapshot_bind: (.+)=([^=\s]+)$", text, re.MULTILINE))
     if actual_pins != expected_pins:
         raise ValueError("review snapshot file bindings disagree with ledger")
+    if published and published_scan is not None:
+        review_objects = published_scan.objects_for(root, writer)
     if published and review_objects is not None:
         trust = review_objects.verify(review, root)
     else:

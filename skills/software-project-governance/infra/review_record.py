@@ -500,7 +500,10 @@ class PublishedReviewObjects:
         # Only directly confirmed, matching OIDs take the fast path. Missing
         # objects, tags, abbreviated names and failed/malformed Git responses
         # retain the individual reader's HEAD and type-discrimination checks.
-        confirmed = self._types if Path(root).resolve() == self.root else {}
+        try:
+            confirmed = self._types if Path(root).resolve() == self.root else {}
+        except (OSError, RuntimeError):
+            confirmed = {}
         return _verify_review_trust(review_file, root, current_worktree=False, confirmed=confirmed)
 
 

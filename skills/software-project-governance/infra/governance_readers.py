@@ -66,26 +66,19 @@ def loop_state(root, *, latest_learning_only=False):
     issues_by_id = {}
     receipts = {}
     ledger = None
-    review_objects = None
+    from checks.loop_receipts import PublishedReceiptScan, verify_attempt
+    published_scan = PublishedReceiptScan(u["gate_history"][-1]["evidence_ref"] for u in units if u.get("gate_history"))
     for unit in units:
         history = unit.get("gate_history") or []
         if not history:
             continue
         key, latest = unit["flow_unit_id"], history[-1]
         receipts[key] = latest
-        from checks.loop_receipts import review_id_from_ref, verify_attempt
         try:
             if ledger is None and latest["evidence_ref"].startswith("review-"):
                 from authority_ledger import LedgerWriter
-                from review_record import PublishedReviewObjects
                 ledger = LedgerWriter(path.parent)
-                if ledger.integrity["ok"]:
-                    selected = {review_id_from_ref(u["gate_history"][-1]["evidence_ref"])
-                                for u in units if u.get("gate_history")}
-                    review_objects = PublishedReviewObjects(root, (
-                        r for r in ledger.state["reviews"] if isinstance(r, dict) and isinstance(r.get("review_id"), str)
-                        and r["review_id"] in selected))
-            verify_attempt(root, unit, latest, len(history) - 1, ledger=ledger, review_objects=review_objects)
+            verify_attempt(root, unit, latest, len(history) - 1, ledger=ledger, published_scan=published_scan)
             if unit["runtime_status"] == "completed" and key not in historical:
                 if issue := exit_issue(root, unit, root_unit(unit, by_id)):
                     issues_by_id[key] = f"{key}: {issue}. Reopen the stale exit with loop recheck --unit {key}."

@@ -40,6 +40,8 @@ class RepositoryContext:
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     timeout: int = 15
     env: Optional[Mapping[str, str]] = None
+    # The installed release ledger can have a different owner from the selected host.
+    manifest_repository_root: Optional[Path] = None
 
     def run_git(self, *args: str) -> tuple[int, str, str]:
         return self.git(args, self.root, self.timeout)

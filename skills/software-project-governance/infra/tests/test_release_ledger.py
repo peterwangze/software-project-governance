@@ -90,6 +90,180 @@ class TempRepoMixin:
 
 
 class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
+    def test_invalid_ledger_path_reports_the_filesystem_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            invalid = root / "bad\0directory"
+            report = validate_release_ledger(RepositoryContext(root), invalid, version="0.66.0", verify_remote=False)
+            self.assertIn(report.state, {"FAIL", "UNKNOWN"})
+            self.assertTrue(report.issues)
+
+    def test_manifest_facts_keep_the_git_path_of_an_in_repository_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "published.json"
+            target.write_text("{}", encoding="utf-8")
+            alias = root / "0.66.0.json"
+            try:
+                alias.symlink_to(target)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+            result = validate_release_ledger(RepositoryContext(root), root, version="0.66.0", verify_remote=False)
+            self.assertEqual(result.facts["manifests"][0]["path"], alias.name)
+
+    def test_replacement_ledger_validator_keeps_the_public_callback_arguments(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        from release.model import CheckResult
+        from release_validation_cli import _render_ledger
+
+        contexts = []
+
+        def replacement(context, *, manifests_dir, version, remote, verify_remote):
+            contexts.append((context.root, context.manifest_repository_root, manifests_dir, version, remote, verify_remote))
+            return CheckResult("PASS")
+
+        with redirect_stdout(StringIO()):
+            _render_ledger(SimpleNamespace(version="0.66.0", no_remote=True),
+                           host_project_root=Path("host"), plugin_root=lambda: Path("plugin"),
+                           repository_context=RepositoryContext, validate_release_ledger=replacement)
+        self.assertEqual(contexts, [(Path("host"), Path("plugin"), Path("plugin/skills/software-project-governance/core/releases"),
+                                     "0.66.0", "origin", False)])
+
+    def test_cli_returns_structured_results_for_unrelated_git_and_plain_hosts(self):
+        entry = INFRA / "verify_workflow.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            for kind in ("git", "plain"):
+                root = Path(tmp) / kind
+                root.mkdir()
+                if kind == "git":
+                    self.init_repo(root)
+                for version, expected, code in (("0.101.0", "BLOCKED", 3), ("99.99.99", "FAIL", 1)):
+                    with self.subTest(host=kind, version=version):
+                        run = subprocess.run(
+                            [sys.executable, str(entry), "--project-root", str(root), "release-ledger",
+                             "--version", version, "--no-remote"], cwd=root, capture_output=True,
+                        )
+                        self.assertEqual(run.returncode, code, (run.stdout, run.stderr))
+                        self.assertEqual(run.stderr, b"")
+                        report = json.loads(run.stdout)
+                        self.assertEqual(report["state"], expected)
+                        self.assertFalse(report["pass"])
+                        self.assertTrue(report["issues"])
+                        self.assertEqual(Path(report["repository_root"]), root.resolve())
+                        self.assertEqual(Path(report["manifests_dir"]), INFRA.parent / "core/releases")
+
+    def test_linked_worktree_uses_the_manifest_owners_history_for_a_custom_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, linked = Path(tmp) / "publisher", Path(tmp) / "linked"
+            source.mkdir()
+            self.init_repo(source)
+            git(source, "worktree", "add", "--detach", str(linked))
+            # Only the publishing branch contains the new manifest and its adding commit.
+            releases = source / "custom-ledger"
+            releases.mkdir()
+            write_manifest(releases / "0.66.0.json", {
+                "schema_version": 1, "version": "0.66.0", "lifecycle_state": "candidate",
+                "provenance": "native", "artifacts": self.artifacts(),
+                "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
+                "effective_state": {"lifecycle_state": "candidate", "withdrawn": False, "amendments": []},
+                "events": [],
+            })
+            git(source, "add", "custom-ledger")
+            git(source, "commit", "-m", "candidate")
+            for context in (RepositoryContext(source), RepositoryContext(linked),
+                            RepositoryContext(linked, manifest_repository_root=source)):
+                with self.subTest(root=context.root, manifest_owner=context.manifest_repository_root):
+                    report = validate_release_ledger(context, releases, verify_remote=False)
+                    self.assertEqual(report.state, "PASS", report.issues)
+                    self.assertEqual(report.facts["manifests"][0]["candidate_commit"], git(source, "rev-parse", "HEAD"))
+            equivalent = validate_release_ledger(RepositoryContext(linked), releases / ".." / releases.name,
+                                                 version="0.66.0", verify_remote=False)
+            self.assertEqual(equivalent.state, "PASS", equivalent.issues)
+            self.assertEqual(equivalent.facts["manifests"][0]["path"], "custom-ledger/0.66.0.json")
+            # Even a tracked vendored copy cannot borrow lineage from its consumer.
+            vendor = source / "node_modules" / "plugin"
+            packaged = vendor / "skills/software-project-governance/core/releases"
+            packaged.mkdir(parents=True)
+            (packaged / "0.66.0.json").write_bytes((releases / "0.66.0.json").read_bytes())
+            git(source, "add", "node_modules")
+            git(source, "commit", "-m", "vendor a release manifest")
+            import_commit = git(source, "rev-parse", "HEAD")
+            for context, directory in (
+                (RepositoryContext(source, manifest_repository_root=vendor), packaged),
+                (RepositoryContext(vendor, manifest_repository_root=vendor), packaged),
+                (RepositoryContext(vendor), None),
+                (RepositoryContext(vendor), packaged),
+            ):
+                with self.subTest(host=context.root, directory=directory, owner=context.manifest_repository_root):
+                    vendored = validate_release_ledger(context, directory, version="0.66.0", verify_remote=False)
+                    self.assertEqual(vendored.state, "BLOCKED", vendored.as_dict())
+                    self.assertIn("not its own Git checkout", vendored.issues[0])
+                    self.assertEqual(vendored.facts["manifests"], [])
+                    self.assertNotIn(import_commit, json.dumps(vendored.as_dict()))
+            # Explicit custom directories in nested independent repositories also retain their owner.
+            separate = source / "other"
+            separate.mkdir()
+            self.init_repo(separate)
+            (separate / "0.66.0.json").write_bytes((releases / "0.66.0.json").read_bytes())
+            unrelated = validate_release_ledger(RepositoryContext(source), separate, verify_remote=False)
+            self.assertEqual(unrelated.state, "BLOCKED", unrelated.as_dict())
+            self.assertIn("different Git repositories", unrelated.issues[0])
+
+    def test_installed_ledger_ownership_survives_equivalent_public_api_paths(self):
+        layout = Path("skills/software-project-governance/core/releases")
+        with tempfile.TemporaryDirectory() as tmp:
+            consumer = Path(tmp).resolve()
+            self.init_repo(consumer)
+            package = consumer / "node_modules/vendor/package"
+            manifests = package / layout
+            manifests.mkdir(parents=True)
+            entry = package / "skills/software-project-governance/infra/verify_workflow.py"
+            entry.parent.mkdir()
+            entry.write_text("# package entry\n", encoding="utf-8")
+            for name in ("project/CHANGELOG.md", "docs/release.md", ".governance/evidence-log.md"):
+                target = package / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((consumer / name).read_bytes())
+            write_manifest(manifests / "0.66.0.json", {
+                "schema_version": 1, "version": "0.66.0", "lifecycle_state": "candidate",
+                "provenance": "native", "artifacts": self.artifacts(),
+                "trust": {"candidate_commit": {"derivation": "git_commit_adding_path"}},
+                "effective_state": {"lifecycle_state": "candidate", "withdrawn": False, "amendments": []},
+                "events": [],
+            })
+            # A regular project directory can use the same suffix without installing the package.
+            custom = consumer / "datasets" / layout
+            custom.mkdir(parents=True)
+            (custom / "0.66.0.json").write_bytes((manifests / "0.66.0.json").read_bytes())
+            git(consumer, "add", "datasets")
+            git(consumer, "commit", "-m", "record the project's own custom candidate")
+            own_candidate = git(consumer, "rev-parse", "HEAD")
+            git(consumer, "add", "node_modules")
+            git(consumer, "commit", "-m", "import candidate into consumer")
+            imported = git(consumer, "rev-parse", "HEAD")
+            previous = Path.cwd()
+            try:
+                os.chdir(package)
+                local = validate_release_ledger(RepositoryContext(consumer), custom, version="0.66.0", verify_remote=False)
+                self.assertEqual(local.state, "PASS", local.as_dict())
+                self.assertEqual(local.facts["manifests"][0]["candidate_commit"], own_candidate)
+                wrong_owner = RepositoryContext(consumer, manifest_repository_root=consumer)
+                rejected = validate_release_ledger(wrong_owner, layout, version="0.66.0", verify_remote=False)
+                self.assertEqual(rejected.state, "BLOCKED", rejected.as_dict())
+                self.assertEqual(rejected.facts["manifests"], [])
+                for root in (package, Path("."), consumer, Path("../../..")):
+                    for directory in (layout, manifests, manifests / "../releases", layout / "../releases"):
+                        with self.subTest(root=root, directory=directory):
+                            result = validate_release_ledger(RepositoryContext(root), directory,
+                                                             version="0.66.0", verify_remote=False)
+                            self.assertEqual(result.state, "BLOCKED", result.as_dict())
+                            self.assertEqual(result.facts["manifests"], [])
+                            self.assertNotIn(imported, json.dumps(result.as_dict()))
+            finally:
+                os.chdir(previous)
+
     def test_strict_canonical_manifest_bytes_fail_closed(self):
         from release.ledger import parse_canonical_manifest_bytes
 

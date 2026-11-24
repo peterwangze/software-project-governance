@@ -1,7 +1,9 @@
 """Validation for immutable per-version release manifests."""
 
+from dataclasses import replace
 from hashlib import sha256
 import json
+import os
 from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Dict, Iterable, List, Optional
 import unicodedata
@@ -13,6 +15,7 @@ from .schema_validation import validate_schema
 
 
 SCHEMA_MAJOR = 1
+_PACKAGE_MANIFESTS = Path("skills/software-project-governance/core/releases")
 CANONICAL_MANIFEST_MIN_VERSION = (0, 66, 1)
 LIFECYCLE_STATES = {"candidate", "released"}
 PROVENANCE_STATES = {"native", "historical_backfill"}
@@ -317,14 +320,29 @@ def validate_manifest(
     decision_resolver: Optional[DecisionResolver] = None,
 ) -> CheckResult:
     issues: List[str] = []
-    facts: Dict[str, Any] = {"path": path.relative_to(context.root).as_posix()}
+    try:
+        # Check physical containment, but ask Git about the named path, including any symlink.
+        actual = path.resolve()
+        actual.relative_to(context.root.resolve())
+        named = Path(os.path.abspath(path))
+        manifest_rel = named.relative_to(Path(os.path.abspath(context.root))).as_posix()
+        if ".." in path.parts or ".." in context.root.parts:
+            if (context.root / manifest_rel).resolve() != actual:
+                return CheckResult("BLOCKED", ["release manifest path crosses a link before a parent traversal"],
+                                   {"path": path.as_posix(), "repository_root": context.root.as_posix()})
+    except ValueError:
+        return CheckResult("BLOCKED", ["release manifest is outside the repository being verified"],
+                           {"path": path.as_posix(), "repository_root": context.root.as_posix()})
+    except (OSError, RuntimeError) as exc:
+        return CheckResult("UNKNOWN", [f"cannot resolve release manifest path: {exc}"], {"path": path.as_posix()})
+    facts: Dict[str, Any] = {"path": manifest_rel}
     try:
         raw = path.read_bytes()
         manifest = _parse_manifest_bytes(raw)
-    except OSError as exc:
-        return CheckResult("FAIL", [f"cannot read release manifest: {type(exc).__name__}"], facts)
     except ManifestFormatError as exc:
         return CheckResult("FAIL", [str(exc)], facts)
+    except (OSError, ValueError) as exc:
+        return CheckResult("FAIL", [f"cannot read release manifest: {type(exc).__name__}"], facts)
 
     if not isinstance(manifest, dict):
         return CheckResult("FAIL", ["TYPE_DRIFT: release manifest must be an object"], facts)
@@ -387,7 +405,6 @@ def validate_manifest(
             issues.append(f"artifacts.{key} contains a missing or invalid path")
 
     release_docs = [Path(item).as_posix() for item in artifacts["release_docs"]]
-    manifest_rel = path.relative_to(context.root).as_posix()
     trust = manifest.get("trust", {})
     if provenance == "historical_backfill":
         if lifecycle != "released":
@@ -491,6 +508,29 @@ def validate_manifest(
     return CheckResult("FAIL" if issues else "PASS", issues, facts)
 
 
+def _worktree_identity(context: RepositoryContext, directory: Path) -> CheckResult:
+    rc, output, error = context.git(
+        ["rev-parse", "--show-toplevel", "--git-common-dir"], directory, context.timeout
+    )
+    lines = output.splitlines()
+    if rc or len(lines) != 2:
+        state = "UNKNOWN" if rc in {124, 125} or not rc else "BLOCKED"
+        return CheckResult(state, [f"cannot establish Git worktree at {directory}: {error or 'invalid Git response'}"])
+    return CheckResult("PASS", facts={"top": Path(lines[0]).resolve(),
+                                     "common": (directory / lines[1]).resolve()})
+
+
+def _manifest_package_root(host: Path, requested: Path, directory: Path) -> Optional[Path]:
+    # A complete nested installation has its own CLI next to its ledger.
+    # Ordinary custom directories may reuse the same trailing directory names.
+    for location in (directory, Path(os.path.abspath(requested))):
+        if location.match(str(_PACKAGE_MANIFESTS)):
+            skill = location.parent.parent
+            if (skill / "infra/verify_workflow.py").is_file():
+                return skill.parent.parent.resolve()
+    return host if directory == (host / _PACKAGE_MANIFESTS).resolve() else None
+
+
 def validate_release_ledger(
     context: RepositoryContext,
     manifests_dir: Optional[Path] = None,
@@ -499,10 +539,51 @@ def validate_release_ledger(
     verify_remote: bool = True,
     decision_resolver: Optional[DecisionResolver] = None,
 ) -> CheckResult:
-    manifests_dir = manifests_dir or context.root / "skills/software-project-governance/core/releases"
-    paths = [manifests_dir / f"{version}.json"] if version else sorted(manifests_dir.glob("*.json"))
-    if not paths:
-        return CheckResult("FAIL", ["no release manifests found"])
+    """Validate manifests against their owning checkout's files and Git lineage."""
+    manifests_dir = manifests_dir or context.root / _PACKAGE_MANIFESTS
+    # The CLI knows the package root even when the installation sits inside a
+    # consumer's Git worktree. Library callers may use any local ledger directory.
+    try:
+        paths = [manifests_dir / f"{version}.json"] if version else sorted(manifests_dir.glob("*.json"))
+        if not paths:
+            return CheckResult("FAIL", ["no release manifests found"])
+        host = context.root.resolve()
+        directory = manifests_dir.resolve()
+        package = _manifest_package_root(host, manifests_dir, directory)
+        declared = getattr(context, "manifest_repository_root", None)
+        owner = declared.resolve() if declared is not None else package
+    except (OSError, RuntimeError, ValueError) as exc:
+        return CheckResult("UNKNOWN", [f"cannot resolve release ledger directories: {exc}"],
+                           {"repository_root": context.root.as_posix(), "manifests_dir": manifests_dir.as_posix(),
+                            "manifests": []})
+    package_ledger = owner is not None
+    if owner is None:
+        # An explicitly supplied library directory may itself be in a nested
+        # repository or linked worktree. Stop at the selected root for ordinary ledgers.
+        owner = next((p for p in (directory, *directory.parents)
+                      if p == host or (p / ".git").exists()), None)
+    separate = (owner is not None and owner != host) or not directory.is_relative_to(host)
+    # A vendored package selected as its own host can still inherit its consumer's Git history.
+    # Missing versions at the same root retain the ordinary per-manifest read error.
+    if separate or (package_ledger and (not version or paths[0].exists())):
+        facts = {"repository_root": host.as_posix(), "manifests_dir": directory.as_posix(), "manifests": []}
+        if version and not paths[0].exists():
+            return CheckResult("FAIL", [f"release manifest not found: {paths[0]}"], facts)
+        if package is not None and owner != package:
+            return CheckResult("BLOCKED", ["declared repository does not own the installed release ledger"], facts)
+        source_git = _worktree_identity(context, owner or directory)
+        if not source_git.passed:
+            return CheckResult(source_git.state, source_git.issues, facts)
+        checkout = source_git.facts["top"]
+        if (owner is not None and owner != checkout) or not directory.is_relative_to(checkout):
+            return CheckResult("BLOCKED", ["release manifest source is not its own Git checkout"], facts)
+        if checkout != host:
+            host_git = _worktree_identity(context, host)
+            if not host_git.passed:
+                return CheckResult(host_git.state, host_git.issues, facts)
+            if host_git.facts["common"] != source_git.facts["common"]:
+                return CheckResult("BLOCKED", ["release manifests and selected project belong to different Git repositories"], facts)
+            context = replace(context, root=checkout)
     results = [validate_manifest(path, context, remote, verify_remote, decision_resolver) for path in paths]
     state_order = {"PASS": 0, "FAIL": 1, "UNKNOWN": 2, "BLOCKED": 3}
     state = max((result.state for result in results), key=state_order.get)

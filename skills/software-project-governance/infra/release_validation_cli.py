@@ -71,9 +71,16 @@ def cmd_check_release(args, *, check_release_readiness, write_cli_json):
 
 def _render_ledger(args, *, host_project_root, plugin_root, repository_context, validate_release_ledger):
     """Validate declarative per-version release manifests and live Git facts."""
+    from dataclasses import replace
+    from release.context import RepositoryContext
+
+    context = repository_context(host_project_root, timeout=getattr(args, "timeout", 15))
+    source = plugin_root()
+    if isinstance(context, RepositoryContext):
+        context = replace(context, manifest_repository_root=source)
     result = validate_release_ledger(
-        repository_context(host_project_root, timeout=getattr(args, "timeout", 15)),
-        manifests_dir=plugin_root() / "skills/software-project-governance/core/releases",
+        context,
+        manifests_dir=source / "skills/software-project-governance/core/releases",
         version=getattr(args, "version", None),
         remote=getattr(args, "remote", "origin"),
         verify_remote=not getattr(args, "no_remote", False),

@@ -84,6 +84,7 @@ TASK_ID = "FEAT-033"
 
 DEFAULT_BUDGET_MS = 3000
 MAX_JSON_BYTES = 8192
+MATERIALS_IF_NEEDED = "loop materials --unit <id> [--query <terms> | --ref <ref>]"
 
 
 def _behavior():
@@ -518,6 +519,7 @@ def _build_payload(host_root, envelope, budget_ms, profile, started, *, include_
         "budget_ms": budget_ms,
         "profile": profile,
         "resolve": envelope,
+        "materials_if_needed": MATERIALS_IF_NEEDED,
     }
 
     gov_dir = host_root / ".governance"
@@ -529,7 +531,9 @@ def _build_payload(host_root, envelope, budget_ms, profile, started, *, include_
     try:
         from governance_readers import loop_state, project_name
         builder.check_budget("loops")
-        payload["loops"] = loop_state(host_root, latest_learning_only=True)
+        loops = loop_state(host_root, latest_learning_only=True)
+        payload["loops"] = loops
+        has_open_units = any(unit["runtime_status"] != "completed" for unit in loops["units"])
         builder.check_budget("project")
         config = parse_project_config(plan_text)
         project = {
@@ -540,13 +544,11 @@ def _build_payload(host_root, envelope, budget_ms, profile, started, *, include_
                                      or config.get("permission_mode", "")),
             "workflow_version": _clip(config.get("工作流版本", "")),
         }
-        if caps["overview"]:
+        if caps["overview"] and not has_open_units:
             overview = parse_overview_row(plan_text)
             project["overview"] = {key: overview[key] for key in ("project", "latest_retro") if key in overview}
         payload["project"] = project
 
-        loops = payload["loops"]
-        has_open_units = any(unit["runtime_status"] != "completed" for unit in loops["units"])
         if plan_text and not has_open_units and loops["state"] != "invalid":
             builder.check_budget("tasks")
             face, report = candidates_face(plan_text, caps["candidates"])
@@ -561,7 +563,7 @@ def _build_payload(host_root, envelope, budget_ms, profile, started, *, include_
         payload["migration"] = migration_flag(
             plan_tracker_version(plan_text), envelope["active_version"])
 
-        if caps["recent"]:
+        if caps["recent"] and not has_open_units:
             builder.check_budget("recent")
             decision_text = _read_text(gov_dir / "decision-log.md")
             payload["recent"] = {
@@ -738,7 +740,7 @@ def _unit_preview(unit):
         preview["root_contract"] = {k: _clip(contract[k], 90) for k in ("unit", "intent", "source", "acceptance")}
         preview["root_contract"].update(revision=contract["revision"],
             criteria={_clip(k, 40): _clip(v, 60) for k, v in list(contract["criteria"].items())[:3]},
-            revisions=[{k: _clip(str(event[k]), 60) for k in ("id", "kind", "reason", "evidence")}
+            revisions=[{k: _clip(str(event[k]), 60) for k in ("id", "kind", "reason", "evidence") if k in event}
                        for event in contract["revisions"][-1:]])
     if entries := preview.get("learning"):
         preview["learning"] = []
@@ -813,11 +815,11 @@ def _enforce_projection_budget(payload, limit=MAX_JSON_BYTES):
     if units:
         if len(loops.get("issues", [])) > 1:
             loops["issues"] = loops["issues"][:1]
-            disclose("first evidence issue shown; loop status --json lists each affected unit")
+            disclose("first evidence issue shown; check the affected unit with loop status --unit <id> --json")
         original_count = len(units)
         loops["omitted_units"] = original_count
         loops["units"] = []
-        disclose("work unit text and lists shortened; see loop status --json for full details")
+        disclose("work unit text and lists shortened; use loop status --unit <id> --json for the selected unit")
         for unit in sorted(units, key=_unit_recovery_order):
             preview = _unit_preview(unit)
             loops["units"].append(preview)
@@ -905,9 +907,10 @@ def format_loop_lines(loops, *, limit=None):
                 details.append("local scope: " + criteria_text(scope) + "; local success does not certify root acceptance")
             if revisions := contract.get("revisions"):
                 event = revisions[-1]
-                details.append(f"latest root revision {brief(event.get('id', '?'), 60)} "
-                               f"({brief(event.get('kind', '?'), 40)}): {brief(event.get('reason', ''))} "
-                               f"| revision evidence: {brief(event.get('evidence') or 'none recorded')}")
+                revision = f"latest root revision {brief(event.get('id', '?'), 60)} ({brief(event.get('kind', '?'), 40)})"
+                if event.get("reason"):
+                    revision += ": " + brief(event["reason"])
+                details.append(f"{revision} | revision evidence: {brief(event.get('evidence') or 'none recorded')}")
         if intent := unit.get("intent"):
             if (intent.get("basis"), intent.get("source")) != (contract.get("intent"), contract.get("source")):
                 details.append(f"request basis ({intent['source']}): {intent['basis']}")
@@ -915,7 +918,9 @@ def format_loop_lines(loops, *, limit=None):
                 details.append("references: " + ", ".join(intent["prior_art"]))
         for entry in unit.get("learning", []):
             label = "optional next step" if entry["kind"] == "opportunity" else "approach decision"
-            item = f"{label} {entry['id']}: {entry['action']}"
+            item = f"{label} {entry['id']}"
+            if entry.get("action"):
+                item += f": {entry['action']}"
             if entry.get("observation"):
                 item += f" | observed: {entry['observation']} | validate: {entry['validation']}"
             if entry.get("evidence"):
@@ -936,7 +941,7 @@ def format_loop_lines(loops, *, limit=None):
                 or any(entry.get("revalidation") or entry.get("evidence_issue") for entry in unit.get("learning", []))):
             details.append(f"full status: loop status --unit {unit['flow_unit_id']} --json")
         elif unit.get("learning_count", 0) > len(unit.get("learning", [])):
-            details.append(f"earlier records: loop status --unit {unit['flow_unit_id']} --json")
+            details.append(f"material lookup: loop materials --unit {unit['flow_unit_id']} --query <terms>")
         lines.append("%s [%s, round %s] %s — %s" % (
             unit["flow_unit_id"], unit["active_loop_tier"] or unit["runtime_status"], unit["loop_count"],
             _clip(" ".join((unit.get("goal") or unit["title"]).splitlines()), 160), unit["next_action"]))
@@ -946,12 +951,12 @@ def format_loop_lines(loops, *, limit=None):
     if loops.get("message"):
         lines.append(loops["message"])
     for issue in (loops.get("issues") or [])[:3]:
-        lines.append("  evidence issue: " + brief(issue, 240) + " | full status: loop status --json")
+        lines.append("  evidence issue: " + brief(issue, 240) + " | check the affected unit with loop status --unit <id> --json")
     if len(loops.get("issues") or []) > 3:
-        lines.append("Further evidence issues: run loop status --json")
+        lines.append("Further evidence issues: check the affected unit with loop status --unit <id> --json")
     omitted = loops.get("omitted_units", 0) + len(units) - len(visible_units)
     if omitted:
-        lines.append("%s further unit(s): run loop status --json" % omitted)
+        lines.append("%s further unit(s): resolve the selected ID with loop status --unit <id> --json" % omitted)
     return lines
 
 
@@ -975,6 +980,8 @@ def format_text(payload):
         % (project.get("name"), project.get("profile"), project.get("trigger_mode"),
            project.get("permission_mode")),
     ]
+    if payload.get("materials_if_needed"):
+        lines.append("materials if needed: " + payload["materials_if_needed"])
     lines.extend(format_loop_lines(loops, limit=6))
     if tasks:
         lines.append("tasks: total %s completed %s unblocked %s blocked %s "

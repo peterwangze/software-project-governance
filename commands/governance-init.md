@@ -14,7 +14,7 @@
 
 仅为缺失文件从 `<plugin_home>/core/templates/` 创建 `.governance/plan-tracker.md`、`evidence-log.md`、`decision-log.md`、`risk-log.md`。用真实的项目名、目标、Profile、触发模式、权限和安装版本填好配置；清除样例。已经存在的记录按原内容保留。任务表记来源和验收，运行记录由 CLI 写入。
 
-首次接入时，若 `.governance/README.md` 缺失，将[材料入口模板](../skills/software-project-governance/core/templates/governance-readme.md)按此文件名放入宿主项目。向用户指出该入口，供其按任务查结论、再按需打开原件。项目已有入口时沿用原文。
+模型从 bootstrap 选定当前单元。目标、判据和当前裁决足以行动时即继续执行。缺少会影响判断的事实时，运行 `loop materials --unit <id>`，按具体问题用 `--query` 缩小范围，按返回的 `--ref` 定位一份原件。
 
 ### Step 2: 登记首个工作单元
 

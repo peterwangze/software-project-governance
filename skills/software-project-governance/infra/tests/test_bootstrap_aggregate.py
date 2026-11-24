@@ -482,6 +482,13 @@ class ProfileDetailTests(unittest.TestCase):
 class BudgetFailSafeTests(unittest.TestCase):
     """--budget-ms exhaustion returns the finished part + deferred disclosure."""
 
+    def test_materials_route_survives_budget_deferral(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_fixture(tmp)
+            payload = _run_aggregate(tmp, ["--budget-ms", "0"])
+        self.assertIn("loop materials --unit <id>", payload["materials_if_needed"])
+        self.assertIn(payload["materials_if_needed"], ba.format_text(payload))
+
     def test_zero_budget_defers_status_sections(self):
         with tempfile.TemporaryDirectory() as tmp:
             _make_fixture(tmp)
@@ -509,6 +516,61 @@ class BudgetFailSafeTests(unittest.TestCase):
 class ReadOnlyIdempotencyTests(unittest.TestCase):
     """Two consecutive runs: identical output (modulo volatile fields) and
     a byte-identical .governance tree — zero writes, zero side effects."""
+
+    def test_active_unit_does_not_disclose_unrelated_material_or_learning_prose(self):
+        import loop_learning
+        import loop_workflow
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_fixture(tmp)
+            loop_workflow.start(root, unit_id="invoice", tier="inner", goal="Reopen the export",
+                                acceptance="The invoice sum matches the original.")
+            (root / "invoice.txt").write_text("42.00", encoding="utf-8")
+            marker = "UNRELATED_BODY_MUST_NOT_ENTER_BOOTSTRAP"
+            loop_learning.record(root, "invoice", "choice", "decision", marker, marker, marker, "invoice.txt")
+            (root / "scratch.txt").write_text(marker, encoding="utf-8")
+            loop_learning.record(root, "invoice", "scratch", "note", marker, marker, marker, "scratch.txt")
+            with unittest.mock.patch.object(loop_learning, "_fingerprint", wraps=loop_learning._fingerprint) as reads:
+                before = _run_aggregate(tmp)
+            self.assertNotIn("scratch.txt", [c.args[1] for c in reads.call_args_list])
+            self.assertIn("invoice.txt", [c.args[1] for c in reads.call_args_list])
+            gov = root / ".governance"
+            (gov / "materials").mkdir()
+            for n in range(1000):
+                (gov / "materials" / f"other-{n}.txt").write_text(marker, encoding="utf-8")
+            with (gov / "evidence-log.md").open("a", encoding="utf-8") as ledger:
+                ledger.writelines(f"| EVD-{n} | OTHER-1 | {marker} |\n" for n in range(1000))
+            with (gov / "decision-log.md").open("a", encoding="utf-8") as decisions:
+                decisions.write(f"\n| DEC-999 | 2099-12-31 | {marker} | bg | outcome | alt | why | scope | A | OTHER-1 | next |\n")
+            after = _run_aggregate(tmp)
+        self.assertEqual(_strip_volatile(before), _strip_volatile(after))
+        self.assertNotIn(marker, json.dumps(after))
+        self.assertNotIn(marker, ba.format_text(after))
+        self.assertIn("choice", [entry["id"] for entry in after["loops"]["units"][0]["learning"]])
+
+    def test_scoped_packet_keeps_budget_and_omits_observations_and_other_units(self):
+        import loop_learning
+        import loop_workflow
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_fixture(tmp)
+            root = Path(tmp)
+            for uid in ("FEAT-101", "FEAT-102"):
+                loop_workflow.start(root, unit_id=uid, goal=uid, acceptance="Verified output", tier="inner")
+            (root / "result.txt").write_text("Original observation", encoding="utf-8")
+            for uid in ("FEAT-101", "FEAT-102"):
+                loop_learning.record(root, uid, "measured", "decision", "PRIVATE_OBSERVATION", "Run again",
+                                     "PRIVATE_VALIDATION", "result.txt")
+            proc = subprocess.run([sys.executable, "-X", "utf8", str(_ENGINE), "--project-root", tmp,
+                                   "execution-packet", "--task", "FEAT-101", "--budget", "5"],
+                                  capture_output=True, encoding="utf-8", check=True)
+        packets = json.loads(proc.stdout)["packets"]
+        self.assertEqual(list(packets), ["FEAT-101"])
+        packet = packets["FEAT-101"]
+        self.assertEqual(packet["budget"]["max_steps"], 5)
+        self.assertEqual([unit["flow_unit_id"] for unit in packet["work_units"]], ["FEAT-101"])
+        self.assertEqual(packet["work_units"][0]["learning_history"], "loop materials --unit FEAT-101 --query <terms>")
+        self.assertNotIn("PRIVATE_OBSERVATION", proc.stdout)
+        self.assertNotIn("PRIVATE_VALIDATION", proc.stdout)
 
     def test_double_run_is_output_stable_and_tree_untouched(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -848,6 +910,25 @@ class ProjectionClampTests(unittest.TestCase):
         self.assertNotIn("notes", payload)
         self.assertIn("overview", payload["project"])
 
+    def test_revised_root_survives_budget_clamp_without_revision_prose(self):
+        import loop_alignment
+        import loop_workflow
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_fixture(tmp)
+            root = Path(tmp)
+            loop_workflow.start(root, unit_id="invoice", tier="inner", goal="Reopen the invoice",
+                                intent="Original intent " * 1000, acceptance="Totals still match.")
+            revision = dict(id="total", kind="counterevidence", unit="invoice", base_revision=0,
+                            actor="customer", reason="REPORTED_DETAIL " * 500, criteria={"acceptance": "Totals still match."})
+            (root / "report.json").write_text(json.dumps(revision), encoding="utf-8")
+            loop_alignment.revise(root, "invoice", "report.json")
+            info = _run_aggregate(tmp)
+        self.assertTrue(any("shortened" in note for note in info["notes"]))
+        self.assertEqual(info["loops"]["units"][0]["root_contract"]["revisions"][-1]["id"], "total")
+        self.assertLessEqual(ba._payload_bytes(info), ba.MAX_JSON_BYTES)
+        self.assertNotIn("REPORTED_DETAIL", json.dumps(info))
+        self.assertIn("revision evidence: report.json", ba.format_text(info))
+
     def test_many_long_work_units_preserve_a_resumable_first_unit(self):
         import loop_workflow as workflow
         with tempfile.TemporaryDirectory() as tmp:
@@ -857,6 +938,7 @@ class ProjectionClampTests(unittest.TestCase):
                                goal="Implement " + "x" * 8000, acceptance="Exercise a quoted path.")
             payload = _run_aggregate(tmp)
         loops = payload["loops"]
+        self.assertIn("loop materials --unit <id>", payload["materials_if_needed"])
         self.assertEqual(loops["summary"]["total_units"], 30)
         self.assertEqual(len(loops["units"]) + loops["omitted_units"], 30)
         self.assertGreater(loops["omitted_units"], 0)

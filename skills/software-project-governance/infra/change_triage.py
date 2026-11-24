@@ -1529,6 +1529,87 @@ def _write_triage_record(record, records_dir, record_name, evidence_path,
     return None
 
 
+def _archive_evidence_has_task(volume, task_id):
+    from archive_parsing import _EVD_ID_SHAPE_RE, _ROW_FAMILY_LINE_PREFIXES, _parse_family_row
+    from governance_archive_data import expand_task_ids
+
+    prefixes = tuple(_ROW_FAMILY_LINE_PREFIXES.values())
+    with volume.open(encoding="utf-8") as stream:
+        for line in stream:
+            line = line.strip()
+            if not line.startswith(prefixes):
+                continue
+            parts = line.split("|", 3)
+            if len(parts) < 3:
+                continue
+            row_id, owners = parts[1].strip(), parts[2].strip()
+            family = row_id.partition("-")[0]
+            if family == "EVD":
+                if not _EVD_ID_SHAPE_RE.fullmatch(row_id):
+                    continue
+            else:
+                parsed = _parse_family_row(family, line)
+                if not parsed:
+                    continue
+                if task_id in parsed[1]:
+                    return True
+            if task_id == owners or task_id in expand_task_ids(owners):
+                return True
+    return False
+
+
+def archived_task_origin(governance_dir, task_id: str) -> str | None:
+    """Look up ownership in standard task/evidence volumes, including unindexed ones."""
+    if not _TASK_ID_RE.fullmatch(task_id):
+        return None
+    from archive_indexing import _extract_tasks_from_archive_file, evidence_archive_files
+    from delivery_acceptance import _project_path, _regular_stat
+
+    gov = Path(governance_dir)
+    for family in ("tasks", "evidence"):
+        try:
+            directory = _project_path(gov.parent, f"{gov.name}/archive/{family}")
+        except FileNotFoundError:
+            continue
+        for volume in evidence_archive_files(directory):
+            _regular_stat(volume)
+            if family == "tasks":
+                found = any(owner == task_id for owner, _, _ in _extract_tasks_from_archive_file(volume))
+            else:
+                found = _archive_evidence_has_task(volume, task_id)
+            if found:
+                return volume.relative_to(gov.parent).as_posix()
+    return None
+
+
+def planned_task_matches(plan_tracker_text, task_id, title, acceptance) -> bool:
+    """Recognize an already registered open task with the same declared scope."""
+    from plan_status import (
+        _W7_ACTIVE_MARKERS, _status_clean_cell, _status_col_name, _status_is_completed_cell,
+        _status_table_stream,
+    )
+
+    matched = False
+    for header, rows in _status_table_stream(plan_tracker_text):
+        keys = [_status_col_name(cell) for cell in header]
+        if "id" not in keys or "状态" not in keys:
+            continue
+        for cells in rows:
+            row = dict(zip(keys, map(_status_clean_cell, cells)))
+            if row.get("id") != task_id:
+                continue
+            status = row.get("状态", "")
+            name = row.get("事项") or row.get("任务项") or row.get("任务名称")
+            if (len(cells) != len(keys) or not name or name != title
+                    or _status_is_completed_cell(status) or "已终止" in status or "已取消" in status
+                    or not any(marker in status for marker in (*_W7_ACTIVE_MARKERS, "未开始", "已受理"))):
+                return False
+            if any(row[key] != acceptance for key in ("验收要求", "验收标准") if key in row):
+                return False
+            matched = True
+    return matched
+
+
 def run_triage(*, task_id: str, title: str = "", priority: str,
                target_version: str, depends_on, files, reason: str = "",
                acceptance: str = "", declared_side_effects: str = "",
@@ -1536,7 +1617,8 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
                prior_art=None, plan_tracker_text: str,
                current_version: str = "",
                governance_dir, existing_records=None, records_dir=None,
-               evidence_path=None, native_intake=None, native_status=None) -> dict:
+               evidence_path=None, native_intake=None, native_status=None,
+               _checked_native_intake=False) -> dict:
     """Run the mandatory five-step triage and write the machine record.
 
     Fail-closed: any step-ERROR (unknown dependency, invalid priority, empty
@@ -1655,6 +1737,15 @@ def run_triage(*, task_id: str, title: str = "", priority: str,
         return {"error": "task {0} already has a triage record — re-triage "
                          "is rejected (the machine record is immutable; use "
                          "a new task id or resolve manually)".format(task_id)}
+
+    if not _checked_native_intake:
+        try:
+            origin = archived_task_origin(governance_dir, task_id)
+        except (OSError, ValueError) as exc:
+            return {"error": f"cannot verify archived ownership of {task_id}: {exc}"}
+        if origin and not planned_task_matches(plan_tracker_text, task_id, title, acceptance):
+            return {"error": f"{task_id} already belongs to archived work in {origin}. "
+                             "Use an unused task ID or resume the original task."}
 
     depends_on = list(split_dep_ids(depends_on))
     try:
@@ -1865,6 +1956,9 @@ def cmd_change_triage(args, *, host_root, governance_dir, plan_path, read_task_r
         plan_tracker_text=plan_tracker_text,
         current_version=current_version,
         governance_dir=governance_dir, native_intake=declaration, native_status=statuses,
+        # start(dry_run=True) verified the declaration and archive ownership.
+        # A terminal native unit with no remaining intake is not an open registration.
+        _checked_native_intake=statuses.get(args.task) != "completed",
     )
     if summary.get("error"):
         output_json(summary)

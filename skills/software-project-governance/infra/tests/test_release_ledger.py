@@ -132,14 +132,23 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
                                      "0.66.0", "origin", False)])
 
     def test_cli_returns_structured_results_for_unrelated_git_and_plain_hosts(self):
+        from archive import _release_ledger_released_versions
+
         entry = INFRA / "verify_workflow.py"
+        manifests_dir = INFRA.parent / "core/releases"
+        released_versions = _release_ledger_released_versions()
+        self.assertTrue(released_versions, "expected a published, non-withdrawn release in the bundled ledger")
+        published_version = released_versions[-1]
+        self.assertTrue((manifests_dir / f"{published_version}.json").is_file())
+        missing_version = "99.99.99"
+        self.assertFalse((manifests_dir / f"{missing_version}.json").exists())
         with tempfile.TemporaryDirectory() as tmp:
             for kind in ("git", "plain"):
                 root = Path(tmp) / kind
                 root.mkdir()
                 if kind == "git":
                     self.init_repo(root)
-                for version, expected, code in (("0.101.0", "BLOCKED", 3), ("99.99.99", "FAIL", 1)):
+                for version, expected, code in ((published_version, "BLOCKED", 3), (missing_version, "FAIL", 1)):
                     with self.subTest(host=kind, version=version):
                         run = subprocess.run(
                             [sys.executable, str(entry), "--project-root", str(root), "release-ledger",
@@ -152,7 +161,7 @@ class ReleaseLedgerTests(unittest.TestCase, TempRepoMixin):
                         self.assertFalse(report["pass"])
                         self.assertTrue(report["issues"])
                         self.assertEqual(Path(report["repository_root"]), root.resolve())
-                        self.assertEqual(Path(report["manifests_dir"]), INFRA.parent / "core/releases")
+                        self.assertEqual(Path(report["manifests_dir"]), manifests_dir)
 
     def test_linked_worktree_uses_the_manifest_owners_history_for_a_custom_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:

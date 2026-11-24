@@ -13,10 +13,9 @@ The three pieces (ADR-021 §3.2.1, spec-literal):
 
   1. **face-5 词集** — ``DEFERRED_LITERAL_WORDS`` + ``DEFERRED_PATTERN_WORDS``
      (first-version word set, tunable from ledger data — RT-5);
-  2. **否定语境窗口** — a hit whose preceding 8 characters contain one of
-     废除/禁止/违规/=/不得 does NOT fire (quoting a rule while negating it
-     ≠ performing the behavior; this window is the double-insurance layer
-     over the family exemptions, ADR §3.2.1 fourth element);
+  2. **否定语境窗口** — the eight characters on each side of a hit
+     distinguish a local prohibition, a rule quotation or a pool exit from
+     an actual deferral. Table cells and clause boundaries limit the match.
   3. **三键台账** — every word-set hit on an in-scope added row is bucketed
      by ``命中词 × 行族 × 否定语境命中(bool)`` in the guard-owned
      observation ledger; the bucket summary is the false-positive-rate
@@ -100,16 +99,68 @@ DEFERRED_LITERAL_WORDS = (
 DEFERRED_PATTERN_WORDS = (re.compile(r"0\.9[4-9]\s*池"),)
 
 # ── 三件套之二：否定语境窗口（规范级第四判定要素）────────────────────────
-# Spec ambiguity resolution (FEAT-081, disclosed in the task return): the
-# ADR §3.2.1 text says 「命中词前 8 个字符」, but its own acceptance
-# criterion 3 REQUIRES 「'登记待以后'=违规」-shaped rows to yield ZERO
-# issues — a preceding-only window cannot exempt that suffix-judgment
-# shape (the ``=`` follows the hit). Both directions are therefore judged:
-# a marker within 8 chars immediately BEFORE or immediately AFTER the hit
-# span exempts (recorded as negative_context_hit either way — the ledger
-# bucket keeps the data the WARN→FAIL flip review needs to tighten this).
+# Rule quotations may precede or follow the hit (DEC-301). An equals sign
+# connects the hit to a judgement; assignments of status or priority do not.
+# Original marker inventory is public; "=" requires a rule predicate.
 NEGATIVE_CONTEXT_MARKERS = ("废除", "禁止", "违规", "=", "不得")
 NEGATIVE_CONTEXT_WINDOW_CHARS = 8
+_CLAUSE_EDGE = re.compile(r"[|，,。;；!?！？：:、\r\n]")
+_QUOTES_AND_SPACE = " \t`'\"‘’“”「」『』"
+_OBJECT = r"(?:[把将](?:其|(?:该|此|本|新增|新发现)?(?:问题|事项|任务|缺陷|项)))?"
+_DENIAL = re.compile(
+    r"(?:废除|禁止|不得|不要|不能|不可|不应|不必|无需|避免|防止|防范|预防|谨防|(?:^|\s)防|"
+    r"拒绝|并非|不是|非|不再|不)" + _OBJECT
+    + r"(?:再|继续|采用|作为|进行|列入|纳入|放入|转入|进入|加入)*$")
+_RULE_JUDGEMENT = re.compile(
+    r"^(?:(?:状态|做法|行为)\s*|[=＝]\s*|被|已|是|属(?:于)?|视为|判为)"
+    r"(?:废除|禁止|违规|不得采用)")
+_QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("“", "”"), ("‘", "’"),
+                ('"', '"'), ("'", "'"), ("`", "`"))
+_RULE_REFERENCE = re.compile(r"^(?:的)?(?:规则引用|规则原文)")
+_RULE_CITATION = re.compile(r"(?:DEC-\d+|ADR-\d+|规则|制度)(?:[(（]\d+[)）])?[ \t]*$")
+_CLOSED_GAP = re.compile(r"^(?:会计|制度|规则|登记)?(?:缺口|漏洞)(?:已经|已)?"
+                         r"(?:修复|闭合|闭环|补齐|消除)(?=$|[，,。;；|）)\s])")
+_POOL_EXIT = re.compile(r"(?:退出|移出|转出|移除|清空|关闭|清理完|撤出)(?:了)?$")
+_POOL_RESULT = re.compile(r"^(?:(?:已经|已)(?:清空|清理完|处理完|移除|退役|关闭)|"
+                          r"(?:中|内)?(?:的)?(?:事项|任务|条目)(?:均已|已|全部)(?:办结|完成))")
+_FROM_POOL = re.compile(r"(?:自|从)$")
+_REMOVED = re.compile(r"^(?:中|内)?(?:移出|移除|剔除|删除|撤出)")
+# A record citation needs both a reference verb and its object. A bare
+# numbered pool item may equally well be the destination of a new deferral.
+_CITE = re.compile(r"(?:引用|引|据|参照|参见|详见|参阅|查阅)$")
+_CITED_RECORD = re.compile(r"^(?:行|记录|条目|原文)(?:为准|为据|所载|所示|[()（）]|$)")
+_POOL_ITEM = re.compile(r"[ \t]*[#＃][0-9]+[ \t]*")
+_SOURCE_NOTE = re.compile(r"(?:首票|末票|第[一二三四五六七八九十0-9]+票|来源|出处)[(（]$")
+_FINISHED_NOTE = re.compile(r"(?:收官|办结|完成|闭环)[(（]$")
+_REFERENCE_DETAIL = re.compile(r"^(?:P[0-9]+\s*(?:优先)?\s*)?(?=[)）—–]|$)")
+_SETTLED_ITEM = re.compile(r"^(?:清账|办结|闭环)(?=[)）—–]|$)")
+_ALREADY_SETTLED = re.compile(r"^(?:已经|已)(?:清账|办结|闭环)(?=[)）—–]|$)")
+_TICKET_NOTE = re.compile(r"^[(（][A-Z]{2,8}-[0-9]")
+_PAST_PERIOD = r"(?:上|前|上次|前次|上一|前一)(?:轮|次|版|会话)"
+_PAST_SOURCE = re.compile(_PAST_PERIOD + "$")
+_SOURCE_TITLE = re.compile(r"^[『「“《]")
+_SOURCE_LOCATION = re.compile(r"(?:§\s*|快照\s*|snapshot\s+)v?\d+(?:\.\d+){1,2}\s*$")
+_SNAPSHOT_LABEL = re.compile(r"(?:^|" + _CLAUSE_EDGE.pattern + r")[ \t]*(?:(?:[a-z]+-)?snapshot|快照)"
+                             r"[ \t]+carry[- ]over[ \t]*$", re.IGNORECASE)
+_POOL_ACTION = r"(?:登记|放入|转入|存入|纳入|列入|存放|加入|移入|进入|推入|入)"
+_POOL_DESTINATION = re.compile(_POOL_ACTION + r"\s*(?:v?\d+(?:\.\d+){1,2}\s*|" + _PAST_PERIOD + r")?$")
+_CHANNEL_ACTION = re.compile(_POOL_ACTION + r"|留待|待后续")
+_DISPLAY_VERB = r"(?:展示|呈现|显示)"
+_DISPLAY_PREFIX = re.compile(_DISPLAY_VERB + r"$")
+_DISPLAY_CHANNEL = re.compile(r"^(?:经|由)(.{1,8}?)" + _DISPLAY_VERB)
+_PLANNING_RESULT = re.compile(r"^(?:规划|排期|计划)(?:已经|已)?(?:获得|形成|完成|生效)")
+_INVENTORY = re.compile(r"^\s*(?:为空|(?:[0-9]{1,3}\s*项\s*)?盘点(?:去重|结果|来源|源[=＝]))")
+_VISIBLE_RESULT = re.compile(r"^(?:(?:[与及和](?:推荐|任务|优先级)?(?:排序|清单|列表))|构成|成员|状态)?"
+                             r"(?:一次|同时|全部|均|已|在账){0,2}(?:可见|可查|透明化)")
+_MEMBERS = re.compile(r"[ \t]*([=＝])?[ \t]*[A-Z]{2,8}-[0-9]{1,6}"
+                      r"(?:[/~～–-](?:[A-Z]{2,8}-)?[0-9]{1,6}){0,4}")
+_MEMBER_STATUS = re.compile(r"^[ \t]*(?:[0-9一二三四五六七八九十]+(?:个)?(?:任务|条目|项))?"
+                            r"(?:全部|均|都|已)[ \t]*(?:unblocked\b|就绪|可执行|完成|无阻塞)", re.IGNORECASE)
+_PLAN_SOURCE = re.compile(r"(?:规划|盘点|清单|快照)[（(—–-]+$")
+_UNREALIZED = re.compile(r"(?:未能|尚未|未|不再|不能|不得|禁止|并非|不是|不|没有|"
+                         r"取消了?|解除了?|撤销了?|拟|计划|准备|待|将要|将|须|需|应|要)(?:立即|直接|继续)?"
+                         + _OBJECT + "$")
+
 
 # ── 行族范围与豁免（D3 豁免清单）──────────────────────────────────────────
 FAMILY_EVIDENCE = "evidence"
@@ -155,14 +206,121 @@ def family_for_row(surface, row_key):
     return None
 
 
+def _affirmed_prefix(pattern, before):
+    match = pattern.search(before)
+    return match is not None and not _UNREALIZED.search(before[:match.start()])
+
+
+def _pool_item_note(before, detail):
+    if detail is None:
+        return False
+    detail = _CLAUSE_EDGE.split(detail)[0]
+    if not before.strip() and _TICKET_NOTE.match(detail):
+        return True
+    if _REFERENCE_DETAIL.match(detail):
+        return bool(_CITE.search(before) or _SOURCE_NOTE.search(before))
+    settled = _SETTLED_ITEM.match(detail)
+    if settled:
+        # A closed parenthetical can list several completed tickets separated by semicolons.
+        return _affirmed_prefix(_FINISHED_NOTE, before) or (
+            not before.strip() and detail[settled.end():].startswith((")", "）")))
+    return bool(_ALREADY_SETTLED.match(detail))
+
+
+def _member_facts(text, end, before, window):
+    # Only the structured member list consumes this extra span; free prose
+    # on either side remains subject to the ordinary clause and window bounds.
+    members = _MEMBERS.match(text, end, end + 4 * window)
+    if not members:
+        return False
+    detail = _CLAUSE_EDGE.split(text[members.end():members.end() + 2 * window])[0]
+    if members[1]:
+        return bool(_MEMBER_STATUS.match(detail))
+    return bool(_PLAN_SOURCE.search(before) and detail.lstrip().startswith(("✅", "+", "）", ")")))
+
+
+def _pool_note(text, start, end, window):
+    # Read at most two ordinary windows for a qualified noun or a display
+    # channel. An actual entry into this pool takes precedence over its label.
+    before = _CLAUSE_EDGE.split(text[max(0, start - 2 * window):start])[-1]
+    after = _CLAUSE_EDGE.split(text[end:end + 2 * window])[0]
+    if _POOL_DESTINATION.search(before.rstrip()):
+        return False
+    if (_PLANNING_RESULT.match(after) or _INVENTORY.match(after) or _VISIBLE_RESULT.match(after)
+            or _DISPLAY_PREFIX.search(before.rstrip()) or _member_facts(text, end, before, window)):
+        return True
+    channel = _DISPLAY_CHANNEL.match(after)
+    if channel and not _CHANNEL_ACTION.search(channel.group(1)):
+        return True
+    if _PAST_SOURCE.search(before) and _SOURCE_TITLE.match(after):
+        return True
+    if _SOURCE_LOCATION.search(before) and (_SOURCE_TITLE.match(after) or after.startswith(("线索", "记录"))):
+        return True
+    if before.endswith(("快照", "snapshot")) and after.startswith(("叙述", "原文", "记录")):
+        return True
+    if not after.strip() and before.rstrip().lower().endswith(("carry-over", "carry over")):
+        return bool(_SNAPSHOT_LABEL.search(text, max(0, start - 4 * window), start))
+    before = before[-window:].rstrip(_QUOTES_AND_SPACE)
+    if _CITE.search(before) and _CITED_RECORD.match(after[:window]):
+        return True
+    item = _POOL_ITEM.match(text, end, end + window)
+    return bool(item and _pool_item_note(before, text[item.end():item.end() + window]))
+
+
+def _exempt_context(before, after, expression):
+    before = _CLAUSE_EDGE.split(before)[-1]
+    after = _CLAUSE_EDGE.split(after)[0]
+    # A quoted action can include an object after the hit, as in 「留待复核」=违规.
+    for opening, closing in _QUOTE_PAIRS:
+        left, has_opening, prefix = before.rpartition(opening)
+        body, has_closing, suffix = after.partition(closing)
+        if has_opening and has_closing and closing not in prefix and opening not in body:
+            if opening == closing and left.count(opening) % 2:
+                continue
+            if _RULE_JUDGEMENT.match(suffix.lstrip()):
+                return True
+    before = before.rstrip(_QUOTES_AND_SPACE)
+    after = after.lstrip(_QUOTES_AND_SPACE)
+    if _RULE_REFERENCE.match(after) or _RULE_JUDGEMENT.match(after):
+        return True
+    if _affirmed_prefix(_DENIAL, before):
+        return True
+    if "池" in expression:
+        return bool(_affirmed_prefix(_POOL_EXIT, before)
+                    or _POOL_RESULT.match(after)
+                    or (_affirmed_prefix(_FROM_POOL, before) and _REMOVED.match(after)))
+    return False
+
+
+def _quoted_rule_repair(text, start, end, window):
+    # Match the complete quoted expression, including overlapping ledger words.
+    before = text[max(0, start - 2 * window):start]
+    after = text[end:end + 2 * window]
+    if not before or not after or not _RULE_CITATION.search(before[:-1]):
+        return False
+    return (before[-1], after[0]) in _QUOTE_PAIRS and bool(_CLOSED_GAP.match(after[1:]))
+
+
+def _overlapping_spans(spans):
+    """Keep every ledger hit, but resolve the shared phrase's grammatical edges."""
+    index = 0
+    while index < len(spans):
+        first = index
+        end = spans[index][1]
+        index += 1
+        while index < len(spans) and spans[index][0] < end:
+            end = max(end, spans[index][1])
+            index += 1
+        yield spans[first:index], end
+
+
 def scan_deferred_hits(row_text):
     """Every word-set hit on the row → tuple of hit dicts.
 
     Each hit: ``{"word", "start", "end", "negative_context_hit"}`` where
     ``negative_context_hit`` is True when a negation marker sits in the
-    exemption window — within ``NEGATIVE_CONTEXT_WINDOW_CHARS`` characters
-    immediately BEFORE **or AFTER** the hit span (bidirectional arm per
-    the ADR's own acceptance criterion 3; see the constant block note).
+    eight-character window and governs this hit. Ordinary assignments
+    and unrelated neighbouring clauses leave the hit active.
     Overlapping literal hits (「登记待以后」 hits both 登记待 and 待以后)
     are all reported: the ledger buckets per word, and per-word counts are
     the tuning data. Pure; never raises.
@@ -180,18 +338,20 @@ def scan_deferred_hits(row_text):
     spans.sort()
     window = NEGATIVE_CONTEXT_WINDOW_CHARS
     hits = []
-    for start, end, word in spans:
-        before = text[max(0, start - window):start]
-        after = text[end:end + window]
-        negated = any(
-            marker in before or marker in after
-            for marker in NEGATIVE_CONTEXT_MARKERS)
-        hits.append({
-            "word": word,
-            "start": start,
-            "end": end,
-            "negative_context_hit": negated,
-        })
+    for group, phrase_end in _overlapping_spans(spans):
+        phrase_start = group[0][0]
+        phrase = text[phrase_start:phrase_end]
+        note = (_quoted_rule_repair(text, phrase_start, phrase_end, window)
+                or "池" in phrase and _pool_note(text, phrase_start, phrase_end, window))
+        for start, end, word in group:
+            before = text[max(0, start - window):phrase_start]
+            after = text[phrase_end:end + window]
+            hits.append({
+                "word": word,
+                "start": start,
+                "end": end,
+                "negative_context_hit": note or _exempt_context(before, after, phrase),
+            })
     return tuple(hits)
 
 

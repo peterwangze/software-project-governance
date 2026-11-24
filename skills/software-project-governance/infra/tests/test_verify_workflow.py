@@ -18304,7 +18304,7 @@ class LoopGateProcessorWordSetTests(unittest.TestCase):
         # window (8 chars before OR after the hit — the after-arm carries
         # the 「'登记待以后'=违规」suffix-judgment shape its acceptance
         # criterion 3 mandates) → 不触发 (rule-quoting ≠ rule-doing).
-        for prefix in ("废除", "禁止", "违规", "=", "不得"):
+        for prefix in ("废除", "禁止", "违规", "不得"):
             text = ("| EVD-2 | T | x | {0}登记待以后 的规则引用 | b | a "
                     "| d | G | s |".format(prefix))
             judgement = self._judge("evidence-log.md", "EVD-2", text)
@@ -18320,19 +18320,14 @@ class LoopGateProcessorWordSetTests(unittest.TestCase):
         self.assertFalse(judgement["fired"], judgement)
 
     def test_negative_context_window_boundary_is_eight_chars(self):
-        # Preceding-arm boundary: the marker must sit within the 8 chars
-        # immediately before the hit. 7 intervening chars → in window
-        # (exempt); 8 → outside (fires).
+        # The complete judgement must fit in the eight-character window.
+        # Ordinary assignments have no such judgement.
         from checks import loop_gate_processor as lgp
         self.assertEqual(lgp.NEGATIVE_CONTEXT_WINDOW_CHARS, 8)
-        judgement = self._judge(
-            "evidence-log.md", "EVD-3",
-            "| EVD-3 | T | x | =1234567待以后 | b | a | d | G | s |")
-        self.assertFalse(judgement["fired"], judgement)
-        judgement = self._judge(
-            "evidence-log.md", "EVD-3",
-            "| EVD-3 | T | x | =12345678待以后 | b | a | d | G | s |")
-        self.assertTrue(judgement["fired"], judgement)
+        for suffix, should_fire in (("=     违规", False), ("=      违规", True)):
+            row = "| EVD-3 | T | x | 待以后" + suffix + " | b | a | d | G | s |"
+            self.assertEqual(self._judge("evidence-log.md", "EVD-3", row)["fired"],
+                             should_fire, suffix)
 
     def test_family_scope_and_exemptions(self):
         from checks import loop_gate_processor as lgp

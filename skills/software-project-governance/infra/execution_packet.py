@@ -246,7 +246,7 @@ def generate_packet_document(tasks, *, task_ids, existing, governance_dir, build
                     if unit.get(field) is not None:
                         summary[field] = unit[field]
                 if "learning_count" in summary:
-                    summary["learning_history"] = f"loop status --unit {unit['flow_unit_id']} --json"
+                    summary["learning_history"] = f"loop materials --unit {unit['flow_unit_id']} --query <terms>"
                 packet["work_units"].append(summary)
             if len(units) == 1:
                 packet["goal"] = units[0]["goal"]

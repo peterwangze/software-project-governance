@@ -14,6 +14,8 @@ Run:
     python -m pytest skills/software-project-governance/infra/tests/e2e/test_governance_init.py -v
 """
 
+import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -74,6 +76,12 @@ class ProjectSkeleton:
     def write_risk(self, c: str):      self._risk.write_text(c, encoding="utf-8")
     def write_decision(self, c: str):  self._decision.write_text(c, encoding="utf-8")
 
+    def invoke(self, *args):
+        command = [sys.executable, "-X", "utf8", str(_INFRA_DIR / "verify_workflow.py"),
+                   "--project-root", str(self.root), *args]
+        result = subprocess.run(command, capture_output=True, check=True, encoding="utf-8")
+        return json.loads(result.stdout)
+
     def run_evidence_check(self):
         with patch.object(vw, "SAMPLE_PATH", self._plan), \
              patch.object(vw, "EVIDENCE_PATH", self._evidence):
@@ -93,6 +101,65 @@ class ProjectSkeleton:
 
     def __enter__(self): return self
     def __exit__(self, *_): self._td.cleanup()
+
+
+class MaterialNavigationTests(unittest.TestCase):
+
+    def test_evidence_template_matches_registered_rows_and_scoped_lookup(self):
+        from governance_readers import governance_table_cells
+        template = _INFRA_DIR.parent / "core/templates/evidence-log.md"
+        with ProjectSkeleton() as project:
+            project.write_evidence(template.read_text(encoding="utf-8"))
+            headers = next(governance_table_cells(line) for line in project._evidence.read_text(encoding="utf-8").splitlines()
+                           if line.startswith("|"))
+            project.invoke("loop", "start", "--unit", "invoice", "--task", "FIX-001", "--tier", "inner",
+                           "--goal", "Check invoice", "--acceptance", "Reopen and compare totals")
+            (project.root / "invoice.capture").write_text("42.00", encoding="utf-8")
+            description = "目标对齐：核对导出的发票与原始账单中各行的实收数量，确保能够使用同一凭据重现核对结果。"
+            cases = (("发票尾差", "金额一致", "见本行"), ("月末冲销", "退款已核销", "invoice.capture"))
+            for word, conclusion, location in cases:
+                with self.subTest(word=word):
+                    row_id = project.invoke("evidence-append", "--task", "FIX-001", "--type", "实测",
+                                            "--description", description + word, "--basis", "合计为 42.00",
+                                            "--artifacts", location, "--actor", "QA", "--date", "2026-01-01",
+                                            "--gate", "G6", "--conclusion", conclusion)["row_id"]
+                    line = next(line for line in project._evidence.read_text(encoding="utf-8").splitlines()
+                                if line.startswith(f"| {row_id} |"))
+                    record = dict(zip(headers, governance_table_cells(line), strict=True))
+                    self.assertEqual(record.pop("编号"), row_id)
+                    self.assertIn("合计为 42.00", record.pop("事实依据"))
+                    self.assertEqual(record, {"对应任务 ID": "FIX-001", "证据类型": "实测", "证据说明": description + word,
+                                              "原件位置": location, "提交人": "QA", "提交日期": "2026-01-01",
+                                              "关联 Gate": "G6", "结论": conclusion})
+                    item, = project.invoke("loop", "materials", "--unit", "invoice", "--query", word)["items"]
+                    self.assertEqual(item["ref"], row_id)
+                    self.assertIn(conclusion, item["summary"])
+                    self.assertEqual(project.invoke("loop", "materials", "--unit", "invoice", "--query",
+                                                    conclusion)["items"][0]["ref"], row_id)
+                    detail, = project.invoke("loop", "materials", "--unit", "invoice", "--ref", item["ref"])["items"]
+                    self.assertEqual([p["target"] for p in detail["locations"]],
+                                     [] if location == "见本行" else [location])
+
+    def test_both_init_routes_use_the_unit_query_from_bootstrap(self):
+        skill = _INFRA_DIR.parent
+        routes = (skill.parents[1] / "commands/governance-init.md", skill / "core/onboarding.md")
+        with ProjectSkeleton() as project:
+            project.invoke("loop", "start", "--unit", "invoice", "--tier", "inner", "--goal", "Reopen the export",
+                   "--acceptance", "The invoice sum matches the original.")
+            boot = project.invoke("governance-bootstrap", "--format", "json")
+            route = boot["materials_if_needed"].split(" [", 1)[0]
+            for instructions in routes:
+                with self.subTest(instructions=instructions):
+                    text = instructions.read_text(encoding="utf-8")
+                    self.assertTrue(any("templates/" in line and "`evidence-log.md`" in line
+                                        for line in text.splitlines()))
+                    self.assertIn(route, text)
+                    self.assertNotIn("governance-readme.md", text)
+            unit_id = boot["loops"]["units"][0]["flow_unit_id"]
+            result = project.invoke(*route.replace("<id>", unit_id).split())
+            self.assertIsInstance(result, dict)
+            self.assertFalse((project.gov / "README.md").exists())
+            self.assertFalse((project.gov / "materials").exists())
 
 
 # ────────────────────────────────────────────────────────────

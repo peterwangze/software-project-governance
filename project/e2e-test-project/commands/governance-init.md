@@ -14,6 +14,8 @@
 
 仅为缺失文件从 `<plugin_home>/core/templates/` 创建 `.governance/plan-tracker.md`、`evidence-log.md`、`decision-log.md`、`risk-log.md`。用真实的项目名、目标、Profile、触发模式、权限和安装版本填好配置；清除样例。已经存在的记录按原内容保留。任务表记来源和验收，运行记录由 CLI 写入。
 
+模型从 bootstrap 选定当前单元。目标、判据和当前裁决足以行动时即继续执行。缺少会影响判断的事实时，运行 `loop materials --unit <id>`，按具体问题用 `--query` 缩小范围，按返回的 `--ref` 定位一份原件。
+
 ### Step 2: 登记首个工作单元
 
 先保留用户原话，再用受益者的操作、约束和可见结果复述目标。把执行者补充的推断标在复述中。两种解释会改变交付物、验收或范围时，向用户核实具体分歧；意图清楚时沿既有授权推进。
@@ -30,7 +32,7 @@ Claude 选 `CLAUDE.md`，Codex 和读取 AGENTS 指引的宿主选 `AGENTS.md`�
 ```markdown
 ## Governance Bootstrap（由 software-project-governance 插件注入）
 
-> @bootstrap-version: 0.101.1
+> @bootstrap-version: 0.102.0
 
 ### 每次会话第一动作
 
@@ -55,7 +57,7 @@ always-on 显示本次目标、工作单元、循环层、轮次及尚需的验�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作）
 
-> @bootstrap-version: 0.101.1
+> @bootstrap-version: 0.102.0
 
 **SELF-CHECK**：先核实根、工作单元、目标、父子关系、轮次和证据。缺少事实则标为待验证。需要用户取舍时使用 AskUserQuestion。
 
@@ -124,7 +126,7 @@ always-on 显示本次目标、工作单元、循环层、轮次及尚需的验�
 ```markdown
 ## Governance Bootstrap（强制 — 每次会话第一动作 · 次要平台入口薄指针）
 
-> @bootstrap-version: 0.101.1
+> @bootstrap-version: 0.102.0
 
 主入口 `{PRIMARY_ENTRY}` 承接完整规则，或加载 `skills/software-project-governance/SKILL.md`。
 

@@ -576,6 +576,34 @@ class TriageRecordTests(unittest.TestCase):
         evidence = (self.gov / "evidence-log.md").read_text(encoding="utf-8")
         self.assertNotIn("TRIAGE-FIX-103", evidence)
 
+    def test_archived_task_without_index_requires_equivalent_open_registration(self):
+        volume = self.gov / "archive" / "tasks" / "legacy-v0.1.0.md"
+        volume.parent.mkdir(parents=True)
+        volume.write_text("| **P2** | **FIX-103** | archived | — | 0.1.0 | old | ✅ 完成 |\n",
+                          encoding="utf-8")
+        original = (self.gov / "evidence-log.md").read_bytes()
+        plan = (_FIXTURE_TRACKER.replace("闭环路径", "验收要求") +
+                "| P2 | FIX-103 | new product task | — | 0.75.0 | proves original | ⏳ 待执行 |\n")
+        for tracker, title, acceptance in [
+                (_FIXTURE_TRACKER, "new product task", "proves original"),
+                (plan, "unrelated goal", "proves original"),
+                (plan, "new product task", "different acceptance"),
+                (plan.replace("⏳ 待执行", "✅ 完成"), "new product task", "proves original")]:
+            with self.subTest(title=title, acceptance=acceptance, tracker=tracker):
+                result = self._run(plan_tracker_text=tracker, title=title, acceptance=acceptance)
+                self.assertIn("archive/tasks/legacy-v0.1.0.md", result["error"])
+                self.assertFalse((self.gov / "change-triage").exists())
+                self.assertEqual((self.gov / "evidence-log.md").read_bytes(), original)
+        self.assertNotIn("error", self._run(plan_tracker_text=plan, acceptance="proves original"))
+
+    def test_unreadable_archive_structure_fails_closed(self):
+        archive = self.gov / "archive"
+        archive.mkdir()
+        (archive / "evidence").write_text("unexpected file", encoding="utf-8")
+        result = self._run()
+        self.assertIn("cannot verify archived ownership", result["error"])
+        self.assertFalse((self.gov / "change-triage").exists())
+
     def test_archived_dep_resolves_via_governance_archive_index(self):
         """FIX-341 end-to-end: a dep with NO hot row but proven archived-
         completed by ``.governance/archive/index.md`` passes the intake
@@ -908,6 +936,41 @@ class ChangeTriageCliTests(unittest.TestCase):
             argv + list(extra),
             capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
+
+    def test_archived_evidence_ownership_rejects_without_writes_and_preserves_replay(self):
+        volume = self.gov / "archive" / "evidence" / "evidence-v0.1.0-0.2.0.md"
+        volume.parent.mkdir(parents=True)
+        volume.write_text(
+            "| 证据 ID | 关联任务 | 证据类型 | 描述 | 工件 | 状态 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| EVD-665 | DOC-001, FIX-103~105 | 核对 | mentions DOC-002 | old | PASS |\n"
+            "| EVD-666 | DOC-0020 | 核对 | another task | old | PASS |\n"
+            "| REVIEW-FIX-203-R0 | FIX-204 | APPROVED | mentions DOC-002 |\n"
+            "| TRIAGE-FIX-205 | FIX-205 | intake | mentions DOC-002 |\n"
+            "| RECO-FIX-206 | FIX-206 | context | mentions DOC-002 |\n", encoding="utf-8")
+        args = ("--title", "Scoped task", "--priority", "P2", "--version", self.planned,
+                "--files", "src/example.py", "--reason", "verify archived ownership")
+        def snapshot():
+            return {p.relative_to(self.gov): p.read_bytes() for p in self.gov.rglob("*") if p.is_file()}
+
+        before = snapshot()
+        for task_id in ("DOC-001", "FIX-104", "FIX-203", "FIX-204", "FIX-205", "FIX-206"):
+            with self.subTest(task_id=task_id):
+                done = self._run_cli("--task", task_id, *args)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertIn("archive/evidence/" + volume.name, json.loads(done.stdout)["error"])
+                self.assertEqual(before, snapshot())
+
+        # A mention in another task's prose and a longer numbered owner both leave DOC-002 free.
+        done = self._run_cli("--task", "DOC-002", *args)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with volume.open("a", encoding="utf-8") as stream:
+            stream.write("| EVD-667 | DOC-002 | 核对 | accepted task | result.md | PASS |\n")
+        original = snapshot()
+        replay = self._run_cli("--task", "DOC-002", *args)
+        self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+        self.assertTrue(json.loads(replay.stdout)["replayed"])
+        self.assertEqual(original, snapshot())
 
     def test_cli_missing_demand_source_exits_two(self):
         # FEAT-080 (B3): the window is CLOSED — no flag, no intake

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import subprocess
 import re
 from pathlib import Path
@@ -186,6 +187,29 @@ def _intake_intent(task, intake, explicit, delivery_goal, goal, enclosing, previ
     return parent_intent or prior_intent
 
 
+def _check_archived_task(root, path, unit_id, task, *, shared, after, goal, acceptance):
+    if not TASK_ID.fullmatch(task) or not os.path.lexists(path.parent / "archive"):
+        return
+    state = _payload(path)
+    for unit in state["flow_units"]:
+        if unit["flow_unit_id"] == unit_id or (unit["task_id"] == task and
+                (shared or unit["flow_unit_id"] == after)):
+            return
+    intake = _triage_intake(root, task)
+    original = intake.get("loop_intake") or {}
+    if original and (not goal or goal == original.get("goal")) and (
+            not acceptance or acceptance == original.get("acceptance")):
+        return
+    from change_triage import archived_task_origin, planned_task_matches
+    origin = archived_task_origin(path.parent, task)
+    if not origin:
+        return
+    plan = path.parent / "plan-tracker.md"
+    if plan.is_file() and planned_task_matches(plan.read_text(encoding="utf-8"), task, goal, acceptance):
+        return
+    raise ValueError(f"{task} already belongs to archived work in {origin}. Use a new task ID or resume the original task.")
+
+
 def start(root, *, unit_id, goal, tier, gate=None, acceptance=None, parent=None, task=None,
           dependencies=(), release_version=None, release_reviewer=None, after=None, check_command=None,
           expect_output=None, delivery_goal=None, delivery_contract_sha256=None, dry_run=False,
@@ -196,10 +220,13 @@ def start(root, *, unit_id, goal, tier, gate=None, acceptance=None, parent=None,
         raise ValueError("invalid unit id or loop tier")
     requested_gate = gate
     gate = _validate_gate(gate, tier)
+    shared = task is not None
     task = task or unit_id
     if from_learning is not None and not after:
         raise ValueError("--from-learning requires --after to identify its source unit")
     path = runtime_path(root)
+    # Reject a reused identity before the first lock or runtime file is created.
+    _check_archived_task(root, path, unit_id, task, shared=shared, after=after, goal=goal, acceptance=acceptance)
     with loop_event_log._cross_process_lock(path), loop_paro_engine._commit_lock(path):
         state = _payload(path)
         intake = _triage_intake(root, task)
@@ -432,6 +459,14 @@ def add_arguments(parser):
     accept = actions.add_parser("accept", help="Apply the independent product receipt to an ordinary delivery")
     accept.add_argument("--unit", required=True)
     read = actions.add_parser("status", help="Resume from current results and evidence")
+    materials = actions.add_parser("materials", help="Find material for this unit without opening original content")
+    materials.add_argument("--unit", required=True)
+    choice = materials.add_mutually_exclusive_group()
+    choice.add_argument("--query", help="Match terms in scoped record metadata")
+    choice.add_argument("--ref", help="Locate one exact reference returned by this command")
+    choice.add_argument("--check", action="store_true", help="Check registered material and its original references for this unit")
+    materials.add_argument("--json", action="store_true", help="JSON output (default)")
+    materials.add_argument("--offset", type=int, help="Start at this zero-based location in the selected --ref")
     read.add_argument("--unit")
     read.add_argument("--json", action="store_true")
     phase = actions.add_parser("step", help="Record an executor observation")
@@ -444,6 +479,9 @@ def add_arguments(parser):
 
 
 def run(root, args):
+    if args.action == "materials":
+        from loop_materials import lookup
+        return lookup(root, args.unit, query=args.query, ref=args.ref, check=args.check, offset=args.offset)
     if args.action == "start":
         return start(root, unit_id=args.unit, goal=args.goal, tier=args.tier, gate=args.gate,
                      acceptance=args.acceptance, parent=args.parent, task=args.task,

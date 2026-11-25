@@ -15,7 +15,7 @@ def _learning_view(root, unit, *, latest_only, owner=None):
         fields["learning_count"] = len(entries)
         if latest_only:
             # Keep the latest choice and the latest opportunity, in recorded order.
-            last = {entry["kind"]: index for index, entry in enumerate(entries)}
+            last = {entry["kind"]: index for index, entry in enumerate(entries) if entry["kind"] != "note"}
             entries = [entries[index] for index in sorted(last.values())]
         projected = []
         for entry in entries:
@@ -27,6 +27,23 @@ def _learning_view(root, unit, *, latest_only, owner=None):
             projected.append(detail)
         fields["learning"] = projected
     return fields
+
+
+def _summarize_materials(loops):
+    """Project routing and integrity signals; detailed observations belong to a scoped lookup."""
+    for unit in loops["units"]:
+        unit["evidence_refs"] = unit["evidence_refs"][-1:]
+        if contract := unit.get("root_contract"):
+            contract["revisions"] = [
+                {key: event[key] for key in ("id", "kind", "evidence") if key in event}
+                for event in contract["revisions"][-1:]
+            ]
+        if entries := unit.get("learning"):
+            unit["learning"] = [
+                {key: entry[key] for key in ("id", "kind", "evidence_issue", "revalidation") if key in entry}
+                | ({"evidence": entry["evidence"]} if entry.get("evidence_issue") else {})
+                for entry in entries
+            ]
 
 
 def loop_state(root, *, latest_learning_only=False):
@@ -180,6 +197,8 @@ def loop_state(root, *, latest_learning_only=False):
         view.update(state="invalid", issues=list(issues_by_id.values()), message="One or more work units have unverifiable evidence.")
     if not view["units"]:
         view["message"] = "No work units recorded. Start a unit with loop start."
+    if latest_learning_only:
+        _summarize_materials(view)
     return view
 
 

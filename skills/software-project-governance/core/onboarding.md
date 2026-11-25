@@ -5,3 +5,5 @@
 收集项目名、用户目标、验收操作、运行权限和适用 Profile。具备插件命令的宿主使用 `/governance` 读取初始化规程。仅安装本技能时，在目标项目的 `.governance/` 下从本目录的 `templates/` 补齐 `plan-tracker.md`、`evidence-log.md`、`decision-log.md`、`risk-log.md`。用真实项目、目标、权限、触发模式及安装版本填入配置。为宿主创建或补充一条项目指引，指向本技能和从项目根执行的 `governance-bootstrap --format json`。用本技能 `infra/verify_workflow.py` 按[循环入口](lifecycle.md)登记第一项工作，或在同一运行记录中恢复已经登记的工作。
 
 验收接入时，从独立的新进程读取该单元，核对稳定 ID、目标、层级、关联任务和待验证条件。记录缺失或损坏就报告诊断并保留原件。
+
+模型按 bootstrap 选定当前单元；已有事实足以行动时结束查阅。需要补证时，运行 `loop materials --unit <id>`，用 `--query` 匹配当前问题，再用 `--ref` 取选定记录的原件位置。

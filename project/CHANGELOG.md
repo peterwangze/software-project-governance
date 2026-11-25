@@ -2,6 +2,12 @@
 
 本文件记录 `software-project-governance` 的每个版本变更。
 
+## [0.102.0]
+
+- 模型从 `governance-bootstrap` 取得当前单元和判据。需要补证时，`loop materials --unit <id> --query <问题词>` 返回最多三条摘要，`--ref` 定位选定原件。启动和按任务派发的执行包省去历史学习正文。
+- 过程材料按单元或共享任务登记，复用已有证据、修订、学习及审查记录。新项目证据模板与实际写入的十列对齐。一行可复验的事实可以直接登记，长材料可用原格式保留。
+- 收口时用 `loop materials --unit <id> --check` 检查已登记本地引用和本单元、任务的托管目录。受理新工作时也会核对历史归档中的任务编号。[版本范围](../docs/release/version-plan-0.102.0.md)
+
 ## [0.101.1]
 
 - FIX-547 修复首次运行 `/governance` 的脚本定位。入口优先使用本次宿主加载的治理技能目录；仅给插件包根时，使用包内的 `skills/software-project-governance`。市场安装和独立技能安装都从用户的项目目录启动。[ZCode 安装及排错](../docs/marketplace/zcode-marketplace-install.md)

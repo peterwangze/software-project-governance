@@ -354,6 +354,10 @@
         "type": "file"
       },
       {
+        "path": "skills/release-checklist/scripts/check_mainline.py",
+        "type": "file"
+      },
+      {
         "path": "adapters/pi/extension/dispatch-agent.ts",
         "type": "file"
       },

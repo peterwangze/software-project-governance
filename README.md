@@ -15,6 +15,8 @@ Use this workflow when your AI coding setup needs:
 
 ## Release and validation
 
+Maintainers use `origin` for this repository. After verifying the public package, run `python skills/release-checklist/scripts/check_mainline.py master --remote origin` in the local development checkout. Record both commit IDs in the release receipt. Close the release when the check exits successfully. See the [release checklist](skills/release-checklist/SKILL.md) for fast-forward recovery.
+
 For the source layout, runtime entry points and project data locations, see the [repository navigation](https://github.com/peterwangze/software-project-governance/blob/master/project/references/architecture.md#当前目录导航). The [version history](https://github.com/peterwangze/software-project-governance/blob/master/project/CHANGELOG.md) records release changes.
 
 The v0.101.0 release plan compares the workflow with v0.100.0 on a game and a command-line application. It follows each original goal through design changes, independent acceptance and recovery. See the [release scope](https://github.com/peterwangze/software-project-governance/blob/v0.101.0/docs/release/version-plan-0.101.0.md), [release checklist](https://github.com/peterwangze/software-project-governance/blob/v0.101.0/docs/release/release-checklist-0.101.0.md) and [rollback instructions](https://github.com/peterwangze/software-project-governance/blob/v0.101.0/docs/release/rollback-plan-0.101.0.md). Published packages are available from [GitHub Releases](https://github.com/peterwangze/software-project-governance/releases).

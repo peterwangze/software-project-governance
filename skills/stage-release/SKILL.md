@@ -8,3 +8,5 @@ description: 按目标区分独立成品验收与经授权的候选版本发布�
 普通成品由独立验收者用冻结契约对实际制品逐项重跑，DSH 用原生完成入口，其他宿主可用 `goal-bridge --action accept-delivery --goal <id>`。将可复验的观察交还目标；可信失败返回修正，缺件保留待验。
 
 Release 只在用户要求发布且单元绑定具体版本时准备候选、适用 CI、风险、恢复方式和范围。Release Reviewer 对同一候选签核，发布者核实用户授权后操作。发布后运行约定健康检查；达到回滚条件按现有授权恢复，需要新的风险接受或不可逆操作时回到用户。
+
+通过 Git 主线交接的发布，按 [release-checklist](../release-checklist/SKILL.md) 在本地仓库完成主线核对，再向下一次会话交接。

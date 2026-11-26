@@ -19,6 +19,12 @@ For the source layout, runtime entry points and project data locations, see the 
 
 The v0.101.0 release plan compares the workflow with v0.100.0 on a game and a command-line application. It follows each original goal through design changes, independent acceptance and recovery. See the [release scope](https://github.com/peterwangze/software-project-governance/blob/v0.101.0/docs/release/version-plan-0.101.0.md), [release checklist](https://github.com/peterwangze/software-project-governance/blob/v0.101.0/docs/release/release-checklist-0.101.0.md) and [rollback instructions](https://github.com/peterwangze/software-project-governance/blob/v0.101.0/docs/release/rollback-plan-0.101.0.md). Published packages are available from [GitHub Releases](https://github.com/peterwangze/software-project-governance/releases).
 
+### Maintaining this repository
+
+Submit independent changes from your own branch through a pull request to `master` on `origin`. Use a separate worktree when another session owns the current checkout. After the PR merges, fetch `origin` and fast-forward local `master`. To sync a development branch, rebase its own commits onto `origin/master`. Preserve pending work and coordinate with the owner before rewriting a published branch.
+
+At release handoff, compare the full commit ID from `git rev-parse --verify refs/heads/master` with the one returned by `git ls-remote --exit-code origin refs/heads/master`. Record both in the release receipt. Complete the handoff once they match.
+
 ## Mainstream Agent Loading
 
 Use the adapter table to choose a loading path and verify it on your host. Earlier observations are recorded in the [agent loading report](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/mainstream-agent-loading-0.47.0.md) and [runtime readiness matrix](https://github.com/peterwangze/software-project-governance/blob/7b9fd3720376549c53b06d4fc362f5fb0c96e40b/docs/requirements/runtime-readiness-matrix-0.43.0.md).

@@ -36,3 +36,9 @@
 2. 实现避免架构腐化，避免引入架构问题和可维护性问题
 3. 实现保证模块/类/接口职责单一，避免上帝类/上帝模块和多功能接口
 4. 实现不做冗余修改，保持修改纯粹性，一个 commit 承载一个问题修改/功能实现
+
+## 本仓库的分支协作与发布交接
+
+独立改动从自己的任务分支向 `origin/master` 提交 PR。当前工作树由其他任务使用时，另建工作树。PR 合入后，获取 `origin` 的最新状态并快进本地 `master`。需要同步的开发分支再将自己的提交 rebase 到 `origin/master`。保留工作区内的改动，改写已发布分支前与分支负责人确认，并使用带预期远端提交号的 `--force-with-lease` 推送。
+
+发布交接时，比较 `git rev-parse --verify refs/heads/master` 与 `git ls-remote --exit-code origin refs/heads/master` 返回的完整提交号。确认两端一致后，将提交号记入发布回执，供后续会话核对。
